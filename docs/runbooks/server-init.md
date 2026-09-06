@@ -81,6 +81,7 @@
 | 脚本 | 定位 |
 | --- | --- |
 | `scripts/verify-frontend.sh` | 前端本地门禁（lint + tsc + build，与 CI 同口径），推送前高频使用 |
+| `scripts/visual-verify.sh` | 前端目检脚手架（起服务 + 截图，产物是人看的图，不做通过与否判定）；用法见 `frontend/AGENTS.md` §4「目检」，勿与上一行的门禁混用 |
 | `ir-cli/scripts/gen_response_fields.py` | ir-cli 响应字段契约生成器（CI 一致性校验），后端 openapi 变更后运行 |
 
 服务器初始化本身**不再有脚本**——按本文档手工执行即可。
