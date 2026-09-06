@@ -114,7 +114,7 @@ export default function InvestorsContent() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">投资人管理</h1>
+          <h1 className="text-2xl font-semibold">投资人管理</h1>
           <p className="text-muted-foreground">
             管理投资人和权限
           </p>

@@ -361,7 +361,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
             </Button>
           </Link>
           <div>
-            <h1 className={variant === "mobile" ? "text-2xl font-bold" : "text-3xl font-bold tracking-tight"}>
+            <h1 className="text-2xl font-semibold">
               份额变动事件
             </h1>
             <p className="text-muted-foreground">组合代码: {code}</p>

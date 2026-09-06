@@ -648,7 +648,7 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
             </Button>
           </Link>
           <div>
-            <h1 className={variant === "mobile" ? "text-2xl font-bold" : "text-3xl font-bold tracking-tight"}>
+            <h1 className="text-2xl font-semibold">
               调仓交易
             </h1>
             <p className="text-muted-foreground">组合代码: {code}</p>

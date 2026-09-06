@@ -224,7 +224,7 @@ export default function PositionsPage() {
               </Button>
             </Link>
             <div>
-              <h1 className="text-3xl font-bold tracking-tight">持仓管理</h1>
+              <h1 className="text-2xl font-semibold">持仓管理</h1>
               <p className="text-muted-foreground">组合代码: {code}</p>
             </div>
           </div>

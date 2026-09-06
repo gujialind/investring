@@ -36,7 +36,7 @@ export default function DashboardPage() {
     <MainLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">首页</h1>
+          <h1 className="text-2xl font-semibold">首页</h1>
           <p className="text-muted-foreground">
             投资组合概览和净值曲线
           </p>

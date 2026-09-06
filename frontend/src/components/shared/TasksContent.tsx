@@ -81,7 +81,7 @@ export default function TasksContent() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">任务管理</h1>
+        <h1 className="text-2xl font-semibold">任务管理</h1>
         <p className="text-muted-foreground">
           管理定时任务和手动触发
         </p>
