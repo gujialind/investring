@@ -115,7 +115,7 @@ function MobilePortfolioDetailInner() {
           </Button>
         </Link>
         <div className="flex-1">
-          <h1 className="text-xl font-bold">{portfolio.name}</h1>
+          <h1 className="text-2xl font-semibold">{portfolio.name}</h1>
           <p className="text-xs text-muted-foreground">
             {portfolio.code}
             {portfolio.started_at && (

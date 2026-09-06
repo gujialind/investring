@@ -276,7 +276,7 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
 - 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（13 处 / 3 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、`slate/gray` 中性类名、快照页原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
-- 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5——`app/m/dashboard/page.tsx`（`text-2xl font-bold`，字重）、`app/m/portfolio/[code]/page.tsx` 与 `app/m/portfolio/[code]/positions/page.tsx`（`text-xl font-bold`，中间档字号 + 字重）；是否属刻意的紧凑头部形态待判定，另开 issue 处理，登记不改。
+- 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
 
 ---
 
@@ -306,3 +306,4 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 | 2026-08-29 | v1.1 补 | 现状补登（同一评审续）：§7 z-index（浮层 `z-50` / Toast `z-[100]`）与 focus 态（基件默认 ring，不自绘元素须等价）；§9 触控目标例外（`h-9`=36px < 44px，移动端面板内后续可升 `h-10`）；§14 动效三分类（spinner / toast 滑入 / 基件过渡，不新造）；§16 扩为图标体系（lucide-react 唯一来源、`h-4`/`h-5`/`h-3.5` 三档） | 视觉系统评审 |
 | 2026-09-05 | v1.x | 流水列表列瘦身：①§8 新增「**并列双行单元格**」模式（两行同 `text-sm` 同正文色、上行=先发生、每行挂 `title`、空值占位 `--`、同值不折叠、两行 nowrap；与既有「主次双行」为两种模式，按值间关系选用），共用实现 `DatePairCell.tsx`；②§8 主次双行补登产品列字重层级（产品名主行 `font-medium`，平台/投资人不加粗——刻意层级非漂移）与共用实现 `ProductCell.tsx`；③§8 结对行补登「子行空占位以 `colSpan` 折叠」（frontend/ 内 `colSpan` 首次使用）；④§18 登记桌面 `<h1>` `text-3xl font-bold tracking-tight` 存量漂移（12 文件），列为不适用「顺手替换」原则、须整体收敛 | #355 |
 | 2026-09-05 | v1.x | 页面标题整体收敛：桌面 12 处 `<h1>` `text-3xl font-bold tracking-tight` → §5 `text-2xl font-semibold`，4 个共享组件移动分支 `font-bold` 字重同步对齐（§6 不发明端侧独有字号）；§18 该存量条目销账，另登记 3 处移动端专属薄壳页 h1 漂移（待另开 issue） | #386 |
+| 2026-09-06 | v1.x | 移动端薄壳页 h1 收敛 + 徽章/数字单元格竖排防护：①3 处移动端专属薄壳页 h1 → §5 `text-2xl font-semibold`（判定非刻意紧凑形态，§18 条目销账）；②`Badge` 基件加 `whitespace-nowrap`（徽章文案有界，防表格窄列挤压时 CJK 逐字竖排，与 #389 `NameCodeCell` 修法同族）；③`.number-cell` 工具类加 `white-space: nowrap`（数字+单位如「2,000.00 份」不折行，全站表格数字列一致生效） | #394 |
