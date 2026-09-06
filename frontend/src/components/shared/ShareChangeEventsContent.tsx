@@ -361,7 +361,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
             </Button>
           </Link>
           <div>
-            <h1 className={variant === "mobile" ? "text-2xl font-bold" : "text-3xl font-bold tracking-tight"}>
+            <h1 className="text-2xl font-semibold">
               份额变动事件
             </h1>
             <p className="text-muted-foreground">组合代码: {code}</p>
@@ -442,6 +442,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                   <div className="space-y-2">
                     <Label htmlFor="entitlement_date">权益登记日</Label>
                     <DatePicker
+                      id="entitlement_date"
                       date={parseDateOnly(formData.entitlement_date)}
                       onSelect={(date) => {
                         setFormData({ ...formData, entitlement_date: toDateOnly(date) })
@@ -451,6 +452,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                   <div className="space-y-2">
                     <Label htmlFor="ex_date">除息日</Label>
                     <DatePicker
+                      id="ex_date"
                       date={parseDateOnly(formData.ex_date)}
                       onSelect={(date) => {
                         setFormData({ ...formData, ex_date: toDateOnly(date) })

@@ -276,7 +276,7 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
 - 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（13 处 / 3 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、`slate/gray` 中性类名、快照页原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
-- 已登记、**不适用**「顺手替换」原则的存量：桌面页面标题 `<h1>` 一律 `text-3xl font-bold tracking-tight`（12 处 / 12 文件，含 `app/dashboard`、`app/portfolio/[code]{,/positions}` 与 9 个 `components/shared/*Content.tsx`），与 §5 页面标题档（`text-2xl font-semibold`）不符。移动端分支已是 `text-2xl font-bold`，故漂移仅在桌面。**不能顺手替换**：12 个页面互为导航对端，改其中几个会造成跨页标题字号跳动，须一次性整体收敛，另开 issue（#355 触及其中 3 页，仅登记不改）。
+- 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5——`app/m/dashboard/page.tsx`（`text-2xl font-bold`，字重）、`app/m/portfolio/[code]/page.tsx` 与 `app/m/portfolio/[code]/positions/page.tsx`（`text-xl font-bold`，中间档字号 + 字重）；是否属刻意的紧凑头部形态待判定，另开 issue 处理，登记不改。
 
 ---
 
@@ -305,3 +305,4 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 | 2026-08-29 | v1.1 | 评审修订：①§2 补 #128 字典驱动现状、「两个其他色」分工与 sort_order 耦合登记；②§17 补 dark 双通道对齐前置项（CSS `.dark` 现状 ≠ 文档预案值）；③§5 歧义句改写 + 字体栈现状登记；④§4 补占比渲染口径（`percent.toFixed(1)%`，不走 formatPercent）；⑤中性色目标值一次性切换落地（`globals.css` `:root`）；⑥ESLint 护栏扩任意值类名（ratchet 豁免 3 文件 + `components/ui/**` 永久豁免）；⑦新增 §19 自检清单、§20 变更记录 | 视觉系统评审 |
 | 2026-08-29 | v1.1 补 | 现状补登（同一评审续）：§7 z-index（浮层 `z-50` / Toast `z-[100]`）与 focus 态（基件默认 ring，不自绘元素须等价）；§9 触控目标例外（`h-9`=36px < 44px，移动端面板内后续可升 `h-10`）；§14 动效三分类（spinner / toast 滑入 / 基件过渡，不新造）；§16 扩为图标体系（lucide-react 唯一来源、`h-4`/`h-5`/`h-3.5` 三档） | 视觉系统评审 |
 | 2026-09-05 | v1.x | 流水列表列瘦身：①§8 新增「**并列双行单元格**」模式（两行同 `text-sm` 同正文色、上行=先发生、每行挂 `title`、空值占位 `--`、同值不折叠、两行 nowrap；与既有「主次双行」为两种模式，按值间关系选用），共用实现 `DatePairCell.tsx`；②§8 主次双行补登产品列字重层级（产品名主行 `font-medium`，平台/投资人不加粗——刻意层级非漂移）与共用实现 `ProductCell.tsx`；③§8 结对行补登「子行空占位以 `colSpan` 折叠」（frontend/ 内 `colSpan` 首次使用）；④§18 登记桌面 `<h1>` `text-3xl font-bold tracking-tight` 存量漂移（12 文件），列为不适用「顺手替换」原则、须整体收敛 | #355 |
+| 2026-09-05 | v1.x | 页面标题整体收敛：桌面 12 处 `<h1>` `text-3xl font-bold tracking-tight` → §5 `text-2xl font-semibold`，4 个共享组件移动分支 `font-bold` 字重同步对齐（§6 不发明端侧独有字号）；§18 该存量条目销账，另登记 3 处移动端专属薄壳页 h1 漂移（待另开 issue） | #386 |

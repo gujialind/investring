@@ -427,7 +427,7 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">产品管理</h1>
+          <h1 className="text-2xl font-semibold">产品管理</h1>
           <p className="text-muted-foreground">
             管理基金产品和数据源
           </p>

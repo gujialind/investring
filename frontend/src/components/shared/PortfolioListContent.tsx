@@ -105,7 +105,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className={variant === "mobile" ? "text-2xl font-bold" : "text-3xl font-bold tracking-tight"}>
+          <h1 className="text-2xl font-semibold">
             组合管理
           </h1>
           <p className="text-muted-foreground">管理投资组合和查看收益</p>
