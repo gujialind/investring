@@ -103,7 +103,9 @@ export default function ProductFilterSelect({
       </span>
       <span className="min-w-0 flex-1 truncate text-sm">
         {name ? `${name} (${s.code})` : s.code}
-        <span className="text-muted-foreground"> · {formatMarketName(s.market)}</span>
+        {s.market ? (
+          <span className="text-muted-foreground"> · {formatMarketName(s.market)}</span>
+        ) : null}
       </span>
     </div>
   );
