@@ -31,53 +31,18 @@ import {
   authHeaders,
   collectPageErrors,
   dialogByTitle,
-  gotoPortfolioSubpage,
+  openSubmitTradeDialog,
+  pickFirstPlatformOption,
+  pickFirstProduct,
+  platformPopover,
 } from './helpers';
-
-/** 进入 E2E_PORT 调仓交易页并打开「提交交易」Dialog（附带组合 code 供 API 注入现金） */
-async function openTradeDialog(page: Page): Promise<{ dlg: Locator; portfolioCode: string }> {
-  await gotoPortfolioSubpage(page, E2E_PORT, 'trades');
-  await page.getByRole('button', { name: '提交交易' }).first().click();
-  const dlg = dialogByTitle(page, '提交交易');
-  await dlg.waitFor();
-  return { dlg, portfolioCode: E2E_PORT };
-}
-
-/** 选中首个产品（可搜索下拉，无产品数据优雅 skip），返回所选 code/market */
-async function pickFirstProduct(page: Page, dlg: Locator): Promise<{ code: string; market: string }> {
-  await dlg.locator('button[aria-haspopup="dialog"]', { hasText: '请选择产品' }).first().click();
-  const popover = page
-    .getByPlaceholder('搜索产品代码/名称')
-    .locator('xpath=ancestor::div[@role="dialog"][1]');
-  const firstOption = popover.getByTestId('product-option').first();
-  try {
-    await firstOption.waitFor({ timeout: 10_000 });
-  } catch {
-    test.skip(true, '环境中没有产品数据');
-  }
-  const code = (await firstOption.getAttribute('data-code')) ?? '';
-  const market = (await firstOption.getAttribute('data-market')) ?? '';
-  await firstOption.click();
-  return { code, market };
-}
 
 /** 选中首个交易平台（无平台数据优雅 skip），返回所选平台 code。
  *  注意：提交交易 Dialog 内有两个 SearchablePlatformSelect（交易平台 + 现金平台），
  *  触发按钮均挂 data-testid="platform-trigger"，须按 id 消歧 */
 async function pickFirstPlatform(page: Page, dlg: Locator): Promise<string> {
   await dlg.locator('button#platform_code').click();
-  const popover = page
-    .getByPlaceholder('搜索平台名称/代码')
-    .locator('xpath=ancestor::div[@role="dialog"][1]');
-  const firstOption = popover.getByTestId('platform-option').first();
-  try {
-    await firstOption.waitFor({ timeout: 10_000 });
-  } catch {
-    test.skip(true, '环境中没有平台数据');
-  }
-  const code = (await firstOption.getAttribute('data-code')) ?? '';
-  await firstOption.click();
-  return code;
+  return pickFirstPlatformOption(platformPopover(page));
 }
 
 /** 买入金额两输入框 */
@@ -172,7 +137,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 1：正向联动——实付 1000 + fee 5 → 净投入 995.00 ----
   test('填实付与手续费后净投入自动联动', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
 
     await actualInput(dlg).fill('1000');
     // fee 未填时净额 = 实付（缺省 0 手续费）
@@ -186,7 +151,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 2：反向联动——净投入 995 + fee 5 → 实付 1000.00 ----
   test('填净投入与手续费后实付自动联动', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
 
     await netInput(dlg).fill('995');
     await expect(actualInput(dlg)).toHaveValue('995.00');
@@ -200,7 +165,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 3：锚点跟随——改手续费按最后手改字段重算另一字段 ----
   test('手续费变化按锚点字段重算（锚在净投入/实付两种）', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
 
     // 锚在净投入：净额不变、实付重算
     await netInput(dlg).fill('995');
@@ -221,7 +186,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 4：手续费空或 0 → 两字段相等 ----
   test('手续费为 0 时两字段数值相等', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
 
     await actualInput(dlg).fill('1000');
     await feeInput(dlg).fill('0');
@@ -233,7 +198,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 5：净额 ≤ 0 → 错误提示 + 提交禁用 ----
   test('手续费不小于实付时提示错误且无法提交', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     await pickFirstProduct(page, dlg);
     await pickFirstPlatform(page, dlg);
 
@@ -250,7 +215,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 6：提交契约——请求体仅含费值一个金额（route 拦截不落数据）----
   test('提交请求体金额等于实付字段值且无冗余金额字段', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     await pickFirstProduct(page, dlg);
     await pickFirstPlatform(page, dlg);
 
@@ -290,7 +255,7 @@ test.describe('买入金额双字段联动（#193）', () => {
       test.skip(true, '今天非交易日（周末），表单默认交易日期会被后端拒绝');
     }
     const tradeDate = toISODate(now);
-    const { dlg, portfolioCode } = await openTradeDialog(page);
+    const { dlg, portfolioCode } = await openSubmitTradeDialog(page, E2E_PORT);
     const product = await pickFirstProduct(page, dlg);
     const platformCode = await pickFirstPlatform(page, dlg);
     const headers = await authHeaders(page);
@@ -330,7 +295,7 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 8：卖出方向金额为纯派生量——只读展示毛额/到手，无价格不展示 ----
   test('卖出表单只读展示毛额与实际到账，未填价格不展示', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const { dlg } = await openTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
 
     await dlg.getByRole('button', { name: '卖出' }).click();
     await dlg.getByLabel('份额').fill('100');

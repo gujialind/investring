@@ -20,8 +20,8 @@
  *   - 提交载荷不变量：经筛选浏览路径点选后 POST /api/trades 的 market
  *     恒等于点选项 market（筛选状态不渗入选中值）。
  *
- * 定位器契约（沿用 platform-select-search.spec.ts 的 #217 惯例）：选项行
- * data-testid="product-option" + data-code/data-market 属性定位（一码多市场时
+ * 定位器契约（#217 惯例；选择框弹层交互自 #372 起由 e2e/helpers.ts 单点持有）：
+ * 选项行 data-testid="product-option" + data-code/data-market 属性定位（一码多市场时
  * 单靠 code 不唯一，须 code+market 双属性），不解析文案取 code、不依赖 Tailwind
  * 工具类与 Badge/lucide 内部结构；触发按钮 aria-haspopup="dialog" + 文本双条件；
  * 市场筛选 Select 为弹层内唯一 role=combobox（搜索框是 textbox），选项经
@@ -34,46 +34,23 @@
  * TradesContent 为共享组件（「提交交易」Dialog 双端同构），mobile project 自动覆盖。
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import { E2E_PORT, collectPageErrors, dialogByTitle, gotoPortfolioSubpage } from './helpers';
+import {
+  E2E_PORT,
+  collectPageErrors,
+  openSubmitTradeDialog,
+  pickFirstPlatformOption,
+  platformPopover,
+  platformTrigger,
+  productOption,
+  productOptions,
+  productPopover,
+  productTrigger,
+} from './helpers';
 
 /** LOF 双市场种子常量（与 backend/tests/seed_base.py 的 #259 种子一致） */
 const LOF_NAME = '富国中证500指数增强(LOF)A';
 const LOF_SZ = { code: '161017.SZ', market: 'CN_EXCHANGE', marketName: 'A股场内' };
 const LOF_OTC = { code: '161017.OF', market: 'CN_OTC', marketName: '内地场外' };
-
-/** 进入 E2E_PORT 调仓交易页并打开「提交交易」Dialog（双端共享，无需按 project 区分） */
-async function openSubmitTradeDialog(page: Page): Promise<Locator> {
-  await gotoPortfolioSubpage(page, E2E_PORT, 'trades');
-  await page.getByRole('button', { name: '提交交易' }).first().click();
-  const dlg = dialogByTitle(page, '提交交易');
-  await dlg.waitFor();
-  return dlg;
-}
-
-/**
- * 产品搜索弹层：搜索 Input 最近的 role=dialog 祖先。
- * Dialog 内打开时（#191 弹层 Portal 注入 DialogContent）排除外层业务 Dialog。
- */
-function productPopover(page: Page): Locator {
-  return page
-    .getByPlaceholder('搜索产品代码/名称')
-    .locator('xpath=ancestor::div[@role="dialog"][1]');
-}
-
-/**
- * 定位 SearchableProductSelect 触发按钮（aria-haspopup="dialog" + 文本双条件；
- * 同 Dialog 内平台选择框同为 aria-haspopup 按钮，靠 label 文本区分）。
- */
-function productTrigger(scope: Page | Locator, label: string): Locator {
-  return scope.locator('button[aria-haspopup="dialog"]', { hasText: label }).first();
-}
-
-/** 按 data-code + data-market 双属性定位产品选项行（一码多市场分行，单靠 code 不唯一） */
-function productOption(popover: Locator, code: string, market: string): Locator {
-  return popover.locator(
-    `[data-testid="product-option"][data-code="${code}"][data-market="${market}"]`
-  );
-}
 
 /**
  * 打开产品弹层并搜索 161017，返回弹层 Locator。
@@ -95,7 +72,7 @@ test.describe('产品选择器市场标识（防 #259 回归）', () => {
   // ---- 用例 1：LOF 双市场选项分行，市场 Badge 独立可见且文案不同，行 title 完整 ----
   test('搜 161017 出现双市场选项，市场标识独立可见且行 title 完整', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     const popover = await searchLofOptions(page, dlg);
 
     const szOption = productOption(popover, LOF_SZ.code, LOF_SZ.market);
@@ -133,7 +110,7 @@ test.describe('产品选择器市场标识（防 #259 回归）', () => {
   // ---- 用例 2：选中场外项 → 触发按钮回显「名称 (code) · 市场名」并挂 title 全文本 ----
   test('选中场外项回显含「内地场外」且触发按钮挂完整 title', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     const popover = await searchLofOptions(page, dlg);
 
     await productOption(popover, LOF_OTC.code, LOF_OTC.market).click();
@@ -172,28 +149,6 @@ async function pickMarketFilter(page: Page, popover: Locator, label: string): Pr
   await page.getByRole('listbox').getByRole('option', { name: label }).click();
 }
 
-/** 读取弹层内全部产品选项的 {code, market}（data 属性，不解析文案） */
-function productOptionMarkets(popover: Locator): Promise<{ code: string; market: string }[]> {
-  return popover.getByTestId('product-option').evaluateAll((els) =>
-    els.map((el) => ({
-      code: el.getAttribute('data-code') ?? '',
-      market: el.getAttribute('data-market') ?? '',
-    }))
-  );
-}
-
-/** 定位 SearchablePlatformSelect 触发按钮（testid + 文本双条件，同 platform-select-search.spec.ts） */
-function platformTrigger(scope: Page | Locator, label: string): Locator {
-  return scope.getByTestId('platform-trigger').filter({ hasText: label }).first();
-}
-
-/** 平台搜索弹层：搜索 Input 最近的 role=dialog 祖先（排除外层业务 Dialog） */
-function platformPopover(page: Page): Locator {
-  return page
-    .getByPlaceholder('搜索平台名称/代码')
-    .locator('xpath=ancestor::div[@role="dialog"][1]');
-}
-
 /** 产品列表响应体 items 的最小类型（只取本 spec 关心的字段） */
 interface ProductListItem {
   code: string;
@@ -204,7 +159,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
   // ---- 用例 3：弹层内出现市场筛选行，默认「全部市场」，选项四项 ----
   test('弹层内出现市场筛选，默认「全部市场」且选项四项', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     await productTrigger(dlg, '请选择产品').click();
     const popover = productPopover(page);
 
@@ -232,7 +187,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
   // ---- 用例 4：选「A股场内」→ 请求带 market=CN_EXCHANGE，列表只含场内产品 ----
   test('选「A股场内」请求带 market=CN_EXCHANGE，列表只含场内产品', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     await productTrigger(dlg, '请选择产品').click();
     const popover = productPopover(page);
 
@@ -255,7 +210,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
 
     // DOM 渲染同步（keepPreviousData 旧数据占位，轮询至刷新完成）
     await expect(async () => {
-      const rows = await productOptionMarkets(popover);
+      const rows = await productOptions(popover);
       expect(rows.length).toBeGreaterThan(0);
       for (const r of rows) expect(r.market).toBe('CN_EXCHANGE');
     }).toPass();
@@ -266,7 +221,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
   // ---- 用例 5：选「内地场外」→ 只含 CN_OTC，虚拟产品（CASH/IN_TRANSIT*）不出现 ----
   test('选「内地场外」只含 CN_OTC，虚拟产品不出现', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     await productTrigger(dlg, '请选择产品').click();
     const popover = productPopover(page);
 
@@ -292,7 +247,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
 
     // DOM：全部行 data-market=CN_OTC，虚拟产品行不出现
     await expect(async () => {
-      const rows = await productOptionMarkets(popover);
+      const rows = await productOptions(popover);
       expect(rows.length).toBeGreaterThan(0);
       for (const r of rows) expect(r.market).toBe('CN_OTC');
     }).toPass();
@@ -309,7 +264,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
   // ---- 用例 6：LOF 161017 选「内地场外」→ 仅 161017.OF 一条（数据层消除歧义） ----
   test('LOF 161017 选「内地场外」仅显示 161017.OF 一条', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     const popover = await searchLofOptions(page, dlg);
 
     const respPromise = page.waitForResponse(
@@ -332,7 +287,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
   // ---- 用例 7（联动断言）：选中 161017.OF 重开 → 筛选复位「全部市场」、回显完整 ----
   test('选中 161017.OF 后重开：市场筛选复位「全部市场」，已选回显完整', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
     const popover = await searchLofOptions(page, dlg);
 
     await pickMarketFilter(page, popover, '内地场外');
@@ -359,7 +314,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
   // ---- 用例 8（提交载荷不变量）：经筛选浏览路径点选后提交，POST market 恒为点选项 market ----
   test('经市场筛选点选后提交，POST 载荷 market 恒为点选项 market', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const dlg = await openSubmitTradeDialog(page);
+    const { dlg } = await openSubmitTradeDialog(page, E2E_PORT);
 
     // 经「内地场外」筛选路径点选 161017.OF（筛选是浏览态，不渗入选中值）
     await productTrigger(dlg, '请选择产品').click();
@@ -376,13 +331,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
 
     // 交易平台选第一项（无平台数据优雅 skip）；金额填 1000（买入默认，场外无需价格）
     await platformTrigger(dlg, '请选择平台').click();
-    const platPopover = platformPopover(page);
-    try {
-      await platPopover.getByTestId('platform-option').first().waitFor({ timeout: 10_000 });
-    } catch {
-      test.skip(true, '环境中没有平台数据');
-    }
-    await platPopover.getByTestId('platform-option').first().click();
+    await pickFirstPlatformOption(platformPopover(page));
     await dlg.getByLabel('实际支付金额（含费，元）').fill('1000');
 
     // 拦截创建请求并 abort：只取 body 做断言，不落任何数据

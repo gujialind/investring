@@ -55,6 +55,7 @@ npm run test:e2e                             # 3. 跑测试
 - **数据依赖**（种子见 `backend/tests/seed_base.py`）：登录 ADMIN/admin@2026（`auth.setup.ts`，storageState `e2e/.auth/admin.json`）；两个种子组合是契约——draft 组合 `E2E_PORT`（零交易/申赎/快照，承载表单交互与首购激活类用例）+ active 组合 `E2E_ACTIVE`（#354：首购确认 + 已确认场内交易 + 连续 2 日快照 + 1 笔 pending 场内交易，承载快照/持仓/编辑交易类用例）；另有 4 平台 + 产品（含 161017 LOF 双市场种子）。
 - **按 code 直达，不再 `.first()`**（#354）：所有业务 spec 经 `e2e/helpers.ts` 按组合 code 导航（`gotoPortfolioDetail` / `gotoPortfolioSubpage` / `portfolioPath`），不再经组合列表 `.first()`——`list_portfolios` 无 ORDER BY，新增组合后「首个」不确定。**两个组合是种子契约：缺组合或形态退化即硬失败，helper 不做优雅 skip**（旧惯例下种子退化会让用例在 CI 静默全 skip、覆盖无声蒸发，正是 #354 要消除的）。`portfolioPath` 恒返回桌面路径，mobile project 靠 `src/proxy.ts` 按 UA 重定向到 `/m`，结构性消除 `href^="/portfolio/"` 类只在桌面成立的定位。
 - **`test.skip` 只留给真正条件性数据**：平台数 < 2、无平台/产品数据、LOF 双市场种子缺失、端专属用例（另一端 skip 属预期）。**禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**——auto_confirm 会吃掉那笔 pending 交易、破坏「编辑交易」用例契约。改种子时对照 `e2e/*.spec.ts` 头部「数据说明」注释与 `backend/tests/integration/test_seed_contract.py`。
+- **选择框弹层交互一律走 `e2e/helpers.ts`**（#372）：平台/产品选择框的触发器、弹层、选项行与「无数据优雅 skip」的等待+文案由 helpers 单点持有，spec 内禁止再复制 `xpath=ancestor::div[@role="dialog"][1]` 与「环境中没有平台/产品数据」文案——三份拷贝曾各自漂移（同一批产品选项行，一处按 Tailwind `div.cursor-pointer`、两处按 `data-testid="product-option"` 定位）。**注意「首行 waitFor 失败即 skip」与「读全量后按条数 skip」是两种不同触发条件**（platform-select-search 用例 6/10 属后者），不要互相改写。
 - `auth.spec.ts` 三用例必须通过（登录是硬依赖）；platform-select-search 部分用例还需 ≥2 平台/≥2 投资人/产品。
 - projects：setup / chromium（桌面）/ mobile（iPhone 13 webkit）；部分用例是端专属（另一端内 skip，属预期）。
 

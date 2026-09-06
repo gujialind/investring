@@ -16,18 +16,28 @@
  * 定位器契约（#217）：组件侧 data-testid（platform-trigger / platform-option /
  * platform-special-option / platform-empty / cash-update-trigger），平台 code 从
  * 选项行 data-code 属性读取，不依赖 Tailwind 工具类与 lucide 图标类名；
- * 触发按钮回显文本断言保留——那是用户可见契约，不是实现耦合。
+ * 触发按钮回显文本断言保留——那是用户可见契约，不是实现耦合。选择框弹层的触发器/
+ * 弹层/选项行定位自 #372 起由 e2e/helpers.ts 单点持有；本文件原先 3 处按 Tailwind
+ * `div.cursor-pointer` 定位产品选项行（与上述契约相悖）已随该收敛一并消除。
  *
  * 数据说明：组合经 helpers 按 code 直达种子 draft 组合 E2E_PORT（#354），缺组合
  * 即硬失败、不 skip；搜索词不写死——打开弹层读取第一个平台选项推导；平台数 < 2、
  * 无平台数据等条件性数据仍优雅 skip，不在 CI 造数据。
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   E2E_PORT,
   collectPageErrors,
   dialogByTitle,
+  expectFilteredPlatformOptions,
+  firstPlatformOption,
   gotoPortfolioSubpage,
+  optionName,
+  pickFirstProduct,
+  pickPlatformOption,
+  platformOptions,
+  platformPopover,
+  platformTrigger,
   portfolioPath,
 } from './helpers';
 
@@ -49,87 +59,6 @@ async function gotoPositionsPage(page: Page): Promise<void> {
 /** 进入 E2E_PORT 份额变动事件页（渲染信号：新建事件按钮） */
 async function gotoShareChangeEventsPage(page: Page): Promise<void> {
   await gotoPortfolioSubpage(page, E2E_PORT, 'share-change-events');
-}
-
-/**
- * 平台搜索弹层：搜索 Input 最近的 role=dialog 祖先。
- * Dialog 内打开时（#191 弹层 Portal 注入 DialogContent）排除外层业务 Dialog。
- */
-function platformPopover(page: Page): Locator {
-  return page
-    .getByPlaceholder('搜索平台名称/代码')
-    .locator('xpath=ancestor::div[@role="dialog"][1]');
-}
-
-/** 弹层内平台选项（不含特殊项）：code 从 data-code 属性读（不解析文案），text 为「名称 (CODE)」整串 */
-async function platformOptions(popover: Locator): Promise<{ code: string; text: string }[]> {
-  return popover
-    .getByTestId('platform-option')
-    .evaluateAll((els) =>
-      els.map((el) => ({
-        code: el.getAttribute('data-code') ?? '',
-        text: ((el as HTMLElement).innerText || '').trim(),
-      }))
-    );
-}
-
-/** 选项文本 → name：剥离已知 ` (code)` 后缀（code 取自 data-code 属性传入，非文案正则解析） */
-function optionName(text: string, code: string): string {
-  const suffix = ` (${code})`;
-  return text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
-}
-
-/** 读取弹层内第一个平台选项；无平台数据时优雅 skip。keyword = code 前 2 字符小写 */
-async function firstPlatformOption(
-  popover: Locator
-): Promise<{ text: string; code: string; keyword: string }> {
-  const firstRow = popover.getByTestId('platform-option').first();
-  try {
-    await firstRow.waitFor({ timeout: 10_000 });
-  } catch {
-    test.skip(true, '环境中没有平台数据');
-  }
-  const code = (await firstRow.getAttribute('data-code')) ?? '';
-  const text = (await firstRow.innerText()).trim();
-  return { text, code, keyword: code.slice(0, 2).toLowerCase() };
-}
-
-/** 输入搜索词后断言：剩余平台选项均命中 keyword（小写比较）且至少 1 项；返回过滤后选项（轮询等重渲染） */
-async function expectFilteredOptions(
-  popover: Locator,
-  keyword: string
-): Promise<{ code: string; text: string }[]> {
-  let options: { code: string; text: string }[] = [];
-  await expect(async () => {
-    options = await platformOptions(popover);
-    expect(options.length).toBeGreaterThan(0);
-    for (const o of options) {
-      expect(o.text.toLowerCase()).toContain(keyword);
-    }
-  }).toPass();
-  return options;
-}
-
-/** 点选弹层内指定 code 的平台选项（按 data-code 属性定位，不依赖选项文案） */
-async function pickOption(popover: Locator, code: string): Promise<void> {
-  await popover.locator(`[data-testid="platform-option"][data-code="${code}"]`).click();
-}
-
-/**
- * 定位 SearchablePlatformSelect 触发按钮（testid + 回显/占位文本双条件；同页多实例由 scope 限定）。
- * 不能依赖 getByRole('button', { name })：placeholder 态按钮实测 name 匹配为 0
- * （文字带 text-muted-foreground 弱化样式时的 accessible name 计算差异）。
- */
-function platformTrigger(scope: Page | Locator, label: string): Locator {
-  return scope.getByTestId('platform-trigger').filter({ hasText: label }).first();
-}
-
-/**
- * 定位 SearchableProductSelect 触发按钮。产品组件的 testid 注解随其键盘化重写（#215）
- * 一并落地，此处暂用 aria-haspopup="dialog"（Popover 触发器标志）+ 文本双条件定位。
- */
-function productTrigger(scope: Page | Locator, label: string): Locator {
-  return scope.locator('button[aria-haspopup="dialog"]', { hasText: label }).first();
 }
 
 test.describe('平台选择框搜索（防 #177 回归）', () => {
@@ -160,7 +89,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
     // 输入搜索词 → 仅剩命中项；特殊项「全部平台」不参与过滤恒显示
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
-    const matched = await expectFilteredOptions(popover, keyword);
+    const matched = await expectFilteredPlatformOptions(popover, keyword);
     await expect(popover.getByTestId('platform-special-option')).toHaveText('全部平台');
 
     // 点选 → 弹层关闭、触发按钮回显 name (code)；列表请求带 platform_code（「含」侧）
@@ -172,7 +101,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
         r.url().includes(`platform_code=${picked.code}`),
       { timeout: 10_000 }
     );
-    await pickOption(popover, picked.code);
+    await pickPlatformOption(popover, picked.code);
     await respWith;
     const selectedTrigger = platformTrigger(page, picked.text);
     await expect(selectedTrigger).toBeVisible();
@@ -205,8 +134,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
-    const matched = await expectFilteredOptions(popover, keyword);
-    await pickOption(popover, matched[0].code);
+    const matched = await expectFilteredPlatformOptions(popover, keyword);
+    await pickPlatformOption(popover, matched[0].code);
     // 回显断言：按钮 accessible name 是 Label「交易平台」而非文本，用 hasText 定位回显串
     await expect(platformTrigger(dlg, matched[0].text)).toBeVisible();
 
@@ -266,17 +195,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.waitFor();
 
     // 选产品（可搜索下拉取第一项）、填金额（买入模式默认）；平台刻意不选
-    await productTrigger(dlg, '请选择产品').click();
-    const productPopover = page
-      .getByPlaceholder('搜索产品代码/名称')
-      .locator('xpath=ancestor::div[@role="dialog"][1]');
-    const productRows = productPopover.locator('div.cursor-pointer');
-    try {
-      await productRows.first().waitFor({ timeout: 10_000 });
-    } catch {
-      test.skip(true, '环境中没有产品数据');
-    }
-    await productRows.first().click();
+    await pickFirstProduct(page, dlg);
     await dlg.getByLabel('实际支付金额（含费，元）').fill('1000');
 
     // 提交 → 前端拦截：校验 toast 出现、Dialog 保持打开、未发出创建请求
@@ -312,17 +231,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.getByRole('combobox').click();
     await page.getByRole('option', { name: '现金分红' }).click();
     await expect(platformTrigger(dlg, '选择平台')).toBeVisible();
-    await productTrigger(dlg, '请选择产品').click();
-    const productPopover = page
-      .getByPlaceholder('搜索产品代码/名称')
-      .locator('xpath=ancestor::div[@role="dialog"][1]');
-    const productRows = productPopover.locator('div.cursor-pointer');
-    try {
-      await productRows.first().waitFor({ timeout: 10_000 });
-    } catch {
-      test.skip(true, '环境中没有产品数据');
-    }
-    await productRows.first().click();
+    await pickFirstProduct(page, dlg);
 
     // 提交 → 前端拦截：校验 toast 出现、Dialog 保持打开、未发出创建请求
     let createRequested = false;
@@ -360,7 +269,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const options = await platformOptions(popover);
     test.skip(options.length < 2, '环境中平台数 < 2，无法验证互斥');
     const picked = options[0];
-    await pickOption(popover, picked.code);
+    await pickPlatformOption(popover, picked.code);
     await expect(platformTrigger(dlg, picked.text)).toBeVisible();
 
     // 打开转入平台：已选平台行存在且 aria-disabled；点击不生效（弹层不关闭、值不变）
@@ -396,8 +305,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
-    const matched = await expectFilteredOptions(popover, keyword);
-    await pickOption(popover, matched[0].code);
+    const matched = await expectFilteredPlatformOptions(popover, keyword);
+    await pickPlatformOption(popover, matched[0].code);
     await expect(platformTrigger(dlg, matched[0].text)).toBeVisible();
     await dlg.getByRole('button', { name: '取消' }).click();
 
@@ -409,8 +318,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const popover2 = platformPopover(page);
     const opt2 = await firstPlatformOption(popover2);
     await popover2.getByPlaceholder('搜索平台名称/代码').fill(opt2.keyword);
-    const matched2 = await expectFilteredOptions(popover2, opt2.keyword);
-    await pickOption(popover2, matched2[0].code);
+    const matched2 = await expectFilteredPlatformOptions(popover2, opt2.keyword);
+    await pickPlatformOption(popover2, matched2[0].code);
     await expect(platformTrigger(page, matched2[0].text)).toBeVisible();
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
@@ -458,7 +367,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const nameKw = name.slice(0, 2).toLowerCase();
 
     await popover.getByPlaceholder('搜索平台名称/代码').fill(nameKw);
-    const matched = await expectFilteredOptions(popover, nameKw);
+    const matched = await expectFilteredPlatformOptions(popover, nameKw);
     // 通用断言经 code 巧合也可通过，须显式确认至少一项按 name 命中（抽样平台自身必命中）
     expect(
       matched.some((o) => optionName(o.text, o.code).toLowerCase().includes(nameKw)),
@@ -478,24 +387,14 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.waitFor();
 
     // 产品：可搜索下拉取第一项（无产品数据优雅 skip）
-    await productTrigger(dlg, '请选择产品').click();
-    const productPopover = page
-      .getByPlaceholder('搜索产品代码/名称')
-      .locator('xpath=ancestor::div[@role="dialog"][1]');
-    const productRows = productPopover.locator('div.cursor-pointer');
-    try {
-      await productRows.first().waitFor({ timeout: 10_000 });
-    } catch {
-      test.skip(true, '环境中没有产品数据');
-    }
-    await productRows.first().click();
+    await pickFirstProduct(page, dlg);
 
     // 交易平台选第一项；现金平台刻意不碰，保持默认「同交易平台」
     await platformTrigger(dlg, '请选择平台').click();
     const popover = platformPopover(page);
     const options = await platformOptions(popover);
     test.skip(options.length === 0, '环境中没有平台数据');
-    await pickOption(popover, options[0].code);
+    await pickPlatformOption(popover, options[0].code);
 
     await dlg.getByLabel('实际支付金额（含费，元）').fill('1000');
 
@@ -544,8 +443,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
-    const matched = await expectFilteredOptions(popover, keyword);
-    await pickOption(popover, matched[0].code);
+    const matched = await expectFilteredPlatformOptions(popover, keyword);
+    await pickPlatformOption(popover, matched[0].code);
     await expect(platformTrigger(dlg, matched[0].text)).toBeVisible();
 
     await dlg.getByRole('button', { name: '取消' }).click();
@@ -565,7 +464,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
     // 输入搜索词 → 仅剩命中项；特殊项「全部平台」不参与过滤恒显示
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
-    const matched = await expectFilteredOptions(popover, keyword);
+    const matched = await expectFilteredPlatformOptions(popover, keyword);
     await expect(popover.getByTestId('platform-special-option')).toHaveText('全部平台');
 
     // 点选 → 触发按钮回显 name (code)；列表请求带 platform_code（镜像用例 1 的请求断言形态）
@@ -577,7 +476,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
         r.url().includes(`platform_code=${picked.code}`),
       { timeout: 10_000 }
     );
-    await pickOption(popover, picked.code);
+    await pickPlatformOption(popover, picked.code);
     await respWith;
     await expect(platformTrigger(page, picked.text)).toBeVisible();
 
@@ -598,8 +497,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
-    const matched = await expectFilteredOptions(popover, keyword);
-    await pickOption(popover, matched[0].code);
+    const matched = await expectFilteredPlatformOptions(popover, keyword);
+    await pickPlatformOption(popover, matched[0].code);
     await expect(platformTrigger(dlg, matched[0].text)).toBeVisible();
 
     await dlg.getByRole('button', { name: '取消' }).click();
