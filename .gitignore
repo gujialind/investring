@@ -127,3 +127,6 @@ scripts/ssh-tunnel*.sh
 
 # Local design previews (kept local only, not version-controlled; see issue #109)
 docs/previews/
+
+# Local planning docs (not version-controlled)
+docs/plans/

@@ -57,3 +57,15 @@ npm run test:e2e                             # 3. 跑测试
 - **`test.skip` 只留给真正条件性数据**：平台数 < 2、无平台/产品数据、LOF 双市场种子缺失、端专属用例（另一端 skip 属预期）。**禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**——auto_confirm 会吃掉那笔 pending 交易、破坏「编辑交易」用例契约。改种子时对照 `e2e/*.spec.ts` 头部「数据说明」注释与 `backend/tests/integration/test_seed_contract.py`。
 - `auth.spec.ts` 三用例必须通过（登录是硬依赖）；platform-select-search 部分用例还需 ≥2 平台/≥2 投资人/产品。
 - projects：setup / chromium（桌面）/ mobile（iPhone 13 webkit）；部分用例是端专属（另一端内 skip，属预期）。
+
+### 目检（视觉验证）
+
+```bash
+../scripts/visual-verify.sh                                              # 双端截三个流水列表（默认 E2E_ACTIVE，恒有行）
+../scripts/visual-verify.sh --device mobile --path /portfolio/E2E_PORT/positions   # 参数原样转给 visual-shot.mjs
+```
+
+- **第三条验证层**：§2 门禁（lint/tsc/build）看不到运行时，§3 单测只覆盖 lib 纯函数，E2E 断言定位与文本、**不断言像素**——列宽挤压、CJK 竖排换行、双行单元格错位、结对行 `colSpan` 对不齐这类问题只有人眼看图能拦（#355「市场」列窄到「A股场内」四字竖排是 issue 里人眼发现的，e2e 全程绿灯）。改 `components/shared/*Content.tsx` 的表格/图表列结构时按本节目检。
+- 两个文件分工：`scripts/visual-verify.sh` 管服务与构建（复用已监听的 :8000/:3000，否则起后端 → `npm run build` → 组装 standalone → 起 `server.js`），`frontend/scripts/visual-shot.mjs` 管登录态与截图。参数（`--path` 可重复 / `--device desktop|mobile` 可重复 / `--out` / `--base`）以 `visual-shot.mjs` 头部注释为单一事实来源，勿在此处另立清单。
+- **视口与 E2E 同口径**：桌面 `Desktop Chrome` 1280×720、移动 `iPhone 13`（webkit），故 `--path` 只写桌面路径，靠 `src/proxy.ts` 按 UA 重定向到 `/m`（同 `portfolioPath` 的道理，不必写两条）。1280 是**保守值**——越窄越容易暴露挤压。每个 `--path` 出两张图：`*-<device>.png` 整页（fullPage）与 `*-<device>-table.png` 表格裁剪（放大读列布局）。
+- **空表目检等于没目检，但造数会污染 e2e 同一个库**：目检与 `npm run test:e2e` 共用 `/tmp/ir_e2e.db`，脚本因此优先复用已运行的后端（重启即清库重灌）。用完的临时记录要么 `DELETE` 掉，要么 kill 后端让下次 e2e 重灌种子，否则多出来的行会打脏行数 / `.first()` 类断言。份额变动事件在 `E2E_ACTIVE` 无种子行，需先造一条：`ex_date` 取晚于最新快照日的交易日、`entitlement_date` 取其前一交易日（先查 `snapshots` 与 `trading-calendar` 定日期），截图后删。**目检同样禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**（红线见上一节）。
