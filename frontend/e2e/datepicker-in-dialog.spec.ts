@@ -158,14 +158,23 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
     await page.keyboard.press('Escape');
 
-    // 份额变动事件（share-change-events L189）：两个 DatePicker，验证除息日。
+    // 份额变动事件：验证**权益登记日**。该弹窗两个 DatePicker 都预填今日，pickerTrigger 的 .first()
+    // 无法区分二者、会随表单字段顺序漂移（#355 把顺序改为 登记日 → 除息日，覆盖会无声换目标），
+    // 故按 label 邻近显式定位。DatePicker 无 id prop（表单 htmlFor 悬空），getByLabel 用不了。
     // 移动端无此子路由（app/m/portfolio/[code]/ 下不存在），仅桌面断言
     if (!isMobile) {
       await page.goto(page.url().replace(/\/subscriptions.*$/, '/share-change-events'));
       await page.getByRole('button', { name: '新建事件' }).click();
       dlg = dialogByTitle(page, '新建份额变动事件');
       await dlg.waitFor();
-      trig = await pickDay(page, dlg, DAY_18);
+      const entitlementTrigger = dlg
+        .getByText('权益登记日', { exact: true })
+        .locator('xpath=..')
+        .locator('button')
+        // 过滤掉 DatePicker 图标 only 的「清除日期」按钮，只留日期触发器
+        .filter({ hasText: /\d{4}-\d{2}-\d{2}|选择日期/ })
+        .first();
+      trig = await pickDay(page, dlg, DAY_18, entitlementTrigger);
       await expect(dlg).toBeVisible();
       await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
       await page.keyboard.press('Escape');

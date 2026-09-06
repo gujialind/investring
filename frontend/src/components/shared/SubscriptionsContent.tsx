@@ -43,7 +43,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatCurrency, formatSharesUnit, formatNav, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
 import { validatePlatformCode, parsePositiveNumber } from "@/lib/validation";
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
@@ -71,6 +71,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import NameCodeCell from "@/components/shared/NameCodeCell";
+import DatePairCell from "@/components/shared/DatePairCell";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import { SubscriptionConfirmDialog } from "@/components/shared/SubscriptionConfirmDialog";
 
@@ -605,8 +606,7 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                   <TableHead className="number-cell">金额</TableHead>
                   <TableHead className="number-cell">份额</TableHead>
                   <TableHead className="number-cell">净值</TableHead>
-                  <TableHead>申请日期</TableHead>
-                  <TableHead>确认日期</TableHead>
+                  <TableHead>申请/确认日期</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
@@ -633,21 +633,15 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                     <TableCell className="number-cell">{formatCurrency(sub.amount)}</TableCell>
                     <TableCell className="number-cell">{formatSharesUnit(sub.shares)}</TableCell>
                     <TableCell className="number-cell">{formatNav(sub.unit_price)}</TableCell>
-                    <TableCell>{sub.apply_date}</TableCell>
                     <TableCell>
-                      {/* 决策②：pending 的 confirm_date 是预计确认日，主次双行标注「预计」 */}
-                      {sub.confirm_date ? (
-                        sub.status === "pending" ? (
-                          <>
-                            <div className="text-sm">{sub.confirm_date}</div>
-                            <div className="text-xs text-muted-foreground">预计</div>
-                          </>
-                        ) : (
-                          sub.confirm_date
-                        )
-                      ) : (
-                        "--"
-                      )}
+                      {/* 成对日期合并单列（#355）：上行申请日、下行确认日；pending 的确认日是预计值，下行内联标注 */}
+                      <DatePairCell
+                        topLabel="申请日期"
+                        topValue={formatDate(sub.apply_date)}
+                        bottomLabel="确认日期"
+                        bottomValue={sub.confirm_date ? formatDate(sub.confirm_date) : "--"}
+                        estimated={sub.status === "pending" && !!sub.confirm_date}
+                      />
                     </TableCell>
                     <TableCell>
                       <Badge variant={getStatusBadgeVariant(sub.status)}>

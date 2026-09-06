@@ -43,7 +43,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatCurrency, formatSharesUnit, formatNav, formatMarketName, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
@@ -70,6 +70,8 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import NameCodeCell from "@/components/shared/NameCodeCell";
+import ProductCell from "@/components/shared/ProductCell";
+import DatePairCell from "@/components/shared/DatePairCell";
 import ProductFilterSelect from "@/components/shared/ProductFilterSelect";
 import SearchableProductSelect from "@/components/shared/SearchableProductSelect";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
@@ -496,17 +498,13 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
   const renderMainRow = (trade: Trade, isPairMain: boolean) => (
     <TableRow key={trade.id} className={isPairMain ? "border-b-0" : undefined}>
       <TableCell>
-        {/* CASH 孤儿单行：产品列改显示业务来源（§5.8 简化口径）；结对主行/基金单行维持产品名+code 双行 */}
+        {/* CASH 孤儿单行：产品列改显示业务来源（§5.8 简化口径）；结对主行/基金单行走 ProductCell 双行 */}
         {trade.product_code === "CASH" && !isPairMain ? (
           <span className="text-sm">{cashOrphanLabel(trade)}</span>
         ) : (
-          <div>
-            <p className="font-medium">{trade.product_name || trade.product_code}</p>
-            <p className="text-xs text-muted-foreground">{trade.product_code}</p>
-          </div>
+          <ProductCell code={trade.product_code} name={trade.product_name} market={trade.market} />
         )}
       </TableCell>
-      <TableCell>{formatMarketName(trade.market)}</TableCell>
       <TableCell>
         {trade.platform_code ? <NameCodeCell code={trade.platform_code} nameMap={platformNameMap} /> : "--"}
       </TableCell>
@@ -532,21 +530,15 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
         {formatCurrency(trade.fee)}
       </TableCell>
       <TableCell className="number-cell">{formatNav(trade.price)}</TableCell>
-      <TableCell>{trade.trade_date}</TableCell>
       <TableCell>
-        {/* 决策②：pending 的 confirm_date 是预计确认日，主次双行标注「预计」 */}
-        {trade.confirm_date ? (
-          trade.status === "pending" ? (
-            <>
-              <div className="text-sm">{trade.confirm_date}</div>
-              <div className="text-xs text-muted-foreground">预计</div>
-            </>
-          ) : (
-            trade.confirm_date
-          )
-        ) : (
-          "--"
-        )}
+        {/* 成对日期合并单列（#355）：上行交易日、下行确认日；pending 的确认日是预计值，下行内联标注 */}
+        <DatePairCell
+          topLabel="交易日期"
+          topValue={formatDate(trade.trade_date)}
+          bottomLabel="确认日期"
+          bottomValue={trade.confirm_date ? formatDate(trade.confirm_date) : "--"}
+          estimated={trade.status === "pending" && !!trade.confirm_date}
+        />
       </TableCell>
       <TableCell>
         <Badge variant={getStatusBadgeVariant(trade.status)}>
@@ -629,23 +621,17 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
             {platformName ? ` · ${platformName}` : ""}
           </span>
         </TableCell>
-        <TableCell />
-        <TableCell />
-        <TableCell />
+        {/* 空占位以 colSpan 折叠（#355）：主行 10 列 = 产品·平台·类型·金额·份额·手续费·价格·日期·状态·操作，
+            子行 = 标签 + 2(平台·类型) + 金额 + 6(份额·手续费·价格·日期·状态·操作)。
+            子行槽位纯位置耦合、tsc/lint 拦不住，折叠后 span 写错会立刻在视觉上暴露而非静默错一列 */}
+        <TableCell colSpan={2} />
         <TableCell className="number-cell">
           <span className="text-xs text-foreground">
             {meta.sign}
             {formatCurrency(sub.amount ?? 0)}
           </span>
         </TableCell>
-        {/* 份额/手续费列空占位，对齐主行 12 列（#173） */}
-        <TableCell />
-        <TableCell />
-        <TableCell />
-        <TableCell />
-        <TableCell />
-        <TableCell />
-        <TableCell className="text-right" />
+        <TableCell colSpan={6} />
       </TableRow>
     );
   };
@@ -913,15 +899,13 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
               <TableHeader>
                 <TableRow>
                   <TableHead>产品</TableHead>
-                  <TableHead>市场</TableHead>
                   <TableHead>平台</TableHead>
                   <TableHead>类型</TableHead>
                   <TableHead className="number-cell">金额</TableHead>
                   <TableHead className="number-cell">份额</TableHead>
                   <TableHead className="number-cell">手续费</TableHead>
                   <TableHead className="number-cell">价格</TableHead>
-                  <TableHead>交易日期</TableHead>
-                  <TableHead>确认日期</TableHead>
+                  <TableHead>交易/确认日期</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>

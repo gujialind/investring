@@ -98,12 +98,13 @@ test.describe('移动端份额变动事件页（#276）', () => {
     try {
       await page.getByRole('link', { name: '份额变动事件' }).click();
 
-      // 列表展示（#342）：默认无日期筛选可见新事件；产品列「名称（代码）」
+      // 列表展示（#342 → #355 双行）：产品列主行名称、次行 `代码 · 市场名`（虚拟产品 market 为空则无后缀）
       const row = page.locator('table tbody tr').filter({ hasText: created.product_code }).first();
       await expect(row).toBeVisible({ timeout: 15_000 });
       if (product.name) {
-        await expect(row.getByText(`${product.name}（${created.product_code}）`)).toBeVisible();
+        await expect(row.getByText(product.name)).toBeVisible();
       }
+      await expect(row.getByText(new RegExp(`^${created.product_code}( · .+)?$`))).toBeVisible();
 
       // pending 父记录有编辑入口
       await row.locator('button[title="编辑"]').click();

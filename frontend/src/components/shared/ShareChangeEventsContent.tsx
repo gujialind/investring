@@ -32,7 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, formatSharesUnit, formatMarketName, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
 import { Plus, ArrowLeft, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil } from "lucide-react";
 import Link from "next/link";
 import { ShareChangeEventCreate, ApiException } from "@/lib/api";
@@ -70,6 +70,8 @@ import SearchableProductSelect from "@/components/shared/SearchableProductSelect
 import { EVENT_TYPE_LABELS, EventConfirmDialog } from "@/components/shared/event-confirm-dialog";
 import { EventEditDialog } from "@/components/shared/event-edit-dialog";
 import NameCodeCell from "@/components/shared/NameCodeCell";
+import ProductCell from "@/components/shared/ProductCell";
+import DatePairCell from "@/components/shared/DatePairCell";
 
 interface ShareChangeEventsContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
@@ -434,22 +436,24 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                   </div>
                 )}
 
+                {/* 日期字段顺序 = 业务时序（#355）：权益登记日先于除息日（后端强制 ex_date > entitlement_date），
+                    与确认弹窗既有顺序一致 */}
                 <div className={formGrid}>
-                  <div className="space-y-2">
-                    <Label htmlFor="ex_date">除息日</Label>
-                    <DatePicker
-                      date={parseDateOnly(formData.ex_date)}
-                      onSelect={(date) => {
-                        setFormData({ ...formData, ex_date: toDateOnly(date) })
-                      }}
-                    />
-                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="entitlement_date">权益登记日</Label>
                     <DatePicker
                       date={parseDateOnly(formData.entitlement_date)}
                       onSelect={(date) => {
                         setFormData({ ...formData, entitlement_date: toDateOnly(date) })
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ex_date">除息日</Label>
+                    <DatePicker
+                      date={parseDateOnly(formData.ex_date)}
+                      onSelect={(date) => {
+                        setFormData({ ...formData, ex_date: toDateOnly(date) })
                       }}
                     />
                   </div>
@@ -590,10 +594,8 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                     <TableRow>
                       <TableHead>事件类型</TableHead>
                       <TableHead>产品</TableHead>
-                      <TableHead>市场</TableHead>
                       <TableHead>平台</TableHead>
-                      <TableHead>除息日</TableHead>
-                      <TableHead>权益登记日</TableHead>
+                      <TableHead>权益登记/除息日</TableHead>
                       <TableHead className="number-cell">份额变化</TableHead>
                       <TableHead className="number-cell">现金变化</TableHead>
                       <TableHead>状态</TableHead>
@@ -605,9 +607,16 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                       <TableRow key={event.id}>
                         <TableCell>{EVENT_TYPE_LABELS[event.event_type] || event.event_type}</TableCell>
                         <TableCell>
-                          {formatProductName(event.product_name, event.product_code)}
+                          {event.product_code ? (
+                            <ProductCell
+                              code={event.product_code}
+                              name={event.product_name}
+                              market={event.market}
+                            />
+                          ) : (
+                            "--"
+                          )}
                         </TableCell>
-                        <TableCell>{formatMarketName(event.market)}</TableCell>
                         <TableCell>
                           {event.platform_code ? (
                             <NameCodeCell code={event.platform_code} nameMap={platformNameMap} />
@@ -615,8 +624,15 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                             "全部"
                           )}
                         </TableCell>
-                        <TableCell>{event.ex_date}</TableCell>
-                        <TableCell>{event.entitlement_date}</TableCell>
+                        <TableCell>
+                          {/* 成对日期合并单列（#355）：上行权益登记日、下行除息日，与业务时序一致 */}
+                          <DatePairCell
+                            topLabel="权益登记日"
+                            topValue={formatDate(event.entitlement_date)}
+                            bottomLabel="除息日"
+                            bottomValue={formatDate(event.ex_date)}
+                          />
+                        </TableCell>
                         <TableCell className="number-cell">
                           {formatSharesUnit(event.shares_change)}
                         </TableCell>
