@@ -442,6 +442,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                   <div className="space-y-2">
                     <Label htmlFor="entitlement_date">权益登记日</Label>
                     <DatePicker
+                      id="entitlement_date"
                       date={parseDateOnly(formData.entitlement_date)}
                       onSelect={(date) => {
                         setFormData({ ...formData, entitlement_date: toDateOnly(date) })
@@ -451,6 +452,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                   <div className="space-y-2">
                     <Label htmlFor="ex_date">除息日</Label>
                     <DatePicker
+                      id="ex_date"
                       date={parseDateOnly(formData.ex_date)}
                       onSelect={(date) => {
                         setFormData({ ...formData, ex_date: toDateOnly(date) })

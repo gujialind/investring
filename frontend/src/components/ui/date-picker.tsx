@@ -15,6 +15,8 @@ import {
 import { useTradingCalendar } from "@/hooks/useTradingCalendar"
 
 interface DatePickerProps {
+  /** 透传到触发按钮，供配套 Label 的 htmlFor 关联（a11y / getByLabel 定位） */
+  id?: string
   date?: Date
   onSelect?: (date: Date | undefined) => void
   placeholder?: string
@@ -25,6 +27,7 @@ interface DatePickerProps {
 }
 
 export function DatePicker({
+  id,
   date,
   onSelect,
   placeholder = "选择日期",
@@ -78,6 +81,7 @@ export function DatePicker({
       <div className="relative">
         <PopoverTrigger asChild>
           <Button
+            id={id}
             type="button"
             variant="outline"
             disabled={disabled}

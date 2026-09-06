@@ -150,6 +150,7 @@ export function EventEditDialog({
               <div className="space-y-2">
                 <Label htmlFor="edit_entitlement_date">权益登记日</Label>
                 <DatePicker
+                  id="edit_entitlement_date"
                   date={parseDateOnly(form.entitlement_date)}
                   onSelect={(date) => setField({ entitlement_date: toDateOnly(date) })}
                 />
@@ -157,6 +158,7 @@ export function EventEditDialog({
               <div className="space-y-2">
                 <Label htmlFor="edit_ex_date">除息日</Label>
                 <DatePicker
+                  id="edit_ex_date"
                   date={parseDateOnly(form.ex_date)}
                   onSelect={(date) => setField({ ex_date: toDateOnly(date) })}
                 />
