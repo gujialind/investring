@@ -10,6 +10,7 @@ import {
   formatNav,
   formatDate,
   formatMarketName,
+  formatProductName,
 } from "@/lib/utils";
 
 /**
@@ -42,11 +43,7 @@ export function TradeConfirmDialog({
   const { data, isLoading, isFetching, error } = useTradePreview(trade?.id ?? null, open);
   const preview = data?.preview;
   const isBuy = trade?.trade_type === "buy";
-  const productName = trade
-    ? trade.product_name
-      ? `${trade.product_name}（${trade.product_code}）`
-      : trade.product_code
-    : "--";
+  const productName = formatProductName(trade?.product_name, trade?.product_code);
 
   return (
     <ConfirmInfoDialog

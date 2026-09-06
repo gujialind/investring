@@ -43,7 +43,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatCurrency, formatSharesUnit, formatNav, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
@@ -966,7 +966,7 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">产品</span>
                     <span>
-                      {editingTrade.product_name || editingTrade.product_code}（{editingTrade.product_code}）
+                      {formatProductName(editingTrade.product_name, editingTrade.product_code)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
