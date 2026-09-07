@@ -336,8 +336,12 @@ export default function ProductFilterDialog({
                               </span>
                             )}
                           </div>
+                          {/* market 为空（CASH / 在途虚拟产品）不拼市场段，避免 `· --` 残留（#393） */}
                           <p className="text-xs text-muted-foreground">
-                            {p.code} · {formatMarketName(p.market)} · {productTypeLabel(p.product_type)}
+                            {p.code}
+                            {p.market ? <> · {formatMarketName(p.market)}</> : null}
+                            {" · "}
+                            {productTypeLabel(p.product_type)}
                           </p>
                           {tags.length > 0 && (
                             <div className="mt-1 flex flex-wrap gap-1">

@@ -30,7 +30,7 @@ export default function MobileDashboardPage() {
     <div className="space-y-4 p-4">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">首页</h1>
+        <h1 className="text-2xl font-semibold">首页</h1>
         <p className="text-sm text-muted-foreground">投资组合概览</p>
       </div>
 

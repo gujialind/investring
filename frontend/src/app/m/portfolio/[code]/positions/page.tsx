@@ -112,7 +112,7 @@ export default function MobilePositionsPage() {
             </Button>
           </Link>
           <div>
-            <h1 className="text-xl font-bold">持仓管理</h1>
+            <h1 className="text-2xl font-semibold">持仓管理</h1>
             <p className="text-xs text-muted-foreground">{code}</p>
           </div>
         </div>
