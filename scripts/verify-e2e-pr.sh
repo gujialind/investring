@@ -96,19 +96,33 @@ done
 # --- 工具函数 ---
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+CLEANUP_DONE=false
 cleanup() {
+  [ "$CLEANUP_DONE" = true ] && return
+  CLEANUP_DONE=true
+  # 失败/中断路径兜底：恢复原始分支（正常路径已恢复时为 no-op）
+  if [ -n "$ORIGINAL_BRANCH" ] && [ "$ORIGINAL_BRANCH" != "HEAD" ]; then
+    local cur
+    cur=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$cur" != "$ORIGINAL_BRANCH" ]; then
+      log "恢复原始分支 ($ORIGINAL_BRANCH)..."
+      git checkout "$ORIGINAL_BRANCH" --quiet || log "⚠️ 分支恢复失败，请手动执行: git checkout $ORIGINAL_BRANCH"
+    fi
+  fi
+  if [ "$KEEP_STACK" = true ]; then
+    log "隔离栈保留（--keep-stack）：后端 :$BACKEND_PORT，前端 :$FRONTEND_PORT，db $ISOLATED_DB"
+    return
+  fi
   log "清理隔离栈..."
   [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null || true
   [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null || true
   [ -n "$ISOLATED_DB" ] && [ -f "$ISOLATED_DB" ] && rm -f "$ISOLATED_DB"
   [ -n "$CUSTOM_LAUNCHER" ] && [ -f "$CUSTOM_LAUNCHER" ] && rm -f "$CUSTOM_LAUNCHER"
-  if [ "$KEEP_STACK" = false ]; then
-    log "隔离栈已清理"
-  else
-    log "隔离栈保留（--keep-stack）：后端 :$BACKEND_PORT，前端 :$FRONTEND_PORT，db $ISOLATED_DB"
-  fi
+  log "隔离栈已清理"
 }
 trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 port_in_use() {
   ss -tuln 2>/dev/null | grep -q ":$1 " || netstat -tuln 2>/dev/null | grep -q ":$1 "
@@ -240,8 +254,9 @@ capture() {
   IFS=',' read -ra SPEC_ARR <<< "$SPECS"
   for spec in "${SPEC_ARR[@]}"; do
     raw="/tmp/e2e-verify-raw-$spec-$TIMESTAMP.json"
+    # 用例 fail 时 playwright 退出非零，但不中止——fail 状态由 JSON reporter 导出进 TSV、体现在 diff
     BASE_URL="http://localhost:$FRONTEND_PORT" npx playwright test "e2e/$spec.spec.ts" \
-      --workers="$WORKERS" --reporter=json > "$raw" 2>/dev/null
+      --workers="$WORKERS" --reporter=json > "$raw" 2>/dev/null || true
     python3 - "$raw" "$spec" "$output_tsv" <<'PYEOF'
 import json, sys
 raw, spec, out = sys.argv[1], sys.argv[2], sys.argv[3]
