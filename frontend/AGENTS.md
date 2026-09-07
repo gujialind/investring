@@ -71,3 +71,16 @@ npm run test:e2e                             # 3. 跑测试
 - 两个文件分工：`scripts/visual-verify.sh` 管服务与构建（复用已监听的 :8000/:3000，否则起后端 → `npm run build` → 组装 standalone → 起 `server.js`），`frontend/scripts/visual-shot.mjs` 管登录态与截图。参数（`--path` 可重复 / `--device desktop|mobile` 可重复 / `--out` / `--base`）以 `visual-shot.mjs` 头部注释为单一事实来源，勿在此处另立清单。
 - **视口与 E2E 同口径**：桌面 `Desktop Chrome` 1280×720、移动 `iPhone 13`（webkit），故 `--path` 只写桌面路径，靠 `src/proxy.ts` 按 UA 重定向到 `/m`（同 `portfolioPath` 的道理，不必写两条）。1280 是**保守值**——越窄越容易暴露挤压。每个 `--path` 出两张图：`*-<device>.png` 整页（fullPage）与 `*-<device>-table.png` 表格裁剪（放大读列布局）。
 - **空表目检等于没目检，但造数会污染 e2e 同一个库**：目检与 `npm run test:e2e` 共用 `/tmp/ir_e2e.db`，脚本因此优先复用已运行的后端（重启即清库重灌）。用完的临时记录要么 `DELETE` 掉，要么 kill 后端让下次 e2e 重灌种子，否则多出来的行会打脏行数 / `.first()` 类断言。份额变动事件在 `E2E_ACTIVE` 无种子行，需先造一条：`ex_date` 取晚于最新快照日的交易日、`entitlement_date` 取其前一交易日（先查 `snapshots` 与 `trading-calendar` 定日期），截图后删。**目检同样禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**（红线见上一节）。
+
+### E2E 归一化对比（纯测试重构验证）
+
+```bash
+./scripts/verify-e2e-pr.sh --branch feature/372-e2e-select-helpers
+./scripts/verify-e2e-pr.sh --branch feature/383-skip-review --specs platform-select-search
+```
+
+- **适用场景**：纯测试代码重构（如 #372 helper 收敛、#371 移动端 skip 删除、#383 skip 复核），需要验证 pass/skip 形态未变。脚本在 base 分支和 PR 分支各跑一次指定 spec × project 的 E2E，导出归一化 TSV 后 diff，期望空 diff 或指定的单行变化。
+- **隔离栈**：自动检测并发会话占用的端口（`:3000`/`:8000`），选择安全端口（默认 `8100-8199` 后端、`3100-3199` 前端）启动隔离栈，避免冲突。隔离 db 文件 `/tmp/ir_e2e_verify_<pid>.db`，跑完自动清理（`--keep-stack` 保留）。
+- **参数**：`--branch`（必填）、`--base-ref`（默认 `origin/main`）、`--specs`（逗号分隔，默认 4 个受影响 spec）、`--projects`（默认 `chromium,mobile`）、`--workers`（默认 1，消除 CPU 争用非确定性）。详见脚本头部注释。
+- **输出**：`/tmp/e2e-verify-baseline-<timestamp>.tsv` 与 `/tmp/e2e-verify-after-<timestamp>.tsv`，diff 结果打印到 stdout。TSV 格式：`[spec, project, 用例标题, status, 结果, skip 文案]`，按行排序以抵消 `fullyParallel` 的非确定顺序。
+- **注意**：脚本会 `git checkout` 切换分支，**工作目录必须干净**（无未提交改动）。跑完自动恢复到原始分支。
