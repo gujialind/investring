@@ -20,13 +20,18 @@
  * 弹层/选项行定位自 #372 起由 e2e/helpers.ts 单点持有；本文件原先 3 处按 Tailwind
  * `div.cursor-pointer` 定位产品选项行（与上述契约相悖）已随该收敛一并消除。
  * #382 补齐最后残留：toast 卡片改走 helpers.toastByTitle（data-testid="toast-card" +
- * 标题过滤），不再 `xpath=ancestor::div[contains(@class,…)]` 按样式爬祖先；且 e2e/**
- * 已由 eslint no-restricted-syntax 结构性拦截 lucide 类名 / xpath class 匹配 /
- * Tailwind 工具类三类定位——#217 的契约自此有机器保障，不再只靠人工 grep 结论。
+ * 标题过滤），不再用 xpath 按 class 属性爬祖先；且 e2e/** 已由 eslint
+ * no-restricted-syntax 结构性拦截 lucide 图标类名、xpath 的 class 匹配、Tailwind
+ * 工具类三类定位——#217 的契约自此有机器保障，不再只靠人工 grep 结论。
  *
  * 数据说明：组合经 helpers 按 code 直达种子 draft 组合 E2E_PORT（#354），缺组合
  * 即硬失败、不 skip；搜索词不写死——打开弹层读取第一个平台选项推导；平台数 < 2、
  * 无平台数据等条件性数据仍优雅 skip，不在 CI 造数据。
+ *
+ * 端差异（#383）：双端共用 components/shared/*Content.tsx 与同一批 Dialog，唯一需要
+ * 适配的是移动端筛选栏默认折叠——已由 helpers.openFilterPanelIfMobile 单点展开，用例
+ * 断言本身双端通用。故本文件剩余端专属 skip 只有两类：功能确实缺（用例 6，移动端无
+ * 现金转移）、同一控件两端各测一次且互为镜像（用例 7 / 13）。
  */
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -36,6 +41,7 @@ import {
   expectFilteredPlatformOptions,
   firstPlatformOption,
   gotoPortfolioSubpage,
+  openFilterPanelIfMobile,
   optionName,
   pickFirstProduct,
   pickPlatformOption,
@@ -56,7 +62,7 @@ async function gotoSubscriptionsPage(page: Page): Promise<void> {
   await gotoPortfolioSubpage(page, E2E_PORT, 'subscriptions');
 }
 
-/** 进入 E2E_PORT 持仓页（桌面端；移动端无「更新非净值资产」入口，调用方需 skip mobile） */
+/** 进入 E2E_PORT 持仓页（渲染信号「更新非净值资产」为桌面专属；移动端 positions 是独立实现，见 helpers SUBPAGE_READY 注） */
 async function gotoPositionsPage(page: Page): Promise<void> {
   await gotoPortfolioSubpage(page, E2E_PORT, 'positions');
 }
@@ -67,9 +73,8 @@ async function gotoShareChangeEventsPage(page: Page): Promise<void> {
 }
 
 test.describe('平台选择框搜索（防 #177 回归）', () => {
-  // ---- 用例 1：调仓页筛选平台可搜索 + 特殊项「全部平台」+ 请求参数断言 ----
+  // ---- 用例 1：调仓页筛选平台可搜索 + 特殊项「全部平台」+ 请求参数断言；#383 起双端同断言 ----
   test('调仓页筛选平台可搜索，保留「全部平台」且请求参数正确', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面筛选栏断言仅针对桌面项目');
     const errors = collectPageErrors(page);
 
     // 「不含」侧：默认（全部平台）进页面，列表请求不带 platform_code。
@@ -87,6 +92,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await initialResp;
 
     // 打开筛选栏平台弹层，动态取第一个平台 code 片段作为搜索词
+    await openFilterPanelIfMobile(page, testInfo);
     await platformTrigger(page, '全部平台').click();
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
@@ -125,9 +131,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 2：提交交易表单「交易平台」可搜索、「现金平台」默认「同交易平台」置顶 ----
-  test('提交交易表单：交易平台可搜索，现金平台默认「同交易平台」', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面表单断言仅针对桌面项目');
+  // ---- 用例 2：提交交易表单「交易平台」可搜索、「现金平台」默认「同交易平台」置顶；#383 起双端同断言 ----
+  test('提交交易表单：交易平台可搜索，现金平台默认「同交易平台」', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
     await page.getByRole('button', { name: '提交交易' }).first().click();
@@ -154,9 +159,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 3：申赎表单原生 required 被自定义组件替换后，空平台提交须被前端手动校验拦截 ----
-  test('申赎表单未选平台提交被前端拦截', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面表单断言仅针对桌面项目');
+  // ---- 用例 3：申赎表单原生 required 被自定义组件替换后，空平台提交须被前端手动校验拦截；#383 起双端同断言 ----
+  test('申赎表单未选平台提交被前端拦截', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoSubscriptionsPage(page);
     await page.getByRole('button', { name: /提交申请|首次申购激活/ }).first().click();
@@ -188,9 +192,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 4：调仓表单空平台提交被前端手动校验拦截（#209，镜像用例 3 申赎拦截形态）----
-  test('提交交易表单未选平台提交被前端拦截', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面表单断言仅针对桌面项目');
+  // ---- 用例 4：调仓表单空平台提交被前端手动校验拦截（#209，镜像用例 3 申赎拦截形态）；#383 起双端同断言 ----
+  test('提交交易表单未选平台提交被前端拦截', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
     await page.getByRole('button', { name: '提交交易' }).first().click();
@@ -219,9 +222,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 5：新建事件表单平台级事件空平台提交被前端手动校验拦截（#216，镜像用例 3/4）----
-  test('新建事件表单：平台级事件未选平台提交被前端拦截', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面表单断言仅针对桌面项目');
+  // ---- 用例 5：新建事件表单平台级事件空平台提交被前端手动校验拦截（#216，镜像用例 3/4）；#383 起双端同断言 ----
+  test('新建事件表单：平台级事件未选平台提交被前端拦截', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoShareChangeEventsPage(page);
     await page.getByRole('button', { name: '新建事件' }).click();
@@ -312,7 +314,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     // trades 移动页筛选面板（覆盖 shared 组件 mobile variant）：展开「筛选」→ 平台控件可搜索
     await page.goto(portfolioPath(E2E_PORT, 'trades'));
     await page.getByRole('button', { name: '提交交易' }).first().waitFor({ timeout: 15_000 });
-    await page.getByRole('button', { name: '筛选' }).click();
+    await openFilterPanelIfMobile(page, testInfo);
     await platformTrigger(page, '全部平台').click();
     const popover2 = platformPopover(page);
     const opt2 = await firstPlatformOption(popover2);
@@ -324,11 +326,11 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 8：清空搜索词恢复全量 + 无匹配空态 ----
+  // ---- 用例 8：清空搜索词恢复全量 + 无匹配空态；#383 起双端同断言 ----
   test('清空搜索词恢复全量，无匹配显示空态提示', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面筛选栏断言仅针对桌面项目');
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
+    await openFilterPanelIfMobile(page, testInfo);
     await platformTrigger(page, '全部平台').click();
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
@@ -353,11 +355,11 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 9：按平台名称片段搜索（覆盖过滤的 name 分支，而非仅 code 分支）----
+  // ---- 用例 9：按平台名称片段搜索（覆盖过滤的 name 分支，而非仅 code 分支）；#383 起双端同断言 ----
   test('按平台名称片段搜索可过滤', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面筛选栏断言仅针对桌面项目');
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
+    await openFilterPanelIfMobile(page, testInfo);
     await platformTrigger(page, '全部平台').click();
     const popover = platformPopover(page);
     const { text, code } = await firstPlatformOption(popover);
@@ -376,9 +378,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 10：现金平台默认「同交易平台」时，提交请求 body 不含 cash_platform_code ----
-  test('现金平台默认「同交易平台」时提交 body 不含 cash_platform_code', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面表单断言仅针对桌面项目');
+  // ---- 用例 10：现金平台默认「同交易平台」时，提交请求 body 不含 cash_platform_code；#383 起双端同断言 ----
+  test('现金平台默认「同交易平台」时提交 body 不含 cash_platform_code', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
     await page.getByRole('button', { name: '提交交易' }).first().click();
@@ -449,13 +450,13 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 12（#217 冒烟）：申赎筛选栏平台选择框（特殊项「全部平台」+ 请求参数断言）----
+  // ---- 用例 12（#217 冒烟）：申赎筛选栏平台选择框（特殊项「全部平台」+ 请求参数断言）；#383 起双端同断言 ----
   test('申赎页筛选平台可搜索，保留「全部平台」且请求参数正确', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '桌面筛选栏断言仅针对桌面项目');
     const errors = collectPageErrors(page);
     await gotoSubscriptionsPage(page);
 
     // 打开筛选栏平台弹层，动态取第一个平台 code 片段作为搜索词
+    await openFilterPanelIfMobile(page, testInfo);
     await platformTrigger(page, '全部平台').click();
     const popover = platformPopover(page);
     const { keyword } = await firstPlatformOption(popover);
