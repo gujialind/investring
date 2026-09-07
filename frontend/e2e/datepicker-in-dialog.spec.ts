@@ -177,9 +177,10 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
 
     // 持仓页：现金修正 + 平台间现金转移（positions L340/L409）
     // 移动端 positions 为独立实现（m/positions/page.tsx L194 弹窗不同源于桌面）：
-    // 「更新非净值资产」触发器是纯图标按钮（RefreshCw），且无现金转移功能
+    // 「更新非净值资产」触发器是纯图标按钮（data-testid="cash-update-trigger"，#382 起
+    // 不再按 lucide 类名定位），且无现金转移功能
     if (isMobile) {
-      await page.locator('button:has(.lucide-refresh-cw)').click();
+      await page.getByTestId('cash-update-trigger').click();
       dlg = dialogByTitle(page, '更新非净值资产');
       await dlg.waitFor();
       trig = await pickDay(page, dlg, DAY_18);

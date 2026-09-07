@@ -12,7 +12,7 @@
  * ——结构性消除 `href^="/portfolio/"` 类只在桌面成立的定位（regression.spec.ts
  * 旧 mobile bug：移动端锚点 href 为 /m/portfolio/...，`^=` 永不匹配 → 恒 skip）。
  */
-import { expect, test, type Page, type Locator } from '@playwright/test';
+import { expect, test, type Page, type Locator, type TestInfo } from '@playwright/test';
 
 /** 种子契约组合（backend/tests/seed_base.py，勿删勿改形态） */
 export const E2E_PORT = 'E2E_PORT'; // draft、零交易/申赎/快照
@@ -68,9 +68,40 @@ export async function gotoPortfolioSubpage(
   await SUBPAGE_READY[sub](page).waitFor({ state: 'visible', timeout: 15_000 });
 }
 
+/**
+ * 移动端展开折叠筛选面板；桌面端筛选栏恒展开，本函数 no-op（#383）。
+ *
+ * `components/shared/*Content.tsx` 的 `variant === "mobile"` 分支把 filterControls 包在
+ * `{filterOpen && …}` 里、`filterOpen` 初值 false，故未展开时 platformTrigger 定位到
+ * 未渲染节点、click 直接超时。这是端差异里**唯一**需要适配的一处：面板展开后控件与
+ * 桌面完全同构（同一 filterControls 节点），断言本身双端通用。
+ *
+ * 按钮名必须用锚定正则——激活计数 Badge 会把 accessible name 变成「筛选1」，而空态在
+ * `hasNonDefaultFilter` 下另有「重置筛选」按钮（EmptyState 的 resetFilters action），
+ * Playwright 字符串 name 默认子串匹配，两者会 strict-mode 撞车。
+ */
+export async function openFilterPanelIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
+  if (testInfo.project.name !== 'mobile') return;
+  const trigger = page.getByRole('button', { name: /^筛选/ });
+  await trigger.waitFor({ state: 'visible', timeout: 15_000 });
+  await trigger.click();
+}
+
 /** 按弹窗标题定位业务 Dialog（Popover 弹层同样带 role=dialog，需用文案区分） */
 export function dialogByTitle(page: Page, title: string | RegExp): Locator {
   return page.locator('[role="dialog"]').filter({ hasText: title }).first();
+}
+
+/**
+ * 按标题定位 toast 卡片（#382）。ToastContainer 卡片根挂 data-testid="toast-card"；
+ * toast 默认存活 3s、可堆叠出多张，故用 filter({ has: heading }) 按标题收窄。
+ * 不用 hasText：把标题钉在 <h4> 上，避免误命中消息 <p>。
+ */
+export function toastByTitle(page: Page, title: string | RegExp): Locator {
+  return page
+    .getByTestId('toast-card')
+    .filter({ has: page.getByRole('heading', { name: title }) })
+    .first();
 }
 
 /**
@@ -119,11 +150,13 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 //
 // 命名约定（新增 helper 须遵守，消除 click/locate 混淆）：
 //   xPopover / xTrigger / xOption → 纯 Locator 工厂（同步、无副作用）
+//   xByTitle                      → 纯 Locator 工厂，按标题文案定位容器（dialog / toast）
 //   xOptions                      → 只读批量提取 data 属性
 //   firstXOption                  → 只读单行（含等待与优雅 skip），不点选
 //   pickXxx                       → 会点选
 //   expectXxx                     → 断言共享组件契约（业务断言留在 spec）
 //   openXxx                       → 导航 + 开弹窗
+//   openXxxIfMobile               → 端差异适配（另一端 no-op），不含导航
 // ===========================================================================
 
 /** 首行等待 + 优雅 skip 的选项类别（决定 testid 与 skip 文案） */
