@@ -74,6 +74,18 @@ export function dialogByTitle(page: Page, title: string | RegExp): Locator {
 }
 
 /**
+ * 按标题定位 toast 卡片（#382）。ToastContainer 卡片根挂 data-testid="toast-card"；
+ * toast 默认存活 3s、可堆叠出多张，故用 filter({ has: heading }) 按标题收窄。
+ * 不用 hasText：把标题钉在 <h4> 上，避免误命中消息 <p>。
+ */
+export function toastByTitle(page: Page, title: string | RegExp): Locator {
+  return page
+    .getByTestId('toast-card')
+    .filter({ has: page.getByRole('heading', { name: title }) })
+    .first();
+}
+
+/**
  * 收集页面未捕获异常（客户端崩溃防线），用例末尾断言为空。
  * 豁免 Next.js standalone/mobile 的 RSC `_rsc` prefetch 被重定向层拦下的框架级
  * `access control` 噪音（`/m/...?_rsc=... due to access control checks`）：移动端
@@ -119,6 +131,7 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 //
 // 命名约定（新增 helper 须遵守，消除 click/locate 混淆）：
 //   xPopover / xTrigger / xOption → 纯 Locator 工厂（同步、无副作用）
+//   xByTitle                      → 纯 Locator 工厂，按标题文案定位容器（dialog / toast）
 //   xOptions                      → 只读批量提取 data 属性
 //   firstXOption                  → 只读单行（含等待与优雅 skip），不点选
 //   pickXxx                       → 会点选

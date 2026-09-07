@@ -14,11 +14,15 @@
  *     PC 持仓「更新非净值资产」。
  *
  * 定位器契约（#217）：组件侧 data-testid（platform-trigger / platform-option /
- * platform-special-option / platform-empty / cash-update-trigger），平台 code 从
- * 选项行 data-code 属性读取，不依赖 Tailwind 工具类与 lucide 图标类名；
+ * platform-special-option / platform-empty / cash-update-trigger / toast-card），平台
+ * code 从选项行 data-code 属性读取，不依赖 Tailwind 工具类与 lucide 图标类名；
  * 触发按钮回显文本断言保留——那是用户可见契约，不是实现耦合。选择框弹层的触发器/
  * 弹层/选项行定位自 #372 起由 e2e/helpers.ts 单点持有；本文件原先 3 处按 Tailwind
  * `div.cursor-pointer` 定位产品选项行（与上述契约相悖）已随该收敛一并消除。
+ * #382 补齐最后残留：toast 卡片改走 helpers.toastByTitle（data-testid="toast-card" +
+ * 标题过滤），不再 `xpath=ancestor::div[contains(@class,…)]` 按样式爬祖先；且 e2e/**
+ * 已由 eslint no-restricted-syntax 结构性拦截 lucide 类名 / xpath class 匹配 /
+ * Tailwind 工具类三类定位——#217 的契约自此有机器保障，不再只靠人工 grep 结论。
  *
  * 数据说明：组合经 helpers 按 code 直达种子 draft 组合 E2E_PORT（#354），缺组合
  * 即硬失败、不 skip；搜索词不写死——打开弹层读取第一个平台选项推导；平台数 < 2、
@@ -39,6 +43,7 @@ import {
   platformPopover,
   platformTrigger,
   portfolioPath,
+  toastByTitle,
 } from './helpers';
 
 /** 进入 E2E_PORT 调仓交易页（桌面渲染信号：提交交易按钮） */
@@ -174,11 +179,9 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     });
     await dlg.getByRole('button', { name: '提交申请' }).click();
 
-    await expect(page.getByRole('heading', { name: '表单校验失败' })).toBeVisible();
     // toast 卡片内断言 message（页面另有同文案的平台占位符，不能全局 getByText）
-    const toast = page
-      .getByRole('heading', { name: '表单校验失败' })
-      .locator('xpath=ancestor::div[contains(@class,"rounded-lg")][1]');
+    const toast = toastByTitle(page, '表单校验失败');
+    await expect(toast).toBeVisible();
     await expect(toast.getByText('请选择平台', { exact: true })).toBeVisible();
     await expect(dlg).toBeVisible();
     expect(createRequested, '未选平台时不应发出创建请求').toBe(false);
@@ -207,11 +210,9 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     });
     await dlg.getByRole('button', { name: '提交交易' }).click();
 
-    await expect(page.getByRole('heading', { name: '表单校验失败' })).toBeVisible();
     // toast 卡片内断言 message（页面另有同文案的平台占位符，不能全局 getByText）
-    const toast = page
-      .getByRole('heading', { name: '表单校验失败' })
-      .locator('xpath=ancestor::div[contains(@class,"rounded-lg")][1]');
+    const toast = toastByTitle(page, '表单校验失败');
+    await expect(toast).toBeVisible();
     await expect(toast.getByText('请选择平台', { exact: true })).toBeVisible();
     await expect(dlg).toBeVisible();
     expect(createRequested, '未选平台时不应发出创建请求').toBe(false);
@@ -242,11 +243,9 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     });
     await dlg.getByRole('button', { name: '创建' }).click();
 
-    await expect(page.getByRole('heading', { name: '表单校验失败' })).toBeVisible();
     // toast 卡片内断言 message（页面另有同文案的平台占位符，不能全局 getByText）
-    const toast = page
-      .getByRole('heading', { name: '表单校验失败' })
-      .locator('xpath=ancestor::div[contains(@class,"rounded-lg")][1]');
+    const toast = toastByTitle(page, '表单校验失败');
+    await expect(toast).toBeVisible();
     await expect(toast.getByText('请选择平台', { exact: true })).toBeVisible();
     await expect(dlg).toBeVisible();
     expect(createRequested, '未选平台时不应发出创建请求').toBe(false);

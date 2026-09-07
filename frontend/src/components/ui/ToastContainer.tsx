@@ -54,6 +54,7 @@ function ToastItem({
 
   return (
     <div
+      data-testid="toast-card"
       className={`rounded-lg border shadow-lg p-4 ${borders[toast.type as keyof typeof borders]} ${bgColors[toast.type as keyof typeof bgColors]}`}
       style={{ animation: 'slideIn 0.3s ease-out' }}
     >

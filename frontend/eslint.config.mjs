@@ -78,6 +78,45 @@ const numberDisplaySelectors = [
   },
 ];
 
+// 2026-09-07（issue #382）：e2e 定位器契约护栏（#217）。
+// #217 当年以「grep 零残留」验收，但该结论从无机器保障，且实际不成立——#371/#372
+// 实施中发现 4 处残留仍在按 lucide 图标类名与 Tailwind 工具类定位。此处结构性拦截。
+// 不会误伤的既有合法写法：helpers.ts 的 `ancestor::div[@role="dialog"][1]`（不含
+// contains(@class）、datepicker 的 `rdp-day_button`（react-day-picker 公开类名 API，
+// 真正锚点是 data-day 属性）；注释不是 AST 节点，故 spec 里的历史说明文字也不命中。
+const locatorContractSelectors = [
+  {
+    selector: "Literal[value=/\\.lucide-/]",
+    message:
+      "禁止按 lucide 图标类名定位（图标是实现细节，随 lucide-react 版本漂移）。请改用 data-testid 或 accessible name，见 #217/#382。",
+  },
+  {
+    selector: "TemplateElement[value.cooked=/\\.lucide-/]",
+    message:
+      "禁止按 lucide 图标类名定位（图标是实现细节，随 lucide-react 版本漂移）。请改用 data-testid 或 accessible name，见 #217/#382。",
+  },
+  {
+    selector: "Literal[value=/contains\\(@class/]",
+    message:
+      "禁止在 xpath 中按 class 匹配祖先/后代（耦合 Tailwind 工具类与 shadcn 基件样式）。请在组件侧补 data-testid 后按 testid 定位，见 #217/#382。",
+  },
+  {
+    selector: "TemplateElement[value.cooked=/contains\\(@class/]",
+    message:
+      "禁止在 xpath 中按 class 匹配祖先/后代（耦合 Tailwind 工具类与 shadcn 基件样式）。请在组件侧补 data-testid 后按 testid 定位，见 #217/#382。",
+  },
+  {
+    selector: "Literal[value=/cursor-pointer/]",
+    message:
+      "禁止按 Tailwind 工具类定位。请改用 data-testid，见 #217/#372/#382。",
+  },
+  {
+    selector: "TemplateElement[value.cooked=/cursor-pointer/]",
+    message:
+      "禁止按 Tailwind 工具类定位。请改用 data-testid，见 #217/#372/#382。",
+  },
+];
+
 const eslintConfig = [
   // 复刻 `next lint` 的默认忽略范围，避免扫描 node_modules / 构建产物
   {
@@ -156,6 +195,15 @@ const eslintConfig = [
     ],
     rules: {
       "no-restricted-syntax": ["error", ...paletteColorSelectors],
+    },
+  },
+  // e2e 定位器契约（#217/#382）：此前所有 no-restricted-syntax 块均为 src/** 作用域，
+  // 结构上覆盖不到 e2e/，故残留能长期存在。用 e2e/**/*.ts 以显式匹配任意深度
+  // （含直接子文件 helpers.ts 与 fixtures/auth.setup.ts）。
+  {
+    files: ["e2e/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...locatorContractSelectors],
     },
   },
 ];
