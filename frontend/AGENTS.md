@@ -60,6 +60,21 @@ npm run test:e2e                             # 3. 跑测试
 - `auth.spec.ts` 三用例必须通过（登录是硬依赖）；platform-select-search 部分用例还需 ≥2 平台/≥2 投资人/产品。
 - projects：setup / chromium（桌面）/ mobile（iPhone 13 webkit）；部分用例是端专属（另一端内 skip，属预期）。
 
+### E2E / 目检前置检查
+
+跑 `npm run test:e2e` 或 `scripts/visual-verify.sh` 前，先核对监听进程归属：
+
+```bash
+ss -tlnp | grep -E ":8000|:3000"
+readlink /proc/<pid>/cwd  # 看是否当前 worktree
+```
+
+- cwd 已 `(deleted)` → 死会话残留，可安全 `kill <pid>`（脚本会自起新服务）
+- cwd 属其他工作树 → 不要动（可能干扰并行会话）
+- cwd 是当前工作树 → 正常，复用即可
+
+不检查的后果：`playwright.config.ts` 本地 `reuseExistingServer: !process.env.CI` 会复用旧服务，测到旧代码或 ECONNREFUSED；`visual-verify.sh` 同样复用已监听服务。
+
 ### 目检（视觉验证）
 
 ```bash
