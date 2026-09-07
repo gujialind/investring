@@ -161,21 +161,19 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     // 份额变动事件：验证**权益登记日**。该弹窗两个 DatePicker 都预填今日，pickerTrigger 的 .first()
     // 无法区分二者、会随表单字段顺序漂移（#355 把顺序改为 登记日 → 除息日，覆盖会无声换目标），
     // 故按 label 显式定位（#385 起 DatePicker 透传 id，htmlFor 关联生效，getByLabel 可直取）。
-    // 移动端无此子路由（app/m/portfolio/[code]/ 下不存在），仅桌面断言
-    if (!isMobile) {
-      await page.goto(page.url().replace(/\/subscriptions.*$/, '/share-change-events'));
-      await page.getByRole('button', { name: '新建事件' }).click();
-      dlg = dialogByTitle(page, '新建份额变动事件');
-      await dlg.waitFor();
-      const entitlementTrigger = dlg.getByLabel('权益登记日', { exact: true });
-      trig = await pickDay(page, dlg, DAY_18, entitlementTrigger);
-      await expect(dlg).toBeVisible();
-      await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
-      await page.keyboard.press('Escape');
-      await page.goto(page.url().replace(/\/share-change-events.*$/, '/positions'));
-    } else {
-      await page.goto(page.url().replace(/\/subscriptions.*$/, '/positions'));
-    }
+    // #371：app/m/portfolio/[code]/share-change-events/page.tsx 存在且渲染同一 ShareChangeEventsContent，
+    // 新建事件 Dialog 子树零 variant 分支（variant 只改 formGrid 列数与筛选栏折叠）——原「移动端无此
+    // 子路由」为失实前提，故双端同断言。
+    await page.goto(page.url().replace(/\/subscriptions.*$/, '/share-change-events'));
+    await page.getByRole('button', { name: '新建事件' }).click();
+    dlg = dialogByTitle(page, '新建份额变动事件');
+    await dlg.waitFor();
+    const entitlementTrigger = dlg.getByLabel('权益登记日', { exact: true });
+    trig = await pickDay(page, dlg, DAY_18, entitlementTrigger);
+    await expect(dlg).toBeVisible();
+    await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
+    await page.keyboard.press('Escape');
+    await page.goto(page.url().replace(/\/share-change-events.*$/, '/positions'));
 
     // 持仓页：现金修正 + 平台间现金转移（positions L340/L409）
     // 移动端 positions 为独立实现（m/positions/page.tsx L194 弹窗不同源于桌面）：

@@ -419,9 +419,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 11（#217 冒烟）：share-change-events 新建事件 Dialog 平台选择框（条件渲染接入点）----
-  test('新建事件表单：事件类型切换的平台选择框条件渲染与搜索点选', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '移动端无份额变动事件页');
+  // ---- 用例 11（#217 冒烟）：share-change-events 新建事件 Dialog 平台选择框（条件渲染接入点）；#371 起双端同断言 ----
+  test('新建事件表单：事件类型切换的平台选择框条件渲染与搜索点选', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoShareChangeEventsPage(page);
     await page.getByRole('button', { name: '新建事件' }).click();
