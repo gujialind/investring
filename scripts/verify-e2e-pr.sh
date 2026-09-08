@@ -3,8 +3,8 @@
 # E2E 归一化对比脚本（纯测试重构 PR 的验证工具）
 # ============================================================================
 # 用于验证纯测试代码改动（如 #372 helper 收敛、#371 移动端 skip 删除、#383 skip 复核）
-# 是否改变了 pass/skip 形态。在 base 分支和 PR 分支各跑一次指定 spec × project 的 E2E，
-# 导出归一化 TSV 后 diff，期望空 diff 或指定的单行变化。
+# 是否改变了 pass/skip 形态。在 base ref 与 PR 分支两侧各跑一次指定 spec × project 的 E2E，
+# 导出归一化 TSV 后 diff。期望空 diff；非空 diff 需人工判读是否为预期变化。
 #
 # 用法：
 #   ./scripts/verify-e2e-pr.sh --branch feature/383-skip-review
@@ -24,14 +24,18 @@
 #   --keep-stack           跑完后保留隔离栈（便于手动复核），默认跑完清理
 #   --help                 显示帮助
 #
+# 前置条件（不满足则 1 秒内拒绝，不会先花 10 分钟建栈再报错）：
+# - 已 git checkout 到 --branch 指定的分支（构建源要确定性地是 PR 分支 tip）
+# - 已跟踪文件无未提交改动（未跟踪文件不拦，含 gitignore 的 e2e/.auth/admin.json）
+# - --branch 是本地分支（不接受远端 ref / tag / 游离 HEAD）
+#
 # 工作原理：
-# 1. 检测并发会话占用的端口（:3000/:8000），自动选择安全端口避免冲突
+# 1. 前置检查 + 选择隔离端口（默认后端 8100-8199、前端 3100-3199 第一个空闲）
 # 2. 启动隔离后端（独立 db 文件，自动种子）
-# 3. 构建并启动隔离前端（API_BASE_URL 在构建时烘焙）
-# 4. 在 base 分支采集 baseline（4 spec × 2 project，导出归一化 TSV）
-# 5. 切换到 PR 分支，采集 after
-# 6. diff 两个 TSV 并报告差异
-# 7. 恢复原始分支，清理隔离栈（除非 --keep-stack）
+# 3. 构建并启动隔离前端（构建源 = PR 分支 tip；API_BASE_URL 在构建时烘焙）
+# 4. 用 git restore 把 frontend/e2e/ 分别换成 base ref 与 PR 分支的内容，各采集一次
+#    （HEAD 全程不动，两侧共用同一份构建与同一个后端，唯一变量是 spec）
+# 5. 还原 frontend/e2e/，diff 两个 TSV 并报告差异，清理隔离栈（除非 --keep-stack）
 #
 # 隔离栈：
 # - 后端：127.0.0.1:<backend-port>，db 文件 /tmp/ir_e2e_verify_<pid>.db
@@ -72,12 +76,15 @@ AFTER_TSV="/tmp/e2e-verify-after-$TIMESTAMP.tsv"
 ISOLATED_DB=""
 BACKEND_PID=""
 FRONTEND_PID=""
-ORIGINAL_BRANCH=""
+E2E_SWAPPED=false
+SWAP_ORPHANS=""
 CUSTOM_LAUNCHER=""
 
 # --- 帮助 ---
 show_help() {
-  sed -n '2,/^# ====/p' "$0" | sed 's/^# \?//' | head -n -1
+  # 范围末尾锚在 set -euo pipefail（全文恰 1 次、紧跟头注释），不是 /^# ====/——
+  # 后者在第 4 行（标题框的下边框）就命中，帮助只剩 2 行。
+  sed -n '2,/^set -euo pipefail/p' "$0" | sed 's/^# \?//' | head -n -1
   exit 0
 }
 
@@ -106,13 +113,19 @@ CLEANUP_DONE=false
 cleanup() {
   [ "$CLEANUP_DONE" = true ] && return
   CLEANUP_DONE=true
-  # 失败/中断路径兜底：恢复原始分支（正常路径已恢复时为 no-op）
-  if [ -n "$ORIGINAL_BRANCH" ] && [ "$ORIGINAL_BRANCH" != "HEAD" ]; then
-    local cur
-    cur=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-    if [ "$cur" != "$ORIGINAL_BRANCH" ]; then
-      log "恢复原始分支 ($ORIGINAL_BRANCH)..."
-      git checkout "$ORIGINAL_BRANCH" --quiet || log "⚠️ 分支恢复失败，请手动执行: git checkout $ORIGINAL_BRANCH"
+  # 还原被换过的 frontend/e2e/。必须挂 E2E_SWAPPED 旗标：前置检查失败也会走到 cleanup，
+  # 那时无条件 restore --source=HEAD 会把操作者自己在 e2e/ 下的未提交改动静默丢掉。
+  # 也必须排在 --keep-stack 的提前 return 之前——留栈不等于留一个被换过的树。
+  if [ "$E2E_SWAPPED" = true ]; then
+    log "还原 frontend/e2e/ → HEAD ($BRANCH)..."
+    git -C "$REPO_ROOT" restore --source=HEAD --worktree --no-overlay -- frontend/e2e/ \
+      || log "⚠️  还原失败，手动执行: git -C $REPO_ROOT restore --source=HEAD --worktree -- frontend/e2e/"
+    # base 侧独有的 spec 会被写成未跟踪文件（restore --no-overlay 只删已跟踪的），
+    # 残留会被后续整包 npx playwright test 捡走，须按预计算的清单显式删掉。
+    if [ -n "$SWAP_ORPHANS" ]; then
+      while IFS= read -r orphan; do
+        [ -n "$orphan" ] && rm -f "$REPO_ROOT/$orphan"
+      done <<< "$SWAP_ORPHANS"
     fi
   fi
   if [ "$KEEP_STACK" = true ]; then
@@ -145,9 +158,79 @@ find_free_port() {
   return 1
 }
 
-# --- 保存当前分支 ---
-ORIGINAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-log "当前分支: $ORIGINAL_BRANCH"
+# --- PHASE 0：前置检查（全部秒级失败，不先花 ~10 分钟建栈再拒）---
+
+# 只接受本地分支：构建源钉在 $BRANCH tip，远端 ref / tag / 游离 HEAD 都不成立
+if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  log "❌ 本地分支 $BRANCH 不存在（不接受远端 ref / tag）"
+  exit 1
+fi
+
+# HEAD 钉在 $BRANCH 上，构建源才确定性地是 PR 分支 tip 而非「操作者碰巧所在的分支」。
+# 游离 HEAD 由此第 1 秒即拒（abbrev-ref 得字面量 HEAD，永不等于分支名），全程也无需恢复分支。
+CUR_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
+if [ "$CUR_BRANCH" != "$BRANCH" ]; then
+  log "❌ HEAD 在 $CUR_BRANCH，须先 git checkout $BRANCH（构建源要确定是 PR 分支 tip）"
+  exit 1
+fi
+
+# 只拦已跟踪改动（未跟踪的不拦，含 gitignore 的 e2e/.auth/admin.json）。必须保持仓库级、
+# 不能缩到 frontend/e2e/：构建烘焙 frontend/src、next.config.js、package.json、public，
+# 隔离后端 import backend/app 与 backend/tests/seed_base.py——这两处脏了上面那条确定性就静默失效。
+if ! git -C "$REPO_ROOT" diff --quiet HEAD; then
+  log "❌ 已跟踪文件有未提交改动（构建源会掺入工作树内容）"
+  git -C "$REPO_ROOT" diff --stat HEAD
+  exit 1
+fi
+
+# 基线新鲜度。fetch 失败只降级为警告：离线也必须能用
+git -C "$REPO_ROOT" fetch --quiet origin \
+  || log "⚠️  fetch 失败（离线？），沿用本地 $BASE_REF，请核对下面 SHA"
+BASE_SHA=$(git -C "$REPO_ROOT" rev-parse --short "$BASE_REF")
+BRANCH_SHA=$(git -C "$REPO_ROOT" rev-parse --short "$BRANCH")
+log "baseline: $BASE_REF @ $BASE_SHA"
+log "after:    $BRANCH @ $BRANCH_SHA"
+if [ "$BASE_SHA" = "$BRANCH_SHA" ]; then
+  log "❌ 两侧指向同一提交，无可对比"
+  exit 1
+fi
+
+# 「纯测试改动」前提只提示、不硬拦：硬拦实测会误伤 PR #401（它给 ToastContainer.tsx 补了
+# data-testid 以支撑 helpers.toastByTitle），那是本工具迄今唯一一次成功实跑。勿改回 exit 1。
+if ! git -C "$REPO_ROOT" diff --quiet "$BASE_REF" "$BRANCH" -- frontend/src backend/app; then
+  log "⚠️  非纯测试改动——不拦，但这样读 diff："
+  git -C "$REPO_ROOT" diff --stat "$BASE_REF" "$BRANCH" -- frontend/src backend/app
+  log "   两侧共用同一份 $BRANCH tip 构建与同一个后端，src/backend 改动被两侧同等看到，"
+  log "   唯一变量仍是 frontend/e2e/**。若期望的形态变化来自 src 侧，本工具证不了——"
+  log "   另跑 npm run test:e2e + scripts/visual-verify.sh。"
+fi
+
+# spec 存在性：拼错一个 spec 名不该等 10 分钟才知道
+IFS=',' read -ra SPEC_ARR <<< "$SPECS"
+for spec in "${SPEC_ARR[@]}"; do
+  if [ ! -f "$FRONTEND_DIR/e2e/$spec.spec.ts" ]; then
+    log "❌ frontend/e2e/$spec.spec.ts 不存在于 $BRANCH"
+    exit 1
+  fi
+  if ! git -C "$REPO_ROOT" cat-file -e "$BASE_REF:frontend/e2e/$spec.spec.ts" 2>/dev/null; then
+    log "⚠️  $spec.spec.ts 不存在于 $BASE_REF——baseline 侧不会产出它的行，diff 会全是新增"
+  fi
+done
+
+# base 侧独有的 e2e 文件：换 spec 时会被写成未跟踪文件，而 restore --no-overlay 只删已跟踪的，
+# 故预计算清单交给 cleanup 精确删除（残留 spec 会被后续整包 playwright test 捡走）。
+# 两侧排序与 comm 的比较必须同序（LC_ALL=C），否则 comm 会静默给出错误结果。
+SWAP_ORPHANS=$(LC_ALL=C comm -23 \
+  <(git -C "$REPO_ROOT" ls-tree -r --name-only "$BASE_REF" -- frontend/e2e/ | LC_ALL=C sort) \
+  <(git -C "$REPO_ROOT" ls-tree -r --name-only "$BRANCH" -- frontend/e2e/ | LC_ALL=C sort))
+if [ -n "$SWAP_ORPHANS" ]; then
+  log "ℹ️  base 侧独有的 e2e 文件（跑完由 cleanup 删除）: $(echo "$SWAP_ORPHANS" | tr '\n' ' ')"
+fi
+
+# project 参数展开：--projects 此前是死变量（声明、解析，但从不传给 playwright）。
+IFS=',' read -ra PROJ_ARR <<< "$PROJECTS"
+PROJ_ARGS=()
+for p in "${PROJ_ARR[@]}"; do PROJ_ARGS+=("--project=$p"); done
 
 # --- 端口检测 ---
 if [ -z "$BACKEND_PORT" ]; then
@@ -158,10 +241,12 @@ if [ -z "$FRONTEND_PORT" ]; then
 fi
 log "隔离端口: 后端 :$BACKEND_PORT，前端 :$FRONTEND_PORT"
 
-# --- 检查并发会话 ---
-if port_in_use 3000 || port_in_use 8000; then
-  log "⚠️  检测到 :3000 或 :8000 被占用（并发会话），将使用隔离端口"
-fi
+# --- 换 spec（不换分支）---
+# 用 git -C 而非依赖 CWD：capture 阶段 CWD 是 $FRONTEND_DIR，相对 pathspec 会算错。
+swap_e2e() {
+  log "frontend/e2e/ → $1 ($(git -C "$REPO_ROOT" rev-parse --short "$1"))；期间请勿在本工作树 add/commit"
+  git -C "$REPO_ROOT" restore --source="$1" --worktree --no-overlay -- frontend/e2e/
+}
 
 # --- 启动隔离后端 ---
 log "启动隔离后端..."
@@ -218,13 +303,19 @@ for i in {1..40}; do
 done
 
 # --- 构建并启动隔离前端 ---
-log "构建隔离前端（API_BASE_URL=http://localhost:$BACKEND_PORT）..."
+# 构建源 = $BRANCH tip（PHASE 0 已强制 HEAD == $BRANCH 且已跟踪文件干净）
+log "构建隔离前端（API_BASE_URL=http://localhost:$BACKEND_PORT，构建期烘焙）..."
 cd "$FRONTEND_DIR"
-NEXT_TELEMETRY_DISABLED=1 API_BASE_URL="http://localhost:$BACKEND_PORT" npm run build > "/tmp/e2e-verify-build-$TIMESTAMP.log" 2>&1
+NEXT_TELEMETRY_DISABLED=1 API_BASE_URL="http://localhost:$BACKEND_PORT" npm run build > "/tmp/e2e-verify-build-$TIMESTAMP.log" 2>&1 \
+  || { log "❌ 构建失败，看 /tmp/e2e-verify-build-$TIMESTAMP.log"; exit 1; }
+# 先删再拷：目标已存在时 cp -r 会拷成 .next/standalone/.next/static/static
+rm -rf .next/standalone/.next/static .next/standalone/public
 cp -r .next/static .next/standalone/.next/static
 cp -r public .next/standalone/public
 log "启动隔离前端..."
-PORT="$FRONTEND_PORT" API_BASE_URL="http://localhost:$BACKEND_PORT" node .next/standalone/server.js > "/tmp/e2e-verify-frontend-$TIMESTAMP.log" 2>&1 &
+# 不传 API_BASE_URL：它是纯构建期变量（只被 next.config.js 消费，rewrite 目标已内联进
+# server.js 成字符串字面量），跑起来再传是 no-op，留着会让人误以为成品构建能改指后端。
+PORT="$FRONTEND_PORT" node .next/standalone/server.js > "/tmp/e2e-verify-frontend-$TIMESTAMP.log" 2>&1 &
 FRONTEND_PID=$!
 for i in {1..40}; do
   if curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$FRONTEND_PORT/" | grep -q "307\|200"; then
@@ -235,25 +326,11 @@ for i in {1..40}; do
   sleep 0.5
 done
 
-# --- 检查未提交改动 ---
-if [ -n "$(git status --porcelain)" ]; then
-  log "❌ 工作目录有未提交改动，请先提交或 stash"
-  git status --short
-  exit 1
-fi
-
-# --- 检查分支存在 ---
-if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-  log "❌ 分支 $BRANCH 不存在"
-  exit 1
-fi
-
 # --- 采集函数 ---
 capture() {
   local output_tsv=$1 ref=$2
   log "采集 → $output_tsv"
   : > "$output_tsv"
-  IFS=',' read -ra SPEC_ARR <<< "$SPECS"
   for spec in "${SPEC_ARR[@]}"; do
     raw="/tmp/e2e-verify-raw-$spec-$TIMESTAMP.json"
     runlog="/tmp/e2e-verify-run-$spec-$TIMESTAMP.log"
@@ -261,9 +338,10 @@ capture() {
     # rc 单独留档是为了把「用例 fail」（合法数据）与「运行本身坏了」区分开。
     # CI="" 钉死 retries=0 / workers 不自适应 / reuseExistingServer=true：操作者环境里
     # export 了 CI=true 的话，retry 会把 flaky 洗成 passed，且会在已占用的隔离端口上硬失败。
+    # 注：--project 不会跳过 dependencies，故 setup 仍会跑（归一化器滤掉它那一行）。
     rc=0
     CI="" BASE_URL="http://localhost:$FRONTEND_PORT" npx playwright test "e2e/$spec.spec.ts" \
-      --workers="$WORKERS" --reporter=json > "$raw" 2> "$runlog" || rc=$?
+      "${PROJ_ARGS[@]}" --workers="$WORKERS" --reporter=json > "$raw" 2> "$runlog" || rc=$?
     log "  $spec: playwright 退出码 $rc（非 0 = 有用例未通过，状态已进 TSV）"
     python3 - "$raw" "$spec" "$output_tsv" "$runlog" "$PROJECTS" "$ref" <<'PYEOF'
 import json, sys
@@ -326,19 +404,16 @@ PYEOF
   log "采集完成: $(wc -l < "$output_tsv") 行"
 }
 
-# --- 采集 baseline ---
-log "切换到 base ($BASE_REF)..."
-git checkout "$BASE_REF" --quiet
+# --- 采集 baseline（只换 spec，HEAD 全程不动）---
+E2E_SWAPPED=true
+swap_e2e "$BASE_REF"
 capture "$BASELINE_TSV" "$BASE_REF"
 
 # --- 采集 after ---
-log "切换到 PR 分支 ($BRANCH)..."
-git checkout "$BRANCH" --quiet
+# $BRANCH == HEAD 已被 PHASE 0 强制，故这一步同时就是把工作树换回来；
+# cleanup 里的 --source=HEAD 还原是对同一不变量的幂等重申（覆盖 Ctrl-C 等路径）。
+swap_e2e "$BRANCH"
 capture "$AFTER_TSV" "$BRANCH"
-
-# --- 恢复原始分支 ---
-log "恢复到原始分支 ($ORIGINAL_BRANCH)..."
-git checkout "$ORIGINAL_BRANCH" --quiet
 
 # --- Diff 报告 ---
 log "=== DIFF ==="
