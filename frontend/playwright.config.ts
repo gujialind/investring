@@ -10,6 +10,13 @@ import { defineConfig, devices } from '@playwright/test';
  *   npx playwright test --ui          # 交互式 UI 模式
  *   npx playwright test --debug       # 调试模式
  */
+// webServer.port 从 use.baseURL 派生而非另设环境变量：端口与被测地址同源，
+// 不可能各说各话。隔离栈调用方（scripts/verify-e2e-pr.sh）传 BASE_URL 指向自己的
+// 端口后，Playwright 就不会再在 :3000 上另起一份本调用方控制不了的服务。
+// 不设 BASE_URL 时（CI 只设 CI=true）与改动前逐字等价：:3000。
+const baseURL = process.env.BASE_URL || 'http://localhost:3000';
+const webServerPort = Number(new URL(baseURL).port) || 3000;
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -30,7 +37,7 @@ export default defineConfig({
   ],
 
   use: {
-    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',
@@ -43,8 +50,8 @@ export default defineConfig({
   // 历史上曾跑在 next dev 上，按需编译/Fast Refresh full reload 竞态
   // 是 PR #169 类 flaky 的根因，切生产构建后此类竞态结构性消失。
   webServer: {
-    command: 'PORT=3000 node .next/standalone/server.js',
-    port: 3000,
+    command: `PORT=${webServerPort} node .next/standalone/server.js`,
+    port: webServerPort,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },

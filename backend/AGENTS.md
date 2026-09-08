@@ -127,7 +127,7 @@ cd backend && pytest tests -q
 
 `tests/seed_base.py` 提供两个入口，改种子只改这一处：
 
-* **`seed_base_data(db)`**——基础数据：维度字典、适用关系、4 平台、9 产品（3 虚拟 + 6 业务）、2025-2026 工作日日历、draft 组合 `E2E_PORT`（零交易零快照）、ADMIN/admin@2026、VIEWER/viewer123。**三处消费**：pytest（conftest `_seed_base_data`）、CI E2E（`scripts/seed_e2e.py`）、本地 E2E（`scripts/run_e2e_backend.py`）。
+* **`seed_base_data(db)`**——基础数据：维度字典、适用关系、4 平台、9 产品（3 虚拟 + 6 业务）、2025-2026 工作日日历、draft 组合 `E2E_PORT`（零交易零快照）、ADMIN/admin@2026、VIEWER/viewer123。**三处消费**：pytest（conftest `_seed_base_data`）、CI E2E（`scripts/seed_e2e.py`）、本地 E2E（`scripts/run_e2e_backend.py`）。仍是三处而非四处，因为归一化对比脚本 `scripts/verify-e2e-pr.sh` 的隔离栈已改为复用 `run_e2e_backend.py`（此前它自带一份 heredoc 副本，是隐藏的第四处消费，改种子时容易漏）。
 * **`seed_e2e_active(db)`**——E2E 专属活跃组合 `E2E_ACTIVE`（#354）。**仅两处 E2E 脚本在 `seed_base_data` 之后调用，不进 pytest session 种子**：其业务交易/申购/价格数据会泄漏进按「全局账本」精确断言的存量后端测试（`test_filter_by_status`/`test_sort_apply_date_desc`/`test_trades` 系列/价格 upsert 计数），且后端 pytest 本就不需要它。
 
 **前端 E2E 依赖两个组合的形态契约**（spec 经 `frontend/e2e/helpers.ts` 按 code 直达，缺组合或形态退化会硬失败，不再优雅 skip），勿删勿改形态：
@@ -162,5 +162,5 @@ cd backend && uvicorn app.main:app --reload   # 配置见 .env.example
 
 ## 7. E2E 相关脚本
 
-- `scripts/run_e2e_backend.py`：本地 E2E 后端（SQLite 临时库，每次启动重建 + 自动种子，空 lifespan 跳迁移）。
+- `scripts/run_e2e_backend.py`：本地 E2E 后端（SQLite 临时库，每次启动重建 + 自动种子，空 lifespan 跳迁移）。默认 `/tmp/ir_e2e.db` + `:8000`，可用 **`E2E_DB_PATH` / `E2E_PORT`** 覆盖——`scripts/verify-e2e-pr.sh` 的隔离栈靠这两个变量复用本启动器（它此前自带一份 heredoc 副本，等于把种子契约抄了两遍，官方一改就静默漂移）。
 - `scripts/seed_e2e.py`：CI E2E 种子入口，**未设 `DATABASE_URL` 直接拒绝**（防误连）。
