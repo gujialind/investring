@@ -41,4 +41,9 @@ test.describe('登录认证', () => {
     await page.goto('/dashboard');
     await expect(page).toHaveURL(/login/);
   });
+
+  // [dogfood] 临时 skip，验证 e2e-morph-expected 标签放行路径，验完即删
+  test.skip('dogfood: dummy skip for morph-expected label verification', async ({ page }) => {
+    // 此用例不执行，只制造 baseline/candidate 形态差异
+  });
 });
