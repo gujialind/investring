@@ -41,7 +41,13 @@
 # 输出：
 # - /tmp/e2e-verify-baseline-<timestamp>.tsv
 # - /tmp/e2e-verify-after-<timestamp>.tsv
+# - /tmp/e2e-verify-raw-<spec>-<timestamp>.json   每个 spec 的 playwright JSON reporter 原始产物
+# - /tmp/e2e-verify-run-<spec>-<timestamp>.log    每个 spec 的 playwright stderr（归一化失败时先看这个）
+# - /tmp/e2e-verify-{backend,frontend,build}-<timestamp>.log
 # - diff 结果（stdout）
+#
+# ⚠️ 勿经管道判定成败：`./verify-e2e-pr.sh ... | tee out.log` 拿到的是 tee 的退出码 0，
+#    脚本内的 set -o pipefail 管不到调用方的管道。要留档就重定向：`... > out.log 2>&1`。
 # ============================================================================
 set -euo pipefail
 
@@ -229,10 +235,6 @@ for i in {1..40}; do
   sleep 0.5
 done
 
-# --- 刷新 auth ---
-log "刷新 auth storageState..."
-BASE_URL="http://localhost:$FRONTEND_PORT" npx playwright test --project=setup --workers=1 > /dev/null 2>&1
-
 # --- 检查未提交改动 ---
 if [ -n "$(git status --porcelain)" ]; then
   log "❌ 工作目录有未提交改动，请先提交或 stash"
@@ -248,23 +250,39 @@ fi
 
 # --- 采集函数 ---
 capture() {
-  local output_tsv=$1
+  local output_tsv=$1 ref=$2
   log "采集 → $output_tsv"
   : > "$output_tsv"
   IFS=',' read -ra SPEC_ARR <<< "$SPECS"
   for spec in "${SPEC_ARR[@]}"; do
     raw="/tmp/e2e-verify-raw-$spec-$TIMESTAMP.json"
-    # 用例 fail 时 playwright 退出非零，但不中止——fail 状态由 JSON reporter 导出进 TSV、体现在 diff
-    BASE_URL="http://localhost:$FRONTEND_PORT" npx playwright test "e2e/$spec.spec.ts" \
-      --workers="$WORKERS" --reporter=json > "$raw" 2>/dev/null || true
-    python3 - "$raw" "$spec" "$output_tsv" <<'PYEOF'
+    runlog="/tmp/e2e-verify-run-$spec-$TIMESTAMP.log"
+    # 用例 fail 时 playwright 退出非零，但不中止——fail 状态由 JSON reporter 导出进 TSV、体现在 diff。
+    # rc 单独留档是为了把「用例 fail」（合法数据）与「运行本身坏了」区分开。
+    # CI="" 钉死 retries=0 / workers 不自适应 / reuseExistingServer=true：操作者环境里
+    # export 了 CI=true 的话，retry 会把 flaky 洗成 passed，且会在已占用的隔离端口上硬失败。
+    rc=0
+    CI="" BASE_URL="http://localhost:$FRONTEND_PORT" npx playwright test "e2e/$spec.spec.ts" \
+      --workers="$WORKERS" --reporter=json > "$raw" 2> "$runlog" || rc=$?
+    log "  $spec: playwright 退出码 $rc（非 0 = 有用例未通过，状态已进 TSV）"
+    python3 - "$raw" "$spec" "$output_tsv" "$runlog" "$PROJECTS" "$ref" <<'PYEOF'
 import json, sys
-raw, spec, out = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(raw) as f:
-    data = json.load(f)
+raw, spec, out, runlog, projects, ref = sys.argv[1:7]
+keep = set(projects.split(','))
+try:
+    with open(raw) as f:
+        data = json.load(f)
+except Exception as e:
+    sys.exit(f"❌ {raw} 不是合法 JSON——playwright 这次运行本身坏了，不是用例 fail：{e}\n"
+             f"   侧: {ref}；常见原因是该 spec 不存在于这一侧，或 webServer/配置坏了\n"
+             f"   看运行日志：{runlog}")
+
 rows = []
 def walk(node):
     if isinstance(node, dict):
+        # Playwright JSON reporter：同时含 title 与 tests 的节点恰好是 specs[] 元素
+        # （suite 节点是 title+specs+suites、无 tests），故此鸭子类型精确命中用例节点。
+        # title 在节点自身；tests[] 每 project 一个元素、不含 title（原 t["title"] 必 KeyError）。
         if "title" in node and "tests" in node:
             for t in node["tests"]:
                 status = t.get("status", "?")
@@ -273,13 +291,32 @@ def walk(node):
                 for ann in t.get("annotations", []) + t.get("results", [{}])[-1].get("annotations", []):
                     if ann.get("type") == "skip":
                         skip_desc = ann.get("description", "")
-                rows.append([spec, t.get("projectName", "?"), t["title"], status, result, skip_desc])
+                rows.append([spec, t.get("projectName", "?"), node["title"], status, result, skip_desc])
         for v in node.values():
             walk(v)
     elif isinstance(node, list):
         for item in node:
             walk(item)
 walk(data)
+
+# 口径守卫：stats 是 reporter 自报的用例总数，对不上就说明形态漂了或漏了节点——
+# 静默产出一份行数不对的 TSV 比崩掉更坏（本工具的病一直是假绿灯）。此检查须在
+# project 过滤之前：stats 把 setup 也算在内。
+s = data.get("stats", {})
+total = sum(s.get(k, 0) for k in ("expected", "unexpected", "flaky", "skipped"))
+if total != len(rows):
+    sys.exit(f"❌ 归一化 {len(rows)} 行 ≠ reporter stats 总数 {total}：JSON reporter 形态可能已变，看 {raw}")
+
+# setup 是 chromium/mobile 的 dependencies，每次采集都会跑并产出一行；它不是被测用例，
+# 且 --project 过滤不掉依赖项目（要 --no-deps，但那样就没有 storageState 了），只能在这里滤。
+rows = [r for r in rows if r[1] in keep]
+# 逐个 project 校验：只查「过滤后为空」会漏掉部分命中——--projects chromiun,mobile 拼错一个，
+# 仍能靠 mobile 产出半份 TSV 并 exit 0，操作者会把空 diff 读成「两个 project 都一致」。
+missing = sorted(keep - {r[1] for r in rows})
+if missing:
+    sys.exit(f"❌ --projects 里的 {missing} 在 {raw} 中没产出用例行（project 名拼错？侧: {ref}）")
+if not rows:
+    sys.exit(f"❌ {raw} 里没有 --projects {sorted(keep)} 的用例行（--projects 为空？侧: {ref}）")
 rows.sort()
 with open(out, "a") as f:
     for r in rows:
@@ -292,12 +329,12 @@ PYEOF
 # --- 采集 baseline ---
 log "切换到 base ($BASE_REF)..."
 git checkout "$BASE_REF" --quiet
-capture "$BASELINE_TSV"
+capture "$BASELINE_TSV" "$BASE_REF"
 
 # --- 采集 after ---
 log "切换到 PR 分支 ($BRANCH)..."
 git checkout "$BRANCH" --quiet
-capture "$AFTER_TSV"
+capture "$AFTER_TSV" "$BRANCH"
 
 # --- 恢复原始分支 ---
 log "恢复到原始分支 ($ORIGINAL_BRANCH)..."
