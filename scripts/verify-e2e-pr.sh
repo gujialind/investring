@@ -31,7 +31,8 @@
 #
 # 工作原理：
 # 1. 前置检查 + 选择隔离端口（默认后端 8100-8199、前端 3100-3199 第一个空闲）
-# 2. 启动隔离后端（独立 db 文件，自动种子）
+# 2. 启动隔离后端（独立 db 文件；复用官方 launcher backend/scripts/run_e2e_backend.py，
+#    经 E2E_DB_PATH / E2E_PORT 隔离，种子契约因此只有一份）
 # 3. 构建并启动隔离前端（构建源 = PR 分支 tip；API_BASE_URL 在构建时烘焙）
 # 4. 用 git restore 把 frontend/e2e/ 分别换成 base ref 与 PR 分支的内容，各采集一次
 #    （HEAD 全程不动，两侧共用同一份构建与同一个后端，唯一变量是 spec）
@@ -78,7 +79,9 @@ BACKEND_PID=""
 FRONTEND_PID=""
 E2E_SWAPPED=false
 SWAP_ORPHANS=""
-CUSTOM_LAUNCHER=""
+BACKEND_LOG="/tmp/e2e-verify-backend-$TIMESTAMP.log"
+FRONTEND_LOG="/tmp/e2e-verify-frontend-$TIMESTAMP.log"
+BUILD_LOG="/tmp/e2e-verify-build-$TIMESTAMP.log"
 
 # --- 帮助 ---
 show_help() {
@@ -132,11 +135,11 @@ cleanup() {
     log "隔离栈保留（--keep-stack）：后端 :$BACKEND_PORT，前端 :$FRONTEND_PORT，db $ISOLATED_DB"
     return
   fi
+  if [ -z "$BACKEND_PID$FRONTEND_PID$ISOLATED_DB" ]; then return; fi
   log "清理隔离栈..."
   [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null || true
   [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null || true
   [ -n "$ISOLATED_DB" ] && [ -f "$ISOLATED_DB" ] && rm -f "$ISOLATED_DB"
-  [ -n "$CUSTOM_LAUNCHER" ] && [ -f "$CUSTOM_LAUNCHER" ] && rm -f "$CUSTOM_LAUNCHER"
   log "隔离栈已清理"
 }
 trap cleanup EXIT
@@ -155,6 +158,37 @@ find_free_port() {
       return 0
     fi
   done
+  return 1
+}
+
+# 显式指定的端口必须空闲：否则下面的 /health 与前端探活会打到别人的服务上并判「就绪」，
+# 于是整轮跑在一个并非本脚本启动的后端上。
+require_free() { # require_free <port> <用途>
+  if port_in_use "$1"; then
+    log "❌ $2 :$1 已被占用，换一个（或省略该参数让脚本自动挑）"
+    exit 1
+  fi
+}
+
+# --- Node 自举（同 verify-frontend.sh / visual-verify.sh：非交互 shell 下 .bashrc 提前 return 不加载 nvm）---
+if ! command -v node >/dev/null 2>&1; then
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+  nvm use >/dev/null 2>&1 || true
+fi
+if ! command -v node >/dev/null 2>&1; then
+  log "❌ 未找到 node。请先: source ~/.bashrc && nvm use"
+  exit 1
+fi
+
+probe() { curl -fsS -o /dev/null --max-time 3 "$1"; }
+
+wait_up() { # wait_up <url> <日志文件>
+  for _ in $(seq 1 60); do
+    if probe "$1"; then return 0; fi
+    sleep 1
+  done
+  log "❌ $1 超时未就绪，看后台日志：$2"
   return 1
 }
 
@@ -233,11 +267,17 @@ PROJ_ARGS=()
 for p in "${PROJ_ARR[@]}"; do PROJ_ARGS+=("--project=$p"); done
 
 # --- 端口检测 ---
+# 显式指定时必须探占用（require_free）：否则下面的 /health 与前端探活会打到别人的服务上
+# 并判「就绪」，整轮就跑在一个并非本脚本启动的栈上。自动挑的端口 find_free_port 已保证空闲。
 if [ -z "$BACKEND_PORT" ]; then
   BACKEND_PORT=$(find_free_port 8100 8199) || { log "❌ 8100-8199 无空闲端口"; exit 1; }
+else
+  require_free "$BACKEND_PORT" "隔离后端端口"
 fi
 if [ -z "$FRONTEND_PORT" ]; then
   FRONTEND_PORT=$(find_free_port 3100 3199) || { log "❌ 3100-3199 无空闲端口"; exit 1; }
+else
+  require_free "$FRONTEND_PORT" "隔离前端端口"
 fi
 log "隔离端口: 后端 :$BACKEND_PORT，前端 :$FRONTEND_PORT"
 
@@ -249,65 +289,23 @@ swap_e2e() {
 }
 
 # --- 启动隔离后端 ---
+# 复用官方 launcher（backend/scripts/run_e2e_backend.py），靠 E2E_DB_PATH / E2E_PORT 隔离。
+# 此前这里是一份 38 行 heredoc 副本，把种子契约（seed_base_data + seed_e2e_active）抄了第二遍，
+# 官方 launcher 一改就静默漂移——而漂移的后果是两侧跑在不同的数据上，diff 变成噪音。
 log "启动隔离后端..."
 ISOLATED_DB="/tmp/ir_e2e_verify_$$.db"
-CUSTOM_LAUNCHER="/tmp/run_e2e_backend_verify_$$.py"
-cat > "$CUSTOM_LAUNCHER" <<PYEOF
-import os, sys
-from pathlib import Path
-from contextlib import asynccontextmanager
-
-BACKEND_DIR = Path("$REPO_ROOT/backend").resolve()
-os.environ.update(
-    DATABASE_URL="sqlite:///$ISOLATED_DB",
-    SECRET_KEY="test-secret-key-e2e",
-    SCHEDULER_ENABLED="false",
-    DEBUG="true",
-)
-os.chdir(BACKEND_DIR)
-sys.path.insert(0, str(BACKEND_DIR))
-
-if os.path.exists("$ISOLATED_DB"):
-    os.remove("$ISOLATED_DB")
-
-from app.main import app
-from app.database import SessionLocal
-from tests.seed_base import seed_base_data, seed_e2e_active
-
-db = SessionLocal()
-try:
-    seed_base_data(db)
-    seed_e2e_active(db)
-finally:
-    db.close()
-
-@asynccontextmanager
-async def _noop_lifespan(app):
-    yield
-
-app.router.lifespan_context = _noop_lifespan
-
-import uvicorn
-uvicorn.run(app, host="127.0.0.1", port=$BACKEND_PORT, log_level="warning")
-PYEOF
 cd "$REPO_ROOT"
-python3 "$CUSTOM_LAUNCHER" > "/tmp/e2e-verify-backend-$TIMESTAMP.log" 2>&1 &
+E2E_DB_PATH="$ISOLATED_DB" E2E_PORT="$BACKEND_PORT" python3 "$BACKEND_LAUNCHER" > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
-for i in {1..40}; do
-  if curl -sf "http://127.0.0.1:$BACKEND_PORT/health" >/dev/null; then
-    log "后端就绪（pid $BACKEND_PID）"
-    break
-  fi
-  [ "$i" -eq 40 ] && { log "❌ 后端启动超时"; exit 1; }
-  sleep 0.5
-done
+wait_up "http://127.0.0.1:$BACKEND_PORT/health" "$BACKEND_LOG"
+log "后端就绪（pid $BACKEND_PID）"
 
 # --- 构建并启动隔离前端 ---
 # 构建源 = $BRANCH tip（PHASE 0 已强制 HEAD == $BRANCH 且已跟踪文件干净）
 log "构建隔离前端（API_BASE_URL=http://localhost:$BACKEND_PORT，构建期烘焙）..."
 cd "$FRONTEND_DIR"
-NEXT_TELEMETRY_DISABLED=1 API_BASE_URL="http://localhost:$BACKEND_PORT" npm run build > "/tmp/e2e-verify-build-$TIMESTAMP.log" 2>&1 \
-  || { log "❌ 构建失败，看 /tmp/e2e-verify-build-$TIMESTAMP.log"; exit 1; }
+NEXT_TELEMETRY_DISABLED=1 API_BASE_URL="http://localhost:$BACKEND_PORT" npm run build > "$BUILD_LOG" 2>&1 \
+  || { log "❌ 构建失败，看 $BUILD_LOG"; exit 1; }
 # 先删再拷：目标已存在时 cp -r 会拷成 .next/standalone/.next/static/static
 rm -rf .next/standalone/.next/static .next/standalone/public
 cp -r .next/static .next/standalone/.next/static
@@ -315,16 +313,10 @@ cp -r public .next/standalone/public
 log "启动隔离前端..."
 # 不传 API_BASE_URL：它是纯构建期变量（只被 next.config.js 消费，rewrite 目标已内联进
 # server.js 成字符串字面量），跑起来再传是 no-op，留着会让人误以为成品构建能改指后端。
-PORT="$FRONTEND_PORT" node .next/standalone/server.js > "/tmp/e2e-verify-frontend-$TIMESTAMP.log" 2>&1 &
+PORT="$FRONTEND_PORT" node .next/standalone/server.js > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
-for i in {1..40}; do
-  if curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$FRONTEND_PORT/" | grep -q "307\|200"; then
-    log "前端就绪（pid $FRONTEND_PID）"
-    break
-  fi
-  [ "$i" -eq 40 ] && { log "❌ 前端启动超时"; exit 1; }
-  sleep 0.5
-done
+wait_up "http://127.0.0.1:$FRONTEND_PORT/" "$FRONTEND_LOG"
+log "前端就绪（pid $FRONTEND_PID）"
 
 # --- 采集函数 ---
 capture() {
@@ -428,8 +420,24 @@ else
 fi
 
 log "输出文件:"
-log "  baseline: $BASELINE_TSV"
-log "  after:    $AFTER_TSV"
-log "  后端日志: /tmp/e2e-verify-backend-$TIMESTAMP.log"
-log "  前端日志: /tmp/e2e-verify-frontend-$TIMESTAMP.log"
+log "  baseline:   $BASELINE_TSV"
+log "  after:      $AFTER_TSV"
+for spec in "${SPEC_ARR[@]}"; do
+  log "  raw JSON:   /tmp/e2e-verify-raw-$spec-$TIMESTAMP.json   ($spec)"
+  log "  运行日志:   /tmp/e2e-verify-run-$spec-$TIMESTAMP.log    ($spec 的 playwright stderr)"
+done
+log "  后端日志:   $BACKEND_LOG"
+log "  前端日志:   $FRONTEND_LOG"
+log "  构建日志:   $BUILD_LOG"
+
+# 本次构建把隔离后端端口烘焙进了 frontend/.next/standalone（next.config.js 的 rewrite 目标
+# 在构建期内联成字符串字面量）。npm run test:e2e 不重建、直接用这份 server.js，
+# 于是会把所有 API 调用代理到 :$BACKEND_PORT——那个端口现在已经是死的。
+log ""
+log "⚠️  frontend/.next/standalone 已被本次运行改写，API 代理指向 :$BACKEND_PORT（现已停）。"
+log "    接着跑 npm run test:e2e / scripts/visual-verify.sh 之前须重建："
+log "      cd frontend && NEXT_TELEMETRY_DISABLED=1 npm run build \\"
+log "        && rm -rf .next/standalone/.next/static .next/standalone/public \\"
+log "        && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
+
 log "✅ 验证完成"

@@ -43,7 +43,9 @@ npm run test:watch   # watch 模式
 ## 4. E2E（Playwright）
 
 ```bash
-python3 backend/scripts/run_e2e_backend.py   # 1. 起本地后端（自动种子，监听 :8000）
+python3 backend/scripts/run_e2e_backend.py   # 1. 起本地后端（自动种子，监听 :8000；
+                                             #    E2E_DB_PATH / E2E_PORT 可覆盖库与端口，
+                                             #    见 backend/AGENTS.md「E2E 相关脚本」）
 cd frontend && npm run build \
   && cp -r .next/static .next/standalone/.next/static \
   && cp -r public .next/standalone/public    # 2. 生产构建 + 组装 standalone
@@ -97,7 +99,8 @@ git checkout feature/383-skip-review   # 前置：HEAD 必须就在 PR 分支上
 
 - **适用场景**：纯测试代码重构（如 #372 helper 收敛、#371 移动端 skip 删除、#383 skip 复核），需要验证 pass/skip 形态未变。脚本在 base ref 与 PR 分支两侧各跑一次指定 spec × project 的 E2E，导出归一化 TSV 后 diff。**期望空 diff；非空 diff 需人工判读是否为预期变化**（脚本不知道你想改哪几行）。
 - **前置条件**（不满足则 1 秒内拒绝，不会先花 ~10 分钟建栈再报错）：已 `git checkout` 到 `--branch` 指定的分支、已跟踪文件无未提交改动（未跟踪文件不拦）、`--branch` 是本地分支（不接受远端 ref / tag / 游离 HEAD）。**脚本自己不 checkout 任何东西**：只用 `git restore --source=<ref> -- frontend/e2e/` 换 spec，HEAD 全程不动，并在包括 Ctrl-C 在内的所有退出路径把 `frontend/e2e/` 还原回 HEAD——故没有「恢复原始分支」这一步，也不存在游离 HEAD 恢复问题。
-- **隔离栈**：选择安全端口（默认 `8100-8199` 后端、`3100-3199` 前端）启动隔离栈，避免与并发会话冲突。隔离 db 文件 `/tmp/ir_e2e_verify_<pid>.db`，跑完自动清理（`--keep-stack` 保留）。`webServer.port` 跟随 `BASE_URL`，故本运行在 `:3000` 上什么都不起、也不会复用别人留下的旧构建。
+- **隔离栈**：选择安全端口（默认 `8100-8199` 后端、`3100-3199` 前端）启动隔离栈，避免与并发会话冲突；显式传 `--backend-port` / `--frontend-port` 时会先探占用，被占即拒（否则探活会打到别人的服务上并判「就绪」）。隔离后端**复用官方 launcher** `backend/scripts/run_e2e_backend.py`（经 `E2E_DB_PATH` / `E2E_PORT` 隔离，种子契约因此只有一份）。隔离 db 文件 `/tmp/ir_e2e_verify_<pid>.db`，跑完自动清理（`--keep-stack` 保留）。`webServer.port` 跟随 `BASE_URL`，故本运行在 `:3000` 上什么都不起、也不会复用别人留下的旧构建。需要 node 在 PATH 上（脚本自带 nvm 自举，同 `verify-frontend.sh`）。
 - **参数**：`--branch`（必填）、`--base-ref`（默认 `origin/main`）、`--specs`（逗号分隔，默认 4 个受影响 spec）、`--projects`（默认 `chromium,mobile`）、`--workers`（默认 1，消除 CPU 争用非确定性）。详见脚本头部注释。
-- **输出**：`/tmp/e2e-verify-baseline-<timestamp>.tsv` 与 `/tmp/e2e-verify-after-<timestamp>.tsv`，diff 结果打印到 stdout。TSV 格式：`[spec, project, 用例标题, status, 结果, skip 文案]`，按行排序以抵消 `fullyParallel` 的非确定顺序。**第 4、5 列取值域不同且都不冗余**：第 4 列是 Playwright 的 `tests[].status` ∈ `expected|unexpected|flaky|skipped`（`passed` 永不出现于此列），第 5 列是 `results[-1].status` ∈ `passed|failed|skipped|timedOut`；两列分歧（`flaky` + `passed`）正是 retry 把不稳定用例洗成通过的信号——这也是脚本给 playwright 调用钉 `CI=""`（`retries=0`）的理由。`setup` project 的行已滤除（它是 chromium/mobile 的 `dependencies`，而 `--project` 滤不掉依赖项目）。
+- **输出**：`/tmp/e2e-verify-baseline-<timestamp>.tsv` 与 `/tmp/e2e-verify-after-<timestamp>.tsv`，diff 结果打印到 stdout；每个 spec 另留 `/tmp/e2e-verify-raw-<spec>-<timestamp>.json`（playwright JSON reporter 原始产物）与 `/tmp/e2e-verify-run-<spec>-<timestamp>.log`（playwright stderr，**归一化报错时先看这个**——它区分「用例 fail」与「运行本身坏了」），外加 `{backend,frontend,build}` 三份日志，路径在收尾逐条打印。TSV 格式：`[spec, project, 用例标题, status, 结果, skip 文案]`，按行排序以抵消 `fullyParallel` 的非确定顺序。**第 4、5 列取值域不同且都不冗余**：第 4 列是 Playwright 的 `tests[].status` ∈ `expected|unexpected|flaky|skipped`（`passed` 永不出现于此列），第 5 列是 `results[-1].status` ∈ `passed|failed|skipped|timedOut`；两列分歧（`flaky` + `passed`）正是 retry 把不稳定用例洗成通过的信号——这也是脚本给 playwright 调用钉 `CI=""`（`retries=0`）的理由。`setup` project 的行已滤除（它是 chromium/mobile 的 `dependencies`，而 `--project` 滤不掉依赖项目）。
+- **跑完必须重建 standalone 才能接着跑别的 E2E**：本次构建把**隔离后端端口**烘焙进了 `frontend/.next/standalone`（`API_BASE_URL` 只被 `next.config.js` 消费，rewrite 目标在构建期内联成字符串字面量，跑起来再传是 no-op）。而 `npm run test:e2e` 不重建、直接用这份 `server.js`，于是会把所有 API 调用代理到那个已经死掉的端口——表现为整片用例超时/请求失败，且看不出与上一次归一化对比有关。脚本收尾会打印重建命令。
 - **非纯测试改动只告警、不阻断**：两侧共用同一份 PR 分支 tip 构建与同一个隔离后端，`frontend/src` / `backend/app` 的改动被两侧同等看到，唯一变量仍是 `frontend/e2e/**`，故 diff 依然可读。**先例 PR #401**：它既删 9 处失实前提的移动端 skip，又给 `ToastContainer.tsx` 补 `data-testid="toast-card"` 以支撑 `helpers.toastByTitle`，告警触发但结论成立（chromium 零 delta = 定位器等价；mobile 9 行 `skipped→passed` = skip 前提确为假）。**勿把这条告警「修」成硬拦**——#399 建议的「`git diff --quiet <base> <branch> -- frontend/src backend/app` 非空即 `exit 1`」实测正好拒掉 #401 这次成功实跑。若期望的形态变化来自 src 侧，本工具证不了，另跑 `npm run test:e2e` + `scripts/visual-verify.sh`。
