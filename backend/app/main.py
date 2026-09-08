@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -5,9 +6,20 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.database import engine, Base, SessionLocal
+from app.logging_config import setup_logging
+from app.request_context import (
+    REQUEST_ID_HEADER,
+    SCOPE_REQUEST_ID_KEY,
+    RequestContextMiddleware,
+)
 from app.routers import auth, investors, portfolios, products, platforms, trading_calendar, data_sources, market_data, subscriptions, trades, share_change_events, positions, logs, tasks, notifications, snapshots, cash_transfers, sync_jobs, asset_classifications
 from app.services.exceptions import BusinessError
 from app.init_tasks import init_scheduled_tasks
+
+logger = logging.getLogger(__name__)
+
+# 必须早于下面两处 import 期副作用（建表、初始化调度任务），它们本身可能产日志（issue #404）
+setup_logging()
 
 Base.metadata.create_all(bind=engine)
 
@@ -65,14 +77,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 请求上下文（request_id + 访问日志）。Starlette 的 add_middleware 后注册者更外，
+# 故本中间件包在 CORS 之外，预检 OPTIONS 同样留痕（issue #404）
+app.add_middleware(RequestContextMiddleware)
+
 
 @app.exception_handler(BusinessError)
 async def business_error_handler(request: Request, exc: BusinessError):
     """统一领域异常映射：保持 detail.{error,message} 契约不变。"""
+    logger.warning(
+        "业务拒绝",
+        extra={
+            "code": exc.code,
+            "reason": exc.message,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": exc.http_status,
+        },
+    )
     detail = {"error": exc.code, "message": exc.message}
     if exc.details:
         detail["details"] = exc.details
     return JSONResponse(status_code=exc.http_status, content={"detail": detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """未预期异常：ERROR 级带完整堆栈 + 500。子 issue B #405 在此追加 SystemErrorLog 落库。
+
+    Starlette 把 Exception handler 装在 ServerErrorMiddleware（中间件链**最外层**），
+    执行时 RequestContextMiddleware 的 finally 已解绑上下文，故 request_id 从 scope 取回。
+    """
+    request_id = request.scope.get(SCOPE_REQUEST_ID_KEY)
+    extra = {"method": request.method, "path": request.url.path, "status_code": 500}
+    if request_id:
+        extra["request_id"] = request_id
+    logger.error("未预期异常", exc_info=exc, extra=extra)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers={REQUEST_ID_HEADER: request_id} if request_id else None,
+    )
+
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["认证"])

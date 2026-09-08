@@ -39,7 +39,11 @@ os.environ.setdefault("DATABASE_URL", _load_test_db_url())
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing")
 os.environ.setdefault("SCHEDULER_ENABLED", "false")
 
-from contextlib import asynccontextmanager
+import io
+import json
+import logging
+import logging.config
+from contextlib import asynccontextmanager, redirect_stdout
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -48,6 +52,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app.logging_config import _build_config
 from app.main import app
 from app.models import (
     Investor, Portfolio, Product, Platform,
@@ -334,3 +339,44 @@ def sample_investor(test_db: Session) -> Investor:
 def sample_admin(test_db: Session) -> Investor:
     """返回 admin 测试用户"""
     return test_db.query(Investor).filter(Investor.code == "ADMIN").first()
+
+
+# ============================================================================
+# 日志捕获（issue #404）
+# ============================================================================
+
+@pytest.fixture
+def json_log_capture() -> Generator[io.StringIO, None, None]:
+    """把生产日志配置重新应用到本测试专属的 stdout 缓冲，返回该缓冲。
+
+    不用 capsys/capfd：`app.main` 在 import 期已执行 `setup_logging()`，dictConfig 的
+    `ext://sys.stdout` 绑死的是那一刻的 pytest 全局捕获对象，per-test 捕获换不掉它。
+    这里在 redirect_stdout 状态下重新应用生产配置（handler 因而绑到本缓冲），
+    结束后还原 root logger，避免影响其他测试。
+    """
+    buffer = io.StringIO()
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+
+    with redirect_stdout(buffer):
+        logging.config.dictConfig(_build_config("INFO"))
+
+    try:
+        yield buffer
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+
+
+def log_lines(buffer: io.StringIO) -> list[dict]:
+    """解析缓冲里的每一行 stdout；任一行不是合法 JSON 即测试失败。"""
+    return [json.loads(line) for line in buffer.getvalue().splitlines() if line.strip()]
+
+
+def only_log_line(buffer: io.StringIO, **fields) -> dict:
+    """断言恰好有一行匹配给定字段，并返回它。"""
+    lines = log_lines(buffer)
+    matched = [line for line in lines if all(line.get(k) == v for k, v in fields.items())]
+    assert len(matched) == 1, f"期望恰好 1 行匹配 {fields}，实际 {len(matched)}；全部行：{lines}"
+    return matched[0]

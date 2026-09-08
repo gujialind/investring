@@ -33,9 +33,16 @@ def _retry(func, error_label: str):
             return func()
         except Exception as e:
             if attempt < max_retries - 1:
+                logger.warning(
+                    "%s（第 %d/%d 次尝试）：%s，%ds 后重试",
+                    error_label, attempt + 1, max_retries, e, delay,
+                )
                 time.sleep(delay)
                 delay *= 2
                 continue
+            logger.error(
+                "%s（已重试 %d 次）：%s", error_label, max_retries, e, exc_info=True
+            )
             raise AkshareAPIError(f"{error_label}: {e}")
 
 

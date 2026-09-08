@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
 from datetime import date
 from typing import Optional
-import logging
 from app.database import get_db
 from app.models.share_change_event import ShareChangeEvent
 from app.schemas.share_change_event import (
@@ -22,8 +21,6 @@ from app.services.share_change_event_service import (
     cancel_share_change_event as cancel_event_service,
     unconfirm_share_change_event as unconfirm_event_service,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

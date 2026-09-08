@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "InvestRing"
     debug: bool = True
+    # 日志级别；空 = 由 debug 推导（True→DEBUG / False→INFO），显式设置则覆盖（issue #404）
+    log_level: str = ""
     
     class Config:
         env_file = ".env"
