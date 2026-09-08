@@ -112,3 +112,5 @@ diff /tmp/a.tsv /tmp/b.tsv
 ```
 
 同一栈同一数据是可比性来源；`CI=` 置空让 `reuseExistingServer` 复用已起栈。两跑之间重启一次后端（重灌种子）可消除上一跑的数据残留。
+
+CI compare 红的重跑语义（#414 实踩）：因 capture 失败而被 skip 的 compare **无法单独重跑**——`gh run rerun --job <compare>` 返回 `cannot be rerun`，且新 attempt 产生后旧 attempt 的失败 job 也不可再重跑；须重跑失败的 capture job（会级联带起 compare + CI OK）或 `gh run rerun <run-id>` 整 run 重跑。

@@ -66,6 +66,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
+        continue-on-error: true  # 诊断品上传失败不染红 job（artifact 服务间歇 403，#414）
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -392,6 +393,7 @@ jobs:
       # issue #172），always 上传保证失败时也能取到
       - name: Upload Playwright report
         if: always()
+        continue-on-error: true  # 诊断品上传失败不染红 job（artifact 服务间歇 403，#414）
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -655,6 +657,7 @@ jobs:
 
       - name: Upload failure evidence
         if: always()
+        continue-on-error: true  # 诊断品上传失败不染红 job（#414）；上方 raw JSON 是 compare 必需输入、保持阻塞
         uses: actions/upload-artifact@v4
         with:
           name: e2e-raw-${{ matrix.side }}-results
