@@ -2,6 +2,7 @@
 # InvestRing CI 持续集成流水线
 # ============================================================================
 # 范围：后端测试 + CLI 契约校验 + 前端 lint/类型/构建门禁 + 前端 E2E（issue #168）
+#        + E2E 形态对比（issue #410：纯测试重构 PR 的 pass/skip 形态双侧 diff 门禁）
 # 触发条件：push 到 main（合入后）或 pull request 到 main（issue #211 单分支模型）
 # 测试数据库：
 #   - SQLite（conftest.py 默认模式，快速反馈）
@@ -15,6 +16,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # labeled：e2e-compare 的 e2e-morph-expected 豁免靠打标签触发重跑
+    #（手动 re-run 不刷新 event payload，看不到新标签）
+    types: [opened, synchronize, reopened, labeled]
 
 # 并发控制：按「事件类型 + 源分支」分组，同组只保留最新运行。
 # 事件类型入组（issue #211）：push（合入 main 后）与 pull_request（feature→main）分属不同组，
@@ -439,10 +443,278 @@ jobs:
           provenance: false
           sbom: false
 
+  # E2E 形态对比（issue #410）：纯测试重构 PR 的「假绿灯」防线——base 与 PR 两侧
+  # 各跑一遍全量 E2E，归一化（scripts/e2e_normalize.py）成 TSV 后 diff，期望空 diff；
+  # 非空 diff 拦合入，预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
+  # 标签豁免。两侧构建源同为 PR head，唯一变量是 frontend/e2e/ 目录；CI runner 天然
+  # 隔离，本地脚本 verify-e2e-pr.sh 的隔离层（挑端口/独立 db/swap spec/trap）随之整删。
+  changes:
+    name: "Detect E2E Morphology Inputs"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      e2e_morph: ${{ steps.detect.outputs.hit }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # 纯 git 检测（不引第三方 action）。路径清单含 playwright.config.ts 与
+      # 种子文件——它们同样改变 pass/skip 形态；ci.yml 自身在列（本 job 的 dogfood）。
+      - id: detect
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" \
+            | grep -qE '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/|\.github/workflows/ci\.yml)'; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # normalizer 单测独立成 micro job：不挂 backend-test（该 job 带 --cov=app +
+  # fail_under=80，scripts/tests 不在覆盖率口径内，混入信号混乱）
+  scripts-test:
+    name: "Scripts Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run scripts tests
+        run: |
+          pip install pytest
+          python -m pytest scripts/tests -q
+
+  # 栈步骤与 frontend-e2e 逐行同构（MySQL/建库/迁移/种子/uvicorn/构建/浏览器）；
+  # 差异仅：baseline 侧换 e2e 目录、--retries=0、JSON reporter 落文件。
+  e2e-compare-capture:
+    name: "E2E Capture (${{ matrix.side }})"
+    needs: changes
+    if: needs.changes.outputs.e2e_morph == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false  # 一侧挂了另一侧仍跑完留证
+      matrix:
+        side: [baseline, candidate]
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -uroot -proot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # baseline 侧只换 e2e 目录，构建源仍是 PR head——「同一构建、唯一变量是
+      # frontend/e2e/**」不变量（#401 场景：测试重构 + src 补 data-testid 依赖这一点）。
+      # 先 rm -rf 再 checkout：head 独有 spec 会残留跑成并集（旧脚本 SWAP_ORPHANS
+      # 同源坑）；e2e/.auth/admin.json 是 gitignore 的、由 setup project 重建，删了无妨。
+      - name: Swap e2e to base (baseline only)
+        if: matrix.side == 'baseline'
+        run: |
+          rm -rf frontend/e2e
+          git checkout "${{ github.event.pull_request.base.sha }}" -- frontend/e2e
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create database
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot -e "
+            CREATE DATABASE ir_e2e CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
+
+      - name: Create schema and run migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+          SECRET_KEY: test-secret-key-for-ci
+          SCHEDULER_ENABLED: "false"
+          DEBUG: "false"
+        run: |
+          python -c "from app.database import engine, Base; import app.models; Base.metadata.create_all(bind=engine)"
+          alembic upgrade head
+
+      - name: Seed E2E base data
+        working-directory: backend
+        env:
+          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+          SECRET_KEY: test-secret-key-for-ci
+          SCHEDULER_ENABLED: "false"
+          DEBUG: "false"
+        run: python scripts/seed_e2e.py
+
+      - name: Start backend
+        working-directory: backend
+        env:
+          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+          SECRET_KEY: test-secret-key-for-ci
+          SCHEDULER_ENABLED: "false"
+          DEBUG: "false"
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../backend-e2e-compare.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/health
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend (production)
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          npm run build
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Update apt index
+        run: sudo apt-get update
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        timeout-minutes: 15
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright webkit
+        working-directory: frontend
+        timeout-minutes: 15
+        run: npx playwright install --with-deps webkit
+
+      # CI=true 保 reuseExistingServer=false；--retries=0 覆盖 config（CI?2:0）——
+      # retry 会把 flaky 洗成 passed，形态对比失真。用例 fail 是合法数据（进 JSON →
+      # TSV → diff），rc 吞掉不拦本 job，成败由 e2e-compare 判定。
+      # PLAYWRIGHT_JSON_OUTPUT_FILE 必须显式落文件：--reporter=list,json 下 list
+      # 也打 stdout，混流会毁 JSON。
+      - name: Run Playwright tests (capture)
+        working-directory: frontend
+        env:
+          CI: "true"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/e2e-raw-${{ matrix.side }}.json
+        run: |
+          rc=0
+          npx playwright test --retries=0 --workers=2 --reporter=list,json || rc=$?
+          echo "playwright rc=$rc（非 0 = 有用例未通过，状态已进 JSON）"
+
+      # JSON 缺失 = 运行本身坏了（构建/webServer/配置），响亮失败而非静默空 diff
+      - name: Upload raw JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-raw-${{ matrix.side }}
+          path: /tmp/e2e-raw-${{ matrix.side }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-raw-${{ matrix.side }}-results
+          path: |
+            frontend/test-results/
+            backend-e2e-compare.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  e2e-compare:
+    name: "E2E Morphology Compare"
+    needs: e2e-compare-capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 默认 checkout PR merge commit：用 PR 版 normalizer 处理两侧 raw，自洽
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download raw JSON
+        uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-raw-*
+          path: /tmp/raw
+
+      - name: Normalize both sides
+        run: |
+          python3 scripts/e2e_normalize.py \
+            --input /tmp/raw/e2e-raw-baseline/e2e-raw-baseline.json \
+            --output /tmp/base.tsv --projects chromium,mobile --side baseline
+          python3 scripts/e2e_normalize.py \
+            --input /tmp/raw/e2e-raw-candidate/e2e-raw-candidate.json \
+            --output /tmp/cand.tsv --projects chromium,mobile --side candidate
+
+      # diff 退出码显式捕获，不依赖 shell 的 pipefail 默认值
+      - name: Diff morphology
+        env:
+          EXEMPT: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-morph-expected') }}
+        run: |
+          rc=0
+          diff /tmp/base.tsv /tmp/cand.tsv > /tmp/morph.diff || rc=$?
+          cat /tmp/morph.diff
+          if [ "$rc" -eq 0 ]; then echo "✅ 形态一致（空 diff）"; exit 0; fi
+          {
+            echo '### E2E 形态 diff'
+            echo '```diff'
+            cat /tmp/morph.diff
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$EXEMPT" = "true" ]; then
+            echo "::warning::形态有差异，经 e2e-morph-expected 标签放行"
+            exit 0
+          fi
+          echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
+          exit 1
+
   # 汇总门禁（issue #211）：作为 main 分支唯一的 required status check。
   # 不直接把 matrix 展开的 Docker Build Smoke / 偏发的 Frontend E2E 设为 required，
   # 而是用本 job needs 全部实质 job 后统一判定——任一 failure/cancelled 即失败，
-  # skipped 视为通过（为将来 paths-ignore 预留）。
+  # skipped 视为通过（changes/e2e-compare 系在非 e2e PR 与 push 事件下跳过，issue #410）。
   ci-ok:
     name: "CI OK"
     if: always()
@@ -453,6 +725,10 @@ jobs:
       - frontend-check
       - frontend-e2e
       - docker-build-smoke
+      - changes
+      - scripts-test
+      - e2e-compare-capture
+      - e2e-compare
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate result

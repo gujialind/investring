@@ -11,8 +11,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   npx playwright test --debug       # 调试模式
  */
 // webServer.port 从 use.baseURL 派生而非另设环境变量：端口与被测地址同源，
-// 不可能各说各话。隔离栈调用方（scripts/verify-e2e-pr.sh）传 BASE_URL 指向自己的
-// 端口后，Playwright 就不会再在 :3000 上另起一份本调用方控制不了的服务。
+// 不可能各说各话。需要隔离栈的调用方传 BASE_URL 指向自己的端口后，
+// Playwright 就不会再在 :3000 上另起一份本调用方控制不了的服务。
 // 不设 BASE_URL 时（CI 只设 CI=true）与改动前逐字等价：:3000。
 const baseURL = process.env.BASE_URL || 'http://localhost:3000';
 const webServerPort = Number(new URL(baseURL).port) || 3000;

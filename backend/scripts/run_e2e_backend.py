@@ -1,8 +1,7 @@
 # E2E 测试后端启动器：复用 conftest 做法，空 lifespan 跳过 alembic
 # （MySQL 专有 SQL 在 SQLite 上报错，故 E2E 用 SQLite 临时库时必须跳过迁移）
 # 用法：python backend/scripts/run_e2e_backend.py（监听 127.0.0.1:8000）
-# 可用 E2E_DB_PATH / E2E_PORT 覆盖库路径与端口——scripts/verify-e2e-pr.sh 的隔离栈
-# 靠这两个变量复用本启动器（此前它自带一份 heredoc 副本，等于把种子契约抄了两遍）。
+# 可用 E2E_DB_PATH / E2E_PORT 覆盖库路径与端口（并行会话/隔离栈复用）。
 import os
 import sys
 from contextlib import asynccontextmanager
