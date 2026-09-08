@@ -14,6 +14,7 @@
 | `app/schemas/`                                      | Pydantic 请求/响应模型                                                                            |
 | `app/utils/`                                        | 安全（密码/Token/登录锁）等工具                                                                         |
 | `app/config.py` / `database.py` / `dependencies.py` | 配置、DB 会话、鉴权依赖                                                                               |
+| `app/logging_config.py` / `context.py` / `request_context.py` | 集中日志配置（stdout 单行 JSON）、请求级上下文（request_id / actor / client_ip）、请求上下文中间件（#404，约定与踩坑见 §1.5）    |
 
 **分层约定（router 为 service 薄适配器）**：业务逻辑单一实现于 service，REST 共用，杜绝并行实现漂移。
 
@@ -87,6 +88,14 @@
 
 * 配置项以 `app/config.py` + `.env` 覆盖为准。
 
+* **日志形态**（#404）：只写 stdout 单行 JSON，不落文件——轮转交给 docker `json-file` driver（生产 10m×3）。配置入口 `app/logging_config.py::setup_logging()`，在 `main.py` 模块级调用且**必须早于**建表与调度初始化那两处 import 期副作用；**幂等**（uvicorn / pytest / `scripts/run_e2e_backend.py` 是多入口，重复配置不得让一行变两行）。固定字段 `timestamp` / `level` / `logger` / `message`，经 `extra=` 传入的其余键原样进 JSON，异常折进 `exception` 字段而不拼进 `message`（否则换行会撕开单行 JSON）；**`extra=` 禁用 `message` 键**（LogRecord 保留字，会 KeyError）。**已知例外（刻意不修）**：`--workers 2`（生产 Dockerfile CMD）与 `--reload`（dev compose）下 uvicorn **父进程不 import 应用**，`setup_logging()` 对之不生效，每次启停输出 2~4 行明文（`INFO:     Uvicorn running on …`、`INFO:     Started parent process [18504]`）；工作进程起后一切皆 JSON。不用 `--log-config` 收编——那会让日志配置分裂成应用内 + 命令行双源。采集侧须容忍非 JSON 行（`jq -R 'fromjson? // empty'`）。
+
+* **日志级别**（#404）：`LOG_LEVEL`（→ `settings.log_level`）优先，空则由 `debug` 推导（True→DEBUG / False→INFO）。刻意**不钉 `sqlalchemy.engine`**——SQL 详略已由 `database.py` 的 `echo=settings.debug` 控制，dictConfig 再钉级别会与 echo 争用；`uvicorn.access` 关掉（访问日志由中间件单点产出，否则每请求两行），`uvicorn` / `uvicorn.error` 改为冒泡到 root，与应用日志同为 JSON。
+
+* **请求上下文**（#404）：`RequestContextMiddleware`（`app/request_context.py`）沿用入站 `X-Request-ID` 或生成 uuid4 hex，注入同名响应头，每请求产一条访问日志（`method` / `path` / `status_code` / `duration_ms`；**只记 path 不记 query**，查询串可能带凭据），`/health` 跳过（探活会淹没真实流量）。入站值先过正则白名单才回写响应头/进日志（防响应头注入）。actor / client_ip 由 `dependencies.py::get_current_user` 写入。**必须是「中间件派发前创建的可变对象 + 依赖改字段」，不能在依赖里 `var.set(...)`**：FastAPI 把同步依赖与同步 endpoint 分别派发到 threadpool，anyio 每次派发都 `copy_context()` 出独立拷贝，依赖里的 `set` 只作用于依赖那份拷贝，endpoint / service 读到的仍是 None（实测）。
+
+* **未预期异常**（#404）：`main.py` 的 `Exception` handler 记 ERROR（带堆栈）并返回 500。注意 Starlette 把 `Exception` handler 装在 `ServerErrorMiddleware`——中间件链的**最外层**：它执行时本中间件的 `finally` 已解绑上下文（故 request_id 从 `scope[SCOPE_REQUEST_ID_KEY]` 取回），响应经**原始** `send` 发出（故 `X-Request-ID` 头要 handler 自己补），且调完 handler **仍会重抛**（故测试须用 `TestClient(app, raise_server_exceptions=False)`）；中间件没见过 `response.start`，访问日志按 500 记。
+
 * 服务版本：`FastAPI(version=…)` 取仓库根 `VERSION` 文件（`app.main._resolve_version`，`APP_VERSION` 环境变量优先）；版本变更必须同 commit 重导出 `openapi.json`（`check_openapi.py` 全量比对含 `info.version`），发布流程见 `docs/reference/versioning.md`。
 
 * 调度：`scheduler_enabled`；两条独立每日 job——`daily_nav_sync`（净值同步+分红检测）与 `daily_snapshot_generate`（快照生成，#156），各持 MySQL `GET_LOCK` 互斥锁，cron 分别取 `scheduler_cron_daily` / `scheduler_cron_snapshot`；自动快照仅处理 `auto_snapshot_enabled=True` 的活跃组合（组合级开关默认 False，opt-in，只约束自动任务，手动生成/重算端点不受影响）。`init_tasks.py` 确保任务记录存在并同步文案，但不覆盖已有 cron\_expr。
@@ -119,7 +128,7 @@ cd backend && pytest tests -q
 - **会话开始 `drop_all + create_all`**（干净起跑）；会话结束**不清理**——跑完可直接登录本地前端浏览种子数据。
 - fixture 层级：session（`test_engine`、`_seed_base_data`）→ autouse（认证全局状态隔离）→ function（`test_db`/`client`/`admin_headers`/`sample_portfolio` 等），业务数据一律用 function 级 fixture/factories 造，不动 session 种子。
 - pytest 配置在 `pyproject.toml`（`--strict-markers`），新增 marker 须登记。
-- **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under=80`（2026-08-29 实测基线 80.81% 下取整）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败。
+- **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under=81`（2026-09-08 实测基线 81.42% 下取整）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败。
   - **棘轮规则**：`fail_under` 只升不降；任何 PR 全量实测总覆盖率超当前阈值 ≥1pp 时，顺手把阈值上调到实测值下取整（随该 PR 提交）；分支覆盖不单设独立阈值（branch=true 下 fail_under 已是分支含口径）。
   - 注意 fail_under 作用于 `--cov` 收集的那次运行：本地跑**子集**加 `--cov` 必然跌破阈值（子集覆盖不了全量代码），属预期，阈值只对全量运行有语义。
 

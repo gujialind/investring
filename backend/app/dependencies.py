@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from app import context
 from app.database import get_db
 from app.models.investor import Investor
 from app.models.login_log import LoginLog
@@ -107,6 +108,11 @@ def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # 改中间件绑定的可变上下文对象（不能在此 set 新 ContextVar：同步依赖跑在自己的
+    # threadpool context 拷贝里，set 只作用于该拷贝，endpoint/service 读不到）
+    context.set_actor(investor.code)
+    context.set_client_ip(get_client_ip(request))
 
     return investor
 
