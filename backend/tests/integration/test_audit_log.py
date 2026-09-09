@@ -9,10 +9,14 @@
 # 4. router-inline 提取 service 后 REST 契约不变（detail.{error,message} + 422）
 # 5. 未预期异常 → system_error_log（handler 经 scope 恢复 actor / IP）
 # 6. 载荷口径：中文不转义、update 只含变化字段
+# 7. issue #422：recalculate 收尾埋点的 flush 失败被守护（仍 200 + results[].errors
+#    带真根因，不退化成 500 RECALCULATION_FAILED）；超长 request_path 在 stdout 与
+#    handler 交接处保持完整、只在写入侧按列宽截断
 # 日期基于 conftest 交易日历（工作日均为交易日）
 # ============================================================================
 
 import json
+import logging
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
@@ -39,10 +43,14 @@ from app.constants.audit_actions import (
     SYSTEM_ACTOR,
 )
 from app.context import RequestContext, request_context_var
+from app.models import PortfolioValueSnapshot
 from app.models.audit_log import AuditLog
 from app.models.product import Product
 from app.models.share_change_event import ShareChangeEvent
+from app.models.system_error_log import SystemErrorLog
 from app.models.trade import Trade
+from app.services import snapshot_service
+from app.services.audit_service import SYSTEM_ERROR_PATH_MAX
 from app.services.cash_transfer_service import (
     confirm_cash_transfer,
     create_cash_transfer,
@@ -95,6 +103,7 @@ from tests.integration.test_snapshot_forced_adjustment import (
     _setup,
     _setup_real_history,
 )
+from tests.unit.test_audit_service import error_log_db  # noqa: F401  pytest 夹具复用
 
 D1 = EX_DAY                 # 2025-06-09 周一：操作日（> 基线快照日 D0）
 D2 = date(2025, 6, 10)      # 周二：跨天转移到账日 / 事件除息日
@@ -713,6 +722,73 @@ class TestSnapshotAudit:
                      resource_id=str(sub.id))
 
 
+class TestRecalculateAuditFlushGuard:
+    """#422a：收尾埋点的 flush 失败不得把 router 承诺的 200+errors 变成 500
+
+    逐日 except 刻意不 rollback（回滚交 router），故某日在 `db.add` 之后、`db.flush()`
+    之前失败时，半截 ORM 对象留在 pending 态；收尾 `record_audit` 的 flush 因此要做
+    真实工作，撞约束即抛。此前该异常逃出 service → router 的 `except Exception` →
+    500 RECALCULATION_FAILED，前端/CLI 拿不到可展示的逐日错误清单。
+    """
+
+    def test_mid_day_failure_returns_200_with_root_cause(
+        self, client, admin_headers, test_db, error_log_db, monkeypatch
+    ):
+        port = "AUD_SNP_FG"
+        inv = "AUD_SNP_FG_INV"
+        _setup_real_history(test_db, port, inv)
+        test_db.commit()
+
+        real_value_snapshot = snapshot_service._generate_portfolio_value_snapshot
+
+        def value_snapshot_violating_not_null(*args, **kwargs):
+            snap = real_value_snapshot(*args, **kwargs)
+            # portfolio_code 是 NOT NULL 列：对象随当日失败留在 pending 态，
+            # 等收尾埋点那次 flush 撞约束（issue 的可达路径②，与 #419 毒化无关）
+            snap.portfolio_code = None
+            return snap
+
+        monkeypatch.setattr(
+            snapshot_service, "_generate_portfolio_value_snapshot",
+            value_snapshot_violating_not_null,
+        )
+        monkeypatch.setattr(
+            snapshot_service, "_generate_investor_holding",
+            MagicMock(side_effect=RuntimeError("投资人快照生成炸了")),
+        )
+
+        resp = client.post(
+            "/api/snapshots/recalculate",
+            headers=admin_headers,
+            json={
+                "portfolio_code": port,
+                "start_date": D0.isoformat(),
+                "end_date": EX_DAY.isoformat(),
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        errors = resp.json()["results"][0]["errors"]
+        assert errors, "逐日失败必须进 results[].errors"
+        assert errors[0]["date"] == D0.isoformat()
+        assert errors[0]["code"] == "RuntimeError", (
+            "errors 携带当日真实根因，而非 500 的笼统 RECALCULATION_FAILED"
+        )
+        assert "投资人快照生成炸了" in errors[0]["error"]
+
+        # 审计侧仍有痕：flush 被守护后响亮记录 + 落一条 system_error_log
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert error.error_type == "AuditWriteFailure"
+        assert "portfolio_code" in error.error_message
+
+        # 整体回滚：基线快照复原、无半截快照落库（§2.6「要么完整成功、要么无变化」）
+        rows = test_db.query(PortfolioValueSnapshot).filter(
+            PortfolioValueSnapshot.portfolio_code == port
+        ).all()
+        assert [r.snapshot_date for r in rows] == [D0], rows
+
+
 class TestManualCashOverrideAudit:
     """现金重估：manual_market_value 的 upsert 两分支 + 删除"""
 
@@ -888,3 +964,49 @@ class TestSystemErrorLogOnUnhandledException:
         # contextvar 在中间件 finally 已解绑，只能靠 get_current_user 暂存的 scope
         assert kwargs["investor_code"] == "ADMIN"
         assert kwargs["ip_address"]
+
+    # #422c：路径长度无界（h11 请求行上限 16 KB），而列宽是 String(200)
+    LONG_CODE = "P" * 300
+
+    def _trigger_with_overlong_path(self, client, admin_headers, monkeypatch):
+        """用带路径参数的端点构造 >200 字符的 path，并让它抛未预期异常"""
+        monkeypatch.setattr(
+            "app.services.performance_service.get_performance",
+            MagicMock(side_effect=RuntimeError("绩效算炸了")),
+        )
+        path = f"/api/portfolios/{self.LONG_CODE}/performance"
+        assert len(path) > SYSTEM_ERROR_PATH_MAX
+        with pytest.raises(RuntimeError):
+            client.get(path, headers=admin_headers)
+        return path
+
+    def test_overlong_path_kept_whole_in_stdout_and_handoff(
+        self, client, admin_headers, monkeypatch, caplog
+    ):
+        """截断只发生在写入侧：stdout 与交给 record_system_error 的都仍是完整 path"""
+        spy = MagicMock()
+        monkeypatch.setattr("app.main.record_system_error", spy)
+
+        with caplog.at_level(logging.ERROR, logger="app.main"):
+            path = self._trigger_with_overlong_path(client, admin_headers, monkeypatch)
+
+        logged = [r for r in caplog.records if r.getMessage() == "未预期异常"]
+        assert logged, [r.getMessage() for r in caplog.records]
+        assert getattr(logged[0], "path", None) == path, "stdout 必须留完整 path"
+        assert spy.call_args.kwargs["request_path"] == path
+
+    def test_overlong_path_still_lands_one_row(
+        self, client, admin_headers, monkeypatch, error_log_db
+    ):
+        """真实写入路径：超长 path 仍落一行（不截断则 MySQL 严格模式下整行丢失）"""
+        path = self._trigger_with_overlong_path(client, admin_headers, monkeypatch)
+
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert error.request_path == path[:SYSTEM_ERROR_PATH_MAX]
+        assert len(error.request_path) <= SYSTEM_ERROR_PATH_MAX
+        assert error.error_type == "RuntimeError"
+        assert error.error_message == "绩效算炸了"
+        assert error.error_stack
+        assert error.request_method == "GET"
+        assert error.investor_code == "ADMIN"
