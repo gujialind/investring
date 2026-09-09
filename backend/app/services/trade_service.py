@@ -1089,15 +1089,19 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
     }
     _old_diff = {k: v for k, v in _audit_old.items() if v != _audit_new[k]}
     _new_diff = {k: _audit_new[k] for k in _old_diff}
-    record_audit(
-        db,
-        action=ACTION_UPDATE,
-        resource_type=RESOURCE_TRADE,
-        resource_id=str(trade.id),
-        resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
-        old_value=_old_diff or None,
-        new_value=_new_diff or None,
-    )
+    # 无实际变更不留痕（同 share_change_event_service 与「空删除不留痕」口径）。
+    # 此处两侧恒为 Decimal——数值入参在函数开头已经 _dec() 归一，故不需要
+    # audit_service._is_same 的跨类型比较
+    if _old_diff:
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_TRADE,
+            resource_id=str(trade.id),
+            resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+            old_value=_old_diff or None,
+            new_value=_new_diff or None,
+        )
 
     return trade
 

@@ -629,15 +629,17 @@ def update_subscription(
     for field, value in updates.items():
         setattr(subscription, field, value)
 
-    record_audit(
-        db,
-        action=ACTION_UPDATE,
-        resource_type=RESOURCE_SUBSCRIPTION,
-        resource_id=str(subscription.id),
-        resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
-        old_value=old_values or None,
-        new_value=new_values or None,
-    )
+    # 无实际变更不留痕（同 share_change_event_service 与「空删除不留痕」口径）
+    if old_values or new_values:
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_SUBSCRIPTION,
+            resource_id=str(subscription.id),
+            resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
+            old_value=old_values or None,
+            new_value=new_values or None,
+        )
 
     return subscription
 

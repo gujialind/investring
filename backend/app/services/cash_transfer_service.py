@@ -132,7 +132,7 @@ def create_cash_transfer(
             "portfolio_code": portfolio_code,
             "from_platform": from_platform,
             "to_platform": to_platform,
-            "amount": float(amt),
+            "amount": amt,
             "transfer_date": transfer_date,
             "cross_day": cross_day,
             "sell_status": sell_trade.status,

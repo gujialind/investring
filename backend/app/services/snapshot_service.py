@@ -322,6 +322,9 @@ def generate_daily_snapshots(
         resource_id=target_date.isoformat(),
         resource_name=portfolio_code,
         new_value={
+            # 这三个值在 PortfolioValueSnapshot 构造时就已 float()
+            # （见 _generate_portfolio_value_snapshot），到此已是 float，故载荷落 JSON
+            # 数字而非 Decimal 字符串——与其他埋点不一致，但在埋点侧不可修（标度已丢），另行跟踪。
             "total_value": float(value_snapshot.total_value),
             "total_shares": float(value_snapshot.total_shares),
             "unit_price": float(value_snapshot.unit_price),

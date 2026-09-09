@@ -422,15 +422,18 @@ def update_share_change_event(
     for field, value in updates.items():
         setattr(event, field, value)
 
-    record_audit(
-        db,
-        action=ACTION_UPDATE,
-        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
-        resource_id=str(event.id),
-        resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
-        old_value=old_values or None,
-        new_value=new_values or None,
-    )
+    # 无实际变更不留痕：PUT 整对象重提交是编辑表单常态，否则每次保存都灌一条
+    # old/new 皆 NULL 的空载荷行（零取证价值），同「空删除不留痕」口径
+    if old_values or new_values:
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+            resource_id=str(event.id),
+            resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
+            old_value=old_values or None,
+            new_value=new_values or None,
+        )
 
     return event
 

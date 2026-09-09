@@ -154,6 +154,34 @@ class TestDiffFields:
         assert old == {"notes": None}
         assert new == {"notes": "y"}
 
+    def test_decimal_vs_float_same_value_is_not_a_change(self):
+        """DB Numeric 读出 Decimal、update schema 是 Optional[float]：
+        `Decimal("1234.5600") != 1234.56` 恒真，原样重提交会被判为变更。
+
+        Decimal 侧显式构造，复现「DB Numeric 列（Decimal）撞上 schema 的
+        Optional[float]」的真实形态；SQLAlchemy 的 Numeric 在 SQLite 与 MySQL
+        都回 Decimal（实测 `Decimal("0.5000")`），故本地即可复现。
+        """
+        obj = _Obj(cash_change=Decimal("1234.5600"), ratio=Decimal("1.1000"))
+        assert _diff_fields(obj, {"cash_change": 1234.56, "ratio": 1.1}) == ({}, {})
+
+    def test_genuine_numeric_change_still_detected(self):
+        obj = _Obj(cash_change=Decimal("1234.5600"))
+        old, new = _diff_fields(obj, {"cash_change": 1234.57})
+        assert old == {"cash_change": Decimal("1234.5600")}
+        assert new == {"cash_change": 1234.57}
+
+    def test_none_to_number_is_a_change(self):
+        old, new = _diff_fields(_Obj(div_cash=None), {"div_cash": 0.5})
+        assert old == {"div_cash": None}
+        assert new == {"div_cash": 0.5}
+
+    def test_bool_bypasses_decimal_conversion(self):
+        """isinstance(True, int) 为真，不排除则 Decimal(str(True)) 抛 InvalidOperation。"""
+        old, new = _diff_fields(_Obj(flag=False), {"flag": True})
+        assert old == {"flag": False}
+        assert new == {"flag": True}
+
 
 class TestActorAttribution:
     def test_request_actor_and_ip_recorded(self, test_db, trade):

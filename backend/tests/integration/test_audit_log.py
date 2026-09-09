@@ -334,6 +334,30 @@ class TestTradeAudit:
         assert old == {"notes": None}
         assert new == {"notes": "调仓备注"}
 
+    def test_update_without_change_leaves_no_trace(self, test_db):
+        """空更新不留痕：diff 为空则不调 record_audit，否则落一条 old/new 皆 NULL 的行。
+
+        update_trade 自建 diff（不走 `_diff_fields`），故这道闸需单独锁；
+        其数值入参已在函数开头经 `_dec()` 归一为 Decimal，Decimal-vs-float
+        的跨类型比较在 `tests/unit/test_audit_service.py` 锁。
+        """
+        port = "AUD_TRD_NOOP"
+        _setup(test_db, port)
+        trade = create_trade_service(
+            test_db, portfolio_code=port, product_code=FUND, market="CN_OTC",
+            trade_type="buy", trade_date=D1,
+            actual_amount=Decimal("300.00"), platform_code="MYCF",
+        )
+        test_db.flush()
+        with _as():
+            update_trade(test_db, trade, {"notes": "调仓备注"})
+            test_db.flush()
+            update_trade(test_db, trade, {"notes": "调仓备注"})
+            test_db.flush()
+            rows = _rows(test_db, action=ACTION_UPDATE,
+                         resource_type=RESOURCE_TRADE, resource_id=str(trade.id))
+        assert len(rows) == 1, "首次改 notes 留一条，原样重提交不再留痕"
+
     def test_confirm_and_unconfirm(self, test_db):
         port = "AUD_TRD_CF"
         _setup(test_db, port)
@@ -495,6 +519,30 @@ class TestShareChangeEventAudit:
         assert old == {"notes": "分红"}
         assert new == {"notes": "改分红备注"}
 
+    def test_update_resubmitting_same_numeric_value_leaves_no_trace(self, test_db):
+        """PUT 整对象是编辑表单的常态：数值字段原样重提交不得产出审计行。
+
+        上面那个用例只改 `notes`（字符串），故掩盖了数值字段的幻影 diff。
+        `ShareChangeEventUpdate` 的数值字段是 `Optional[float]`，这里传
+        `float(event.div_cash)` 复现 router 交给 service 的真实形态。
+        SQLAlchemy 的 Numeric 在 SQLite 同样回 Decimal（实测），故本地即可复现。
+        同时锁住「无实际变更不留痕」：diff 为空则不调 `record_audit`，
+        否则会落一条 old/new 皆 NULL 的空载荷行。
+        """
+        port = "AUD_EVT_SAME"
+        _setup(test_db, port)
+        with _as():
+            event = self._event(test_db, port)
+            test_db.flush()
+            update_share_change_event(
+                test_db, event, {"div_cash": float(event.div_cash)}
+            )
+            test_db.flush()
+            rows = _rows(test_db, action=ACTION_UPDATE,
+                         resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+                         resource_id=str(event.id))
+        assert rows == [], f"原样重提交 div_cash 不应留审计痕，实得 {len(rows)} 条"
+
     def test_confirm_and_unconfirm(self, test_db):
         port = "AUD_EVT_CF"
         _setup(test_db, port)
@@ -576,6 +624,10 @@ class TestSnapshotAudit:
         _, new = _payload(row)
         assert set(new) == {"total_value", "total_shares", "unit_price",
                             "positions", "investors"}
+        # 这三个值在 PortfolioValueSnapshot 构造时就已 float()，标度已丢，
+        # 故落 JSON 数字而非其他埋点的 Decimal 字符串——埋点侧不可修，另行跟踪
+        for key in ("total_value", "total_shares", "unit_price"):
+            assert isinstance(new[key], float), f"{key} 应为 float，实为 {type(new[key])}"
 
     def test_empty_generate_leaves_no_delete_trace(self, test_db):
         """generate 每次都先删旧快照；空删除不留痕，否则淹没审计日志"""
@@ -808,7 +860,7 @@ class TestPayloadConventions:
                    resource_type=RESOURCE_CASH_TRANSFER)
         new = json.loads(row.new_value)
         assert new["transfer_date"] == "2025-06-09"
-        assert new["amount"] == 0.01
+        assert new["amount"] == "0.01", "Decimal 字符串化后 2 位小数不变形（非 float 0.01）"
 
 
 class TestSystemErrorLogOnUnhandledException:

@@ -21,6 +21,7 @@
 import json
 import logging
 import traceback
+from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import insert
@@ -41,13 +42,32 @@ def _serialize_value(value: Any) -> Optional[str]:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _is_same(old_val: Any, new_val: Any) -> bool:
+    """数值统一转 Decimal 再比：Decimal 与 float 的比较是**精确**的，
+    `Decimal("1234.5600") != 1234.56` 恒真（1234.56 的二进制浮点并不精确等于该十进制值）。
+    DB Numeric 列读出 Decimal，而 update schema 的数值字段是 `Optional[float]`
+    （如 `ShareChangeEventUpdate.cash_change`），直接比会把用户原样重提交的字段判为
+    「已变更」，写出根本没发生的审计变更。经 `str()` 转 Decimal 后按数值比较，
+    标度差不再误判（`Decimal("1.1") == Decimal("1.1000")`）。
+
+    只归一**比较**、不归一调用方 setattr 的值，故落库数据不变。
+    """
+    if isinstance(old_val, bool) or isinstance(new_val, bool):
+        return old_val == new_val
+    if isinstance(old_val, (int, float, Decimal)) and isinstance(
+        new_val, (int, float, Decimal)
+    ):
+        return Decimal(str(old_val)) == Decimal(str(new_val))
+    return old_val == new_val
+
+
 def _diff_fields(obj: Any, updates: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """捕获 setattr 前后的变化字段，返回 (old_dict, new_dict)。仅含实际变化的键。"""
     old: Dict[str, Any] = {}
     new: Dict[str, Any] = {}
     for key, new_val in updates.items():
         old_val = getattr(obj, key, None)
-        if old_val != new_val:
+        if not _is_same(old_val, new_val):
             old[key] = old_val
             new[key] = new_val
     return old, new
