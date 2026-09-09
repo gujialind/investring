@@ -45,4 +45,7 @@ app.router.lifespan_context = _noop_lifespan
 
 import uvicorn  # noqa: E402
 
-uvicorn.run(app, host="127.0.0.1", port=E2E_PORT, log_level="warning")
+# log_config=None：跳过 uvicorn.Config 内置的 dictConfig——它会把 uvicorn 默认明文
+# handler 装回、propagate 置 False，覆盖 import app.main 期已执行的 setup_logging()；
+# 跳过后 uvicorn 自身日志（含 ASGI 异常）冒泡 root，与应用日志同为单行 JSON（#417）
+uvicorn.run(app, host="127.0.0.1", port=E2E_PORT, log_level="warning", log_config=None)
