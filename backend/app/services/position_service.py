@@ -23,6 +23,11 @@ from app.services.trading_utils import (
     is_trading_day,
 )
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.audit_service import record_audit
+from app.constants.audit_actions import (
+    ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
+    RESOURCE_MANUAL_MARKET_VALUE,
+)
 from app.utils.quantize import quantize_amount
 
 
@@ -803,9 +808,16 @@ def update_cash_position(
         ManualMarketValue.value_date == target_date,
     ).first()
     if manual:
+        audit_action = ACTION_UPDATE
+        audit_old = {
+            "market_value": manual.market_value,
+            "computed_value": manual.computed_value,
+        }
         manual.market_value = amount_d
         manual.computed_value = computed
     else:
+        audit_action = ACTION_CREATE
+        audit_old = None
         manual = ManualMarketValue(
             portfolio_code=portfolio_code,
             platform_code=platform_code,
@@ -817,6 +829,21 @@ def update_cash_position(
         )
         db.add(manual)
     db.flush()
+
+    record_audit(
+        db,
+        action=audit_action,
+        resource_type=RESOURCE_MANUAL_MARKET_VALUE,
+        resource_id=str(manual.id),
+        resource_name=f"{portfolio_code}/{platform_code}/CASH/{target_date.isoformat()}",
+        old_value=audit_old,
+        new_value={
+            "market_value": manual.market_value,
+            "computed_value": computed,
+            "value_date": target_date,
+            **({"warnings": warnings} if warnings else {}),
+        },
+    )
 
     return {
         "portfolio_code": portfolio_code,
@@ -898,6 +925,21 @@ def delete_manual_cash_override(
         )
 
     deleted_value = float(manual.market_value)
+
+    record_audit(
+        db,
+        action=ACTION_DELETE,
+        resource_type=RESOURCE_MANUAL_MARKET_VALUE,
+        resource_id=str(manual.id),
+        resource_name=f"{portfolio_code}/{platform_code}/CASH/{value_date.isoformat()}",
+        old_value={
+            "market_value": manual.market_value,
+            "computed_value": manual.computed_value,
+            "value_date": manual.value_date,
+            "created_by": manual.created_by,
+        },
+    )
+
     db.delete(manual)
     db.flush()
 

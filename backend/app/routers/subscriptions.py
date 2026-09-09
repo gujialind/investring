@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
@@ -14,6 +14,8 @@ from app.services.subscription_service import (
     unconfirm_single_subscription,
     create_subscription as create_subscription_service,
     update_subscription as update_subscription_service,
+    cancel_subscription as cancel_subscription_service,
+    delete_subscription as delete_subscription_service,
     list_subscriptions,
 )
 from app.schemas.subscription import (
@@ -164,13 +166,8 @@ def cancel_subscription(
     subscription = db.query(Subscription).filter(Subscription.id == id).with_for_update().first()
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    if subscription.status != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "INVALID_STATUS", "message": "仅 pending 状态可取消"},
-        )
 
-    subscription.status = "cancelled"
+    cancel_subscription_service(db, subscription)
     db.commit()
     return {"message": "Subscription cancelled successfully"}
 
@@ -220,15 +217,6 @@ def delete_subscription(
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    if subscription.status == "confirmed":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "CANNOT_DELETE_CONFIRMED",
-                "message": "已确认的申购赎回事件不可直接删除，请先取消确认后再删除"
-            }
-        )
-
-    db.delete(subscription)
+    delete_subscription_service(db, subscription)
     db.commit()
     return {"message": "Subscription deleted successfully"}

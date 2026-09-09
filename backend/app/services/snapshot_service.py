@@ -30,6 +30,11 @@ from app.services.trading_utils import (
 )
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.subscription_service import unconfirm_single_subscription
+from app.services.audit_service import record_audit
+from app.constants.audit_actions import (
+    ACTION_GENERATE, ACTION_RECALCULATE, ACTION_DELETE, ACTION_CASCADE_UNCONFIRM,
+    RESOURCE_SNAPSHOT, RESOURCE_SHARE_CHANGE_EVENT,
+)
 from app.models.manual_market_value import ManualMarketValue
 from app.utils.quantize import quantize_shares
 
@@ -309,7 +314,25 @@ def generate_daily_snapshots(
         f"快照生成成功: portfolio={portfolio_code}, date={target_date}, "
         f"positions={len(positions)}, investors={len(holdings)}"
     )
-    
+
+    record_audit(
+        db,
+        action=ACTION_GENERATE,
+        resource_type=RESOURCE_SNAPSHOT,
+        resource_id=target_date.isoformat(),
+        resource_name=portfolio_code,
+        new_value={
+            # 这三个值在 PortfolioValueSnapshot 构造时就已 float()
+            # （见 _generate_portfolio_value_snapshot），到此已是 float，故载荷落 JSON
+            # 数字而非 Decimal 字符串——与其他埋点不一致，但在埋点侧不可修（标度已丢），另行跟踪。
+            "total_value": float(value_snapshot.total_value),
+            "total_shares": float(value_snapshot.total_shares),
+            "unit_price": float(value_snapshot.unit_price),
+            "positions": len(positions),
+            "investors": len(holdings),
+        },
+    )
+
     return {
         "success": True,
         "message": "快照生成成功",
@@ -487,6 +510,30 @@ def recalculate_snapshots(
             current_date += timedelta(days=1)
 
         results.append(result)
+
+    record_audit(
+        db,
+        action=ACTION_RECALCULATE,
+        resource_type=RESOURCE_SNAPSHOT,
+        resource_id=f"{start_date.isoformat()}..{end_date.isoformat()}",
+        resource_name=portfolio_code or "ALL",
+        old_value={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        new_value={
+            "portfolios": [
+                {
+                    "portfolio_code": r["portfolio_code"],
+                    "processed_dates": r["processed_dates"],
+                    "auto_confirmed": len(r["auto_confirmed"]),
+                    "cascaded_unconfirmed": len(r["cascaded_unconfirmed"]),
+                    "errors": len(r["errors"]),
+                }
+                for r in results
+            ],
+        },
+    )
 
     return {
         "success": True,
@@ -837,6 +884,8 @@ def _cascade_unconfirm_subscriptions(
     )
 
     unconfirmed_list = []
+    # 不另写审计：回退委派给 unconfirm_single_subscription，其内部已逐条留 unconfirm 痕，
+    # 再叠 cascade_unconfirm 即对同一事实重复记账（对比事件级联为就地改字段，须自带埋点）
     for sub in confirmed_subs:
         unconfirm_single_subscription(db, sub, check_snapshot=False, auto_flush=False)
         unconfirmed_list.append({
@@ -874,9 +923,19 @@ def _cascade_unconfirm_share_change_events(
     result = []
     for event in events:
         # 父记录：先物理删除所有子记录（确保 regen 重确认不重复拆分）
-        db.query(ShareChangeEvent).filter(
+        children_deleted = db.query(ShareChangeEvent).filter(
             ShareChangeEvent.parent_event_id == event.id
         ).delete(synchronize_session=False)
+
+        # 回退前的确认数据（就地清空，无 service 委派，故须在此留痕）
+        _audit_old = {
+            "status": event.status,
+            "entitlement_shares": event.entitlement_shares,
+            "shares_before": event.shares_before,
+            "shares_change": event.shares_change,
+            "shares_after": event.shares_after,
+            "cash_change": event.cash_change,
+        }
 
         # 然后回退父记录本身
         event.status = "pending"
@@ -894,6 +953,21 @@ def _cascade_unconfirm_share_change_events(
         logger.info(
             f"级联取消确认事件: event_id={event.id}, "
             f"portfolio={portfolio_code}, snapshot_date={snapshot_date}"
+        )
+
+        record_audit(
+            db,
+            action=ACTION_CASCADE_UNCONFIRM,
+            resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+            resource_id=str(event.id),
+            resource_name=f"{portfolio_code}/{event.event_type}",
+            old_value=_audit_old,
+            new_value={
+                "status": "pending",
+                "reason": "snapshot_deleted",
+                "snapshot_date": snapshot_date,
+                "deleted_children": children_deleted,
+            },
         )
 
     return result
@@ -939,6 +1013,25 @@ def _delete_existing_snapshots(
             InvestorHolding.snapshot_date == target_date,
         )
     ).rowcount
+
+    # generate_daily_snapshots 每次都先调本函数；空删除不留痕，否则淹没审计日志
+    if pp_deleted or nav_deleted or ih_deleted or cascaded or cascaded_events:
+        record_audit(
+            db,
+            action=ACTION_DELETE,
+            resource_type=RESOURCE_SNAPSHOT,
+            resource_id=target_date.isoformat(),
+            resource_name=portfolio_code,
+            old_value={
+                "deleted": {
+                    "portfolio_position": pp_deleted,
+                    "portfolio_value_snapshot": nav_deleted,
+                    "investor_holding": ih_deleted,
+                },
+                "cascaded_subscriptions": [c["id"] for c in cascaded],
+                "cascaded_events": [e["id"] for e in cascaded_events],
+            },
+        )
 
     return {
         "cascaded_subscriptions": cascaded,

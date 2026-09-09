@@ -20,6 +20,7 @@ from app.services.share_change_event_service import (
     confirm_share_change_event as confirm_event_service,
     cancel_share_change_event as cancel_event_service,
     unconfirm_share_change_event as unconfirm_event_service,
+    delete_share_change_event as delete_event_service,
 )
 
 router = APIRouter()
@@ -225,11 +226,6 @@ def delete_share_change_event(
     if not event:
         raise HTTPException(status_code=404, detail="Share change event not found")
 
-    # 父记录：先删除所有子记录
-    db.query(ShareChangeEvent).filter(
-        ShareChangeEvent.parent_event_id == event.id
-    ).delete(synchronize_session=False)
-
-    db.delete(event)
+    delete_event_service(db, event)
     db.commit()
     return {"message": "Share change event deleted successfully"}

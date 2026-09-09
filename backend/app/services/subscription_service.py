@@ -28,6 +28,12 @@ from app.services.position_service import (
     calculate_investor_available_shares,
 )
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.audit_service import record_audit, _diff_fields
+from app.constants.audit_actions import (
+    ACTION_CREATE, ACTION_UPDATE, ACTION_CONFIRM, ACTION_UNCONFIRM,
+    ACTION_CANCEL, ACTION_DELETE,
+    RESOURCE_SUBSCRIPTION,
+)
 from app.utils.quantize import quantize_amount, quantize_shares
 
 logger = logging.getLogger(__name__)
@@ -290,6 +296,23 @@ def confirm_single_subscription(
         f"nav={nav}, confirm_date={confirm_date}"
     )
 
+    record_audit(
+        db,
+        action=ACTION_CONFIRM,
+        resource_type=RESOURCE_SUBSCRIPTION,
+        resource_id=str(subscription.id),
+        resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
+        old_value={"status": "pending"},
+        new_value={
+            "status": "confirmed",
+            "unit_price": nav,
+            "shares": subscription.shares,
+            "amount": subscription.amount,
+            "confirm_date": confirm_date,
+            "cash_transfer_group": f"sub_{subscription.id}",
+        },
+    )
+
     return subscription
 
 
@@ -344,6 +367,9 @@ def unconfirm_single_subscription(
     # 该守卫会阻断快照删除级联回退、且无法覆盖其他现金消耗路径。现金充足性改由
     # 两处保证：①赎回确认消费点校验（INSUFFICIENT_CASH）②快照生成阻断（NEGATIVE_CASH）。
 
+    old_unit_price = subscription.unit_price
+    old_confirm_date = subscription.confirm_date
+
     subscription.status = "pending"
     # 重算期望确认日（申赎恒 T+1）而非置 None，保持 pending 记录 confirm_date 非空，
     # 避免快照校验 confirm_date <= target 因 SQL NULL 比较漏检（与 unconfirm_trade 对齐）
@@ -393,6 +419,16 @@ def unconfirm_single_subscription(
         db.flush()
 
     logger.info(f"取消确认: id={subscription.id}")
+
+    record_audit(
+        db,
+        action=ACTION_UNCONFIRM,
+        resource_type=RESOURCE_SUBSCRIPTION,
+        resource_id=str(subscription.id),
+        resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
+        old_value={"status": "confirmed", "unit_price": old_unit_price, "confirm_date": old_confirm_date},
+        new_value={"status": "pending", "confirm_date": subscription.confirm_date},
+    )
 
     return subscription
 
@@ -476,6 +512,27 @@ def create_subscription(
         raise BusinessError("INVALID_TYPE", "类型必须为 subscribe 或 redeem")
 
     db.add(new_sub)
+    db.flush()
+
+    record_audit(
+        db,
+        action=ACTION_CREATE,
+        resource_type=RESOURCE_SUBSCRIPTION,
+        resource_id=str(new_sub.id),
+        resource_name=f"{portfolio_code}/{investor_code}/{sub_type}",
+        new_value={
+            "portfolio_code": portfolio_code,
+            "investor_code": investor_code,
+            "platform_code": platform_code,
+            "sub_type": sub_type,
+            "apply_date": apply_date,
+            "amount": new_sub.amount,
+            "shares": new_sub.shares,
+            "confirm_date": confirm_date,
+            "status": "pending",
+        },
+    )
+
     return new_sub
 
 
@@ -567,10 +624,70 @@ def update_subscription(
             if Decimal(str(new_shares)) > available:
                 raise BusinessError("INSUFFICIENT_SHARES", "赎回份额超过可用份额")
 
+    old_values, new_values = _diff_fields(subscription, updates)
+
     for field, value in updates.items():
         setattr(subscription, field, value)
 
+    # 无实际变更不留痕（同 share_change_event_service 与「空删除不留痕」口径）
+    if old_values or new_values:
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_SUBSCRIPTION,
+            resource_id=str(subscription.id),
+            resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
+            old_value=old_values or None,
+            new_value=new_values or None,
+        )
+
     return subscription
+
+
+def cancel_subscription(db: Session, subscription: Subscription) -> Subscription:
+    """取消申赎（仅 pending 可取消）。不 commit。"""
+    if subscription.status != "pending":
+        raise BusinessError("INVALID_STATUS", "仅 pending 状态可取消")
+
+    subscription.status = "cancelled"
+
+    record_audit(
+        db,
+        action=ACTION_CANCEL,
+        resource_type=RESOURCE_SUBSCRIPTION,
+        resource_id=str(subscription.id),
+        resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
+        old_value={"status": "pending"},
+        new_value={"status": "cancelled"},
+    )
+
+    return subscription
+
+
+def delete_subscription(db: Session, subscription: Subscription) -> None:
+    """删除申赎（confirmed 不可直接删除）。不 commit。"""
+    if subscription.status == "confirmed":
+        raise BusinessError(
+            "CANNOT_DELETE_CONFIRMED",
+            "已确认的申购赎回事件不可直接删除，请先取消确认后再删除",
+        )
+
+    record_audit(
+        db,
+        action=ACTION_DELETE,
+        resource_type=RESOURCE_SUBSCRIPTION,
+        resource_id=str(subscription.id),
+        resource_name=f"{subscription.portfolio_code}/{subscription.investor_code}/{subscription.sub_type}",
+        old_value={
+            "status": subscription.status,
+            "sub_type": subscription.sub_type,
+            "apply_date": subscription.apply_date,
+            "amount": subscription.amount,
+            "shares": subscription.shares,
+        },
+    )
+
+    db.delete(subscription)
 
 
 def list_subscriptions(

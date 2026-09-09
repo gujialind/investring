@@ -7,6 +7,7 @@ from app import context
 from app.database import get_db
 from app.models.investor import Investor
 from app.models.login_log import LoginLog
+from app.request_context import SCOPE_ACTOR_KEY, SCOPE_CLIENT_IP_KEY
 from app.utils.security import decode_token, is_token_blacklisted, is_account_locked
 
 security = HTTPBearer(auto_error=False)
@@ -111,8 +112,14 @@ def get_current_user(
 
     # 改中间件绑定的可变上下文对象（不能在此 set 新 ContextVar：同步依赖跑在自己的
     # threadpool context 拷贝里，set 只作用于该拷贝，endpoint/service 读不到）
+    client_ip = get_client_ip(request)
     context.set_actor(investor.code)
-    context.set_client_ip(get_client_ip(request))
+    context.set_client_ip(client_ip)
+
+    # scope 另存一份：未预期异常 handler 执行时上下文已被中间件 finally 解绑，
+    # system_error_log 的 investor_code / ip_address 只能从这里恢复
+    request.scope[SCOPE_ACTOR_KEY] = investor.code
+    request.scope[SCOPE_CLIENT_IP_KEY] = client_ip
 
     return investor
 

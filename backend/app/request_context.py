@@ -26,6 +26,11 @@ REQUEST_ID_HEADER = "X-Request-ID"
 # 供未预期异常 handler 回写响应头与日志字段。
 SCOPE_REQUEST_ID_KEY = "investring_request_id"
 
+# 同理：异常 handler 落 system_error_log 需要「谁 / 从哪来」，但那时 contextvar 已解绑，
+# 故 get_current_user 认证成功后把 actor 与 client_ip 暂存到 scope 上（与 request_id 同一手法）。
+SCOPE_ACTOR_KEY = "investring_actor"
+SCOPE_CLIENT_IP_KEY = "investring_client_ip"
+
 # 探活每 N 秒一次，记进访问日志会淹没真实流量
 _SKIP_PATHS = frozenset({"/health"})
 

@@ -52,12 +52,12 @@ addopts = "--strict-markers"
 # 覆盖率设防（issue #254；#171 观察期结束转入设防期）：
 # 配置放 [tool.coverage.*] 而非 pytest addopts——不传 --cov 时 coverage 完全不激活，
 # 本地跑子集零开销；CI（backend-test job）带 --cov 即自动启用分支口径 + 硬阈值。
-# fail_under 为 branch-inclusive 口径：2026-09-08 实测基线 81.42%，下取整定 81。
+# fail_under 为 branch-inclusive 口径：2026-09-08 实测基线 82.15%（#405 审计埋点），下取整定 82。
 # 棘轮规则（只升不降、上调时机）见 backend/AGENTS.md「跑测试」节。
 [tool.coverage.run]
 branch = true
 source = ["app"]
 
 [tool.coverage.report]
-fail_under = 81
+fail_under = 82
 show_missing = true

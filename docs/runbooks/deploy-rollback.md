@@ -119,6 +119,7 @@ commit）。
 | 0005 | cash_amount / 日期字段重命名 | 已实现 | 纯重命名，无损 |
 | 0006 | product_code 扩展 String(20) + in_transit_total + IN_TRANSIT 种子产品 | **未实现**（`raise NotImplementedError`） | **不可逆**：IN_TRANSIT 数据存在时无法安全回退（FK 约束 + 列收窄容不下长 code）。跨过 0006 的回滚只能走前滚（§4.1）或从 RDS 快照恢复 |
 | 0007 | asset_classification.asset_name 新增 + 回填 | 已实现 | 删列，回填值丢失但可按 `ASSET_NAME_MAP` 重跑迁移恢复；人工改过的 asset_name 不可恢复，低风险 |
+| 0013 | 四张日志表纳入 alembic 管理（audit_log / system_error_log / login_log / task_execution_log） | **刻意 no-op**（不删表） | 无损：采纳型迁移——生产库这四张表与其数据均早于本迁移存在（由 `create_all` 建出），`upgrade()` 实为 no-op，故逆操作也不删表（删表 = 销毁审计/登录/任务历史）。另 `task_execution_log` 被 `nav_sync_detail.task_log_id` 外键引用，MySQL 下 DROP 必失败（errno 3730） |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 

@@ -24,6 +24,10 @@ from app.services.trading_utils import (
 )
 from app.services.position_service import calculate_available_cash
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.audit_service import record_audit
+from app.constants.audit_actions import (
+    ACTION_CREATE, ACTION_CONFIRM, RESOURCE_CASH_TRANSFER,
+)
 from app.utils.quantize import quantize_amount
 
 
@@ -118,6 +122,24 @@ def create_cash_transfer(
 
     db.flush()
 
+    record_audit(
+        db,
+        action=ACTION_CREATE,
+        resource_type=RESOURCE_CASH_TRANSFER,
+        resource_id=transfer_group,
+        resource_name=f"{portfolio_code}/{from_platform}→{to_platform}",
+        new_value={
+            "portfolio_code": portfolio_code,
+            "from_platform": from_platform,
+            "to_platform": to_platform,
+            "amount": amt,
+            "transfer_date": transfer_date,
+            "cross_day": cross_day,
+            "sell_status": sell_trade.status,
+            "buy_status": buy_trade.status,
+        },
+    )
+
     return {
         "transfer_group": transfer_group,
         "from_platform": from_platform,
@@ -161,6 +183,16 @@ def confirm_cash_transfer(
     for leg in pending_legs:
         leg.status = "confirmed"
         # 保留各腿自身的 confirm_date 语义（新模型下：sell=转出日，buy=到账日）
+
+    record_audit(
+        db,
+        action=ACTION_CONFIRM,
+        resource_type=RESOURCE_CASH_TRANSFER,
+        resource_id=transfer_group,
+        resource_name=f"{portfolio_code}/{transfer_group}",
+        old_value={"pending_count": len(pending_legs)},
+        new_value={"confirmed_count": len(pending_legs), "confirm_date": confirm_date},
+    )
 
     return {
         "transfer_group": transfer_group,
