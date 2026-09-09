@@ -5,9 +5,11 @@
 设计要点：
 - **savepoint 隔离 + Core INSERT**：先把业务改动 flush 进外层事务，再用连接级
   savepoint 只包审计行本身；审计行走 Core INSERT 而非 ORM `add()`+flush——后者一旦
-  flush 失败就把 Session 置为 pending-rollback（此后任何会话操作都抛
-  PendingRollbackError，savepoint 回滚救不回来，业务事务等于被审计拖垮），
-  Core execute 失败只污染该条语句，回滚 savepoint 后会话照常可用；
+  flush 失败就把根因挂到父 `SessionTransaction` 并置 DEACTIVE（此后任何会话操作都抛
+  PendingRollbackError），而连接级 savepoint 的回滚碰不到 ORM 事务状态机，业务事务
+  等于被审计拖垮；Core execute 失败只污染该条语句，回滚 savepoint 后会话照常可用。
+  #419 给 auto_confirm 换上的 session 级 savepoint 此处刻意不采用（那条路径要
+  「单条失败后继续循环」，本处失败即响亮记录后返回）；
 - **不 commit**（§1.1 service 约定）：审计行随业务事务由 router 提交/回滚——
   业务回滚则审计不落，只记真正发生的事实；
 - **SYSTEM 哨兵**：后台执行体（调度器、线程池）无请求上下文时 actor 落 "SYSTEM"；
@@ -170,10 +172,11 @@ def record_audit(
     try:
         db.flush()
         sp = db.connection().begin_nested()
-        # 用 Core INSERT 而非 ORM add+flush：flush 失败会把 Session 置为 pending-rollback
-        # （此后任何会话操作都抛 PendingRollbackError），连接级 savepoint 回滚救不回来，
-        # 业务事务等于被审计拖垮；Core execute 失败只污染该条语句，回滚 savepoint 后
-        # 外层事务与会话仍可用（已实测）。
+        # 用 Core INSERT 而非 ORM add+flush：flush 失败会把根因挂到父 SessionTransaction
+        # 并把它置 DEACTIVE（此后任何会话操作都抛 PendingRollbackError），而连接级 savepoint
+        # 的回滚碰不到 ORM 事务状态机，业务事务等于被审计拖垮；Core execute 失败只污染该条
+        # 语句，回滚 savepoint 后外层事务与会话仍可用（已实测）。刻意不换成 #419 给
+        # auto_confirm 用的 session 级 savepoint——那条路径要「单条失败后继续循环」，本处不需要。
         db.execute(insert(AuditLog).values(**values))
         sp.commit()
     except Exception as exc:
