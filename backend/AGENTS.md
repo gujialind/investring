@@ -12,6 +12,7 @@
 | `app/services/`                                     | 全部业务规则/不变量/计算/状态机/ORM 读写；**只抛领域异常、不 import fastapi、不 commit（可 flush）**                      |
 | `app/models/`                                       | SQLAlchemy 表模型                                                                              |
 | `app/schemas/`                                      | Pydantic 请求/响应模型                                                                            |
+| `app/constants/`                                    | 纯数据常量的单一事实来源：`asset_dimensions.py`（五维字典种子）、`audit_actions.py`（审计 action / resource\_type 枚举，列宽由 `tests/unit/test_audit_service.py` 守门）；埋点处禁止写字面量 |
 | `app/utils/`                                        | 安全（密码/Token/登录锁）等工具                                                                         |
 | `app/config.py` / `database.py` / `dependencies.py` | 配置、DB 会话、鉴权依赖                                                                               |
 | `app/logging_config.py` / `context.py` / `request_context.py` | 集中日志配置（stdout 单行 JSON）、请求级上下文（request_id / actor / client_ip）、请求上下文中间件（#404，约定与踩坑见 §1.5）    |
@@ -64,6 +65,15 @@
 
 其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现。其他服务职责读各文件 docstring。
 
+* **`audit_service.py`（#405，跨切面）**：`audit_log` / `system_error_log` 的**唯一写入路径**，埋点一律调 `record_audit` / `record_system_error`，不直接 `db.add(AuditLog(...))`。
+
+  - **必埋范围**：申赎、调仓、跨平台现金转移、份额变动事件、快照 generate/recalculate/delete（含级联回退）、现金手动重估，动作取 create/update/confirm/unconfirm/cancel/delete（快照另有 generate/recalculate/cascade\_unconfirm）。产品/平台/投资人/组合 CRUD 本期不埋（只覆盖高风险子集）。埋点在 **service**，故 REST 与 CLI 共用、不漏记；原先 router-inline 的申赎 cancel/delete、交易 delete、事件 delete 已提取为 service 函数。
+  - **事务归属**：`record_audit` 不 commit，审计行随业务事务一起提交或回滚。写入包**连接级 savepoint**（`db.connection().begin_nested()`，非 session 级——与 conftest 的 savepoint 重启监听器冲突）且用 **Core INSERT** 而非 ORM `add()`+`flush()`：ORM flush 失败会把 Session 置为 pending-rollback，连接级 savepoint 回滚**清不掉** `Session._rollback_exception`，此后任何会话操作都抛 `PendingRollbackError`，等于审计把业务事务拖垮（实测）；Core execute 失败只污染该条语句。savepoint 之前必须先 `db.flush()` 把调用方的业务改动落进外层事务，否则 `ROLLBACK TO SAVEPOINT` 连带撤销它们（调用方却收到成功响应）。
+  - **失败响亮**：审计写不进去 → 只回滚 savepoint + stdout ERROR + 落一条 `system_error_log`（`error_type=AuditWriteFailure`，走独立 `SessionLocal`），绝不外抛也绝不静默；`record_system_error` 自身 best-effort，写失败只记 stdout。
+  - **actor 归属**：取 `context.get_actor()`，无请求上下文（调度器、线程池）落 `SYSTEM` 哨兵——`investor_code` 是 NOT NULL 列，缺哨兵则后台路径整条写不进去。`snapshot_recalc_job` 跨线程**只传 `request_id` 不传 actor**（`ThreadPoolExecutor.submit` 不复制 contextvars，且线程池与价格同步共用），故后台重算的审计恒为 SYSTEM、stdout 日志仍可关联触发请求。
+  - **载荷口径**：diff-only（`_diff_fields` 只留变化字段，无变化则两侧皆 None）、`ensure_ascii=False`（中文原样落库）、`default=str`（Decimal/date 字符串化）；create 无 `old_value`、delete 无 `new_value`。副作用（配对 CASH 腿、组合激活）折进同一条的 `new_value`，不另开记录。
+  - **不重复记账**：级联回退若**委派**给既有实现（申赎走 `unconfirm_single_subscription`），由被委派方留 `unconfirm` 痕，不再叠 `cascade_unconfirm`；只有**就地改字段**的（事件级联）才自带 `cascade_unconfirm`。空删除（generate 每次都先调 `_delete_existing_snapshots`）不留 `delete` 痕，否则淹没审计日志。
+
 ### 1.4 数据模型与关键约束
 
 表结构与全部唯一约束以 `app/models/` 为准。需记住的设计决策：
@@ -84,6 +94,8 @@
 
 * **适用关系双层落库**（#135 矩阵落库）：运行期事实来源为 DB（常量为种子源），`validate_dimension_tags` 四层校验叠加、只收紧不放松——①存在性+dimension 匹配；②`is_active` 软失效（无物理删除；update 仅校验实际变化字段的新值，存量引用停用值不阻断其他编辑）；③维度级规则表 `asset_class_dimension_rule`（required/optional，**无行=forbidden，无规则行的大类=现金型全 forbidden**——新建大类配规则后运行期即可用，无需发版）；④值级关联表 `asset_dimension_applicability`（多对多，产品所选值必须关联其 asset\_class）。产品五维标签的「必填/禁止」语义由此两表驱动，不再硬编码。
 
+* **四张日志表的 schema 事实来源是迁移 0013**（#405）：`audit_log` / `system_error_log` / `login_log` / `task_execution_log` 此前只由 `main.py` 的 `create_all` 建表，0001–0012 无对应 `create_table`——模型改列后生产库静默不跟随（schema drift）。0013 逐表 `has_table()` 守卫，**已存在则跳过并打 warning**（生产库这些表已由 create\_all 建出），故幂等；downgrade 逆序 drop 四张，可逆。`audit_log` 列宽是硬约束（`action` 20 / `resource_type` 50 / `investor_code` 20），改 `audit_actions.py` 的常量值先看宽度（`tests/unit/test_audit_service.py` 守门）。
+
 ### 1.5 配置与运行
 
 * 配置项以 `app/config.py` + `.env` 覆盖为准。
@@ -95,6 +107,7 @@
 * **请求上下文**（#404）：`RequestContextMiddleware`（`app/request_context.py`）沿用入站 `X-Request-ID` 或生成 uuid4 hex，注入同名响应头，每请求产一条访问日志（`method` / `path` / `status_code` / `duration_ms`；**只记 path 不记 query**，查询串可能带凭据），`/health` 跳过（探活会淹没真实流量）。入站值先过正则白名单才回写响应头/进日志（防响应头注入）。actor / client_ip 由 `dependencies.py::get_current_user` 写入。**必须是「中间件派发前创建的可变对象 + 依赖改字段」，不能在依赖里 `var.set(...)`**：FastAPI 把同步依赖与同步 endpoint 分别派发到 threadpool，anyio 每次派发都 `copy_context()` 出独立拷贝，依赖里的 `set` 只作用于依赖那份拷贝，endpoint / service 读到的仍是 None（实测）。
 
 * **未预期异常**（#404）：`main.py` 的 `Exception` handler 记 ERROR（带堆栈）并返回 500。注意 Starlette 把 `Exception` handler 装在 `ServerErrorMiddleware`——中间件链的**最外层**：它执行时本中间件的 `finally` 已解绑上下文（故 request_id 从 `scope[SCOPE_REQUEST_ID_KEY]` 取回），响应经**原始** `send` 发出（故 `X-Request-ID` 头要 handler 自己补），且调完 handler **仍会重抛**（故测试须用 `TestClient(app, raise_server_exceptions=False)`）；中间件没见过 `response.start`，访问日志按 500 记。
+  - **同一 handler 另落一条 `system_error_log`**（#405）：actor / client\_ip 同样只能从 scope 取回（`SCOPE_ACTOR_KEY` / `SCOPE_CLIENT_IP_KEY`，由 `dependencies.py::get_current_user` 认证成功后与 contextvar 一并暂存）；落库经 `run_in_threadpool` 挪出事件循环（handler 是 async，DB I/O 会阻塞其他请求）；`request_params` **刻意不记**——查询串可能带凭据，与访问日志只记 path 同口径。
 
 * 服务版本：`FastAPI(version=…)` 取仓库根 `VERSION` 文件（`app.main._resolve_version`，`APP_VERSION` 环境变量优先）；版本变更必须同 commit 重导出 `openapi.json`（`check_openapi.py` 全量比对含 `info.version`），发布流程见 `docs/reference/versioning.md`。
 
@@ -122,13 +135,14 @@ cd backend && pytest tests -q
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration -q -k precision` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
+  | 审计/系统错误日志（`audit_service.py`、任一埋点、日志表迁移） | `pytest tests/unit/test_audit_service.py tests/integration/test_audit_log.py tests/unit/test_migration_0013.py -q` |
 
   跨核心服务的改动（snapshot/position/trade/subscription 任一）额外连带 `-k snapshot` 兜底——快照链是所有写路径的下游。
 - **测试库优先级**（`tests/conftest.py::_load_test_db_url`）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> 降级 `sqlite:///./test_investring.db`。CI 的 SQLite job 不设 `TEST_DB_URL`（也不存在 .env.test），MySQL job 显式设置。
 - **会话开始 `drop_all + create_all`**（干净起跑）；会话结束**不清理**——跑完可直接登录本地前端浏览种子数据。
 - fixture 层级：session（`test_engine`、`_seed_base_data`）→ autouse（认证全局状态隔离）→ function（`test_db`/`client`/`admin_headers`/`sample_portfolio` 等），业务数据一律用 function 级 fixture/factories 造，不动 session 种子。
 - pytest 配置在 `pyproject.toml`（`--strict-markers`），新增 marker 须登记。
-- **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under=81`（2026-09-08 实测基线 81.42% 下取整）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败。
+- **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under=82`（2026-09-08 实测基线 82.15% 下取整，#405 审计埋点后上调）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败。
   - **棘轮规则**：`fail_under` 只升不降；任何 PR 全量实测总覆盖率超当前阈值 ≥1pp 时，顺手把阈值上调到实测值下取整（随该 PR 提交）；分支覆盖不单设独立阈值（branch=true 下 fail_under 已是分支含口径）。
   - 注意 fail_under 作用于 `--cov` 收集的那次运行：本地跑**子集**加 `--cov` 必然跌破阈值（子集覆盖不了全量代码），属预期，阈值只对全量运行有语义。
 

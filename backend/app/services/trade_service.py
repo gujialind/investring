@@ -22,6 +22,12 @@ from app.services.trading_utils import get_next_trading_day, is_trading_day, get
 from app.services.position_service import calculate_available_cash, calculate_available_shares
 from app.services.product_service import resolve_product_market
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.audit_service import record_audit
+from app.constants.audit_actions import (
+    ACTION_CREATE, ACTION_UPDATE, ACTION_CONFIRM, ACTION_UNCONFIRM,
+    ACTION_CANCEL, ACTION_DELETE,
+    RESOURCE_TRADE,
+)
 from app.utils.quantize import quantize_amount, quantize_shares
 
 logger = logging.getLogger(__name__)
@@ -548,6 +554,23 @@ def confirm_single_trade(
         f"product={trade.product_code}, confirm_date={trade.confirm_date}"
     )
 
+    record_audit(
+        db,
+        action=ACTION_CONFIRM,
+        resource_type=RESOURCE_TRADE,
+        resource_id=str(trade.id),
+        resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+        old_value={"status": "pending"},
+        new_value={
+            "status": "confirmed",
+            "price": trade.price,
+            "shares": trade.shares,
+            "amount": trade.amount,
+            "actual_amount": trade.actual_amount,
+            "confirm_date": trade.confirm_date,
+        },
+    )
+
     return trade
 
 
@@ -778,6 +801,31 @@ def create_trade(
         cash_platform_code=cash_platform_code,
         cash_confirm_date=cash_confirm_date,
     )
+    db.flush()
+
+    record_audit(
+        db,
+        action=ACTION_CREATE,
+        resource_type=RESOURCE_TRADE,
+        resource_id=str(new_trade.id),
+        resource_name=f"{portfolio_code}/{product_code}/{trade_type}",
+        new_value={
+            "portfolio_code": portfolio_code,
+            "product_code": product_code,
+            "market": market,
+            "trade_type": trade_type,
+            "trade_date": trade_date,
+            "amount": new_trade.amount,
+            "actual_amount": new_trade.actual_amount,
+            "shares": new_trade.shares,
+            "price": new_trade.price,
+            "fee": new_trade.fee,
+            "platform_code": new_trade.platform_code,
+            "status": "pending",
+            "transfer_group": new_trade.transfer_group,
+        },
+    )
+
     return new_trade
 
 
@@ -936,6 +984,12 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
                 )
 
     # ---- 4. 写入与联动（校验全部通过，此时才 setattr）----
+    _audit_old = {
+        "notes": trade.notes, "price": trade.price, "fee": trade.fee,
+        "shares": trade.shares, "amount": trade.amount,
+        "actual_amount": trade.actual_amount, "trade_date": trade.trade_date,
+        "confirm_date": trade.confirm_date,
+    }
     if "notes" in update_data:
         trade.notes = update_data["notes"]
     if price_input is not None:
@@ -1027,6 +1081,24 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
                 paired.amount = mirror_amount
                 paired.actual_amount = mirror_amount
 
+    _audit_new = {
+        "notes": trade.notes, "price": trade.price, "fee": trade.fee,
+        "shares": trade.shares, "amount": trade.amount,
+        "actual_amount": trade.actual_amount, "trade_date": trade.trade_date,
+        "confirm_date": trade.confirm_date,
+    }
+    _old_diff = {k: v for k, v in _audit_old.items() if v != _audit_new[k]}
+    _new_diff = {k: _audit_new[k] for k in _old_diff}
+    record_audit(
+        db,
+        action=ACTION_UPDATE,
+        resource_type=RESOURCE_TRADE,
+        resource_id=str(trade.id),
+        resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+        old_value=_old_diff or None,
+        new_value=_new_diff or None,
+    )
+
     return trade
 
 
@@ -1041,6 +1113,17 @@ def cancel_trade(db: Session, trade: Trade) -> Trade:
         )
     trade.status = "cancelled"
     sync_transfer_group(db, trade, "cancelled")
+
+    record_audit(
+        db,
+        action=ACTION_CANCEL,
+        resource_type=RESOURCE_TRADE,
+        resource_id=str(trade.id),
+        resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+        old_value={"status": "pending"},
+        new_value={"status": "cancelled"},
+    )
+
     return trade
 
 
@@ -1080,7 +1163,51 @@ def unconfirm_trade(db: Session, trade: Trade) -> Trade:
                 db, trade.trade_date, days=product.confirm_days or 0
             )
     sync_transfer_group(db, trade, "pending")
+
+    record_audit(
+        db,
+        action=ACTION_UNCONFIRM,
+        resource_type=RESOURCE_TRADE,
+        resource_id=str(trade.id),
+        resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+        old_value={"status": "confirmed"},
+        new_value={"status": "pending", "confirm_date": trade.confirm_date},
+    )
+
     return trade
+
+
+def delete_trade(db: Session, trade: Trade) -> None:
+    """删除交易（confirmed 不可直接删除），级联删除配对 CASH 腿。不 commit。"""
+    if trade.status == "confirmed":
+        raise BusinessError(
+            "CANNOT_DELETE_CONFIRMED",
+            "已确认的交易不可直接删除，请先取消确认后再删除",
+        )
+
+    record_audit(
+        db,
+        action=ACTION_DELETE,
+        resource_type=RESOURCE_TRADE,
+        resource_id=str(trade.id),
+        resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+        old_value={
+            "status": trade.status,
+            "trade_type": trade.trade_type,
+            "trade_date": trade.trade_date,
+            "amount": trade.amount,
+            "shares": trade.shares,
+            "transfer_group": trade.transfer_group,
+        },
+    )
+
+    if trade.transfer_group:
+        db.query(Trade).filter(
+            Trade.transfer_group == trade.transfer_group,
+            Trade.id != trade.id,
+        ).delete(synchronize_session=False)
+
+    db.delete(trade)
 
 
 def list_trades(

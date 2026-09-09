@@ -23,6 +23,7 @@ from app.services.trade_service import (
     update_trade as update_trade_service,
     cancel_trade as cancel_trade_service,
     unconfirm_trade as unconfirm_trade_service,
+    delete_trade as delete_trade_service,
     list_trades,
 )
 
@@ -258,22 +259,6 @@ def delete_trade(
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
 
-    if trade.status == "confirmed":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "CANNOT_DELETE_CONFIRMED",
-                "message": "已确认的交易不可直接删除，请先取消确认后再删除"
-            }
-        )
-
-    # 级联删除配对 CASH 腿（同一 transfer_group 的另一腿）
-    if trade.transfer_group:
-        db.query(Trade).filter(
-            Trade.transfer_group == trade.transfer_group,
-            Trade.id != trade.id,
-        ).delete(synchronize_session=False)
-
-    db.delete(trade)
+    delete_trade_service(db, trade)
     db.commit()
     return {"message": "Trade deleted successfully"}

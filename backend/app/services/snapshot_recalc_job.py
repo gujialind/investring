@@ -9,6 +9,10 @@
   的单一事务语义：无 errors 统一 commit、任一日失败整体 rollback。
 
 锁语义：snapshot_recalc 与价格同步任务互不阻塞，各自单 active 锁。
+
+上下文传播（issue #405）：提交时捕获请求的 request_id、在执行体内逐任务绑定并重置，
+使后台重算的 stdout 日志可与触发请求串联；actor 刻意不传播——重算不是某个投资人的
+直接操作，其审计记录按约定落 SYSTEM 哨兵。
 """
 import logging
 from datetime import datetime
@@ -16,6 +20,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.context import RequestContext, get_request_id, request_context_var
 from app.services.market_data_service import ConflictError, _get_executor
 from app.services.snapshot_service import recalculate_snapshots
 
@@ -62,11 +67,18 @@ def submit_snapshot_recalc_job(
         if own_db:
             db.close()
 
-    _get_executor().submit(_run_snapshot_recalc_job_impl, job_id)
+    # submit 不复制 contextvars，且线程池与价格同步共用（线程复用），故显式传参；
+    # 只传 request_id——后台执行体无请求主体，审计侧按约定落 SYSTEM 哨兵
+    request_id = get_request_id()
+    _get_executor().submit(_run_snapshot_recalc_job_impl, job_id, request_id)
     return job_id
 
 
-def _run_snapshot_recalc_job_impl(job_id: int, db: Optional[Session] = None):
+def _run_snapshot_recalc_job_impl(
+    job_id: int,
+    request_id: Optional[str] = None,
+    db: Optional[Session] = None,
+):
     """后台线程执行体：自持 Session（db 参数仅供测试注入）。
 
     保持单一事务语义：recalculate_snapshots 全程不 commit，
@@ -80,6 +92,10 @@ def _run_snapshot_recalc_job_impl(job_id: int, db: Optional[Session] = None):
     own_db = db is None
     if own_db:
         db = SessionLocal()
+
+    # 逐任务绑定/重置：让本次重算的 stdout 日志带上触发请求的 request_id，
+    # 同时杜绝绑定过的上下文泄漏给复用同一线程的下一个任务
+    token = request_context_var.set(RequestContext(request_id=request_id))
     try:
         job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
         if not job:
@@ -144,3 +160,4 @@ def _run_snapshot_recalc_job_impl(job_id: int, db: Optional[Session] = None):
     finally:
         if own_db:
             db.close()
+        request_context_var.reset(token)

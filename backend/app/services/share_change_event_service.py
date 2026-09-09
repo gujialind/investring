@@ -22,6 +22,12 @@ from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.services.trading_utils import is_trading_day, get_latest_snapshot_date
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.product_service import resolve_product_market
+from app.services.audit_service import record_audit, _diff_fields
+from app.constants.audit_actions import (
+    ACTION_CREATE, ACTION_UPDATE, ACTION_CONFIRM, ACTION_UNCONFIRM,
+    ACTION_CANCEL, ACTION_DELETE,
+    RESOURCE_SHARE_CHANGE_EVENT,
+)
 from app.utils.quantize import quantize_amount, quantize_shares
 
 logger = logging.getLogger(__name__)
@@ -351,6 +357,28 @@ def create_share_change_event(
         status="pending",
     )
     db.add(new_event)
+    db.flush()
+
+    record_audit(
+        db,
+        action=ACTION_CREATE,
+        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+        resource_id=str(new_event.id),
+        resource_name=f"{portfolio_code}/{product_code}/{event_type}",
+        new_value={
+            "portfolio_code": portfolio_code,
+            "product_code": product_code,
+            "market": market,
+            "event_type": event_type,
+            "ex_date": ex_date,
+            "entitlement_date": entitlement_date,
+            "platform_code": platform_code,
+            "shares_change": new_event.shares_change,
+            "cash_change": new_event.cash_change,
+            "status": "pending",
+        },
+    )
+
     return new_event
 
 
@@ -389,8 +417,21 @@ def update_share_change_event(
         db, event.product_code, event.market, event.event_type, merged_shares_change
     )
 
+    old_values, new_values = _diff_fields(event, updates)
+
     for field, value in updates.items():
         setattr(event, field, value)
+
+    record_audit(
+        db,
+        action=ACTION_UPDATE,
+        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+        resource_id=str(event.id),
+        resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
+        old_value=old_values or None,
+        new_value=new_values or None,
+    )
+
     return event
 
 
@@ -458,6 +499,23 @@ def confirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareCha
         event.status = "confirmed"
         event.confirmed_at = datetime.now()
 
+    record_audit(
+        db,
+        action=ACTION_CONFIRM,
+        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+        resource_id=str(event.id),
+        resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
+        old_value={"status": "pending"},
+        new_value={
+            "status": "confirmed",
+            "entitlement_shares": event.entitlement_shares,
+            "shares_before": event.shares_before,
+            "shares_change": event.shares_change,
+            "shares_after": event.shares_after,
+            "cash_change": event.cash_change,
+        },
+    )
+
     return event
 
 
@@ -466,6 +524,17 @@ def cancel_share_change_event(db: Session, event: ShareChangeEvent) -> ShareChan
     if event.status != "pending":
         raise BusinessError("INVALID_STATUS", "仅 pending 状态可取消")
     event.status = "cancelled"
+
+    record_audit(
+        db,
+        action=ACTION_CANCEL,
+        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+        resource_id=str(event.id),
+        resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
+        old_value={"status": "pending"},
+        new_value={"status": "cancelled"},
+    )
+
     return event
 
 
@@ -518,4 +587,39 @@ def unconfirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareC
         event.shares_after = None
         event.cash_change = None
 
+    record_audit(
+        db,
+        action=ACTION_UNCONFIRM,
+        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+        resource_id=str(event.id),
+        resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
+        old_value={"status": "confirmed"},
+        new_value={"status": "pending"},
+    )
+
     return event
+
+
+def delete_share_change_event(db: Session, event: ShareChangeEvent) -> None:
+    """删除份额变动事件（级联删除子记录）。不 commit。"""
+    record_audit(
+        db,
+        action=ACTION_DELETE,
+        resource_type=RESOURCE_SHARE_CHANGE_EVENT,
+        resource_id=str(event.id),
+        resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
+        old_value={
+            "status": event.status,
+            "event_type": event.event_type,
+            "ex_date": event.ex_date,
+            "entitlement_date": event.entitlement_date,
+            "shares_change": event.shares_change,
+            "cash_change": event.cash_change,
+        },
+    )
+
+    db.query(ShareChangeEvent).filter(
+        ShareChangeEvent.parent_event_id == event.id
+    ).delete(synchronize_session=False)
+
+    db.delete(event)

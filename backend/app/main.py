@@ -1,18 +1,23 @@
 import logging
 import os
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.database import engine, Base, SessionLocal
 from app.logging_config import setup_logging
 from app.request_context import (
     REQUEST_ID_HEADER,
+    SCOPE_ACTOR_KEY,
+    SCOPE_CLIENT_IP_KEY,
     SCOPE_REQUEST_ID_KEY,
     RequestContextMiddleware,
 )
 from app.routers import auth, investors, portfolios, products, platforms, trading_calendar, data_sources, market_data, subscriptions, trades, share_change_events, positions, logs, tasks, notifications, snapshots, cash_transfers, sync_jobs, asset_classifications
+from app.services.audit_service import record_system_error
 from app.services.exceptions import BusinessError
 from app.init_tasks import init_scheduled_tasks
 
@@ -103,16 +108,31 @@ async def business_error_handler(request: Request, exc: BusinessError):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    """未预期异常：ERROR 级带完整堆栈 + 500。子 issue B #405 在此追加 SystemErrorLog 落库。
+    """未预期异常：ERROR 级带完整堆栈 + 落 system_error_log + 500（issue #405）。
 
     Starlette 把 Exception handler 装在 ServerErrorMiddleware（中间件链**最外层**），
-    执行时 RequestContextMiddleware 的 finally 已解绑上下文，故 request_id 从 scope 取回。
+    执行时 RequestContextMiddleware 的 finally 已解绑上下文，故 request_id / actor / IP
+    一律从 scope 取回。
     """
     request_id = request.scope.get(SCOPE_REQUEST_ID_KEY)
     extra = {"method": request.method, "path": request.url.path, "status_code": 500}
     if request_id:
         extra["request_id"] = request_id
     logger.error("未预期异常", exc_info=exc, extra=extra)
+
+    # 落库挪进线程池：handler 跑在事件循环里，DB I/O 会阻塞其他请求。
+    # request_params 刻意不记——查询串可能带凭据，与访问日志只记 path 同口径。
+    await run_in_threadpool(
+        record_system_error,
+        error_type=type(exc).__name__,
+        error_message=str(exc),
+        error_stack="".join(traceback.format_exception(exc)),
+        request_path=request.url.path,
+        request_method=request.method,
+        investor_code=request.scope.get(SCOPE_ACTOR_KEY),
+        ip_address=request.scope.get(SCOPE_CLIENT_IP_KEY),
+    )
+
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
