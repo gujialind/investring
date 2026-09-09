@@ -42,7 +42,11 @@ yarn.lock
 
 # AI IDE
 .trae/
-.qoder/
+.qoder/*
+!.qoder/rules/
+!.qoder/hooks/
+!.qoder/agents/
+!.qoder/skills/
 .claude/
 
 # AI Coding Assistants (multi-IDE)
@@ -56,7 +60,7 @@ yarn.lock
 .mimosa/
 
 # Hermes skills (project-level)
-skills/
+/skills/
 skills-lock.json
 
 # Logs
