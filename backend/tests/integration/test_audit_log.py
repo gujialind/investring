@@ -624,10 +624,11 @@ class TestSnapshotAudit:
         _, new = _payload(row)
         assert set(new) == {"total_value", "total_shares", "unit_price",
                             "positions", "investors"}
-        # 这三个值在 PortfolioValueSnapshot 构造时就已 float()，标度已丢，
-        # 故落 JSON 数字而非其他埋点的 Decimal 字符串——埋点侧不可修，另行跟踪
-        for key in ("total_value", "total_shares", "unit_price"):
-            assert isinstance(new[key], float), f"{key} 应为 float，实为 {type(new[key])}"
+        # #421：构造点按列标度落 Decimal，载荷即保标度字符串（total_value /
+        # unit_price 4 位、total_shares 2 位），不再是掉标度的 JSON 数字
+        assert new["total_value"] == "1100.0000"
+        assert new["total_shares"] == "1100.00"
+        assert new["unit_price"] == "1.0000"
 
     def test_empty_generate_leaves_no_delete_trace(self, test_db):
         """generate 每次都先删旧快照；空删除不留痕，否则淹没审计日志"""

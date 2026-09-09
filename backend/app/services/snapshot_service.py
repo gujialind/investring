@@ -322,12 +322,11 @@ def generate_daily_snapshots(
         resource_id=target_date.isoformat(),
         resource_name=portfolio_code,
         new_value={
-            # 这三个值在 PortfolioValueSnapshot 构造时就已 float()
-            # （见 _generate_portfolio_value_snapshot），到此已是 float，故载荷落 JSON
-            # 数字而非 Decimal 字符串——与其他埋点不一致，但在埋点侧不可修（标度已丢），另行跟踪。
-            "total_value": float(value_snapshot.total_value),
-            "total_shares": float(value_snapshot.total_shares),
-            "unit_price": float(value_snapshot.unit_price),
+            # #421：构造点已按列标度落 Decimal，这里原样交给审计层的 default=str，
+            # 载荷即保标度字符串（如 "1100.0000"），与其他埋点口径一致
+            "total_value": value_snapshot.total_value,
+            "total_shares": value_snapshot.total_shares,
+            "unit_price": value_snapshot.unit_price,
             "positions": len(positions),
             "investors": len(holdings),
         },
@@ -338,6 +337,7 @@ def generate_daily_snapshots(
         "message": "快照生成成功",
         "portfolio_code": portfolio_code,
         "snapshot_date": target_date,
+        # API 返回刻意保留 float()：前端 JSON 数字契约，与审计载荷口径无关
         "total_value": float(value_snapshot.total_value),
         "total_shares": float(value_snapshot.total_shares),
         "unit_price": float(value_snapshot.unit_price),
@@ -1490,15 +1490,17 @@ def _generate_portfolio_value_snapshot(
         if pos.product_code in IN_TRANSIT_CODES and pos.cash_amount
     )
 
+    # #421：按列标度量化为 Decimal 而非 float()——审计载荷经 default=str 落保标度
+    # 字符串（float 会丢标度、且 0.1 类值落 JSON 会带二进制误差），与 DB 读回类型一致
     snapshot = PortfolioValueSnapshot(
         portfolio_code=portfolio_code,
         snapshot_date=target_date,
-        total_value=float(total_value),
-        total_shares=float(total_shares),
-        unit_price=float(unit_price.quantize(Decimal("0.0001"))),
-        unit_price_change_pct=float(unit_price_change_pct.quantize(Decimal("0.0001"))) if unit_price_change_pct else 0,
-        frozen_shares=float(frozen_shares) if frozen_shares > 0 else 0,
-        in_transit_total=float(in_transit_total) if in_transit_total else 0,
+        total_value=total_value.quantize(Decimal("0.0001")),
+        total_shares=quantize_shares(total_shares),
+        unit_price=unit_price.quantize(Decimal("0.0001")),
+        unit_price_change_pct=unit_price_change_pct.quantize(Decimal("0.0001")),
+        frozen_shares=quantize_shares(frozen_shares),
+        in_transit_total=Decimal(str(in_transit_total)).quantize(Decimal("0.0001")),
     )
     
     return snapshot
