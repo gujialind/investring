@@ -3,7 +3,7 @@
 # ============================================================================
 # 迁移的存在意义是消除 schema drift（四张日志表此前只靠 main.py 的 create_all 建表，
 # 模型改列后生产库静默不跟随），故断言重点不是「能跑」而是「跑出来的 schema 与 ORM
-# 模型逐列一致」，外加幂等（生产库已有这些表且有数据）与 downgrade/upgrade 往返。
+# 模型逐列一致」，外加幂等（生产库已有这些表且有数据）与 downgrade 的 no-op 契约。
 #
 # 不走 alembic 命令 API：0001-0012 含 MySQL 专有 SQL，SQLite 上跑不通整条链
 # （conftest 也因此把 lifespan 里的 alembic upgrade no-op 掉），只程序化执行 0013。
@@ -71,7 +71,7 @@ class TestRevisionChain:
         assert migration.down_revision == "0012"
 
     def test_covers_exactly_the_four_log_tables(self):
-        """漏一张即留一处 schema drift；多一张则会误删非日志表。"""
+        """_TABLES 是本迁移纳管范围的声明式清单：漏一张即留一处 schema drift。"""
         assert sorted(migration._TABLES) == sorted(MODELS)
 
 
@@ -142,13 +142,27 @@ class TestUpgrade:
 
 
 class TestDowngrade:
-    def test_drops_all_four_tables(self, engine):
+    def test_noop_keeps_tables_and_data(self, engine):
+        """downgrade 刻意不删表：生产回滚（deploy-rollback.md）不得销毁已存在的审计数据。
+
+        task_execution_log 另被 nav_sync_detail.task_log_id 外键引用，MySQL 下 drop 直接失败
+        （errno 3730），故「删表」这条逆操作在本项目里既危险又不可行。
+        """
         with engine.connect() as conn:
             _run(migration.upgrade, conn)
+            conn.execute(
+                sa.insert(AuditLog).values(
+                    investor_code="ADMIN", action="create", resource_type="trade"
+                )
+            )
+            conn.commit()
+
+        with engine.connect() as conn:
             _run(migration.downgrade, conn)
             inspector = sa.inspect(conn)
             for name in MODELS:
-                assert not inspector.has_table(name), f"{name} 未删除"
+                assert inspector.has_table(name), f"{name} 被 downgrade 删除"
+            assert conn.execute(sa.select(sa.func.count()).select_from(AuditLog)).scalar() == 1
             conn.commit()
 
     def test_roundtrip_restores_schema(self, engine):

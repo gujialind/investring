@@ -94,7 +94,7 @@
 
 * **适用关系双层落库**（#135 矩阵落库）：运行期事实来源为 DB（常量为种子源），`validate_dimension_tags` 四层校验叠加、只收紧不放松——①存在性+dimension 匹配；②`is_active` 软失效（无物理删除；update 仅校验实际变化字段的新值，存量引用停用值不阻断其他编辑）；③维度级规则表 `asset_class_dimension_rule`（required/optional，**无行=forbidden，无规则行的大类=现金型全 forbidden**——新建大类配规则后运行期即可用，无需发版）；④值级关联表 `asset_dimension_applicability`（多对多，产品所选值必须关联其 asset\_class）。产品五维标签的「必填/禁止」语义由此两表驱动，不再硬编码。
 
-* **四张日志表的 schema 事实来源是迁移 0013**（#405）：`audit_log` / `system_error_log` / `login_log` / `task_execution_log` 此前只由 `main.py` 的 `create_all` 建表，0001–0012 无对应 `create_table`——模型改列后生产库静默不跟随（schema drift）。0013 逐表 `has_table()` 守卫，**已存在则跳过并打 warning**（生产库这些表已由 create\_all 建出），故幂等；downgrade 逆序 drop 四张，可逆。`audit_log` 列宽是硬约束（`action` 20 / `resource_type` 50 / `investor_code` 20），改 `audit_actions.py` 的常量值先看宽度（`tests/unit/test_audit_service.py` 守门）。
+* **四张日志表的 schema 事实来源是迁移 0013**（#405）：`audit_log` / `system_error_log` / `login_log` / `task_execution_log` 此前只由 `main.py` 的 `create_all` 建表，0001–0012 无对应 `create_table`——模型改列后生产库静默不跟随（schema drift）。0013 逐表 `has_table()` 守卫，**已存在则跳过并打 warning**（生产库这些表已由 create\_all 建出），故幂等；**downgrade 刻意 no-op**——采纳型迁移的逆操作不得删表：真实部署里这四张表与其数据都早于 0013 存在，而 `docs/runbooks/deploy-rollback.md` 的 `alembic downgrade` 是真实运维路径，删表 = 销毁审计/登录/任务历史；且 `task_execution_log` 被 `nav_sync_detail.task_log_id` 外键引用，MySQL 下 DROP 必失败（errno 3730，SQLite 不校验外键故本地测不出来）。`audit_log` 列宽是硬约束（`action` 20 / `resource_type` 50 / `investor_code` 20），改 `audit_actions.py` 的常量值先看宽度（`tests/unit/test_audit_service.py` 守门）。
 
 ### 1.5 配置与运行
 

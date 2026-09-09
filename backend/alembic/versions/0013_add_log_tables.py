@@ -11,7 +11,7 @@ Create Date: 2026-09-08
 幂等设计：生产库中这些表已由 create_all 建出，故每张表先
 `sa.inspect(op.get_bind()).has_table(name)` 判断，已存在则跳过（打 warning 日志），
 不存在才 `op.create_table`。列定义严格对齐 `app/models/` 中各模型（String 长度、
-nullable、server_default）。downgrade 逆序 drop 四张表（可逆，CI 往返验证）。
+nullable、server_default）。downgrade 为刻意 no-op，理由见该函数内注释。
 """
 import logging
 
@@ -109,5 +109,11 @@ def upgrade():
 
 
 def downgrade():
-    for table in reversed(_TABLES):
-        op.drop_table(table)
+    # 刻意 no-op，别「顺手补上 drop_table」：
+    # ① 采纳型迁移——alembic 链不能从零建库（见 backend/AGENTS.md「启动时序」），真实部署里
+    #    这四张表与其数据都早于本迁移存在，upgrade() 实为 no-op，逆操作也就不该删表；
+    #    docs/runbooks/deploy-rollback.md 的 `alembic downgrade` 是真实运维路径，删表 = 销毁
+    #    审计/登录/任务历史。
+    # ② 即便想删也删不掉：task_execution_log 被 nav_sync_detail.task_log_id 外键引用，
+    #    MySQL 下 DROP 直接失败（errno 3730），回滚半途而废（CI MySQL job 实测）。
+    pass
