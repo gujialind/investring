@@ -20,6 +20,13 @@ import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import { useState } from "react";
 import type { Portfolio } from "@/types/portfolio";
 
+// 触发方式徽章（#406）：手动/自动是「来源」标识，无状态语义，故按
+// docs/design/visual-spec.md §1.3 末段用 neutral / outline，不占用 success/warning/destructive
+// 状态色（状态列已用 getStatusBadgeVariant 表达成功/失败）。未知取值回落 neutral。
+function getTriggerBadgeVariant(triggerType?: string): "neutral" | "outline" {
+  return triggerType === "scheduled" ? "neutral" : "outline";
+}
+
 // 组合自动快照开关行（#156）：每行独立的 useUpdatePortfolio 链路，须为独立组件以合规调用 hook
 function PortfolioAutoSnapshotRow({ portfolio }: { portfolio: Portfolio }) {
   const updatePortfolio = useUpdatePortfolio(portfolio.code);
@@ -200,6 +207,7 @@ export default function TasksContent() {
                 <TableRow>
                   <TableHead>任务</TableHead>
                   <TableHead>状态</TableHead>
+                  <TableHead>触发方式</TableHead>
                   <TableHead className="text-right">执行耗时</TableHead>
                   <TableHead>开始时间</TableHead>
                   <TableHead>结束时间</TableHead>
@@ -213,6 +221,15 @@ export default function TasksContent() {
                       <Badge variant={getStatusBadgeVariant(exec.status)}>
                         {exec.status === "success" ? "成功" : exec.status === "failed" ? "失败" : exec.status === "partial_success" ? "部分成功" : "运行中"}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {exec.trigger_type ? (
+                        <Badge variant={getTriggerBadgeVariant(exec.trigger_type)}>
+                          {exec.trigger_type === "scheduled" ? "自动" : exec.trigger_type === "manual" ? "手动" : exec.trigger_type}
+                        </Badge>
+                      ) : (
+                        "--"
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       {exec.duration_ms ? `${(exec.duration_ms / 1000).toFixed(1)}s` : "--"}

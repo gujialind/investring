@@ -127,6 +127,84 @@ class TestTaskDescribe:
         assert resp.status_code == 403
 
 
+class TestRunTaskEndpoint:
+    """POST /api/system/tasks/{code}/run（#406：编排下沉 service 后响应契约不变）"""
+
+    @pytest.fixture
+    def enabled_task(self, test_db):
+        task = test_db.query(ScheduledTask).filter_by(code="nav_sync").first()
+        if task is None:
+            task = ScheduledTask(code="nav_sync", name="净值同步", is_enabled=True)
+            test_db.add(task)
+        else:
+            task.is_enabled = True
+        test_db.commit()
+        return task
+
+    def test_success_response_shape_unchanged(self, client, admin_headers, test_db, enabled_task):
+        """响应体与文案逐字保持：{"message": …, **result}"""
+        from unittest.mock import patch
+
+        with patch("app.services.market_data_service.sync_product_prices") as mock_sync:
+            mock_sync.return_value = {"success": True, "synced_count": 1, "source": "tushare"}
+            resp = client.post("/api/system/tasks/nav_sync/run", headers=admin_headers)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["message"] == "任务 nav_sync 执行完成"
+        assert set(body) >= {"message", "synced_count", "products_count",
+                             "failed_products", "target_date"}
+
+        # 落库走统一编排：一条 manual 记录、status/records 有真值
+        logs = test_db.query(TaskExecutionLog).all()
+        assert len(logs) == 1
+        assert logs[0].trigger_type == "manual"
+        assert logs[0].status == "success"
+        assert logs[0].records_total == body["products_count"]
+        assert logs[0].duration_ms is not None
+
+    def test_log_cleanup_keeps_deleted_logs_wrapper(self, client, admin_headers, test_db):
+        """log_cleanup 的 deleted_logs 包装键保留（CLI/前端既有契约）"""
+        task = test_db.query(ScheduledTask).filter_by(code="log_cleanup").first()
+        if task is None:
+            task = ScheduledTask(code="log_cleanup", name="日志清理", is_enabled=True)
+            test_db.add(task)
+        else:
+            task.is_enabled = True
+        test_db.commit()
+
+        resp = client.post("/api/system/tasks/log_cleanup/run", headers=admin_headers)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["message"] == "任务 log_cleanup 执行成功"
+        assert set(body["deleted_logs"]) == {
+            "login_logs", "audit_logs", "nav_sync_details", "task_logs", "error_logs",
+        }
+
+    def test_disabled_task_rejected_before_log(self, client, admin_headers, test_db, enabled_task):
+        """未启用返回 400，且不产生执行记录（前置校验在编排之前）"""
+        enabled_task.is_enabled = False
+        test_db.commit()
+
+        resp = client.post("/api/system/tasks/nav_sync/run", headers=admin_headers)
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Task is disabled"
+        assert test_db.query(TaskExecutionLog).count() == 0
+
+    def test_unknown_code_returns_404_and_no_log(self, client, admin_headers, test_db):
+        """未知任务码：404，且不产生执行记录"""
+        resp = client.post("/api/system/tasks/NO_SUCH_TASK/run", headers=admin_headers)
+
+        assert resp.status_code == 404
+        assert test_db.query(TaskExecutionLog).count() == 0
+
+    def test_viewer_cannot_run(self, client, viewer_headers, enabled_task):
+        resp = client.post("/api/system/tasks/nav_sync/run", headers=viewer_headers)
+        assert resp.status_code == 403
+
+
 class TestInitTaskDescriptions:
     """初始化任务文案"""
 

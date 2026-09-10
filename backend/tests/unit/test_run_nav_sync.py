@@ -18,9 +18,26 @@ from app.models.nav_sync_detail import NavSyncDetail
 from app.models.price_record import PriceRecord
 from app.models.product import Product
 from app.models.share_change_event import ShareChangeEvent
+from app.models.task_execution_log import TaskExecutionLog
 from app.services.task_runner import (
     run_nav_sync, run_snapshot_generate, _generate_snapshots_for_date,
 )
+
+
+def _task_log_id(db) -> int:
+    """建一条真实 TaskExecutionLog 并返回 id。
+
+    run_nav_sync 的 log_id 必填（#406 起），且 NavSyncDetail.task_log_id 是指向
+    task_execution_log 的外键（conftest 在 SQLite 上开了 PRAGMA foreign_keys=ON），
+    故这里必须造真实父行，不能传一个悬空整数。
+    """
+    log = TaskExecutionLog(
+        task_code="nav_sync", trigger_type="manual", status="running",
+        started_at=datetime.now(),
+    )
+    db.add(log)
+    db.flush()
+    return log.id
 
 
 class TestTargetDateYesterday:
@@ -31,7 +48,7 @@ class TestTargetDateYesterday:
         """sync_product_prices 传入的 end_date 应为昨天"""
         mock_sync.return_value = {"success": True, "synced_count": 0, "source": "tushare"}
 
-        result = run_nav_sync(test_db, log_id=None)
+        result = run_nav_sync(test_db, _task_log_id(test_db))
 
         yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
         assert result["target_date"] == yesterday
@@ -60,7 +77,7 @@ class TestIncrementalStart:
 
         mock_sync.return_value = {"success": True, "synced_count": 1, "source": "tushare"}
 
-        run_nav_sync(test_db, log_id=None)
+        run_nav_sync(test_db, _task_log_id(test_db))
 
         # 不依赖产品遍历顺序（SQLite 按插入序、MySQL 按主键序），按 product_code 定位调用
         target_call = next(
@@ -81,7 +98,7 @@ class TestNoShareChangeEvent:
         count_before = test_db.query(ShareChangeEvent).count()
 
         mock_sync.return_value = {"success": True, "synced_count": 0, "source": "tushare"}
-        run_nav_sync(test_db, log_id=None)
+        run_nav_sync(test_db, _task_log_id(test_db))
 
         count_after = test_db.query(ShareChangeEvent).count()
         assert count_after == count_before
@@ -96,7 +113,7 @@ class TestSnapshotNotGatedByFailures:
         """run_nav_sync 不再调用 _generate_snapshots_for_date，返回 dict 无 snapshots_generated 键"""
         mock_sync.return_value = {"success": False, "synced_count": 0, "message": "API 错误", "source": "tushare"}
 
-        result = run_nav_sync(test_db, log_id=None)
+        result = run_nav_sync(test_db, _task_log_id(test_db))
 
         mock_snap.assert_not_called()
         assert "snapshots_generated" not in result
@@ -215,13 +232,18 @@ class TestRunSnapshotGenerate:
     @patch("app.services.task_runner._generate_snapshots_for_date")
     def test_target_date_is_yesterday(self, mock_snap, test_db):
         """run_snapshot_generate 以昨天为 target_date 调回补，返回结构含两者"""
-        mock_snap.return_value = {"generated": 0, "warnings": [], "auto_confirm_failed": []}
+        mock_snap.return_value = {
+            "generated": 0, "portfolios_processed": 0,
+            "warnings": [], "auto_confirm_failed": [],
+        }
 
-        result = run_snapshot_generate(test_db, log_id=None)
+        # #406：log_id 死参数已从签名移除（快照链路无逐日明细表可关联）
+        result = run_snapshot_generate(test_db)
 
         yesterday = datetime.now().date() - timedelta(days=1)
         assert result["target_date"] == yesterday.isoformat()
         assert result["snapshots_generated"] == 0
+        assert result["portfolios_processed"] == 0
         mock_snap.assert_called_once()
         assert mock_snap.call_args.args[1] == yesterday
 

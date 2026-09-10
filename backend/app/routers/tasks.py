@@ -1,4 +1,3 @@
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -12,7 +11,7 @@ from app.schemas.task import (
     PaginatedTaskLogResponse,
 )
 from app.dependencies import get_current_admin
-from app.services.trading_calendar_service import sync_trading_calendar
+from app.services.exceptions import BusinessError
 
 router = APIRouter()
 
@@ -69,6 +68,15 @@ def run_task(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
+    # #406：按 code 分支的 status / records / error 推导整体下沉到
+    # `task_runner.run_task`（手动与调度共用同一实现），本层不再持有任务业务逻辑
+    # （backend/AGENTS.md「分层目录与职责」节：router 是 service 薄适配层）。
+    # 响应体与文案逐字保持不变。
+    #
+    # 刻意不写函数 docstring——FastAPI 会把 docstring 收进 OpenAPI `description`，
+    # 中文段落会让 openapi.json 无谓漂移（契约只该因接口语义变化而变）。
+    from app.services.task_runner import TRIGGER_MANUAL, run_task as run_task_service
+
     task = db.query(ScheduledTask).filter(ScheduledTask.code == code).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -76,88 +84,22 @@ def run_task(
     if not task.is_enabled:
         raise HTTPException(status_code=400, detail="Task is disabled")
 
-    log = TaskExecutionLog(
-        task_code=code,
-        trigger_type="manual",
-        status="running",
-        started_at=datetime.now(),
-    )
-    db.add(log)
-    db.commit()
-    db.refresh(log)
-
     try:
-        from app.services.task_runner import (
-            run_nav_sync, run_snapshot_generate, run_calendar_sync, run_log_cleanup,
-        )
-
-        if code == "trading_calendar_sync":
-            result = run_calendar_sync(db)
-            task.last_run_at = datetime.now()
-            log.status = "success"
-            log.finished_at = datetime.now()
-            db.commit()
-            return {"message": f"任务 {code} 执行成功", **result}
-
-        elif code == "nav_sync":
-            result = run_nav_sync(db, log.id)
-            task.last_run_at = datetime.now()
-            log.status = "success" if not result.get("failed_products") else "partial_success"
-            log.finished_at = datetime.now()
-            db.commit()
-            return {"message": f"任务 {code} 执行完成", **result}
-
-        elif code == "snapshot_generate":
-            result = run_snapshot_generate(db, log.id)
-            task.last_run_at = datetime.now()
-            # #305：自动确认失败/告警写入任务日志，调度触发路径可观测
-            warnings = result.get("warnings") or []
-            failed = result.get("auto_confirm_failed") or []
-            if failed:
-                log.status = "partial_success"
-                summary = "; ".join(
-                    f"{r.get('code', 'UNKNOWN')}: {r.get('error', '')}" for r in failed
-                )
-                if warnings:
-                    summary += " | warnings: " + "; ".join(
-                        w.get("type", "unknown") for w in warnings
-                    )
-                log.error_message = summary[:1000]
-            elif warnings:
-                log.status = "success"
-                log.error_message = (
-                    "warnings: " + "; ".join(w.get("type", "unknown") for w in warnings)
-                )[:1000]
-            else:
-                log.status = "success"
-            log.finished_at = datetime.now()
-            db.commit()
-            return {"message": f"任务 {code} 执行完成", **result}
-
-        elif code == "log_cleanup":
-            result = run_log_cleanup(db)
-            task.last_run_at = datetime.now()
-            log.status = "success"
-            log.finished_at = datetime.now()
-            db.commit()
-            return {"message": f"任务 {code} 执行成功", "deleted_logs": result}
-
-        else:
-            log.status = "failed"
-            log.finished_at = datetime.now()
-            log.error_message = f"未知任务: {code}"
-            db.commit()
-            raise HTTPException(status_code=404, detail=f"未知任务: {code}")
-
+        result = run_task_service(db, code, trigger_type=TRIGGER_MANUAL)
     except HTTPException:
         raise
     except Exception as e:
-        log.status = "failed"
-        log.finished_at = datetime.now()
-        log.error_message = str(e)
-        task.last_run_at = datetime.now()
-        db.commit()
+        # 任务自身抛 BusinessError 时也走这里：经全局 handler 映射为
+        # detail={error, message}（与其它端点同口径），而非 500 兜底
+        if isinstance(e, BusinessError):
+            raise
         raise HTTPException(status_code=500, detail=f"任务执行失败: {str(e)}")
+
+    if code == "log_cleanup":
+        return {"message": f"任务 {code} 执行成功", "deleted_logs": result}
+
+    verb = "执行完成" if code in ("nav_sync", "snapshot_generate") else "执行成功"
+    return {"message": f"任务 {code} {verb}", **result}
 
 
 @router.post("/{code}/enable")
