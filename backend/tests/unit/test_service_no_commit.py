@@ -187,7 +187,9 @@ class TestTaskRunnerCleanupNoCommit:
 
         _forbid_commit(monkeypatch, test_db)
         result = cleanup_old_logs(test_db)
-        assert set(result.keys()) == {"login_logs", "audit_logs", "task_logs", "error_logs"}
+        assert set(result.keys()) == {
+            "login_logs", "audit_logs", "nav_sync_details", "task_logs", "error_logs",
+        }
 
 
 class TestTradePreviewNoCommit:

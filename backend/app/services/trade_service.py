@@ -274,8 +274,12 @@ def sync_transfer_group(
     if trade.product_code != "CASH":
         mirror_amount = trade.actual_amount if trade.actual_amount is not None else trade.amount
     # #37 savepoint：配对腿更新失败回滚 savepoint，不影响外层事务
-    # 用连接级 SAVEPOINT（db.connection().begin_nested()）而非 session 级
-    # db.begin_nested()，避免触发 after_transaction_end 事件与测试隔离监听器冲突
+    # 保持连接级：本函数失败即 rollback + raise，从不承诺 session 继续可用，用不上
+    # session 级 db.begin_nested() 的 ORM 事务状态复位——那是 #419 给 auto_confirm
+    # 「单条失败仍要继续循环」那条路径修的。旧注释担心的监听器冲突并非不存在，而是
+    # 只发生在 `with db.begin_nested():` 形式（closed 事务仍是 _trans_context_manager，
+    # 夹具的 after_transaction_end 补 savepoint 时撞 InvalidRequestError 掩盖根因）；
+    # 显式 begin/commit/rollback 形式不复现，详见 backend/AGENTS.md §1.3「可观测性」。
     sp = db.connection().begin_nested()
     try:
         for paired_trade in paired:

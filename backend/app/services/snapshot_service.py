@@ -16,7 +16,7 @@ from typing import Callable, Dict, Any, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, and_, or_, delete
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, PendingRollbackError
 
 from app.models import (
     Portfolio, PortfolioPosition, PortfolioValueSnapshot, InvestorHolding,
@@ -322,12 +322,11 @@ def generate_daily_snapshots(
         resource_id=target_date.isoformat(),
         resource_name=portfolio_code,
         new_value={
-            # 这三个值在 PortfolioValueSnapshot 构造时就已 float()
-            # （见 _generate_portfolio_value_snapshot），到此已是 float，故载荷落 JSON
-            # 数字而非 Decimal 字符串——与其他埋点不一致，但在埋点侧不可修（标度已丢），另行跟踪。
-            "total_value": float(value_snapshot.total_value),
-            "total_shares": float(value_snapshot.total_shares),
-            "unit_price": float(value_snapshot.unit_price),
+            # #421：构造点已按列标度落 Decimal，这里原样交给审计层的 default=str，
+            # 载荷即保标度字符串（如 "1100.0000"），与其他埋点口径一致
+            "total_value": value_snapshot.total_value,
+            "total_shares": value_snapshot.total_shares,
+            "unit_price": value_snapshot.unit_price,
             "positions": len(positions),
             "investors": len(holdings),
         },
@@ -338,6 +337,7 @@ def generate_daily_snapshots(
         "message": "快照生成成功",
         "portfolio_code": portfolio_code,
         "snapshot_date": target_date,
+        # API 返回刻意保留 float()：前端 JSON 数字契约，与审计载荷口径无关
         "total_value": float(value_snapshot.total_value),
         "total_shares": float(value_snapshot.total_shares),
         "unit_price": float(value_snapshot.unit_price),
@@ -487,6 +487,25 @@ def recalculate_snapshots(
                     result["auto_confirmed"].extend(auto_results)
                     # 申赎统一 T+1 确认，刚确认的申赎 confirm_date = D+1 > D
                     # 不会被 D 日的 investor_holding 包含，无需局部刷新
+
+                # session 已废（#419 兜底路径）：外层事务不可恢复，不能继续逐日——
+                # 下一日只会抛出掩埋根因的 PendingRollbackError。把终止根因记进
+                # errors 触发调用方整体 rollback（响应仍为 200 + errors）。
+                aborted = next(
+                    (r for r in auto_results if r.get("code") == "SESSION_ABORTED"),
+                    None,
+                )
+                if aborted:
+                    result["errors"].append({
+                        "date": current_date.isoformat(),
+                        "error": aborted.get("error"),
+                        "code": "SESSION_ABORTED",
+                    })
+                    logger.error(
+                        f"重算中止（session 失效）: portfolio={portfolio.code}, "
+                        f"date={current_date}, error={aborted.get('error')}"
+                    )
+                    break
 
                 result["processed_dates"].append(current_date.isoformat())
                 result["total_processed"] += 1
@@ -1490,15 +1509,17 @@ def _generate_portfolio_value_snapshot(
         if pos.product_code in IN_TRANSIT_CODES and pos.cash_amount
     )
 
+    # #421：按列标度量化为 Decimal 而非 float()——审计载荷经 default=str 落保标度
+    # 字符串（float 会丢标度、且 0.1 类值落 JSON 会带二进制误差），与 DB 读回类型一致
     snapshot = PortfolioValueSnapshot(
         portfolio_code=portfolio_code,
         snapshot_date=target_date,
-        total_value=float(total_value),
-        total_shares=float(total_shares),
-        unit_price=float(unit_price.quantize(Decimal("0.0001"))),
-        unit_price_change_pct=float(unit_price_change_pct.quantize(Decimal("0.0001"))) if unit_price_change_pct else 0,
-        frozen_shares=float(frozen_shares) if frozen_shares > 0 else 0,
-        in_transit_total=float(in_transit_total) if in_transit_total else 0,
+        total_value=total_value.quantize(Decimal("0.0001")),
+        total_shares=quantize_shares(total_shares),
+        unit_price=unit_price.quantize(Decimal("0.0001")),
+        unit_price_change_pct=unit_price_change_pct.quantize(Decimal("0.0001")),
+        frozen_shares=quantize_shares(frozen_shares),
+        in_transit_total=Decimal(str(in_transit_total)).quantize(Decimal("0.0001")),
     )
     
     return snapshot
@@ -1614,42 +1635,80 @@ def _generate_investor_holding(
     return result_holdings
 
 
+def _session_aborted(db: Session) -> bool:
+    """探测 session 是否已进入「须先 rollback 才能再用」的状态（#419 兜底）。
+
+    ORM flush 失败会把根因挂到 `SessionTransaction._rollback_exception`，此后任何
+    需要 ACTIVE 态的操作都抛 `PendingRollbackError`——唯一解药是 `Session.rollback()`，
+    逐条继续只会产出一串误导性条目。`Session.is_active` 是这条状态的公开读法
+    （尚未开启事务时为 True，session 会 autobegin，故不会误判）。
+    """
+    return not db.is_active
+
+
 def _auto_confirm_guarded(
     db: Session, entry: Dict[str, Any], confirm_fn: Callable[[], Any]
 ) -> bool:
-    """单条自动确认包连接级 savepoint 执行（#305）。
+    """单条自动确认包 session 级 savepoint 执行（#305，机制修正见 #419）。
 
-    - BusinessError / DB 层失败（IntegrityError 等）：savepoint 内回滚、外层事务
-      保持可用，条目记 auto_confirm_failed 与 code/details，循环继续；
-    - 连接级失效（断连等）：整个事务不可恢复，条目记根因后返回 False，
-      调用方应终止本段——杜绝后续条目逐条产生误导性 PendingRollbackError。
+    - BusinessError / DB 层失败（IntegrityError 等）：savepoint 内回滚，ORM 事务状态
+      复位、外层事务保持可用，条目记 auto_confirm_failed 与 code/details，循环继续；
+    - session 已废（连接级失效、`PendingRollbackError`、失败后仍不可用）或 savepoint
+      回滚不掉（外层事务状态不可信）：条目记根因（code=SESSION_ABORTED）后返回 False，
+      调用方终止本段——杜绝后续条目逐条产生误导性 PendingRollbackError。
 
     成功时回填 entry action=auto_confirmed/status=success。
     """
-    pending_before = set(db.new)
-    sp = db.connection().begin_nested()
+    # 进入前先探测可用性（#419 附带①）：session 已废时 begin_nested 自身就会抛，
+    # 且此后每条都只会得到同一条 PendingRollbackError，直接终止本段。
+    if _session_aborted(db):
+        entry["action"] = "auto_confirm_failed"
+        entry["code"] = "SESSION_ABORTED"
+        entry["error"] = "session 已失效，终止本段自动确认"
+        return False
+    savepoint_broken = False
+    sp = None
     try:
+        # 必须是 **session 级** `db.begin_nested()` 而非 `db.connection().begin_nested()`：
+        # 被守护的是 ORM 写入路径，flush 失败走 ORM 错误处理链——SQLAlchemy 会把根因挂到
+        # 父 SessionTransaction 并回滚 session 持有的整个 DBAPI 事务，连接级 savepoint
+        # 的回滚碰不到这两者（#419 实测：外层已 flush 的成果当场清零、下一条在守护之外
+        # 就抛 PendingRollbackError）。session 级 savepoint 只回滚到自身、恢复 ORM 快照
+        # 并把状态复位为 ACTIVE。
+        # 显式 begin_nested/commit/rollback，不用 `with`：flush 失败时 SQLAlchemy 已自行
+        # 回滚并关闭该 nested 事务，而 `with` 期间它仍是 session 的 _trans_context_manager，
+        # conftest 的 after_transaction_end 监听器再 begin_nested() 会撞上
+        # 「Can't operate on closed transaction inside context manager」把真实根因掩盖（实测）。
+        sp = db.begin_nested()
         confirm_fn()
         db.flush()  # 强制约束错误在 savepoint 内暴露
         sp.commit()
     except Exception as e:
-        try:
-            sp.rollback()
-        except Exception:
-            pass
-        # savepoint 回滚不影响 session 身份映射：清理段内新增的 pending 对象
-        # （如配对 CASH 腿），否则下次 flush 会重复 INSERT
-        for obj in set(db.new) - pending_before:
-            db.expunge(obj)
-        # 丢弃回滚后残留的 dirty ORM 态
-        db.expire_all()
+        # 只在 savepoint 仍是当前 nested 事务时回滚：flush 失败那条路 SQLAlchemy 已经
+        # 回滚并关闭了它，再 rollback 只会抛 InvalidRequestError 掩盖真实根因。
+        if sp is not None and db.get_nested_transaction() is sp:
+            try:
+                sp.rollback()
+            except Exception:
+                # 回滚不掉 = 段内改动可能半留半撤，外层事务状态不可信，终止本段
+                savepoint_broken = True
+                logger.error(
+                    "auto_confirm savepoint 回滚失败，外层事务状态不可信，终止本段",
+                    exc_info=True,
+                    extra={"entry_type": entry.get("type"), "error": str(e)},
+                )
         info = _error_info(e)
         entry["action"] = "auto_confirm_failed"
         entry["error"] = info["message"]
         entry["code"] = info["code"]
         if "details" in info:
             entry["details"] = info["details"]
-        if isinstance(e, DBAPIError) and e.connection_invalidated:
+        if (
+            savepoint_broken
+            or isinstance(e, PendingRollbackError)
+            or (isinstance(e, DBAPIError) and e.connection_invalidated)
+            or _session_aborted(db)
+        ):
             entry["code"] = "SESSION_ABORTED"
             return False
         return True
@@ -1674,8 +1733,11 @@ def auto_confirm_after_snapshot(
     乱序补录的早期申购可能抛 CONFIRM_BEFORE_STARTED（issue #179 闸门），
     被捕获为 auto_confirm_failed、不阻断整批，需手动按序处理。
 
-    #305：单条确认包连接级 savepoint——DB 级失败（IntegrityError 等）不毒化
-    session、循环继续；连接级失效记一条根因（code=SESSION_ABORTED）后终止。
+    #305：单条确认包 savepoint 隔离——DB 级失败（IntegrityError 等）不毒化
+    session、循环继续；session 不可恢复（连接级失效、PendingRollbackError、
+    savepoint 回滚自身失败）记一条根因（code=SESSION_ABORTED）后终止本段。
+    savepoint 必须是 session 级的（`db.begin_nested()`），机制理由见
+    `_auto_confirm_guarded` 与 #419。
     失败条目携带 code 与 details（BusinessError 透传）。
 
     Args:

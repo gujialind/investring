@@ -8,6 +8,9 @@
 # - savepoint 隔离：审计 flush 失败不外抛、不回滚业务改动、不落审计行，
 #   并留 stdout ERROR + system_error_log 双痕迹
 # - record_system_error：独立 session 写入 + best-effort（写失败只记 stdout）
+# - issue #422 三处 robustness：(a) savepoint **之前**的 flush 也在守护内（失败不外抛、
+#   留痕、调用方事务可继续）；(b) savepoint 回滚失败不再被裸 pass 静默吞（另记一条带
+#   堆栈的 ERROR，文案不预设回滚成功）；(c) request_path 按列宽截断，200 由常量守门
 # ============================================================================
 
 import json
@@ -19,6 +22,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine.base import NestedTransaction
 from sqlalchemy.orm import sessionmaker
 
 from app.constants import audit_actions
@@ -32,6 +36,7 @@ from app.context import RequestContext, request_context_var
 from app.models.audit_log import AuditLog
 from app.models.system_error_log import SystemErrorLog
 from app.services.audit_service import (
+    SYSTEM_ERROR_PATH_MAX,
     _diff_fields,
     _serialize_value,
     record_audit,
@@ -341,3 +346,200 @@ class TestRecordSystemError:
 
         broken.close.assert_called_once()
         assert any("system_error_log 写入失败" in r.getMessage() for r in caplog.records)
+
+
+class TestFlushGuard:
+    """#422a：savepoint **之前**的 flush 也在守护内
+
+    flush 干的是调用方的活（把业务改动落进外层事务），撞约束即抛。此前它在 try 之外，
+    异常会逃出 record_audit——recalculate 收尾埋点因此把 router 承诺的 200+errors
+    变成 500 RECALCULATION_FAILED，且不留任何审计侧痕迹。
+    """
+
+    @pytest.fixture
+    def flush_fails_once(self, test_db, monkeypatch):
+        """让 record_audit 内部那次 flush 抛异常，之后的调用恢复原样。"""
+        original = test_db.flush
+        calls = {"n": 0}
+
+        def guarded(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("业务改动撞约束")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(test_db, "flush", guarded)
+        return calls
+
+    def test_flush_failure_never_propagates_and_leaves_traces(
+        self, test_db, trade, error_log_db, flush_fails_once, caplog
+    ):
+        with caplog.at_level(logging.ERROR, logger="app.services.audit_service"):
+            record_audit(
+                test_db,
+                action=ACTION_UPDATE,
+                resource_type=RESOURCE_TRADE,
+                resource_id=str(trade.id),
+            )
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("审计写入失败" in m for m in messages), messages
+        assert any("savepoint 未建立" in m for m in messages), messages
+
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert error.error_type == "AuditWriteFailure"
+        assert "业务改动撞约束" in error.error_message
+        assert str(trade.id) in error.error_message
+        assert error.error_stack
+        assert test_db.query(AuditLog).count() == 0, "失败的审计行不得落库"
+
+    def test_caller_transaction_continues(
+        self, test_db, trade, error_log_db, flush_fails_once
+    ):
+        """守护的意义：审计不拖垮核心记账，调用方后续写入与审计照常"""
+        record_audit(
+            test_db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_TRADE,
+            resource_id=str(trade.id),
+        )
+
+        trade.notes = "flush 失败之后的业务改动"
+        test_db.flush()
+        assert trade.notes == "flush 失败之后的业务改动"
+
+        with _bound_context(actor="ADMIN"):
+            record_audit(
+                test_db,
+                action=ACTION_UPDATE,
+                resource_type=RESOURCE_TRADE,
+                resource_id=str(trade.id),
+            )
+        assert test_db.query(AuditLog).count() == 1
+
+
+class TestSavepointRollbackFailure:
+    """#422b：回滚失败不再被裸 pass 吞掉
+
+    回滚失败几乎必然意味着连接已死或事务状态已废——比「审计没写进去」更高一级的信号。
+    """
+
+    def test_rollback_failure_logged_loudly(
+        self, test_db, trade, error_log_db, monkeypatch, caplog
+    ):
+        def broken_rollback(self):
+            raise RuntimeError("连接已死，savepoint 回滚不了")
+
+        monkeypatch.setattr(NestedTransaction, "rollback", broken_rollback)
+
+        with caplog.at_level(logging.ERROR, logger="app.services.audit_service"):
+            # action 为 NOT NULL 列，传 None 让审计 INSERT 真的失败，走到回滚分支
+            record_audit(
+                test_db,
+                action=None,
+                resource_type=RESOURCE_TRADE,
+                resource_id=str(trade.id),
+            )
+
+        rollback_records = [
+            r for r in caplog.records if "savepoint 回滚失败" in r.getMessage()
+        ]
+        assert len(rollback_records) == 1, [r.getMessage() for r in caplog.records]
+        assert rollback_records[0].exc_info, "回滚失败那条必须带堆栈"
+        assert "连接已死" in str(rollback_records[0].exc_info[1])
+
+        originals = [r for r in caplog.records if "审计写入失败" in r.getMessage()]
+        assert len(originals) == 1, [r.getMessage() for r in caplog.records]
+        assert "savepoint 已回滚" not in originals[0].getMessage(), (
+            "回滚失败时文案不得再断言已回滚"
+        )
+        assert "回滚亦失败" in originals[0].getMessage()
+
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert "连接已死" in error.error_message, "升级信号要进取证记录，不能只留 stdout"
+
+
+class TestSystemErrorPathTruncation:
+    """#422c：request_path 无界（h11 请求行上限 16 KB）→ 截断到列宽
+
+    不截断则 MySQL 严格模式下 errno 1406 被 best-effort except 吸收，
+    整条 system_error_log 静默丢失（不是被截断，是整行没落库）。
+    """
+
+    OVERLONG = "/api/portfolios/" + "p" * 500
+
+    def test_constant_matches_column_width(self):
+        """200 不得以魔数散落：与模型列宽绑死，改列宽即红"""
+        assert SYSTEM_ERROR_PATH_MAX == SystemErrorLog.__table__.c.request_path.type.length
+
+    def test_overlong_path_truncated(self, error_log_db):
+        record_system_error(
+            error_type="ValueError",
+            error_message="净值缺失",
+            error_stack="Traceback ...",
+            request_path=self.OVERLONG,
+            request_method="GET",
+            investor_code="ADMIN",
+            ip_address="10.0.0.1",
+        )
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert len(error.request_path) == SYSTEM_ERROR_PATH_MAX
+        assert error.request_path == self.OVERLONG[:SYSTEM_ERROR_PATH_MAX]
+        # 只截路径，其余取证字段不受影响
+        assert error.error_type == "ValueError"
+        assert error.error_message == "净值缺失"
+        assert error.error_stack == "Traceback ..."
+        assert error.request_method == "GET"
+        assert error.investor_code == "ADMIN"
+
+    def test_short_path_untouched(self, error_log_db):
+        record_system_error(
+            error_type="ValueError",
+            error_message="净值缺失",
+            request_path="/api/snapshots/generate",
+        )
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert error.request_path == "/api/snapshots/generate"
+
+    def test_none_path_stays_none(self, error_log_db):
+        record_system_error(error_type="ValueError", error_message="净值缺失")
+        with error_log_db() as session:
+            assert session.query(SystemErrorLog).one().request_path is None
+
+    def test_overlong_path_fits_real_column(self):
+        """真实列宽兜底：SQLite 不校验 String 长度，截断的实际效果只在 MySQL 成立"""
+        from app.database import SessionLocal, engine
+
+        if engine.dialect.name != "mysql":
+            pytest.skip("SQLite 不校验 String(200) 列宽")
+
+        truncated = self.OVERLONG[:SYSTEM_ERROR_PATH_MAX]
+        session = SessionLocal()
+        try:
+            record_system_error(
+                error_type="DataTooLongProbe",
+                error_message="超长路径探针",
+                request_path=self.OVERLONG,
+                request_method="GET",
+            )
+            row = session.query(SystemErrorLog).filter(
+                SystemErrorLog.request_path == truncated
+            ).first()
+            assert row is not None, (
+                "截断失效：MySQL 严格模式下整条记录被 errno 1406 吞掉"
+            )
+            assert len(row.request_path) <= SYSTEM_ERROR_PATH_MAX
+            assert row.error_type == "DataTooLongProbe"
+            assert row.error_message == "超长路径探针"
+            assert row.request_method == "GET"
+        finally:
+            # 独立 session 是 commit 的，必须自清：残留行会污染按行数断言的其他用例
+            session.query(SystemErrorLog).filter(
+                SystemErrorLog.request_path == truncated
+            ).delete()
+            session.commit()
+            session.close()

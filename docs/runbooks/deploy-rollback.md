@@ -119,6 +119,11 @@ commit）。
 | 0005 | cash_amount / 日期字段重命名 | 已实现 | 纯重命名，无损 |
 | 0006 | product_code 扩展 String(20) + in_transit_total + IN_TRANSIT 种子产品 | **未实现**（`raise NotImplementedError`） | **不可逆**：IN_TRANSIT 数据存在时无法安全回退（FK 约束 + 列收窄容不下长 code）。跨过 0006 的回滚只能走前滚（§4.1）或从 RDS 快照恢复 |
 | 0007 | asset_classification.asset_name 新增 + 回填 | 已实现 | 删列，回填值丢失但可按 `ASSET_NAME_MAP` 重跑迁移恢复；人工改过的 asset_name 不可恢复，低风险 |
+| 0008 | 资产分类五维度重构（维度字典 + product 五 FK 列，删旧扁平分类与 portfolio_position.asset_type） | **未实现**（`raise NotImplementedError`） | **不可逆**：旧扁平分类行与 `asset_type` 列已物理删除。跨过 0008 的回滚只能走前滚（§4.1）或从 RDS 快照恢复（与 0006 同类） |
+| 0009 | 维度规则表 asset_class_dimension_rule + 适用关系表 asset_dimension_applicability + asset_classification.is_active | 已实现 | 删两表 + 删列（每步带存在性守卫）；**规则矩阵与适用关系行删除后不可恢复**，回退后需重跑迁移或手工重建规则 |
+| 0010 | portfolio.display_config（#144 持仓分组覆盖） | 已实现 | 删列；组合级分组覆盖配置丢失，回退后前端恢复默认分组，低风险 |
+| 0011 | portfolio.auto_snapshot_enabled（#156 自动快照开关） | 已实现 | 删列；opt-in 开关丢失，回退后所有组合恢复默认 False（自动快照停摆），低风险 |
+| 0012 | product.nav_lag_days（逐产品估值滞后天数） | 已实现 | **有损**：删列后逐产品自设值（QDII/港互认惯例 1）丢失且无法从其他字段推导，回退再升级后需人工重设，否则快照取价口径变化 |
 | 0013 | 四张日志表纳入 alembic 管理（audit_log / system_error_log / login_log / task_execution_log） | **刻意 no-op**（不删表） | 无损：采纳型迁移——生产库这四张表与其数据均早于本迁移存在（由 `create_all` 建出），`upgrade()` 实为 no-op，故逆操作也不删表（删表 = 销毁审计/登录/任务历史）。另 `task_execution_log` 被 `nav_sync_detail.task_log_id` 外键引用，MySQL 下 DROP 必失败（errno 3730） |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。

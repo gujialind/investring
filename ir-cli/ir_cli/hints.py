@@ -1,7 +1,7 @@
 """
 错误码 → 补救指引映射
 
-后端业务错误码是稳定契约（见 AGENTS.md 附录 D），此表将常见错误码映射为
+后端业务错误码是稳定契约（全量清单见 docs/reference/business-constraints.md「错误码总表」，AST 守门测试保证同步），此表将常见错误码映射为
 下一步可直接执行的 ir 命令或操作指引，随错误 JSON 一并输出（error.hints），
 帮助 AI agent 一次失败即收敛到正确路径，无需反复试错。
 
@@ -24,6 +24,7 @@ ERROR_HINTS: dict = {
     "INSUFFICIENT_SHARES": "ir position available-shares --portfolio-code <code> --product-code <product_code> 查询实时可用份额",
     "CANNOT_MODIFY_CONFIRMED": "confirmed 记录不可直接修改，先执行 unconfirm 回退至 pending",
     "CANNOT_DELETE_CONFIRMED": "confirmed 记录不可直接删除，先执行 unconfirm 回退至 pending",
+    "INVALID_STATUS": "记录状态不允许该操作（confirm/cancel 仅限 pending，unconfirm 仅限 confirmed，cancelled 不可修改）：先查询当前状态（ir trade list / ir sub list / ir share-event list --portfolio-code <code>）再按状态处理",
     "PENDING_TRANSACTIONS_EXIST": "存在 pending 申赎/交易，先逐笔 confirm 或 cancel 后重试",
     "CASH_TRADE_FORBIDDEN": "禁止直接创建 CASH 交易，现金变动须走 ir sub（申赎）/ ir cash-transfer（跨平台转移）/ 基金调仓自动配对",
     "PRICE_NAV_MISMATCH": "传入价格与 T 日净值不一致: ir market price 查询净值核对，或省略 --price 由后端取 T 日净值",

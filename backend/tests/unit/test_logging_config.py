@@ -1,20 +1,22 @@
 # ============================================================================
-# 单元测试：集中日志配置 (test_logging_config.py) — issue #404
+# 单元测试：集中日志配置 (test_logging_config.py) — issue #404 / #417
 # ============================================================================
-# 覆盖 stdout JSON 行形态、级别推导、setup_logging() 幂等，以及两条约定：
-# 不钉 sqlalchemy.engine 级别（SQL 详略归 database.py 的 echo）、压掉 uvicorn.access。
+# 覆盖 stdout JSON 行形态、级别推导、setup_logging() 幂等，以及三条约定：
+# sqlalchemy.engine 系清 handler 不钉级别（SQL 详略归 database.py 的 echo，#417）、
+# 压掉 uvicorn.access、程序化入口下 uvicorn 日志仍为 JSON。
 # ============================================================================
 
 import io
 import json
 import logging
+import logging.config
 from contextlib import redirect_stdout
 
 import pytest
 
 from app.config import get_settings
 from app.context import RequestContext, request_context_var
-from app.logging_config import JsonFormatter, resolve_log_level, setup_logging
+from app.logging_config import JsonFormatter, _build_config, resolve_log_level, setup_logging
 from tests.conftest import log_lines
 
 
@@ -160,12 +162,28 @@ class TestSetupLogging:
         assert len(log_lines(json_log_capture)) == 1
 
     def test_does_not_pin_sqlalchemy_engine(self, json_log_capture):
-        """SQL 详略由 database.py 的 echo=settings.debug 控制，这里再钉级别会与之争用"""
+        """清 handler 但**不钉级别**：SQL 详略由 database.py 的 echo=settings.debug
+        控制，钉级别会与之争用；清 handler 是消掉 echo 自挂的明文源（#417）"""
         assert logging.getLogger().handlers, "前置：dictConfig 应已配置 root"
 
-        engine_logger = logging.getLogger("sqlalchemy.engine")
-        assert engine_logger.level == logging.NOTSET
+        for name in ("sqlalchemy.engine", "sqlalchemy.engine.Engine"):
+            engine_logger = logging.getLogger(name)
+            assert engine_logger.level == logging.NOTSET
+            assert engine_logger.handlers == []
+            assert engine_logger.propagate is True
+
+    def test_echo_attached_plain_handler_cleared(self, json_log_capture):
+        """echo 生效时 SQLAlchemy 在 engine 创建时给 sqlalchemy.engine.Engine 自挂
+        明文 StreamHandler（propagate 不变）→ 每条 SQL 明文 + JSON 双写（#417(a)）。
+        main.py 顺序是 engine 先建、setup_logging() 后跑，dictConfig 必须清掉已挂的"""
+        engine_logger = logging.getLogger("sqlalchemy.engine.Engine")
+        plain = logging.StreamHandler(io.StringIO())
+        engine_logger.handlers = [plain]
+
+        logging.config.dictConfig(_build_config("INFO"))
+
         assert engine_logger.handlers == []
+        assert engine_logger.propagate is True
 
     def test_uvicorn_access_suppressed(self, json_log_capture):
         """访问日志由 RequestContextMiddleware 单点产出，uvicorn 那份必须关掉"""

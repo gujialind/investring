@@ -86,8 +86,14 @@ def _build_config(level: str) -> dict:
             # 启动/关闭/ASGI 异常等 uvicorn 自身日志改走 root，与应用日志同为 JSON
             "uvicorn": {"handlers": [], "propagate": True},
             "uvicorn.error": {"handlers": [], "propagate": True},
-            # 刻意不覆盖 sqlalchemy.engine：SQL 详略由 database.py 的
-            # echo=settings.debug 控制，这里再钉级别会与之争用
+            # sqlalchemy.engine.Engine 在 engine 创建时若 echo 生效且自身无 handlers，
+            # 会被 SQLAlchemy 自挂一个明文 StreamHandler（propagate 不变），同一条 SQL
+            # 明文 + JSON 双写（#417）。这里清掉 handler 但**不钉级别**——SQL 详略仍由
+            # database.py 的 echo=settings.debug 控制，输出统一走 root JSON。
+            # 依赖 main.py 的顺序：engine 先建（import database）、setup_logging() 后跑，
+            # dictConfig 才能清掉已挂的 handler。
+            "sqlalchemy.engine": {"handlers": [], "propagate": True},
+            "sqlalchemy.engine.Engine": {"handlers": [], "propagate": True},
         },
     }
 

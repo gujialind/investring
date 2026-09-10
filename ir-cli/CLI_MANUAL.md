@@ -97,11 +97,28 @@ ir schema trade              # 仅输出指定命令组
 
 ### 3.3 错误码一览
 
+`error.code` 有两个来源：**后端业务码**（响应体 `detail.error` 的结构化 code，绝大部分场景）与 **CLI 客户端码**（后端未带结构化 code 时由 CLI 生成）。后端码全量清单（触发条件 + HTTP 状态）见 `docs/reference/business-constraints.md`「错误码总表」，由后端 AST 守门测试保证与代码同步；一般 CLI 报错先查总表，只有总表查无此码时才是下表前半部分的 CLI 客户端码。
+
+**CLI 客户端码**（来源 `ir_cli/`：HTTP 状态兜底映射、本地参数校验、网络层；后端带码时一律优先后端码，`FORBIDDEN`/`NOT_FOUND` 等与后端同名）：
+
+| 错误码 | 触发 |
+|--------|------|
+| `AUTH_REQUIRED` | 401 兜底；或本地无 token 时不发请求直接拒绝（后端 401 为纯文本 detail，不带结构化码） |
+| `FORBIDDEN` | 403 兜底（后端权限门 403 也用此码） |
+| `NOT_FOUND` | 404 兜底（后端 `NotFoundError` 也用此码） |
+| `CONFLICT` | 409 兜底（后端带码时用专用码，如 `RECALC_JOB_CONFLICT`；价格同步的 409 为纯文本 detail，落此兜底） |
+| `VALIDATION_ERROR` | 422 兜底（FastAPI 请求体校验失败的 422 不带结构化码）；或 CLI 本地校验（日期格式、必填/更新字段缺失等） |
+| `SERVER_ERROR` | ≥500 兜底 |
+| `HTTP_ERROR` | 其余非 2xx 兜底 |
+| `CONNECTION_ERROR` / `TIMEOUT_ERROR` / `NETWORK_ERROR` | 网络层失败：连接失败 / 超时 / 传输中断 |
+| `INVALID_JSON` | 本地校验：`--json` 不是合法 JSON 对象 |
+
+**常见后端码摘选**（完整清单与触发条件见总表）：
+
 | 错误码 | 说明 |
 |--------|------|
 | `NOT_FOUND` | 资源不存在 |
 | `ALREADY_EXISTS` | 资源已存在（唯一约束冲突） |
-| `VALIDATION_ERROR` | 参数校验失败 |
 | `INVALID_STATUS` | 状态不允许当前操作 |
 | `INVALID_PARAM` | 字段与记录类型/语义不匹配（如申购传份额、字段显式传 null） |
 | `INVALID_AMOUNT` / `INVALID_SHARES` | 金额/份额不合法 |
@@ -116,7 +133,8 @@ ir schema trade              # 仅输出指定命令组
 | `PENDING_TRANSACTIONS_EXIST` | 存在未处理的交易 |
 | `PORTFOLIO_NOT_ACTIVE` | 组合未激活 |
 | `INVESTOR_HAS_SHARES` | 投资人仍持有份额，不可删除 |
-| `DATA_SOURCE_ERROR` | 外部数据源同步失败 |
+| `DATA_SOURCE_NOT_CONFIGURED` | 数据源未配置（`TUSHARE_TOKEN` 缺失），返回 503 |
+| `SYNC_FAILED` | 数据源同步失败（接口报错或其他异常），返回 500 |
 | `CASH_TRADE_FORBIDDEN` | 禁止直接创建 CASH 产品交易 |
 | `CANNOT_CANCEL_EXCHANGE` | 场内交易不可取消 |
 | `SNAPSHOT_DEPENDENCY` | 快照已依赖该记录，无法取消确认 |
@@ -128,8 +146,6 @@ ir schema trade              # 仅输出指定命令组
 | `DIMENSION_VALUE_IN_USE` | 维度值关联仍被产品引用，不可移除（`details.products` 列引用产品） |
 | `DIMENSION_RULE_CONFLICT` | 维度规则收紧与存量产品冲突（`details.products` 列冲突产品） |
 | `CONFIRM_REQUIRED` | 需要显式确认（如 `--yes`） |
-| `AUTH_REQUIRED` | 未登录或 token 已过期 |
-| `INTERNAL_ERROR` | 系统内部错误 |
 
 ### 3.4 数据类型说明
 

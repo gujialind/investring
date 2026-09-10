@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.scheduled_task import ScheduledTask
@@ -30,9 +31,13 @@ def cleanup_old_logs(db: Session) -> dict:
     清理策略：
     - 登录日志：保留 30 天
     - 审计日志：保留 90 天
-    - 任务执行日志：保留 90 天
     - 净值同步明细：保留 90 天
+    - 任务执行日志：保留 90 天
     - 系统错误日志：保留 30 天
+
+    nav_sync_detail 必须先于 task_execution_log 删除（#426）：其 task_log_id
+    外键无 ondelete，先删父行会撞约束抛 IntegrityError、中断整个清理
+    （system_error_log 排在其后即永远执行不到）。
 
     不 commit（backend/AGENTS.md「分层目录与职责」节），事务边界交调用方（router tasks）。
     """
@@ -48,6 +53,7 @@ def cleanup_old_logs(db: Session) -> dict:
     deleted = {
         "login_logs": 0,
         "audit_logs": 0,
+        "nav_sync_details": 0,
         "task_logs": 0,
         "error_logs": 0,
     }
@@ -59,6 +65,18 @@ def cleanup_old_logs(db: Session) -> dict:
     deleted["audit_logs"] = db.query(AuditLog).filter(
         AuditLog.created_at < cutoff_audit
     ).delete()
+
+    # #426：子行除按自身 created_at 老化外，还要兜住「子行比父行新几秒、
+    # 自身未老化但仍引用老化父行」的边界行（两者在同一次任务运行中先后创建）
+    aged_task_log_ids = select(TaskExecutionLog.id).where(
+        TaskExecutionLog.created_at < cutoff_task
+    )
+    deleted["nav_sync_details"] = db.query(NavSyncDetail).filter(
+        or_(
+            NavSyncDetail.created_at < cutoff_task,
+            NavSyncDetail.task_log_id.in_(aged_task_log_ids),
+        )
+    ).delete(synchronize_session=False)
 
     deleted["task_logs"] = db.query(TaskExecutionLog).filter(
         TaskExecutionLog.created_at < cutoff_task
