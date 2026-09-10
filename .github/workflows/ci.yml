@@ -139,7 +139,7 @@ jobs:
           # 合入后必须改回 false（issue #170）
           SKIP_DOWNGRADE: "false"
         run: |
-          python -c "from app.database import engine, Base; import app.models; Base.metadata.create_all(bind=engine)"
+          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
           alembic current | grep "(head)"
           # 可逆性验证：downgrade -1 只回退最新一条迁移（已知不可逆的 0006/0008 不会被触碰）
@@ -308,7 +308,7 @@ jobs:
           SCHEDULER_ENABLED: "false"
           DEBUG: "false"
         run: |
-          python -c "from app.database import engine, Base; import app.models; Base.metadata.create_all(bind=engine)"
+          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
 
       # 种子 ADMIN/admin@2026 + draft 组合 E2E_PORT + active 组合 E2E_ACTIVE
@@ -574,7 +574,7 @@ jobs:
           SCHEDULER_ENABLED: "false"
           DEBUG: "false"
         run: |
-          python -c "from app.database import engine, Base; import app.models; Base.metadata.create_all(bind=engine)"
+          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
 
       - name: Seed E2E base data
