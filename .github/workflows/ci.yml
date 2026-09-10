@@ -112,16 +112,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 库级排序规则对齐生产 RDS（utf8mb3_general_ci，建表默认继承库级设置）。
-      # 例外：日志/同步明细表（audit_log / system_error_log / login_log /
-      # task_execution_log / nav_sync_detail）在库级 utf8mb3 之内单独声明 utf8mb4
-      # （模型 __table_args__ + 迁移 0014）——4 字节字符撞 utf8mb3 列会致 errno 1366、
-      # 记录写不进去（#427）。库级设置本身不动。
+      # 库级字符集与排序规则对齐生产 RDS（utf8mb4 / utf8mb4_general_ci，#433 起统一）。
+      # 连接串侧同样是 charset=utf8mb4，两侧一致才不会有「4 字节 UTF-8 字符（emoji、
+      # CJK 扩展 B）撞 utf8mb3 列 → errno 1366 → 整条记录写不进去」这个缺陷面：
+      # #427 曾在 utf8mb3 库内把五张自由文本表单独提为 utf8mb4 作例外，#433 把库级
+      # 一并统一、例外清单随之取消（迁移 0015）。改回 utf8mb3 会让 test_db_charset.py
+      # 与 test_migration_0015.py 变红。
+      #
+      # 注：`CREATE DATABASE` 的库级设置只决定**将来**建表的默认值，不会改动已存在的表；
+      # 且新库路径下 `create_all`（main.py import 期）在迁移之前跑，故模型层另有
+      # app/models/base.py 的钩子确保每张表自带 CHARSET，不单纯依赖这里。
       - name: Create databases
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "
-            CREATE DATABASE ir_test CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;
-            CREATE DATABASE ir_migration CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
+            CREATE DATABASE ir_test CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+            CREATE DATABASE ir_migration CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
 
       # 复刻生产启动顺序：main.py import 期 create_all 建全表，lifespan 内 upgrade head 增量修补
       - name: Verify migration chain (create_all + alembic upgrade head)
@@ -286,12 +291,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 库级排序规则对齐 backend-test-mysql（utf8mb3_general_ci）；日志/同步明细表为例外，
-      # 表级 utf8mb4（模型 __table_args__ + 迁移 0014，见 #427）
+      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）
       - name: Create database
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "
-            CREATE DATABASE ir_e2e CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
+            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
 
       # 复刻生产启动顺序（对齐 backend-test-mysql）：create_all 先建全表，
       # alembic upgrade head 增量修补——迁移链依赖 create_all 已建表
@@ -556,10 +560,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）
       - name: Create database
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "
-            CREATE DATABASE ir_e2e CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
+            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
 
       - name: Create schema and run migrations
         working-directory: backend

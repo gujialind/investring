@@ -51,7 +51,8 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
+from app.database import get_db
+from app.models.base import Base
 from app.logging_config import _build_config
 from app.main import app
 from app.models import (

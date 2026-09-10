@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Text, Numeric, Date, DateTime, Integer, ForeignKey, ForeignKeyConstraint, UniqueConstraint, func
-from app.database import Base
+from app.models.base import Base
 
 
 class Trade(Base):

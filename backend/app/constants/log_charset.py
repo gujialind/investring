@@ -1,45 +1,38 @@
-"""日志/同步明细的字符集常量（issue #427）。
+"""日志/同步明细表的表级字符集纳管清单（issue #427；#433 起库级亦为 utf8mb4）。
 
-**为什么是 utf8mb4 而不是库级 utf8mb3**：生产 RDS 与 CI 建库都用 utf8mb3
-（`utf8mb3_general_ci`，刻意对齐生产 RDS 的库级约定），而**连接侧字符集是 utf8mb4**
-（`app/config.py` 连接串 charset=utf8mb4）。这个不对称是刻意的、不能靠改库级 charset
-解决；但 utf8mb3 列容不下 4 字节 UTF-8 字符（emoji、CJK 扩展 B 汉字等），MySQL 严格
-模式下 errno 1366 `Incorrect string value` 会让**整条**记录写不进去。失效形态分两档：
+**这个模块现在只承载「历史事实 + 纳管清单」**，不再是「库级之外的例外」：
 
-- `audit_log` / `system_error_log`：写入是 best-effort（`record_system_error` 的
-  except 吸收）→ **整条日志静默消失**，恰是日志基建最不该有的失效模式；
+- 建表用的 charset/collate 常量已移到 `app/constants/db_charset.py`（#433 把库级一并
+  统一到 utf8mb4 后，表级声明与库级默认同值，常量不再有「日志专属」语义）；
+- 迁移 `0014` 与 `tests/unit/test_migration_0014.py` 仍引用本模块的 `LOG_TABLE_CHARSET`
+  / `LOG_TABLE_COLLATE` / `CHARSET_TABLES`——**0014 是已在生产执行过的历史迁移，
+  不改其 import 与语义**（它记录的正是「库级还是 utf8mb3 时这五张表单独提 utf8mb4」
+  这一步），改它只会让历史与仓库对不上。
+
+**#427 的原始缺陷形态**（保留以便读懂 0014）：库级 utf8mb3 与连接侧 utf8mb4 不对称，
+utf8mb3 列容不下 4 字节 UTF-8 字符（emoji、CJK 扩展 B 汉字），MySQL 严格模式下 errno
+1366 `Incorrect string value` 让**整条**记录写不进去。分两档：
+
+- `audit_log` / `system_error_log`：写入 best-effort（`record_system_error` 的 except
+  吸收）→ **整条日志静默消失**，恰是日志基建最不该有的失效模式；
 - `login_log` / `task_execution_log` / `nav_sync_detail`：写入直接 `commit()` →
   **外抛 500**，连带登录、任务执行、净值同步本身失败。
 
-典型触发来源是用户输入（路径参数、请求体、投资人 code、User-Agent）或外部数据源原文
-被回显进自由文本列。故这些表**在库级 utf8mb3 之内单独声明 utf8mb4**：库级约定不变，
-写入侧不再有字符集适配清单（「哪些列要转义」这种遗漏面不可见的做法被刻意排除）。
+`nav_sync_detail` 与四张日志表同库同型，故一并纳管（#427 讨论中决定）。
 
-**纳管范围是 `CHARSET_TABLES` 而非「四张日志表」**：`nav_sync_detail` 与四张日志表同库
-同型——`error_message` 接收外部接口原文、同样由 `create_all` 建出并继承库级 charset。
-它的外抛形态比静默更响，但没有任何理由让它与其余五张表分道扬镳（#427 讨论中一并纳入）。
-
-单一事实来源：五个模型（`app/models/{audit_log,system_error_log,login_log,
-task_execution_log,nav_sync_detail}.py`）、迁移 `0014_log_tables_utf8mb4.py`、守门测试
-（`tests/unit/test_migration_0014.py`）三方共用，禁止在任一处写字面量。
-
-**不改库级 charset**：`ci.yml` 三处 `CREATE DATABASE ... utf8mb3` 与
-`docker-compose.dev.yml` 的 server 字符集均保持原样，只更新注释说明本例外。
-
-**迁移 0014 是终态而非唯一防线**：模型 `__table_args__` 带 `mysql_charset` 使
-`create_all` 建出的新库不依赖库级默认；否则任何新建库（新环境、CI 重建）又会生成
-utf8mb3 表、缺陷原样复发。
+**#433 之后的终局**：库级 charset 已随迁移 `0015` 统一为 utf8mb4，全库同构；「哪些表
+需要 utf8mb4」这份清单不再需要长期维护——新建表天然继承正确的库级默认。本模块因此是
+**只读的历史快照**，不要往 `CHARSET_TABLES` 里加表。
 """
 
 # 表级字符集：4 字节 UTF-8 字符可写（emoji、CJK 扩展 B 等）
 LOG_TABLE_CHARSET = "utf8mb4"
 
-# 排序规则：utf8mb4 的通用排序规则（与库级 utf8mb3_general_ci 的「general_ci」家族一致）。
-# 显式写出而非依赖服务端 utf8mb4 默认值（MySQL 8 是 utf8mb4_0900_ai_ci，MariaDB 又不同），
-# 保证建表 DDL 与迁移 0014 的 ALTER 落到同一排序规则。
+# 排序规则：utf8mb4 的通用排序规则（与库级旧值 utf8mb3_general_ci 的「general_ci」
+# 家族一致）
 LOG_TABLE_COLLATE = "utf8mb4_general_ci"
 
-# 纳管范围：迁移 0014 与守门测试共用，漏一张即留一处「静默丢失 / 外抛 500」的面
+# 迁移 0014 的纳管范围（历史事实，勿增删）：漏一张即留一处 #427 的失效面
 CHARSET_TABLES = (
     "audit_log",
     "system_error_log",
