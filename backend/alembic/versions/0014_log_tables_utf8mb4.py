@@ -36,8 +36,8 @@ Create Date: 2026-09-10
 **downgrade 语义（为什么不是无脑反向 CONVERT）**：反向转 utf8mb3 在表内已存在 4 字节
 字符时必然失败（数据无法表示），会让 `docs/runbooks/deploy-rollback.md` 的
 `alembic downgrade` 这条真实运维路径半途而废。故先逐表探测是否存在 4 字节字符
-（`LENGTH(col) - 3 * CHAR_LENGTH(col) > 0` 在 utf8mb3/utf8mb4 表下都是精确探测：4 字节
-字符贡献 +1，3 字节中文贡献 0），有则**跳过该表并打 WARNING**——不假装成功、不吞数据、
+（`CONVERT(col USING utf8mb3) <> BINARY col`：utf8mb3 表示不了的字符转换后必然与原值不同），
+有则**跳过该表并打 WARNING**——不假装成功、不吞数据、
 也不阻断回滚；无则正常反向 CONVERT。CI 的 `alembic downgrade -1` 往返在空库上因此必然
 可逆（`SKIP_DOWNGRADE` 无需豁免）。
 """
@@ -55,22 +55,48 @@ depends_on = None
 
 logger = logging.getLogger("alembic.runtime.migration")
 
-# 4 字节 UTF-8 字符探测：utf8mb3/utf8mb4 表下均精确（4 字节字符 LENGTH-3*CHAR_LENGTH=+1，
-# 3 字节中文与 ASCII 均为 0）。不用 information_schema——那要求当前库名与权限，且 CHAR_LENGTH
-# 一类的歧义（NULL/空串）还要另作处理。
+# 4 字节 UTF-8 字符探测：把列值按 utf8mb3 重新解释，与原值做**二进制**比较——只要出现任何
+# utf8mb3 表示不了的字符（即 4 字节字符），转换结果就与原值不同。
+#
+# 为什么不用 `LENGTH(col) - 3 * CHAR_LENGTH(col) > 0`：那套写法依赖「CHAR_LENGTH 返回字符数」
+# 这一函数语义，一旦某个 MySQL 版本/配置让它按字节计数，差值恒为 0、探测静默失效（守卫形同
+# 虚设，且没有别的用例看得出来）。`CONVERT(... USING utf8mb3)` + BINARY 比较只依赖
+# 「转换保留可表示字符、其余变替代符」这一稳定行为，不依赖长度函数口径。
+#
+# BINARY 关键字是必须的：MySQL 字符串比较默认按 collation 做，替代符 `?` 在 *_ci 下仍可能
+# 被判等，加 BINARY 退化为逐字节比较。
 _FOUR_BYTE_PROBE = (
-    "SELECT COUNT(*) FROM {table} WHERE LENGTH({column}) - 3 * CHAR_LENGTH({column}) > 0"
+    "SELECT COUNT(*) FROM {table} WHERE CONVERT({column} USING utf8mb3) <> BINARY {column}"
 )
 
 
 def _four_byte_columns(bind, table_name: str):
-    """该表文本列中实际出现 4 字节字符的列名列表（无则空）。"""
+    """该表文本列中实际出现 4 字节字符的列名列表（无则空）。
+
+    `COUNT(*)` 返回 0 是合法结果（该列没有 4 字节字符），故判据写 `(count or 0) > 0`
+    而非真值判断——后者会把 0 与 NULL 都当假，语义上不表达「计数为正」。
+
+    探测语句（`CONVERT(... USING utf8mb3)`）**不保证**在被探测内容不可表示时返回替代符：
+    若服务端选择抛错（errno 1366），本函数按「无法证明可安全回退」处理——记一条 WARNING
+    并把该表交由调用方跳过，绝不假设它能无损转回 utf8mb3。
+    """
     inspector = sa.inspect(bind)
     hits = []
     for column in inspector.get_columns(table_name):
         if isinstance(column["type"], (sa.Text, sa.String)):
             probe = _FOUR_BYTE_PROBE.format(table=table_name, column=column["name"])
-            if bind.execute(sa.text(probe)).scalar():
+            try:
+                count = bind.execute(sa.text(probe)).scalar()
+            except sa.exc.SQLAlchemyError as exc:
+                logger.warning(
+                    "0014 探测 %s.%s 失败（%s），按「不可安全回退」处理",
+                    table_name,
+                    column["name"],
+                    exc.__class__.__name__,
+                )
+                hits.append(column["name"])
+                continue
+            if (count or 0) > 0:
                 hits.append(column["name"])
     return hits
 

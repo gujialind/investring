@@ -225,6 +225,56 @@ def _patch_downgrade(monkeypatch, four_byte_hits):
     return bind
 
 
+class _FakeProbeBind:
+    """`_four_byte_columns` 的假连接：`execute(...).scalar()` 固定返回给定计数。"""
+
+    def __init__(self, count):
+        self._count = count
+
+    class _Dialect:
+        name = "mysql"
+
+    dialect = _Dialect()
+
+    def execute(self, _statement, *_args, **_kwargs):
+        count = self._count
+
+        class _Result:
+            def scalar(self):
+                return count
+
+        return _Result()
+
+
+class _CountInspector:
+    """只有一列文本列的 inspector——把探测范围压到可断言的最小面。"""
+
+    def get_columns(self, _table_name):
+        return [{"name": "error_message", "type": sa.Text()}]
+
+
+class TestFourByteProbeCounting:
+    """探测函数的判据必须是 COUNT > 0，不能是真值判断。
+
+    CI MySQL job 实测：原写法 `if bind.execute(...).scalar():` 把 COUNT 的 0 当假，
+    **干净表一律探测不出东西**，downgrade 的跳过守卫形同虚设。真实探测在 MySQL 上由
+    TestMysqlFourByteWrites 覆盖；本类用假连接把「0 / 非 0」的边界固定下来，SQLite 也能跑。
+    """
+
+    def test_zero_count_is_not_a_hit(self, monkeypatch):
+        monkeypatch.setattr(migration.sa, "inspect", lambda _bind: _CountInspector())
+        assert migration._four_byte_columns(_FakeProbeBind(0), "t") == []
+
+    def test_positive_count_is_a_hit(self, monkeypatch):
+        monkeypatch.setattr(migration.sa, "inspect", lambda _bind: _CountInspector())
+        assert migration._four_byte_columns(_FakeProbeBind(1), "t") == ["error_message"]
+
+    def test_none_count_is_not_a_hit(self, monkeypatch):
+        """驱动返回 None（无行/类型差异）时按「无 4 字节字符」处理，不得抛异常。"""
+        monkeypatch.setattr(migration.sa, "inspect", lambda _bind: _CountInspector())
+        assert migration._four_byte_columns(_FakeProbeBind(None), "t") == []
+
+
 class TestDowngradeSkipGuard:
     """downgrade 因 4 字节数据跳过时必须打 WARNING 且不执行任何 ALTER（不假装成功）。"""
 
@@ -297,6 +347,101 @@ class TestMysqlColumnCharset:
                 assert not bad, f"{name} 仍有非 {LOG_TABLE_CHARSET} 列：{bad}"
 
 
+class TestMysqlProbeSemantics:
+    """探测表达式本身的行为：在真实 MySQL 上把 `_FOUR_BYTE_PROBE` 跑出来验。
+
+    **只在 MySQL 成立**：SQLite 既无 `CHAR_LENGTH`，也无 `CONVERT(... USING ...)` 语法
+    （本地实测 OperationalError），所以探测函数的真实行为只能由 CI 的 MySQL job 覆盖——
+    SQLite 侧只有方言 guard 与假 bind 的控制流用例。
+
+    这是整套 downgrade 守卫的地基：探测若失效（认不出 4 字节字符，或把 3 字节中文误判为
+    4 字节），守卫会分别退化成「静默丢弃数据」或「永不回退」，且没有别的用例看得出来。
+    故用一个临时表把 `_FOUR_BYTE_PROBE` 的 SQL 原样跑通，不依赖任何真实业务表。
+    """
+
+    TABLE = "_probe_semantics_tmp"
+
+    @pytest.fixture
+    def probe_table(self):
+        engine = _mysql_only()
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE IF EXISTS {self.TABLE}"))
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {self.TABLE} ("
+                    "v_ascii VARCHAR(50), v_cjk VARCHAR(50), v_emoji VARCHAR(50), n INT)"
+                )
+            )
+        yield engine
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE IF EXISTS {self.TABLE}"))
+
+    def _count(self, conn, column, expr):
+        sql = "SELECT COUNT(*) FROM {} WHERE {}".format(
+            self.TABLE, expr.format(column=column)
+        )
+        return conn.execute(sa.text(sql)).scalar()
+
+    def test_probe_discriminates_four_byte_from_three_byte(self, probe_table):
+        with probe_table.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"INSERT INTO {self.TABLE} (v_ascii, v_cjk, v_emoji) VALUES (:a, :c, :e)"
+                ),
+                {"a": "abc", "c": "净值尚未同步", "e": FOUR_BYTE_TEXT},
+            )
+
+        probe_expr = "CONVERT({column} USING utf8mb3) <> BINARY {column}"
+        with probe_table.connect() as conn:
+            assert self._count(conn, "v_emoji", probe_expr) == 1, (
+                "探测式未认出 4 字节字符——downgrade 守卫静默失效"
+            )
+            assert self._count(conn, "v_cjk", probe_expr) == 0, (
+                "3 字节中文被误判为 4 字节——downgrade 会无谓跳过"
+            )
+            assert self._count(conn, "v_ascii", probe_expr) == 0, (
+                "ASCII 被误判为 4 字节"
+            )
+
+    def test_four_byte_columns_skips_non_text_and_clean_columns(self, probe_table):
+        """`_four_byte_columns` 只报「文本列且含 4 字节字符」——整数列不得进结果。"""
+        with probe_table.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"INSERT INTO {self.TABLE} (v_ascii, v_cjk, v_emoji, n) "
+                    "VALUES (:a, :c, :e, :n)"
+                ),
+                {"a": "abc", "c": "净值", "e": FOUR_BYTE_TEXT, "n": 1},
+            )
+
+        with probe_table.connect() as conn:
+            hits = migration._four_byte_columns(conn, self.TABLE)
+
+        assert hits == ["v_emoji"], hits
+
+    def test_four_byte_column_survives_upgrade_conversion(self, probe_table):
+        """upgrade 的 `CONVERT TO CHARACTER SET utf8mb4` 不得改写既有 4 字节数据。
+
+        若服务端在该 ALTER 下把不可表示字符替换掉，本断言即红——那意味着「先转码再回退」
+        会丢数据，需要改成写入侧适配而非表级转码。
+        """
+        with probe_table.begin() as conn:
+            conn.execute(
+                sa.text(f"INSERT INTO {self.TABLE} (v_emoji) VALUES (:e)"),
+                {"e": FOUR_BYTE_TEXT},
+            )
+            conn.execute(
+                sa.text(
+                    f"ALTER TABLE {self.TABLE} CONVERT TO CHARACTER SET utf8mb4 "
+                    f"COLLATE {LOG_TABLE_COLLATE}"
+                )
+            )
+
+        with probe_table.connect() as conn:
+            value = conn.execute(sa.text(f"SELECT v_emoji FROM {self.TABLE}")).scalar()
+        assert value == FOUR_BYTE_TEXT, f"转码改写了数据：{value!r}"
+
+
 class TestMysqlFourByteWrites:
     """4 字节字符必须能写入并原样读回（#427 的验收断言）。"""
 
@@ -317,19 +462,34 @@ class TestMysqlFourByteWrites:
                 .one()
             )
             assert row.error_message == FOUR_BYTE_TEXT
-            assert "💥" in row.error_stack
+            # 断言文本原样落库，而不是断言某个特定 emoji 在其中——error_stack 里的 emoji
+            # 与 FOUR_BYTE_TEXT 里的不是同一个（CI MySQL job 实测踩过这个错）
+            assert row.error_stack == FOUR_BYTE_STACK
         finally:
             session.close()
 
     def test_probe_detects_four_byte_column(self, probes):
+        """同一用例内先断言「干净表探测为空」、再断言「有 emoji 行的表探测命中」。
+
+        两次对照必须同处一个用例：探测是**全表扫描**，任何残留的 emoji 行都会让「干净表」
+        的断言失真；同一函数体内先清后插，顺序与隔离都由本用例自己保证。
+        """
         _mysql_only()
-        probes("FourByteProbeDetect")
-        _probe_row("FourByteProbeDetect", error_message=FOUR_BYTE_TEXT)
+        error_type = "FourByteProbeDetect"
+        probes(error_type)
+        _cleanup_probe(error_type)  # 清掉可能的上轮残留，确保起点干净
 
         with app_engine.connect() as conn:
-            hits = migration._four_byte_columns(conn, "system_error_log")
+            clean_hits = migration._four_byte_columns(conn, "system_error_log")
+        assert "error_message" not in clean_hits, f"干净表不应命中：{clean_hits}"
 
-        assert "error_message" in hits, hits
+        _probe_row(error_type, error_message=FOUR_BYTE_TEXT)
+        with app_engine.connect() as conn:
+            dirty_hits = migration._four_byte_columns(conn, "system_error_log")
+        assert "error_message" in dirty_hits, (
+            f"含 emoji 行的表必须命中，实际 {dirty_hits}"
+            "（探测式失效即 downgrade 守卫静默失效）"
+        )
 
     def test_probe_ignores_three_byte_chinese(self, probes):
         """3 字节中文 utf8mb3 容得下，不得被误判（否则 downgrade 无谓跳过）。"""

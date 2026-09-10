@@ -604,7 +604,9 @@ class TestSystemErrorFourByteCharset:
                     .one()
                 )
                 assert row.error_message == self.FOUR_BYTE_MESSAGE
-                assert "💥" in row.error_stack
+                # 断言原样落库，不断言某个特定 emoji——error_stack 里的与 error_message
+                # 里的并非同一个（CI MySQL job 实测踩过这个错）
+                assert row.error_stack == self.FOUR_BYTE_STACK
                 assert row.request_path.endswith("/performance")
             finally:
                 session.close()
