@@ -64,7 +64,8 @@ class TestGetHint:
 
     def test_static_table_new_entries_present(self):
         for code in ("NOT_FOUND", "PRODUCT_NOT_FOUND", "MARKET_AMBIGUOUS",
-                     "CONFIRM_REQUIRED", "NO_SNAPSHOT_BASELINE", "CALENDAR_NOT_SYNCED"):
+                     "CONFIRM_REQUIRED", "NO_SNAPSHOT_BASELINE", "CALENDAR_NOT_SYNCED",
+                     "INVALID_STATUS"):
             assert ERROR_HINTS.get(code), f"静态表缺少 {code}"
 
     def test_static_entries_recommend_new_commands(self):
