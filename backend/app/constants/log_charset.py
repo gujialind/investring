@@ -1,17 +1,26 @@
-"""四张日志表的字符集常量（issue #427）。
+"""日志/同步明细的字符集常量（issue #427）。
 
 **为什么是 utf8mb4 而不是库级 utf8mb3**：生产 RDS 与 CI 建库都用 utf8mb3
 （`utf8mb3_general_ci`，刻意对齐生产 RDS 的库级约定），而**连接侧字符集是 utf8mb4**
 （`app/config.py` 连接串 charset=utf8mb4）。这个不对称是刻意的、不能靠改库级 charset
 解决；但 utf8mb3 列容不下 4 字节 UTF-8 字符（emoji、CJK 扩展 B 汉字等），MySQL 严格
-模式下 errno 1366 `Incorrect string value` 会让**整条**日志记录写不进去——错误记录
-被 best-effort except 吸收后静默消失，恰是日志基建最不该有的失效模式。典型来源是
-用户输入（路径参数、请求体、投资人 code、User-Agent）被异常文案回显。故四张日志表
-**在库级 utf8mb3 之内单独声明 utf8mb4**：库级约定不变，写入侧不再有字符集适配清单
-（「哪些列要转义」这种遗漏面不可见的做法被刻意排除）。
+模式下 errno 1366 `Incorrect string value` 会让**整条**记录写不进去。失效形态分两档：
 
-单一事实来源：四个模型（`app/models/{audit_log,system_error_log,login_log,
-task_execution_log}.py`）、迁移 `0014_log_tables_utf8mb4.py`、守门测试
+- `audit_log` / `system_error_log`：写入是 best-effort（`record_system_error` 的
+  except 吸收）→ **整条日志静默消失**，恰是日志基建最不该有的失效模式；
+- `login_log` / `task_execution_log` / `nav_sync_detail`：写入直接 `commit()` →
+  **外抛 500**，连带登录、任务执行、净值同步本身失败。
+
+典型触发来源是用户输入（路径参数、请求体、投资人 code、User-Agent）或外部数据源原文
+被回显进自由文本列。故这些表**在库级 utf8mb3 之内单独声明 utf8mb4**：库级约定不变，
+写入侧不再有字符集适配清单（「哪些列要转义」这种遗漏面不可见的做法被刻意排除）。
+
+**纳管范围是 `CHARSET_TABLES` 而非「四张日志表」**：`nav_sync_detail` 与四张日志表同库
+同型——`error_message` 接收外部接口原文、同样由 `create_all` 建出并继承库级 charset。
+它的外抛形态比静默更响，但没有任何理由让它与其余五张表分道扬镳（#427 讨论中一并纳入）。
+
+单一事实来源：五个模型（`app/models/{audit_log,system_error_log,login_log,
+task_execution_log,nav_sync_detail}.py`）、迁移 `0014_log_tables_utf8mb4.py`、守门测试
 （`tests/unit/test_migration_0014.py`）三方共用，禁止在任一处写字面量。
 
 **不改库级 charset**：`ci.yml` 三处 `CREATE DATABASE ... utf8mb3` 与
@@ -30,5 +39,11 @@ LOG_TABLE_CHARSET = "utf8mb4"
 # 保证建表 DDL 与迁移 0014 的 ALTER 落到同一排序规则。
 LOG_TABLE_COLLATE = "utf8mb4_general_ci"
 
-# 纳管范围：迁移 0014 与守门测试共用，漏一张即留一处静默丢失面
-LOG_TABLES = ("audit_log", "system_error_log", "login_log", "task_execution_log")
+# 纳管范围：迁移 0014 与守门测试共用，漏一张即留一处「静默丢失 / 外抛 500」的面
+CHARSET_TABLES = (
+    "audit_log",
+    "system_error_log",
+    "login_log",
+    "task_execution_log",
+    "nav_sync_detail",
+)

@@ -29,10 +29,11 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from app.constants.log_charset import LOG_TABLE_CHARSET, LOG_TABLE_COLLATE, LOG_TABLES
+from app.constants.log_charset import CHARSET_TABLES, LOG_TABLE_CHARSET, LOG_TABLE_COLLATE
 from app.database import Base, SessionLocal, engine as app_engine
 from app.models.audit_log import AuditLog
 from app.models.login_log import LoginLog
+from app.models.nav_sync_detail import NavSyncDetail
 from app.models.system_error_log import SystemErrorLog
 from app.models.task_execution_log import TaskExecutionLog
 
@@ -46,6 +47,8 @@ MODELS = {
     "system_error_log": SystemErrorLog,
     "login_log": LoginLog,
     "task_execution_log": TaskExecutionLog,
+    # 同步明细与四张日志表同库同型：error_message 接收外部数据源原文，同样继承库级 charset
+    "nav_sync_detail": NavSyncDetail,
 }
 
 # 库级 charset：CI 与生产 RDS 同形态（建表默认继承库级设置）
@@ -105,9 +108,13 @@ def _probe_row(error_type: str, **values) -> None:
 
 @pytest.fixture
 def engine(tmp_path):
-    """一次性 SQLite 库，按 create_all（含模型的 mysql_charset 声明）建四张日志表。"""
+    """一次性 SQLite 库，按 create_all（含模型的 mysql_charset 声明）建表。
+
+    刻意建**全量** metadata：`nav_sync_detail` 的 `job_id` 指向 `sync_job`，按表清单建会因
+    外键依赖缺表而失败；生产路径同样是 create_all 全量建。
+    """
     eng = sa.create_engine(f"sqlite:///{tmp_path / 'migration_0014.db'}")
-    Base.metadata.create_all(bind=eng, tables=[m.__table__ for m in MODELS.values()])
+    Base.metadata.create_all(bind=eng)
     yield eng
     eng.dispose()
 
@@ -126,10 +133,10 @@ class TestRevisionChain:
         assert migration.revision == "0014"
         assert migration.down_revision == "0013"
 
-    def test_covers_exactly_the_four_log_tables(self):
-        """纳管范围是声明式清单：漏一张即留一处静默丢失面。"""
-        assert tuple(migration.LOG_TABLES) == LOG_TABLES
-        assert sorted(LOG_TABLES) == sorted(MODELS)
+    def test_covers_exactly_the_declared_tables(self):
+        """纳管范围是声明式清单：漏一张即留一处「静默丢失 / 外抛 500」面。"""
+        assert tuple(migration.CHARSET_TABLES) == CHARSET_TABLES
+        assert sorted(CHARSET_TABLES) == sorted(MODELS)
 
 
 class TestSingleSourceOfTruth:
@@ -183,57 +190,90 @@ class TestSqliteNoOp:
                 assert inspector.has_table(name), f"{name} 被误删"
 
 
-class TestDowngradeSkipGuard:
-    """downgrade 因 4 字节数据跳过时必须打 WARNING 且不执行任何 ALTER（不假装成功）。
+class _FakeInspector:
+    """所有纳管表都「存在」——本类只验跳过/转换的控制流，表存在性由真实 DB 用例覆盖。"""
 
-    真实探测已由 TestMysqlFourByteWrites 在 MySQL 上覆盖；本类只验控制流，故把方言判定
-    与探测函数替换掉，使 SQLite 也能执行到跳过分支。
+    def has_table(self, _name):
+        return True
+
+
+class _FakeBind:
+    class _Dialect:
+        name = "mysql"
+
+    dialect = _Dialect()
+
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, statement, *args, **kwargs):
+        self.executed.append(str(statement))
+        return self
+
+
+def _patch_downgrade(monkeypatch, four_byte_hits):
+    """把方言判定与 4 字节探测替换掉，使 SQLite 也能执行到 downgrade 的跳过/转换分支。
+
+    真实探测已由 TestMysqlFourByteWrites 在 MySQL 上覆盖。
     """
+    bind = _FakeBind()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
+    monkeypatch.setattr(migration.sa, "inspect", lambda _bind: _FakeInspector())
+    monkeypatch.setattr(
+        migration, "_four_byte_columns", lambda _bind, _name: list(four_byte_hits)
+    )
+    return bind
+
+
+class TestDowngradeSkipGuard:
+    """downgrade 因 4 字节数据跳过时必须打 WARNING 且不执行任何 ALTER（不假装成功）。"""
 
     def test_skips_all_tables_when_four_byte_data_present(self, monkeypatch, caplog):
-        executed = []
-
-        class _FakeDialect:
-            name = "mysql"
-
-        class _FakeBind:
-            dialect = _FakeDialect()
-
-            def execute(self, statement, *args, **kwargs):
-                executed.append(str(statement))
-
-        monkeypatch.setattr(migration.op, "get_bind", lambda: _FakeBind())
-        monkeypatch.setattr(
-            migration, "_four_byte_columns", lambda bind, name: ["error_message"]
-        )
+        bind = _patch_downgrade(monkeypatch, ["error_message"])
 
         with caplog.at_level(logging.WARNING, logger="alembic.runtime.migration"):
             migration.downgrade()
 
         skipped = [r.getMessage() for r in caplog.records if "跳过" in r.getMessage()]
-        assert len(skipped) == len(LOG_TABLES), skipped
-        assert not executed, "跳过时必须不执行任何 ALTER"
+        assert len(skipped) == len(CHARSET_TABLES), skipped
+        assert not bind.executed, "跳过时必须不执行任何 ALTER"
 
     def test_converts_when_no_four_byte_data(self, monkeypatch, caplog):
-        executed = []
-
-        class _FakeDialect:
-            name = "mysql"
-
-        class _FakeBind:
-            dialect = _FakeDialect()
-
-            def execute(self, statement, *args, **kwargs):
-                executed.append(str(statement))
-
-        monkeypatch.setattr(migration.op, "get_bind", lambda: _FakeBind())
-        monkeypatch.setattr(migration, "_four_byte_columns", lambda bind, name: [])
+        bind = _patch_downgrade(monkeypatch, [])
 
         with caplog.at_level(logging.INFO, logger="alembic.runtime.migration"):
             migration.downgrade()
 
-        assert len(executed) == len(LOG_TABLES), executed
-        assert all(LEGACY_CHARSET in sql for sql in executed), executed
+        assert len(bind.executed) == len(CHARSET_TABLES), bind.executed
+        assert all(LEGACY_CHARSET in sql for sql in bind.executed), bind.executed
+
+
+def _patch_upgrade(monkeypatch, existing_tables):
+    """upgrade 的控制流：只对存在的表执行 ALTER。"""
+    bind = _FakeBind()
+
+    class _Inspector:
+        def has_table(self, name):
+            return name in existing_tables
+
+    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
+    monkeypatch.setattr(migration.sa, "inspect", lambda _bind: _Inspector())
+    return bind
+
+
+class TestUpgradeTablePresenceGuard:
+    """缺表时响亮告警并跳过，不让整条迁移链失败，也不静默漏转。"""
+
+    def test_converts_only_existing_tables(self, monkeypatch, caplog):
+        existing = set(CHARSET_TABLES) - {"nav_sync_detail"}
+        bind = _patch_upgrade(monkeypatch, existing)
+
+        with caplog.at_level(logging.WARNING, logger="alembic.runtime.migration"):
+            migration.upgrade()
+
+        assert len(bind.executed) == len(existing), bind.executed
+        warned = [r.getMessage() for r in caplog.records if "nav_sync_detail" in r.getMessage()]
+        assert warned, "缺表必须响亮告警"
 
 
 class TestMysqlColumnCharset:
@@ -242,7 +282,7 @@ class TestMysqlColumnCharset:
     def test_all_text_columns_are_utf8mb4(self):
         engine = _mysql_only()
         with engine.connect() as conn:
-            for name in LOG_TABLES:
+            for name in CHARSET_TABLES:
                 rows = conn.execute(
                     sa.text(
                         "SELECT column_name, character_set_name FROM information_schema.columns "
@@ -301,3 +341,71 @@ class TestMysqlFourByteWrites:
             hits = migration._four_byte_columns(conn, "system_error_log")
 
         assert "error_message" not in hits, hits
+
+    def test_nav_sync_detail_error_message_roundtrips(self):
+        """nav_sync_detail 与四张日志表同型（#427 一并纳入）：外部数据源原文含 4 字节字符
+        也必须能落库读回——本表写入直接 commit，撞 1366 的形态是外抛、中断净值同步。
+        """
+        _mysql_only()
+        job = _make_sync_job()
+        try:
+            session = SessionLocal()
+            try:
+                session.add(
+                    NavSyncDetail(
+                        job_id=job.id,
+                        product_code="FUND_4B",
+                        market="CN_OTC",
+                        nav_date="2025-01-07",
+                        status="failed",
+                        error_message=FOUR_BYTE_TEXT,
+                    )
+                )
+                session.commit()
+            finally:
+                session.close()
+
+            session = SessionLocal()
+            try:
+                row = (
+                    session.query(NavSyncDetail)
+                    .filter(NavSyncDetail.job_id == job.id)
+                    .one()
+                )
+                assert row.error_message == FOUR_BYTE_TEXT
+            finally:
+                session.close()
+
+            with app_engine.connect() as conn:
+                hits = migration._four_byte_columns(conn, "nav_sync_detail")
+            assert "error_message" in hits, hits
+        finally:
+            _drop_sync_job(job.id)
+
+
+def _make_sync_job():
+    """造一条 sync_job 供 nav_sync_detail.job_id 外键挂靠（本文件唯一需要的父行）。"""
+    from app.models.sync_job import SyncJob
+
+    session = SessionLocal()
+    try:
+        job = SyncJob(job_type="nav_sync", status="running")
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+        return job
+    finally:
+        session.close()
+
+
+def _drop_sync_job(job_id: int) -> None:
+    """先删子行再删父行——nav_sync_detail.job_id 外键无 ondelete，顺序反了会撞约束。"""
+    from app.models.sync_job import SyncJob
+
+    session = SessionLocal()
+    try:
+        session.query(NavSyncDetail).filter(NavSyncDetail.job_id == job_id).delete()
+        session.query(SyncJob).filter(SyncJob.id == job_id).delete()
+        session.commit()
+    finally:
+        session.close()

@@ -548,7 +548,7 @@ class TestSystemErrorPathTruncation:
 class TestSystemErrorFourByteCharset:
     """#427：自由文本含 4 字节 UTF-8 字符（emoji、CJK 扩展 B）时仍须落一行。
 
-    库级 charset 是 utf8mb3（对齐生产 RDS）而连接侧是 utf8mb4，四张日志表若继承库级
+    库级 charset 是 utf8mb3（对齐生产 RDS）而连接侧是 utf8mb4，日志/同步明细表若继承库级
     设置，4 字节字符即撞 errno 1366 `Incorrect string value`——被 record_system_error
     的 best-effort except 吸收后**整条**记录静默消失（不是被截断，是整行没落库）。
     典型触发：用户输入的路径参数/请求体被异常文案回显（`str(exc)`、
