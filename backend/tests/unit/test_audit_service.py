@@ -543,3 +543,73 @@ class TestSystemErrorPathTruncation:
             ).delete()
             session.commit()
             session.close()
+
+
+class TestSystemErrorFourByteCharset:
+    """#427：自由文本含 4 字节 UTF-8 字符（emoji、CJK 扩展 B）时仍须落一行。
+
+    库级 charset 是 utf8mb3（对齐生产 RDS）而连接侧是 utf8mb4，日志/同步明细表若继承库级
+    设置，4 字节字符即撞 errno 1366 `Incorrect string value`——被 record_system_error
+    的 best-effort except 吸收后**整条**记录静默消失（不是被截断，是整行没落库）。
+    典型触发：用户输入的路径参数/请求体被异常文案回显（`str(exc)`、
+    `traceback.format_exception` 会带上源码行原文）。
+
+    **只在 MySQL 成立**：SQLite 无字符集概念、本地 dev MySQL 的 server 字符集已是
+    utf8mb4，故本类在 CI backend-test-mysql 才真正生效。
+    """
+
+    ERROR_TYPE = "FourByteCharsetProbe"
+    FOUR_BYTE_MESSAGE = "净值缺失 💥 扩展 𠀋"
+    FOUR_BYTE_STACK = 'File "/app/x.py", line 1, in f\n    raise RuntimeError("😀")'
+
+    def _skip_unless_mysql(self):
+        from app.database import engine
+
+        if engine.dialect.name != "mysql":
+            pytest.skip("字符集只在 MySQL 成立（SQLite 无字符集概念）")
+
+    def _cleanup(self):
+        from app.database import SessionLocal
+
+        session = SessionLocal()
+        try:
+            session.query(SystemErrorLog).filter(
+                SystemErrorLog.error_type == self.ERROR_TYPE
+            ).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    def test_four_byte_text_still_lands_one_row(self):
+        """验收断言：errno 1366 不得让整条错误记录消失，文本且须原样落库。"""
+        self._skip_unless_mysql()
+        from app.database import SessionLocal
+
+        try:
+            record_system_error(
+                error_type=self.ERROR_TYPE,
+                error_message=self.FOUR_BYTE_MESSAGE,
+                error_stack=self.FOUR_BYTE_STACK,
+                request_path="/api/portfolios/💥/performance",
+                request_method="GET",
+                investor_code="ADMIN",
+                ip_address="10.0.0.1",
+            )
+
+            session = SessionLocal()
+            try:
+                row = (
+                    session.query(SystemErrorLog)
+                    .filter(SystemErrorLog.error_type == self.ERROR_TYPE)
+                    .one()
+                )
+                assert row.error_message == self.FOUR_BYTE_MESSAGE
+                # 断言原样落库，不断言某个特定 emoji——error_stack 里的与 error_message
+                # 里的并非同一个（CI MySQL job 实测踩过这个错）
+                assert row.error_stack == self.FOUR_BYTE_STACK
+                assert row.request_path.endswith("/performance")
+            finally:
+                session.close()
+        finally:
+            self._cleanup()
+

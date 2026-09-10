@@ -112,7 +112,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 库级排序规则对齐生产 RDS（utf8mb3_general_ci，建表默认继承库级设置）
+      # 库级排序规则对齐生产 RDS（utf8mb3_general_ci，建表默认继承库级设置）。
+      # 例外：日志/同步明细表（audit_log / system_error_log / login_log /
+      # task_execution_log / nav_sync_detail）在库级 utf8mb3 之内单独声明 utf8mb4
+      # （模型 __table_args__ + 迁移 0014）——4 字节字符撞 utf8mb3 列会致 errno 1366、
+      # 记录写不进去（#427）。库级设置本身不动。
       - name: Create databases
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "
@@ -282,7 +286,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 库级排序规则对齐 backend-test-mysql（utf8mb3_general_ci）
+      # 库级排序规则对齐 backend-test-mysql（utf8mb3_general_ci）；日志/同步明细表为例外，
+      # 表级 utf8mb4（模型 __table_args__ + 迁移 0014，见 #427）
       - name: Create database
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "

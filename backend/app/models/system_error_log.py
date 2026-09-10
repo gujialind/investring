@@ -1,9 +1,15 @@
 from sqlalchemy import Column, String, Text, DateTime, Integer, func
+from app.constants.log_charset import LOG_TABLE_CHARSET, LOG_TABLE_COLLATE
 from app.database import Base
 
 
 class SystemErrorLog(Base):
     __tablename__ = "system_error_log"
+
+    # #427：显式 utf8mb4。错误文案常回显用户输入（路径参数、请求体），含 4 字节字符时
+    # utf8mb3 列撞 errno 1366，被 record_system_error 的 best-effort except 吸收后
+    # **整条**记录静默丢失。理由与常量来源见 app/constants/log_charset.py。
+    __table_args__ = {"mysql_charset": LOG_TABLE_CHARSET, "mysql_collate": LOG_TABLE_COLLATE}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     error_type = Column(String(50), nullable=False)

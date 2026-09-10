@@ -1010,3 +1010,33 @@ class TestSystemErrorLogOnUnhandledException:
         assert error.error_stack
         assert error.request_method == "GET"
         assert error.investor_code == "ADMIN"
+
+    # #427：异常文案里的 4 字节字符（emoji / CJK 扩展 B）在 utf8mb3 库上撞 errno 1366，
+    # 被 record_system_error 的 best-effort except 吸收后整条记录静默消失。
+    # 本用例走**真实**落库链路（不 mock record_system_error），端到端锁死该缺口；
+    # 字符集只在 MySQL 成立，故 SQLite job 跳过、CI backend-test-mysql 才真验收。
+    FOUR_BYTE_MESSAGE = "绩效算炸了 💥 扩展 𠀋"
+
+    def test_four_byte_message_still_lands_one_row(
+        self, client, admin_headers, monkeypatch, error_log_db
+    ):
+        from app.database import engine
+
+        if engine.dialect.name != "mysql":
+            pytest.skip("字符集只在 MySQL 成立（SQLite 无字符集概念）")
+
+        monkeypatch.setattr(
+            "app.services.performance_service.get_performance",
+            MagicMock(side_effect=RuntimeError(self.FOUR_BYTE_MESSAGE)),
+        )
+        path = f"/api/portfolios/{self.LONG_CODE[:8]}/performance"
+        with pytest.raises(RuntimeError):
+            client.get(path, headers=admin_headers)
+
+        with error_log_db() as session:
+            error = session.query(SystemErrorLog).one()
+        assert error.error_type == "RuntimeError"
+        assert error.error_message == self.FOUR_BYTE_MESSAGE
+        assert "💥" in error.error_stack
+        assert error.request_path == path
+        assert error.investor_code == "ADMIN"
