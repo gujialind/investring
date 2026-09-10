@@ -125,6 +125,7 @@ commit）。
 | 0011 | portfolio.auto_snapshot_enabled（#156 自动快照开关） | 已实现 | 删列；opt-in 开关丢失，回退后所有组合恢复默认 False（自动快照停摆），低风险 |
 | 0012 | product.nav_lag_days（逐产品估值滞后天数） | 已实现 | **有损**：删列后逐产品自设值（QDII/港互认惯例 1）丢失且无法从其他字段推导，回退再升级后需人工重设，否则快照取价口径变化 |
 | 0013 | 四张日志表纳入 alembic 管理（audit_log / system_error_log / login_log / task_execution_log） | **刻意 no-op**（不删表） | 无损：采纳型迁移——生产库这四张表与其数据均早于本迁移存在（由 `create_all` 建出），`upgrade()` 实为 no-op，故逆操作也不删表（删表 = 销毁审计/登录/任务历史）。另 `task_execution_log` 被 `nav_sync_detail.task_log_id` 外键引用，MySQL 下 DROP 必失败（errno 3730） |
+| 0014 | 四张日志表字符集 utf8mb3 → utf8mb4（#427，4 字节字符致 errno 1366 静默丢失） | 已实现，**有条件跳过** | 无损：回退到 0014 之前不构成迁移缺口风险（旧镜像对 utf8mb4 表照常读写，连接侧本就是 utf8mb4）。downgrade 逐表探测 4 字节字符，**表内已存在则跳过该表并打 WARNING**（反向转 utf8mb3 必然失败），此时这四张表停留在 utf8mb4——功能上无害，只是字符集与库级不一致 |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 
