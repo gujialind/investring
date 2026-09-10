@@ -363,13 +363,18 @@ class TestMysqlProbeSemantics:
 
     @pytest.fixture
     def probe_table(self):
+        """临时表**必须显式 utf8mb4**：本库库级 charset 是 utf8mb3，不声明则连 setup 的
+        emoji 都插不进去（也正是 #427 本身的现象，CI 实测踩过）。探测函数要防的正是
+        「库级 utf8mb3 之内的表能否安全回退」，故测试表本身要落在转码后的终态。
+        """
         engine = _mysql_only()
         with engine.begin() as conn:
             conn.execute(sa.text(f"DROP TABLE IF EXISTS {self.TABLE}"))
             conn.execute(
                 sa.text(
                     f"CREATE TABLE {self.TABLE} ("
-                    "v_ascii VARCHAR(50), v_cjk VARCHAR(50), v_emoji VARCHAR(50), n INT)"
+                    "v_ascii VARCHAR(50), v_cjk VARCHAR(50), v_emoji VARCHAR(50), n INT"
+                    f") CHARSET={LOG_TABLE_CHARSET} COLLATE {LOG_TABLE_COLLATE}"
                 )
             )
         yield engine
