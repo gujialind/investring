@@ -127,6 +127,7 @@ commit）。
 | 0013 | 四张日志表纳入 alembic 管理（audit_log / system_error_log / login_log / task_execution_log） | **刻意 no-op**（不删表） | 无损：采纳型迁移——生产库这四张表与其数据均早于本迁移存在（由 `create_all` 建出），`upgrade()` 实为 no-op，故逆操作也不删表（删表 = 销毁审计/登录/任务历史）。另 `task_execution_log` 被 `nav_sync_detail.task_log_id` 外键引用，MySQL 下 DROP 必失败（errno 3730） |
 | 0014 | 日志/同步明细表字符集 utf8mb3 → utf8mb4（#427，4 字节字符致 errno 1366 记录写不进去：日志侧静默丢失、`nav_sync_detail` 侧外抛） | 已实现，**有条件跳过** | 无损：回退到 0014 之前不构成迁移缺口风险（旧镜像对 utf8mb4 表照常读写，连接侧本就是 utf8mb4）。downgrade 逐表探测 4 字节字符，**表内已存在则跳过该表并打 WARNING**（反向转 utf8mb3 必然失败），此时该表停留在 utf8mb4——功能上无害，只是字符集与库级不一致 |
 | 0015 | 全库字符集统一 utf8mb4（#433）：库级 `ALTER DATABASE` + 其余全部存量表 `CONVERT`，含「先拆外键 → 转码 → 再建外键」 | 已实现，**有条件跳过** | 无损：连接侧本就是 utf8mb4，回退不构成迁移缺口（旧镜像读写 utf8mb4 表照常）。downgrade 与 0014 同判据逐列探测 4 字节字符，**表内已存在则跳过该表并打 WARNING**。⚠️ 执行期会在「拆外键 → 重建」之间短暂失去 FK 保护（DDL 各自隐式提交，包不进一个事务），故择低峰执行；中途失败不会留半成品——重跑即补齐（非空转时总是重放拆→转→建） |
+| 0016 | `nav_sync_detail.job_id` 外键去重收敛（#434）：把同列对上的重复外键（生产库 `fk_nav_sync_detail_job_id` + `nav_sync_detail_ibfk_2` 并存）收敛到「恰好一条、名为 `fk_nav_sync_detail_job_id`」 | **刻意 no-op**（不把冗余外键加回来） | 无损：采纳型迁移，`upgrade()` 对全新库（`create_all` 已按模型显式名建出唯一一条）本就是 no-op。逆操作是把语义完全相同的冗余约束加回来，不恢复任何功能、只会把「按名 drop 只删掉一条、另一条继续强制外键语义」的陷阱重新埋回库里。⚠️ 生产库走「只多删冗余那条」分支（好的那条全程不碰），不产生 FK 空窗；只有「仅剩自动名 `*_ibfk_N`」的旧库才拆掉重建。两条外键规则不一致时 `upgrade()` 直接 `RuntimeError`（不静默挑一条），此时部署失败、DB 无变化 |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 
