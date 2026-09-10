@@ -88,6 +88,9 @@
 
 * 外键删除行为均为 **RESTRICT**，通过业务流程（关闭/停用）管理生命周期，保留历史数据。
 
+* **外键的约束名以模型 `ForeignKey(name=...)` 为规范名**（#434）：MySQL **不做**「同表同列对指向同一目标」的重复外键去重，两条语义相同的约束会同时生效。历史事故正是两条路径各建一条并存在生产库 `nav_sync_detail.job_id` 上——`create_all` 建未命名 FK、MySQL 自动命名成 `nav_sync_detail_ibfk_2`，迁移 0001 又用 `op.create_foreign_key('fk_nav_sync_detail_job_id', …)` 显式建了一条；0001 里那句包着 `try/except: pass`（为兼容 `create_all` 已建表的新库），把「同语义约束已存在」吞掉、没暴露成错误，于是生产（先建表、后跑迁移的历史顺序）两条都留下了。**危害不在冗余本身，而在后续迁移的静默前提失真**：按显式名 `DROP FOREIGN KEY` 只删掉一条，另一条继续强制外键语义，迁移作者会在「外键已解除」的错误前提下改列。故**新加外键一律显式 `name=`**，且与任何迁移里 `create_foreign_key` 用的名字一致；迁移 0001 已在所有环境执行过、**刻意不改**（改它会让「跑过旧 0001 的库」与「跑过新 0001 的库」落到不同状态），存量收敛交给迁移 0016。
+  - **迁移 0016**（`down_revision = '0015'`）把 `nav_sync_detail.job_id` 收敛到「恰好一条、名为 `fk_nav_sync_detail_job_id`」，三条分支：已是目标态 → 空转（全新库路径 `create_all` 已按模型显式名建出唯一一条）；两条并存（生产现状）→ **只多删**冗余那条、好的那条全程不碰；只有自动名 `*_ibfk_N`（#433 之前建的旧库）→ 拆掉重建为显式名（避免各环境外键名长期分叉，也让 `0001.downgrade()` 在这些库上可用）。**downgrade 刻意 no-op**（与 0013 同型）：逆操作是把语义完全相同的冗余约束加回来，不恢复任何功能、只会把同一个陷阱重新埋进库，且 `ci.yml` 的 `alembic downgrade -1` 是真实路径、不能 raise。两条外键的 `ON DELETE`/`ON UPDATE` 规则不一致时**响亮失败**（`RuntimeError`）、绝不静默挑一条——误删一条外键 = 静默丢掉一层约束语义。全库另有只读哨兵：发现**别的**列对也重复时只打 WARNING、不自动处置（同列对重复本身不足以判定该保留哪条）。守门：`tests/unit/test_migration_0016.py`（`TARGET_FK` 与模型 `name=` 绑死、迁移冻结不 import 模型、纯字符串 DDL、SQLite no-op、MySQL 上三种起始态各自收敛且越界插入仍被拒）。
+
 * **虚拟产品**（#93）：除 `CASH`（生产为部署期种子落库）外，迁移 0006 另种子 `IN_TRANSIT_BUY` / `IN_TRANSIT_SELL`，与 CASH 同构（`market=""`、`product_type="IN_TRANSIT"`、`confirm_days=0`）；以 `product_code` 区分方向。维度标签（#128）：CASH 产品 `asset_class_code=ASSET_CASH`、其余四维 NULL；IN\_TRANSIT 五维全 NULL。
 
 * `is_qdii` 已降级为**纯展示标签**、`nav_lag_days` 逐产品自设（业务语义见根 §2.4）。**回填口径**：迁移 `0012` 仅把场外 QDII 的 `nav_lag_days` 置 1，**港互认基金需由界面/CLI 手工设为 1**——运行期不按产品类型自动映射。
@@ -149,6 +152,7 @@ cd backend && pytest tests -q
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
   | 审计/系统错误日志（`audit_service.py`、任一埋点、日志表迁移） | `pytest tests/unit/test_audit_service.py tests/integration/test_audit_log.py tests/unit/test_migration_0013.py tests/unit/test_migration_0014.py -q` |
   | 字符集 / 建表（`db_charset.py`、`models/base.py`、迁移 0015、`ci.yml` 建库语句） | `pytest tests/unit/test_db_charset.py tests/unit/test_migration_0015.py tests/unit/test_migration_0014.py -q` |
+  | 外键约束 / 外键名（`models/nav_sync_detail.py` 的 `name=`、迁移 0016） | `pytest tests/unit/test_migration_0016.py tests/unit/test_migration_0015.py -q` |
 
   跨核心服务的改动（snapshot/position/trade/subscription 任一）额外连带 `-k snapshot` 兜底——快照链是所有写路径的下游。
 - **测试库优先级**（`tests/conftest.py::_load_test_db_url`）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> 降级 `sqlite:///./test_investring.db`。CI 的 SQLite job 不设 `TEST_DB_URL`（也不存在 .env.test），MySQL job 显式设置。
@@ -186,6 +190,7 @@ cd backend && uvicorn app.main:app --reload   # 配置见 .env.example
 ## 5. 迁移（alembic）
 
 - 新迁移必须提供可逆 downgrade；CI（backend-test-mysql）对最新一条迁移做 downgrade/upgrade 往返验证；确不可逆时 PR 设 `SKIP_DOWNGRADE` 豁免、合入后移除。
+- **采纳型迁移**（把早已存在的事实纳入管理，`upgrade()` 对已存在的库近乎 no-op）的 **downgrade 刻意 no-op、且不得 `raise`**：**0013**（四张日志表纳入 alembic）与 **0016**（`nav_sync_detail.job_id` 外键去重收敛）。no-op 的逆操作本身无物可还原，`raise NotImplementedError` 还会把 `ci.yml` 的 `alembic downgrade -1` 弄红。理由逐条写在各自 `downgrade()` 的注释里。
 - 现有不可逆迁移：**0006、0008**（含 DROP 列），回滚只能靠备份。
 - **部分条件下不可逆**：**0014**（日志/同步明细表 utf8mb3→utf8mb4）与 **0015**（全库 utf8mb4）的 downgrade 在目标表已含 4 字节字符时跳过该表并打 WARNING（反向转码必然失败，跳过优于半途而废），故对空库/无 4 字节数据的库仍是完整可逆迁移——CI 往返可过、不需要豁免。0015 的关系是 0014 → 0015（`down_revision = '0014'`）：0014 只转五张日志/同步明细表，0015 把库级默认与其余表一次转净，**0014 已在生产执行过、刻意不改**。
 - 种子类 DML 写迁移时双方言（SQLite/MySQL）都要过——迁移文件头注释写清幂等设计。
