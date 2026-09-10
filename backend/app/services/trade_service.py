@@ -28,7 +28,7 @@ from app.constants.audit_actions import (
     ACTION_CANCEL, ACTION_DELETE,
     RESOURCE_TRADE,
 )
-from app.utils.quantize import quantize_amount, quantize_shares
+from app.utils.quantize import quantize_amount, quantize_nav, quantize_shares
 
 logger = logging.getLogger(__name__)
 
@@ -394,9 +394,11 @@ def calculate_confirm_preview(
 
         # 手动价格为可选校验项：传入时必须与 T 日净值一致，否则拒绝确认由用户修正；
         # 场外基金一律以 T 日净值计算，手动价不参与计算、也不覆盖净值
+        # #428：两侧都经 quantize_nav 归一到 4 位 HALF_UP 再精确比较（无容差）——
+        # nav_price 来自 Numeric(10,4) 列、本来恰是 4 位，一侧归一即保证标度无关
         if price is not None:
-            input_price = Decimal(str(price)).quantize(Decimal("0.0001"))
-            if input_price != nav_price.quantize(Decimal("0.0001")):
+            input_price = quantize_nav(price)
+            if input_price != quantize_nav(nav_price):
                 raise BusinessError(
                     "PRICE_NAV_MISMATCH",
                     f"传入价格({input_price})与T={trade.trade_date}净值({nav_price})不一致，请核对后修改，或不传价格直接取净值",

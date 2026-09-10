@@ -153,7 +153,7 @@
 | `PORTFOLIO_NOT_FOUND` | 404 | 按 code 查不到 portfolio 行：快照 status / list / bulk-delete 端点与 recalculate-async 的组合前置校验（router 侧 `HTTPException` 404）；catch-up、generate-next、现金转移创建、现金手动重估的写入/列表/删除（service 侧 `NotFoundError`）。注意单日 generate 的组合不存在不落本码，走 ValueError → `VALIDATION_FAILED` | routers/snapshots.py:150; services/snapshot_service.py:584 |
 | `POSITION_NOT_FOUND` | 422 | 份额变动事件指向不存在的持仓行：① 确认平台级 `forced_adjustment` 时，`entitlement_date` 当日快照无 (product_code, market, platform_code) 持仓行（提前快失败，否则要到快照生成才炸）；② 快照生成应用窗口内 confirmed 事件时，该三元组键在持仓字典中不存在（LOF market 误填为典型），或键存在但命中的是现金行（`cash_amount IS NOT NULL`） | services/snapshot_service.py:1225; services/share_change_event_service.py:482 |
 | `POSITION_TABLE_PROTECTED` | 422 | POST / PUT / DELETE `/api/positions` 三端点无条件拒绝（handler 首行即抛，不读请求体、不查记录）：`portfolio_position` 是系统生成的快照表，现金修正须走 cash-position（`manual_market_value` 覆盖层），删快照走 `DELETE /snapshots/{portfolio_code}/{snapshot_date}` | routers/positions.py:149; :178 |
-| `PRICE_NAV_MISMATCH` | 422 | 确认或预览确认场外净值型基金（product_type ∈ OEF/LOF 且 market ∈ CN_OTC/HK_MUTUAL）时显式传入 price，quantize 到 4 位后与 T 日（`trade_date`）净值不等——手动价只作一致性校验，不参与计算也不覆盖净值，不传价则直接取净值 | services/trade_service.py:401 |
+| `PRICE_NAV_MISMATCH` | 422 | 确认或预览确认场外净值型基金（product_type ∈ OEF/LOF 且 market ∈ CN_OTC/HK_MUTUAL）时显式传入 price，经 `quantize_nav` 归一到 4 位（ROUND\_HALF\_UP，#428）后与 T 日（`trade_date`）净值不等——手动价只作一致性校验，不参与计算也不覆盖净值，不传价则直接取净值 | services/trade_service.py:405 |
 | `PRODUCTS_PARAM_CONFLICT` | 422 | 列表过滤参数互斥（两处均显式 `http_status=422`）：调仓列表 `products`（逗号分隔 `code\|market` 多选）解析出非空项时又传了 product_code 或 market（判据为 `market is not None`）；份额变动事件列表 products 非空时又传了 product_code | services/trade_service.py:1281; routers/share_change_events.py:63 |
 | `PRODUCT_NOT_FOUND` | 404 | `resolve_product_market`：调用方省略 market，而按 product_code 查不到任何 Product 行（markets 集合为空）。省略 market 但命中多个市场走 `MARKET_AMBIGUOUS`；显式给了 `(code, market)` 却不存在时各入口抛 `NOT_FOUND`，不落本码 | services/product_service.py:189 |
 | `PRODUCT_REQUIRED` | 422 | 创建份额变动事件时 `product_code` 为空（falsy）——事件必须挂具体产品；基金级事件靠 `platform_code` 为空区分，不能省略产品 | services/share_change_event_service.py:276 |
@@ -174,11 +174,13 @@
 
 ## 量化产生点清单
 
-份额与金额统一 2 位小数、ROUND\_HALF\_UP、负数按绝对值对称；**量化只发生在下列产生点**，读取/累加路径不量化（规则本体见根 `AGENTS.md` §2.11）。
+份额与金额统一 2 位小数、净值/市值/成本价 4 位小数、**三者均 ROUND\_HALF\_UP**、负数按绝对值对称；**量化只发生在下列产生点**，读取/累加路径不量化（规则本体见根 `AGENTS.md` §2.11）。每个精度各有唯一 helper，调用点不得写 `Decimal("0.01"/"0.0001")` 字面量——`quantize` 不传 `rounding=` 会走 Decimal 缺省的 HALF\_EVEN（#428 的教训：4 位口径曾静默漂移 7 处）。
 
 * **份额产生点**（`quantize_shares`）：申购确认 `amount/nav`、调仓买入 `amount/price`、卖出与赎回的用户输入、份额事件的变动计算。
 
 * **金额产生点**（`quantize_amount`）：卖出与赎回确认 `shares×nav`、买入金额与手续费的用户输入、申赎金额、现金分红 `cash_change`、`forced_adjustment` 用户填写、`manual_market_value` 写入、现金转移金额、trade PUT 直改。
+
+* **净值/估值产生点**（`quantize_nav`，#428）：`_generate_portfolio_value_snapshot` 构造快照行的 `total_value` / `unit_price` / `unit_price_change_pct` / `in_transit_total`；`_generate_investor_holding` 的 `cost_per_share`；以及**确认对账比较**——场外传入价与 T 日净值两侧归一到 4 位后精确比较（`PRICE_NAV_MISMATCH`，无容差）。
 
 * 估值口径（`market_value` / `total_value` / `unit_price`）保持 4 位、不进现金账本；DB 字段精度收紧留作后续迁移。
 

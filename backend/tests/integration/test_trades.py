@@ -4,6 +4,7 @@
 
 import pytest
 from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 from tests.factories import (
@@ -1444,6 +1445,48 @@ class TestTradePreview:
 
         prev = client.get(
             f"/api/trades/{trade_id}/preview", params={"price": 1.30},
+            headers=admin_headers,
+        )
+        assert prev.status_code == 422
+        assert prev.json()["detail"]["error"] == "PRICE_NAV_MISMATCH"
+
+    # #428：对账比较改为 quantize_nav（两侧归一到 4 位 HALF_UP）后的边界契约。
+    # nav 是 Numeric(10,4)，本来恰为 4 位；传入价是用户输入、标度不限——
+    # 「先量化到 4 位再精确比较（无容差）」这条口径由下面两例锁死。
+    def test_preview_price_matching_four_decimal_nav_passes(
+        self, client, admin_headers, test_db
+    ):
+        """净值 1.2345（4 位）：传入同值放行，多写尾随零（1.23450）同样放行——标度无关"""
+        self._setup_base(test_db, portfolio="PRV_Q4", product="FUND_PRVQ4",
+                         platform="PRV_PLATQ4", nav=Decimal("1.2345"))
+        trade_id = self._create_otc_buy(
+            client, admin_headers,
+            portfolio="PRV_Q4", product="FUND_PRVQ4", platform="PRV_PLATQ4",
+        )
+
+        for price in ("1.2345", "1.23450"):
+            prev = client.get(
+                f"/api/trades/{trade_id}/preview", params={"price": price},
+                headers=admin_headers,
+            )
+            assert prev.status_code == 200, (
+                f"price={price} 应放行，实际 {prev.status_code} {prev.json()}"
+            )
+            assert prev.json()["preview"]["price"] is not None
+
+    def test_preview_price_differing_in_fourth_decimal_rejected(
+        self, client, admin_headers, test_db
+    ):
+        """净值 1.2345：第 4 位起就不同（1.2346）即拒绝——4 位口径无容差"""
+        self._setup_base(test_db, portfolio="PRV_Q5", product="FUND_PRVQ5",
+                         platform="PRV_PLATQ5", nav=Decimal("1.2345"))
+        trade_id = self._create_otc_buy(
+            client, admin_headers,
+            portfolio="PRV_Q5", product="FUND_PRVQ5", platform="PRV_PLATQ5",
+        )
+
+        prev = client.get(
+            f"/api/trades/{trade_id}/preview", params={"price": "1.2346"},
             headers=admin_headers,
         )
         assert prev.status_code == 422

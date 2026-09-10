@@ -36,7 +36,7 @@ from app.constants.audit_actions import (
     RESOURCE_SNAPSHOT, RESOURCE_SHARE_CHANGE_EVENT,
 )
 from app.models.manual_market_value import ManualMarketValue
-from app.utils.quantize import quantize_shares
+from app.utils.quantize import quantize_nav, quantize_shares
 
 logger = logging.getLogger(__name__)
 
@@ -1511,15 +1511,17 @@ def _generate_portfolio_value_snapshot(
 
     # #421：按列标度量化为 Decimal 而非 float()——审计载荷经 default=str 落保标度
     # 字符串（float 会丢标度、且 0.1 类值落 JSON 会带二进制误差），与 DB 读回类型一致
+    # #428：4 位口径改用 quantize_nav（显式 ROUND_HALF_UP）——此前各自写
+    # Decimal("0.0001") 且不传 rounding=，实际是 Decimal 缺省的 HALF_EVEN
     snapshot = PortfolioValueSnapshot(
         portfolio_code=portfolio_code,
         snapshot_date=target_date,
-        total_value=total_value.quantize(Decimal("0.0001")),
+        total_value=quantize_nav(total_value),
         total_shares=quantize_shares(total_shares),
-        unit_price=unit_price.quantize(Decimal("0.0001")),
-        unit_price_change_pct=unit_price_change_pct.quantize(Decimal("0.0001")),
+        unit_price=quantize_nav(unit_price),
+        unit_price_change_pct=quantize_nav(unit_price_change_pct),
         frozen_shares=quantize_shares(frozen_shares),
-        in_transit_total=Decimal(str(in_transit_total)).quantize(Decimal("0.0001")),
+        in_transit_total=quantize_nav(in_transit_total),
     )
     
     return snapshot
@@ -1625,7 +1627,9 @@ def _generate_investor_holding(
             snapshot_date=target_date,
             shares=float(prev_shares),
             frozen_shares=float(frozen_shares) if frozen_shares > 0 else 0,
-            cost_per_share=float(prev_cost.quantize(Decimal("0.0001"))) if prev_cost > 0 else 0,
+            # #428：4 位口径经 quantize_nav（显式 HALF_UP），且不再 float()——#421 已把
+            # 另一个构造点从 float 改回保标度 Decimal，此处同口径（列是 Numeric(10,4)）
+            cost_per_share=quantize_nav(prev_cost) if prev_cost > 0 else 0,
             market_value=float(market_value),
             total_cost=float(total_cost),
             profit=float(profit),

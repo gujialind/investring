@@ -173,9 +173,9 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 
 ### 2.11 数值口径与交易日
 
-* **净值 4 位小数**；**份额与金额统一 2 位小数**，ROUND_HALF_UP，负数按绝对值对称（远离零进位，符合场外基金行业惯例），量化误差计入基金财产。
+* **净值 4 位小数**；**份额与金额统一 2 位小数**，**三者舍入模式均为 ROUND_HALF_UP**（#428 起 4 位口径也显式承诺；此前 4 位只写在 `quantize.py` docstring 里、代码实际走 Decimal 缺省的 HALF_EVEN），负数按绝对值对称（远离零进位，符合场外基金行业惯例），量化误差计入基金财产。三个精度各有一个 helper（`quantize_shares` / `quantize_amount` / `quantize_nav`，`app/utils/quantize.py`）——**调用点一律走 helper，不写 `Decimal("0.01"/"0.0001")` 字面量**，否则缺省舍入会静默漂移。
 * **量化只发生在产生点**（用户输入、确认计算、事件变动计算），读取与累加路径不量化；可用量闸门一律**先量化再精确比较**（无容差）。产生点清单与触发错误码见 `business-constraints.md`。
-* 估值口径（`market_value` / `total_value` / `unit_price`）保持 4 位，不进现金账本。
+* 估值口径（`market_value` / `total_value` / `unit_price` / `cost_per_share`）保持 4 位，不进现金账本。
 * **所有交易操作**（申购、赎回、调仓、现金进出、事件日期）**仅允许在交易日**进行，依据 `trading_calendar.is_open`。
 
 ***
