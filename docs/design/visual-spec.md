@@ -101,6 +101,7 @@
 | `src/components/shared/PositionSections.tsx` | 临时（ratchet） | 存量 `text-[11/13/15/17px]` 共 9 处，同上 |
 | `src/components/layout/NotificationBell.tsx` | 临时（ratchet） | 存量 `text-[10px]` 1 处，同上 |
 | `src/lib/utils.test.ts` | 永久 | 单测需直测 `formatShares` 基础函数（`formatSharesUnit` 的内部实现），仅豁免 `no-restricted-imports` 门禁 |
+| `src/lib/logger.ts`、`src/lib/logger.test.ts` | 永久 | 前端日志基建（#407）：前者是全站 `console.*` 的唯一封装层，不豁免则该护栏无法实现；后者需对 console 方法做 spy 才能断言分级与生产剔除（同 `utils.test.ts` 形态），仅豁免 `no-console` |
 
 确需新增豁免时在代码处加 `eslint-disable-next-line` 并在本节逐条登记（位置 + 理由）。
 
@@ -307,3 +308,4 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 | 2026-09-05 | v1.x | 流水列表列瘦身：①§8 新增「**并列双行单元格**」模式（两行同 `text-sm` 同正文色、上行=先发生、每行挂 `title`、空值占位 `--`、同值不折叠、两行 nowrap；与既有「主次双行」为两种模式，按值间关系选用），共用实现 `DatePairCell.tsx`；②§8 主次双行补登产品列字重层级（产品名主行 `font-medium`，平台/投资人不加粗——刻意层级非漂移）与共用实现 `ProductCell.tsx`；③§8 结对行补登「子行空占位以 `colSpan` 折叠」（frontend/ 内 `colSpan` 首次使用）；④§18 登记桌面 `<h1>` `text-3xl font-bold tracking-tight` 存量漂移（12 文件），列为不适用「顺手替换」原则、须整体收敛 | #355 |
 | 2026-09-05 | v1.x | 页面标题整体收敛：桌面 12 处 `<h1>` `text-3xl font-bold tracking-tight` → §5 `text-2xl font-semibold`，4 个共享组件移动分支 `font-bold` 字重同步对齐（§6 不发明端侧独有字号）；§18 该存量条目销账，另登记 3 处移动端专属薄壳页 h1 漂移（待另开 issue） | #386 |
 | 2026-09-06 | v1.x | 移动端薄壳页 h1 收敛 + 徽章/数字单元格竖排防护：①3 处移动端专属薄壳页 h1 → §5 `text-2xl font-semibold`（判定非刻意紧凑形态，§18 条目销账）；②`Badge` 基件加 `whitespace-nowrap`（徽章文案有界，防表格窄列挤压时 CJK 逐字竖排，与 #389 `NameCodeCell` 修法同族）；③`.number-cell` 工具类加 `white-space: nowrap`（数字+单位如「2,000.00 份」不折行，全站表格数字列一致生效） | #394 |
+| 2026-09-10 | v1.x | §1.5 豁免清单登记 `src/lib/logger.ts` 与其单测（新 `no-console` 护栏的唯一豁免，永久）；同批任务管理页执行历史新增「触发方式」列——来源标识无状态语义，按 §1.3 末段取 `outline`/`neutral` badge，**不占 success/warning/destructive 状态色**（状态列已表达成功/失败） | #406 / #407 |

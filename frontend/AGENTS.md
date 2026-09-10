@@ -18,6 +18,13 @@
 
 * 版本号：设置页「系统信息」显示构建期注入的 `NEXT_PUBLIC_APP_VERSION`（`next.config.js` 读 `package.json` version；该值由发布流程从仓库根 `VERSION` 同步，勿手改，见 `docs/reference/versioning.md`）。
 
+### 1.3 日志（issue #407）
+
+* **业务代码禁止直调 `console.*`**：一律 `import { createLogger } from "@/lib/logger"` 并用 `createLogger("<模块>")` 取带 tag 的实例（前缀统一为 `[InvestRing][<tag>][<LEVEL>]`）。`debug` 在生产构建下自动 no-op，故排查语句可以留在代码里。
+* 护栏在 `eslint.config.mjs`：`files: ["src/**"]` 上 `no-console: error`，**唯一豁免 `src/lib/logger.ts` 与其单测**（前者是唯一封装层、后者需对 console 做 spy；豁免登记见 `docs/design/visual-spec.md` §1.5）。作用域限定是因为 `scripts/visual-shot.mjs` 有 8 处脚本自身的 `console.*`。
+* **渲染期异常**由 App Router 约定文件兜底：`src/app/error.tsx`（根）、`src/app/m/error.tsx`（移动端）、`src/app/global-error.tsx`（根 layout 自身抛错，自带 `<html>`/`<body>` 与 `globals.css`），共用 `src/components/shared/ErrorFallback.tsx`——改兜底 UI 要同时看这三处与 visual-spec。**不自造 `<ErrorBoundary>` 组件**：Next 的约定文件即边界。
+* 级别口径、meta 处理与「为什么不做客户端上报」见 `docs/reference/logging.md` §4。
+
 ***
 
 ## 2. 质量门禁

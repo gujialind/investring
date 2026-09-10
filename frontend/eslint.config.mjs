@@ -141,6 +141,11 @@ const eslintConfig = [
       // eslint-config-next v16 新增规则，存量代码大量命中，暂不启用
       "react-hooks/set-state-in-effect": "off",
       "@next/next/no-location-assign-relative-destination": "off",
+      // 2026-09-10（issue #407）：禁裸 console.*，日志一律走 src/lib/logger.ts。
+      // 作用域限定 src/**：src 内存量命中数为 0（加规则零待修），而 src 之外的
+      // frontend/scripts/visual-shot.mjs 有 8 处 console.*（截图脚本的正常进度输出），
+      // 不限作用域会立刻多出 8 个待修文件。唯一豁免见下方 logger.ts 块。
+      "no-console": "error",
       "no-restricted-syntax": [
         "error",
         ...paletteColorSelectors,
@@ -169,6 +174,16 @@ const eslintConfig = [
     files: ["src/lib/utils.test.ts"],
     rules: {
       "no-restricted-imports": "off",
+    },
+  },
+  // no-console 豁免（visual-spec §1.5 登记，issue #407）：
+  // - logger.ts 是 console.* 的唯一封装层，不豁免则无法实现；
+  // - logger.test.ts 需对 console 方法做 spy 才能断言分级与生产剔除（同 utils.test.ts
+  //   的豁免形态），不是业务代码在用 console。
+  {
+    files: ["src/lib/logger.ts", "src/lib/logger.test.ts"],
+    rules: {
+      "no-console": "off",
     },
   },
   // Node 配置文件为 CJS 语境，require 属正当用法（#375：next.config.js 读 package.json version 注入 NEXT_PUBLIC_APP_VERSION）。
