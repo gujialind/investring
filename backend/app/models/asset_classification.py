@@ -1,5 +1,5 @@
 from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String, Text
-from app.database import Base
+from app.models.base import Base
 
 
 class AssetClassification(Base):

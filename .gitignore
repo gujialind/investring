@@ -134,3 +134,6 @@ docs/previews/
 
 # Local planning docs (not version-controlled)
 docs/plans/
+
+# DSH agent scratch space (env-specific ops artifacts, e.g. generated migration SQL)
+.dsh/

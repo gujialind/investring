@@ -1,5 +1,5 @@
 from sqlalchemy import Column, JSON, String, Text, DateTime, Boolean, func, text
-from app.database import Base
+from app.models.base import Base
 
 
 class Portfolio(Base):

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, ForeignKey, func, text
-from app.database import Base
+from app.models.base import Base
 
 
 class Product(Base):

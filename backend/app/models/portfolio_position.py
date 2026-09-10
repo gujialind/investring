@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Numeric, Date, DateTime, Integer, ForeignKey, ForeignKeyConstraint, func, CheckConstraint, UniqueConstraint, event
-from app.database import Base
+from app.models.base import Base
 
 
 class PortfolioPosition(Base):

@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from app.database import Base
+from app.models.base import Base
 from app.models.audit_log import AuditLog
 from app.models.login_log import LoginLog
 from app.models.system_error_log import SystemErrorLog

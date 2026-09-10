@@ -7,7 +7,8 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.database import engine, Base, SessionLocal
+from app.database import engine, SessionLocal
+from app.models.base import Base
 from app.logging_config import setup_logging
 from app.request_context import (
     REQUEST_ID_HEADER,

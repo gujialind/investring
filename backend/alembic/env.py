@@ -6,7 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.config import get_settings
-from app.database import Base
+from app.models.base import Base
 import app.models
 
 target_metadata = Base.metadata

@@ -30,7 +30,8 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app.constants.log_charset import CHARSET_TABLES, LOG_TABLE_CHARSET, LOG_TABLE_COLLATE
-from app.database import Base, SessionLocal, engine as app_engine
+from app.database import SessionLocal, engine as app_engine
+from app.models.base import Base
 from app.models.audit_log import AuditLog
 from app.models.login_log import LoginLog
 from app.models.nav_sync_detail import NavSyncDetail

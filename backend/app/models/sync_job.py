@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Text, JSON, DateTime, Integer, func
-from app.database import Base
+from app.models.base import Base
 
 
 class SyncJob(Base):

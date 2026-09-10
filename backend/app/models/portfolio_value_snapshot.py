@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Numeric, Date, DateTime, Integer, ForeignKey, func, UniqueConstraint, event
-from app.database import Base
+from app.models.base import Base
 
 
 class PortfolioValueSnapshot(Base):
