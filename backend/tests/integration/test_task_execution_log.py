@@ -35,8 +35,18 @@ def nav_sync_task(test_db) -> ScheduledTask:
 
 
 def _only_log(db) -> TaskExecutionLog:
+    """取当次执行记录，**并 refresh**——断言一律针对落库值而非内存态。
+
+    必须 refresh 的原因（#406，MySQL job 实测）：`task_execution_log` 的
+    `started_at` / `finished_at` 是 `DateTime`（无小数位），MySQL 的 DATETIME 按**秒**
+    截断。不 refresh 时读到的是内存里的原始微秒值，`finished_at - started_at` 有小数差；
+    refresh 后两者同为整秒（短任务差 0），而 `duration_ms` 是落库前按未截断值算的，
+    于是「duration_ms == finished_at - started_at」这条断言在 MySQL 上必红、在 SQLite
+    上（保留微秒）通过。生产读侧看到的也是截断后的值，故断言口径应以落库值表达。
+    """
     logs = db.query(TaskExecutionLog).order_by(TaskExecutionLog.id).all()
     assert len(logs) == 1, f"期望恰好一条执行记录，实际 {len(logs)} 条"
+    db.refresh(logs[0])
     return logs[0]
 
 
@@ -57,10 +67,13 @@ class TestManualTrigger:
         assert log.started_at is not None and log.finished_at is not None
         assert log.finished_at >= log.started_at
 
-        # duration_ms = finished_at - started_at（毫秒），且 > 0
-        expected_ms = int((log.finished_at - log.started_at).total_seconds() * 1000)
-        assert log.duration_ms == expected_ms
-        assert log.duration_ms > 0
+        # duration_ms 有真实值且 >= 0。**刻意不断言 equality**：两列的 DateTime 无小数位，
+        # MySQL 按秒截断而 duration_ms 按未截断值计算，短任务在 MySQL 上就是
+        # 「duration_ms=16、两列同秒」。跨库稳定的判据是「非空 + 非负 + 与两列量级一致」。
+        assert log.duration_ms is not None
+        assert log.duration_ms >= 0
+        wall_ms = int((log.finished_at - log.started_at).total_seconds() * 1000)
+        assert log.duration_ms >= wall_ms  # 截断只可能让墙钟差变小，不可能变大
 
         # records_* 自洽：total == success + failed
         assert result["products_count"] == log.records_total
