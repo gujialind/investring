@@ -578,6 +578,45 @@ class TestUnitPriceChangePct:
         assert abs(float(snap.unit_price_change_pct) - 0.1) < 0.0001
 
 
+class TestValueSnapshotFourDecimalRounding:
+    """#428：快照构造点的 4 位口径必须是 ROUND_HALF_UP（此前走 Decimal 缺省 HALF_EVEN）
+
+    判别式：取 total_value / total_shares 恰好落在「第 5 位为 5 且第 4 位为偶数」的商——
+    HALF_UP 进位、HALF_EVEN 舍去，两者分叉。0.45 / 1000 = 0.00045 即精确命中该边界
+    （exponent 恰为 -5，不是二进制浮点造出来的近似），期望 0.0005。
+
+    若把构造点改回 `.quantize(Decimal("0.0001"))`（缺省 HALF_EVEN），本用例即红。
+    """
+
+    def _make_cash_position(self, portfolio_code, snapshot_date, market_value):
+        return PortfolioPosition(
+            portfolio_code=portfolio_code, product_code="CASH", market="",
+            platform_code="MYCF", shares=None,
+            cash_amount=Decimal(str(market_value)), market_value=Decimal(str(market_value)),
+            snapshot_date=snapshot_date,
+        )
+
+    def test_unit_price_boundary_is_half_up(self, test_db):
+        create_portfolio(test_db, code="NAVR1", status="active")
+        # 前序快照份额恒为 1000.00，使当日 unit_price 完全由 total_value 决定
+        create_value_snapshot(
+            test_db, "NAVR1", date(2025, 1, 6),
+            total_value=Decimal("1000.0000"), total_shares=Decimal("1000.00"),
+            unit_price=Decimal("1.0000"),
+        )
+        positions = [self._make_cash_position("NAVR1", date(2025, 1, 7), "0.45")]
+
+        snap = _generate_portfolio_value_snapshot(
+            test_db, "NAVR1", date(2025, 1, 7), positions
+        )
+
+        assert snap.total_shares == Decimal("1000.00")
+        assert snap.unit_price == Decimal("0.0005"), (
+            f"4 位口径应 HALF_UP 进位得 0.0005，实际 {snap.unit_price}"
+            "（0.0004 说明走了 Decimal 缺省 HALF_EVEN）"
+        )
+
+
 class TestFrozenAmount:
     """#40 改进1：CASH 持仓 frozen_amount = pending CASH sells 金额"""
 

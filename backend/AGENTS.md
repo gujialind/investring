@@ -65,6 +65,8 @@
 
 其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现。其他服务职责读各文件 docstring。
 
+* **`app/utils/quantize.py` 是精度的唯一入口**（#428）：三个 helper 与三个精度一一对应——`quantize_shares` / `quantize_amount`（2 位）、`quantize_nav`（4 位），**均显式 `rounding=ROUND_HALF_UP`**。调用点禁止写 `Decimal("0.01")` / `Decimal("0.0001")` 字面量再 `quantize()`：不传 `rounding=` 即吃 Decimal 上下文缺省的 **ROUND_HALF_EVEN**，两者只在「末位后一位恰为 5」的边界值上分叉——#428 前 7 处 4 位站点（快照构造点的 `total_value`/`unit_price`/`unit_price_change_pct`/`in_transit_total`、`cost_per_share`、场外确认对账的两侧）全是这种静默漂移，而 `quantize.py` 的 docstring 早已声称「均为 HALF_UP」。守门：`tests/unit/test_quantize.py::TestQuantizeNav`（含 HALF_UP/HALF_EVEN 判别式）、`tests/unit/test_snapshot_service.py::TestValueSnapshotFourDecimalRounding`（构造点边界值，取 `total_value/total_shares` 恰落第 5 位为 5 的商，改回缺省即红）、`tests/integration/test_trades.py::TestTradePreview` 的两条 4 位对账边界用例。`cost_per_share` 构造点同时**去掉了外层 `float()`**（与 #421 把快照构造点从 float 改回保标度 Decimal 同口径，列是 `Numeric(10,4)`）。
+
 * **`audit_service.py`（#405，跨切面）**：`audit_log` / `system_error_log` 的**唯一写入路径**，埋点一律调 `record_audit` / `record_system_error`，不直接 `db.add(AuditLog(...))`。
 
   - **必埋范围**：申赎、调仓、跨平台现金转移、份额变动事件、快照 generate/recalculate/delete（含级联回退）、现金手动重估，动作取 create/update/confirm/unconfirm/cancel/delete（快照另有 generate/recalculate/cascade\_unconfirm）。产品/平台/投资人/组合 CRUD 本期不埋（只覆盖高风险子集）。埋点在 **service**，故 REST 与 CLI 共用、不漏记；原先 router-inline 的申赎 cancel/delete、交易 delete、事件 delete 已提取为 service 函数。
