@@ -17,7 +17,7 @@ from app.models.nav_sync_detail import NavSyncDetail
 from app.models.scheduled_task import ScheduledTask
 from app.models.system_error_log import SystemErrorLog
 from app.models.task_execution_log import TaskExecutionLog
-from app.services.task_runner import cleanup_old_logs
+from app.services.task_runner import TRIGGER_SCHEDULED, cleanup_old_logs
 
 AGED = datetime.now() - timedelta(days=120)
 FRESH = datetime.now()
@@ -26,7 +26,9 @@ FRESH = datetime.now()
 def _task_log(db, *, created_at, task_code="nav_sync"):
     log = TaskExecutionLog(
         task_code=task_code,
-        trigger_type="cron",
+        # 取常量而非字面量（#406）：早先这里是私取值 "cron"，与实际写入点
+        # （manual / scheduled）分叉，会让「按 trigger_type 过滤」的读侧断言失真
+        trigger_type=TRIGGER_SCHEDULED,
         status="success",
         started_at=created_at,
         finished_at=created_at,

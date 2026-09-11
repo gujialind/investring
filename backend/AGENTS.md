@@ -19,7 +19,7 @@
 
 **分层约定（router 为 service 薄适配器）**：业务逻辑单一实现于 service，REST 共用，杜绝并行实现漂移。
 
-* **事务边界属于 session 拥有者**：service 收到调用方注入的 session，不 `commit`/`rollback`（可 `flush`）；REST 在 router `db.commit()`（部分失败语义的端点如 recalculate 按 errors 决定 rollback/commit）。**合理例外**：自持 `SessionLocal` 的后台执行体（sync job 线程、scheduler 触发体）与 `task_runner` 的 checkpoint 提交（逐日快照回补、逐产品远程同步，需保留部分成功）可自行 commit。
+* **事务边界属于 session 拥有者**：service 收到调用方注入的 session，不 `commit`/`rollback`（可 `flush`）；REST 在 router `db.commit()`（部分失败语义的端点如 recalculate 按 errors 决定 rollback/commit）。**合理例外**：自持 `SessionLocal` 的后台执行体（sync job 线程、scheduler 触发体）与 `task_runner` 的 checkpoint 提交（逐日快照回补、逐产品远程同步，需保留部分成功；**含任务执行记录的多段 commit**——`running` 先落库、终态再落库，见 §1.3「任务执行记录」）可自行 commit。
 
 * **领域异常统一**：service 抛 `app/services/exceptions.py::BusinessError`（携 `code`/`message`/`http_status`/`details`）；`main.py` 全局 handler 映射为 `JSONResponse{"detail": {"error": code, "message": message}}`（保持前端契约；默认 422、重复创建类 400、NOT\_FOUND 404）。service 内**禁止** import/抛 `HTTPException`。
 
@@ -76,6 +76,14 @@
   - **载荷口径**：diff-only（`_diff_fields` 只留变化字段，无变化则两侧皆 None；数值两侧统一转 Decimal 再比——DB Numeric 读出 Decimal 而 update schema 是 `Optional[float]`，`Decimal("1234.5600") != 1234.56` 恒真，直接比会把原样重提交的字段误判为变更、写出根本没发生的审计变更）、`ensure_ascii=False`（中文原样落库）、`default=str`（Decimal/date 字符串化）；create 无 `old_value`、delete 无 `new_value`。副作用**一律不另开记录**，但只有申赎确认（`cash_transfer_group`）与交易创建（`transfer_group`）真把它折进了 `new_value`——组合激活、交易确认的配对腿镜像本期不入载荷。快照 generate 的三个数值载荷（#421）同为**保标度字符串**：`_generate_portfolio_value_snapshot` 构造 ORM 对象时按列标度量化为 Decimal（`total_value`/`unit_price`/`unit_price_change_pct`/`in_transit_total` 4 位、`total_shares`/`frozen_shares` 2 位），埋点原样交给 `default=str`——**不再在构造点 `float()`**（那会丢标度、并让 0.1 类值带二进制误差进 JSON）。同函数的 API 返回 dict **刻意保留 `float()`**：那是前端 JSON 数字契约，与审计载荷口径正交。
   - **不重复记账**：级联回退若**委派**给既有实现（申赎走 `unconfirm_single_subscription`），由被委派方留 `unconfirm` 痕，不再叠 `cascade_unconfirm`；只有**就地改字段**的（事件级联）才自带 `cascade_unconfirm`。空删除（generate 每次都先调 `_delete_existing_snapshots`）不留 `delete` 痕，否则淹没审计日志。**空更新同理**：三个 update service（申赎 / 交易 / 份额事件）都只在 diff 非空时才调 `record_audit`——PUT 原样重提交是编辑表单常态，不设这道闸每次保存都会灌一条 `old_value`/`new_value` 皆 NULL 的空载荷行（零取证价值）。
 
+* **`task_runner.run_task` 是任务执行记录（`task_execution_log`）的唯一编排点**（#406）：「建 log（running，先 commit）→ 派发 `_TASK_DISPATCH` → 按结果落 status/duration/records/error → commit」。手动触发（`routers/tasks.py`）与调度触发（`scheduler_service`）共用它，两条路径不再各有 status 推导——那正是 #406 之前手动/自动可观测性不对称的成因。
+  - **触发来源**取 `TRIGGER_MANUAL`（`"manual"`）/ `TRIGGER_SCHEDULED`（`"scheduled"`）常量，埋点禁写字面量；前端执行历史按它区分「手动 / 自动」。
+  - **跳过不是执行**：锁被另一进程持有、当日非交易日两类跳过**不建执行记录**（否则每个非交易日为每条 job 各积一行无信息量噪音）；判定收敛在 `scheduler_service._should_run_today`，两条 job 共用。
+  - **`records_*` 口径**（`_derive_log_fields` 按 task_code 归一，各任务返回 dict 结构不统一）：`nav_sync` = products_count / 差额 / len(failed_products)；`snapshot_generate` = portfolios_processed / 差额 / len(auto_confirm_failed)；`trading_calendar_sync` 与 `log_cleanup` 只填 total/success（synced_count、删除行数求和）。**`records_failed` 为 NULL 表示「未度量」，不是「零失败」**——语义不明处宁可留空，读侧不得把 NULL 当 0。#305 的 warnings / auto_confirm_failed 归并语义与 `error_message` 1000 字符截断原样保留在此处（原先写在 router 的按 code 分支里）。
+  - **失败**：任务抛异常 → `status="failed"` + `error_message`（截断 1000，保留 `str(e)` 摘要语义）+ `error_stack`（traceback），异常**原样上抛**，HTTP 映射（500 / `BusinessError` 走全局 handler）留在 router；未知 task_code → `NotFoundError`（不建 log 行）。
+  - **session 与事务**：复用调用方 session，不 close；异常路径**不 rollback**（`running` 行已 commit，不能连它一起回滚），任务体内未提交的业务写入由任务自身编排语义收口（`run_nav_sync` 逐产品 checkpoint、`_generate_snapshots_for_date` 逐日 rollback+commit）。
+  - `run_nav_sync(db, log_id)` 的 `log_id` **必填**（每条 `NavSyncDetail` 都要挂到当次执行记录，否则逐产品明细无父行）；`run_snapshot_generate(db)` **没有** `log_id`——快照链路没有逐日明细表可关联，参数曾是死参数，已移除。
+
 ### 1.4 数据模型与关键约束
 
 表结构与全部唯一约束以 `app/models/` 为准。需记住的设计决策：
@@ -126,7 +134,7 @@
 
 * 服务版本：`FastAPI(version=…)` 取仓库根 `VERSION` 文件（`app.main._resolve_version`，`APP_VERSION` 环境变量优先）；版本变更必须同 commit 重导出 `openapi.json`（`check_openapi.py` 全量比对含 `info.version`），发布流程见 `docs/reference/versioning.md`。
 
-* 调度：`scheduler_enabled`；两条独立每日 job——`daily_nav_sync`（净值同步+分红检测）与 `daily_snapshot_generate`（快照生成，#156），各持 MySQL `GET_LOCK` 互斥锁，cron 分别取 `scheduler_cron_daily` / `scheduler_cron_snapshot`；自动快照仅处理 `auto_snapshot_enabled=True` 的活跃组合（组合级开关默认 False，opt-in，只约束自动任务，手动生成/重算端点不受影响）。`init_tasks.py` 确保任务记录存在并同步文案，但不覆盖已有 cron\_expr。
+* 调度：`scheduler_enabled`；两条独立每日 job——`daily_nav_sync`（净值同步+分红检测）与 `daily_snapshot_generate`（快照生成，#156），各持 MySQL `GET_LOCK` 互斥锁，cron 分别取 `scheduler_cron_daily` / `scheduler_cron_snapshot`；自动快照仅处理 `auto_snapshot_enabled=True` 的活跃组合（组合级开关默认 False，opt-in，只约束自动任务，手动生成/重算端点不受影响）。`init_tasks.py` 确保任务记录存在并同步文案，但不覆盖已有 cron\_expr。**自动运行同样落 `TaskExecutionLog`**（#406，`trigger_type="scheduled"`，与手动共用 `task_runner.run_task`，见 §1.3「任务执行记录」）；两处闸门收敛在 `_should_run_today`（GET\_LOCK 互斥 → 交易日判断），**锁被占与非交易日两类跳过不落执行记录**。
 
 * 数据源：Tushare / AkShare，`data_sources` 路由读写 `.env`；安全：登录失败锁定、Token 过期/黑名单、改密后强制重登（参数明细见 `config.py`）。
 
@@ -150,6 +158,7 @@ cd backend && pytest tests -q
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration -q -k precision` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
+  | 任务执行记录（`task_runner.run_task` / `scheduler_service` / `routers/tasks.py`） | `pytest tests/unit/test_task_log_orchestration.py tests/unit/test_scheduler_service.py tests/unit/test_run_nav_sync.py tests/integration/test_task_execution_log.py tests/integration/test_tasks.py tests/integration/test_log_cleanup.py -q` |
   | 审计/系统错误日志（`audit_service.py`、任一埋点、日志表迁移） | `pytest tests/unit/test_audit_service.py tests/integration/test_audit_log.py tests/unit/test_migration_0013.py tests/unit/test_migration_0014.py -q` |
   | 字符集 / 建表（`db_charset.py`、`models/base.py`、迁移 0015、`ci.yml` 建库语句） | `pytest tests/unit/test_db_charset.py tests/unit/test_migration_0015.py tests/unit/test_migration_0014.py -q` |
   | 外键约束 / 外键名（`models/nav_sync_detail.py` 的 `name=`、迁移 0016） | `pytest tests/unit/test_migration_0016.py tests/unit/test_migration_0015.py -q` |
