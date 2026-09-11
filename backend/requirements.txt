@@ -35,7 +35,7 @@ tushare==1.4.29
 # --no-binary jsonpath 豁免（已加）；钉版防上游后续版本再引入新 sdist 依赖
 # 破环镜像构建（issue #170 冒烟门禁发现，#196 引入 akshare 后构建即断）
 akshare==1.18.94
-lxml==6.1.2
+lxml==6.1.3
 simplejson==4.1.2
 
 # uvicorn dependency
