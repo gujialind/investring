@@ -10,7 +10,7 @@ tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 
 ## 项目背景
 
-- 项目业务规则、领域不变量、状态机、架构约束以仓库根目录 `AGENTS.md` 为准（重点读 §2 核心领域模型与不变量、§8.2 Issue 约定）；路由/枚举/错误码/表结构等读源码。
+- 项目业务规则、领域不变量、状态机、架构约束以仓库根目录 `AGENTS.md` 为准（重点读 §2 核心领域模型与不变量、§3.2 Issue 约定）；路由/枚举/错误码/表结构等读源码。
 - issue 模板唯一事实来源：`.github/ISSUE_TEMPLATE/`（bug_report.md / feature_request.md / chore.md），标题前缀 `[bug]` / `[feat]` / `[chore]`，labels 分别为 `bug` / `enhancement` / `chore`。
 
 ## 第一步：确定问题类型
@@ -24,7 +24,7 @@ tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 
 1. **定位代码**：先读 AGENTS.md 相关章节，再按线索检索对应模块（routers / services / models / 前端组件 / ir-cli），定位到文件与函数级。
 2. **核实问题（不改代码）**：
-   - 后端 API：curl 或 `ir` CLI（用法见 AGENTS.md §6 与 `ir-cli/CLI_MANUAL.md`）复现；
+   - 后端 API：curl 或 `ir` CLI（用法见 `ir-cli/AGENTS.md` 与 `ir-cli/CLI_MANUAL.md`）复现；
    - 可运行现有 pytest（`backend/tests/`）验证；前端现象可用浏览器验证（若环境提供浏览器能力），否则通过 API 复现并说明验证边界；
    - 记录复现路径：具体操作 → 实际输出 → 期望输出，报错信息原样保留。
 3. **根因分析**：定位到哪一层（路由/服务/模型/CLI/前端），列出证据（文件:行号、报错信息、数据样例）。不确定就写"待分析"，不臆测。
@@ -39,7 +39,7 @@ tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 3. **方案推演**：2-3 个候选方案表格对比（方案 | 思路 | 代价）；被否决的方案注明否决原因（避免后人重复踩坑）。
 4. **选定方案**：说明选哪个、为什么。
 5. **填写模板**：背景/目标 → 现状与问题 → 方案推演 → 选定方案 → 待实现改动（文件级清单：新增/修改哪些文件、涉及哪些表/接口/CLI 命令）→ 验收断言（可勾选）。
-6. **遵守项目约定**（AGENTS.md §8.2）：新功能/大改/涉及业务规则或 DB 迁移必须先提 issue；涉及 DB 变更须在改动清单中指出需新增 Alembic 迁移。
+6. **遵守项目约定**（AGENTS.md §3.2）：新功能/大改/涉及业务规则或 DB 迁移必须先提 issue；涉及 DB 变更须在改动清单中指出需新增 Alembic 迁移。
 
 ## 杂务类工作流程（轻量）
 
