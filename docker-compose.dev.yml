@@ -3,6 +3,9 @@
 # ============================================================================
 # 使用方式：docker compose -f docker-compose.dev.yml up -d
 # 特点：挂载源码目录支持热重载，包含 MySQL 数据库
+#
+# 轮转（issue #407）：三个服务均配 json-file + 10m×3，取值与生产
+# docker-compose.yml 逐字一致——此前 dev 侧完全没有 logging 段，容器日志无上限增长。
 # ============================================================================
 
 services:
@@ -26,6 +29,11 @@ services:
       --default-authentication-plugin=mysql_native_password
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_general_ci
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # --------------------------------------------------------------------------
   # 后端服务：开发模式（热重载）
@@ -59,6 +67,11 @@ services:
       --host 0.0.0.0
       --port 8000
       --reload
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # --------------------------------------------------------------------------
   # 前端服务：开发模式（热重载）
@@ -85,6 +98,11 @@ services:
       - backend
     # 开发模式使用 next dev
     command: npm run dev -- -H 0.0.0.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   mysql-dev-data:

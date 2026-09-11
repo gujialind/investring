@@ -3,6 +3,8 @@
 # ============================================================================
 # docker compose up 时自动加载，无需 -f 指定
 # 覆盖项：本地构建替代 GHCR 镜像、暴露后端端口给宿主机、修正 .env 路径
+#
+# 轮转（issue #407）：backend 显式重申 logging 段，取值与 docker-compose.yml 逐字一致
 # ============================================================================
 
 services:
@@ -19,3 +21,8 @@ services:
       - backend/.env
     # 防止僵尸进程
     init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

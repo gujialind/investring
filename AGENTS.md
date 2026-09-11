@@ -19,7 +19,7 @@
 
 **运行入口**：后端 `backend/app/main.py`（启动初始化行为读源码）；前端 `npm run dev`；`ir` CLI 的说明见 `ir-cli/AGENTS.md`。
 
-**模块指南分层**（issue #224）：各模块的架构约定与操作级细节（怎么跑测试/E2E、种子来源、契约流程、易踩坑）在 `backend/AGENTS.md`、`frontend/AGENTS.md`、`ir-cli/AGENTS.md`；业务约束速查见 `docs/reference/business-constraints.md`（改后端业务代码时经 Rule 自动提醒）；项目版本以根 `VERSION` 为单一事实来源，版本号规范与发布流程（`scripts/release.py`）见 `docs/reference/versioning.md`。本文件只保留全局业务不变量与组织约定，不重复。
+**模块指南分层**（issue #224）：各模块的架构约定与操作级细节（怎么跑测试/E2E、种子来源、契约流程、易踩坑）在 `backend/AGENTS.md`、`frontend/AGENTS.md`、`ir-cli/AGENTS.md`；业务约束速查见 `docs/reference/business-constraints.md`（改后端业务代码时经 Rule 自动提醒）；日志规范（后端 JSON 字段/级别口径、审计 action、任务执行记录、前端 logger 用法）见 `docs/reference/logging.md`；项目版本以根 `VERSION` 为单一事实来源，版本号规范与发布流程（`scripts/release.py`）见 `docs/reference/versioning.md`。本文件只保留全局业务不变量与组织约定，不重复。
 
 ***
 
