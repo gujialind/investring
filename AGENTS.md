@@ -207,6 +207,8 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 
 * 使用 PR 模板 `.github/PULL_REQUEST_TEMPLATE.md`。
 
+* **审查标准与流程**见 `docs/reference/code-review.md`（L2 语义审查清单、🔴/🟡/💭 分级与处置规则、PR 规模护栏）。分工边界：CI 已强制的 lint/类型/构建/测试/契约漂移属 L1，**审查评论不重复 L1**。
+
 * **改 PR base 不触发 CI**：`on: pull_request` 默认只订阅 opened/synchronize/reopened，retarget（`edited` 事件）后 checks 为空、required check `CI OK` 永远无法满足；须 close/reopen PR 或推新 commit 重新触发（#377 实踩）。
 
 ### 3.4 commit 信息
