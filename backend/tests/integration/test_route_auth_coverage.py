@@ -27,8 +27,9 @@ AUTH_DEPS = {get_current_user, get_current_admin}
 
 # 扫描器应命中的 /api 操作数下限（操作 = 一个路由对象，非 distinct path：同一 path
 # 挂 GET/PUT 算两条）。维护规则：新增端点时同步上调；下调必须有理由。
-# 取 fastapi 0.136.1 与 0.141.1 双版本实测的相同值（85 个 distinct path、112 个操作）。
-EXPECTED_API_OPERATIONS = 112
+# 取 fastapi 0.136.1 与 0.141.1 双版本实测的相同值（85 个 distinct path、112 个操作）；
+# #424 新增 GET /api/share-change-events/{id}/preview → 86 distinct path / 113 操作。
+EXPECTED_API_OPERATIONS = 113
 
 
 def _collect_dep_funcs(dependant) -> set:

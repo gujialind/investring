@@ -9,6 +9,7 @@ from app.schemas.share_change_event import (
     ShareChangeEventCreate,
     ShareChangeEventUpdate,
     ShareChangeEventResponse,
+    ShareChangeEventPreviewResponse,
     PaginatedShareEventResponse,
 )
 from app.dependencies import get_current_user, get_current_admin
@@ -18,6 +19,7 @@ from app.services.share_change_event_service import (
     create_share_change_event as create_event_service,
     update_share_change_event as update_event_service,
     confirm_share_change_event as confirm_event_service,
+    compute_share_change_event_preview,
     cancel_share_change_event as cancel_event_service,
     unconfirm_share_change_event as unconfirm_event_service,
     delete_share_change_event as delete_event_service,
@@ -131,6 +133,27 @@ def create_share_change_event(
     db.commit()
     db.refresh(new_event)
     return new_event
+
+
+# 注意：必须注册在 GET /{id} 之前，避免路径 "preview" 被 /{id} 吞掉
+@router.get("/{id}/preview", response_model=ShareChangeEventPreviewResponse)
+def preview_share_change_event(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_admin),
+):
+    """确认前预览：返回真实确认将写入的份额/现金变动，不落库（与 confirm 共用计算实现）。
+
+    - 仅 pending 状态可预览，否则 422 INVALID_STATUS（与 confirm 同码同消息）
+    - 权益登记日无持仓快照 → 422 MISSING_POSITION_SNAPSHOT；
+      forced_adjustment 无对应持仓行 → 422 POSITION_NOT_FOUND（#278）
+    - 只读：不改事件状态、不写库、不产审计
+    """
+    event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Share change event not found")
+    preview = compute_share_change_event_preview(db, event)
+    return ShareChangeEventPreviewResponse(preview=preview)
 
 
 @router.get("/{id}", response_model=ShareChangeEventResponse)

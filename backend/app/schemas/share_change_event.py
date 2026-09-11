@@ -57,6 +57,25 @@ class ShareChangeEventResponse(ShareChangeEventBase):
         from_attributes = True
 
 
+class ShareChangeEventPreviewResult(BaseModel):
+    """事件确认前预览的计算结果（与真实确认共用同一计算实现，#424）。
+
+    四个字段与确认后落库值逐一相等（forced_adjustment 例外：它是用户直填值的回显）。
+    """
+
+    entitlement_shares: Optional[float] = None
+    shares_change: Optional[float] = None
+    shares_after: Optional[float] = None
+    cash_change: Optional[float] = None
+
+
+class ShareChangeEventPreviewResponse(BaseModel):
+    """事件确认预览响应（#424）。与 trades / subscriptions 的 preview 形状对齐：
+    记录字段取自列表行，计算值取自 preview。"""
+
+    preview: ShareChangeEventPreviewResult
+
+
 class PaginatedShareEventResponse(BaseModel):
     """份额变动事件列表分页响应（#342）。items 元素复用 ShareChangeEventResponse：
     product_name 仅 list 端点填充，单对象端点恒为 None（见 ShareChangeEventResponse 注释）。"""

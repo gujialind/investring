@@ -220,3 +220,29 @@ class TestQuantizeNav:
     def test_nav_quant_constant(self):
         """NAV_QUANT 为 0.0001（4 位小数口径）"""
         assert NAV_QUANT == Decimal("0.0001")
+
+
+class TestAmountToSharesTwoStepQuantization:
+    """#425：金额 → 份额的转换必须先量化金额到分，再折算份额。
+
+    `reinvest_dividend` 是全系统唯一「金额 → 份额」的事件类型；跳过中间金额量化会把
+    金额量化损失（< 0.005 元）带进份额，跨四舍五入边界时差 0.01 份。
+    """
+
+    ES = Decimal("5377.61")
+    DIV_CASH = Decimal("0.0119")
+    REINVEST_NAV = Decimal("1.0899")
+
+    def test_two_step_matches_fund_company(self):
+        """两步量化：5377.61 × 0.0119 = 63.993559 → 63.99；63.99 / 1.0899 → 58.71"""
+        dividend_amount = quantize_amount(self.ES * self.DIV_CASH)
+        assert dividend_amount == Decimal("63.99")
+        assert quantize_shares(dividend_amount / self.REINVEST_NAV) == Decimal("58.71")
+
+    def test_one_step_crosses_rounding_boundary(self):
+        """反例：跳过金额量化得 58.72（58.715073… 被 ROUND_HALF_UP 进位），与基金公司差 0.01 份"""
+        one_step = quantize_shares(self.ES * self.DIV_CASH / self.REINVEST_NAV)
+        assert one_step == Decimal("58.72")
+        assert one_step != quantize_shares(
+            quantize_amount(self.ES * self.DIV_CASH) / self.REINVEST_NAV
+        )

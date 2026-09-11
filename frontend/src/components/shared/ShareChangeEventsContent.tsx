@@ -636,10 +636,12 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                           />
                         </TableCell>
                         <TableCell className="number-cell">
-                          {formatSharesUnit(event.shares_change)}
+                          {/* #424：pending 行的两列恒为 NULL（自动计算型事件在 confirm 时才
+                              计算落库），显示 `--` 而非误导性的 0.00；预览值在确认弹窗内展示 */}
+                          {event.status === "pending" ? "--" : formatSharesUnit(event.shares_change)}
                         </TableCell>
                         <TableCell className="number-cell">
-                          {formatCurrency(event.cash_change)}
+                          {event.status === "pending" ? "--" : formatCurrency(event.cash_change)}
                         </TableCell>
                         <TableCell>
                           <Badge variant={getStatusBadgeVariant(event.status)}>
@@ -728,7 +730,7 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
         </CardContent>
       </Card>
 
-      {/* #248：确认信息核对弹窗（事件字段均落库，无预览请求），弹窗内二次确认才发起请求 */}
+      {/* #248/#424：确认信息核对弹窗（弹窗内拉取 /preview 展示预期变动量），二次确认才发起请求 */}
       <EventConfirmDialog
         open={confirmingEvent !== null}
         onOpenChange={(open) => !open && setConfirmEventId(null)}

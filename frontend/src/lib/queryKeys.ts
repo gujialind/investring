@@ -58,6 +58,8 @@ export const queryKeys = {
     byPortfolio: (portfolioCode: string) => ["share-change-events", portfolioCode] as const,
     list: (portfolioCode: string, params?: unknown) =>
       ["share-change-events", portfolioCode, params] as const,
+    // 确认预览（#424，同 trades/subscriptions 口径）
+    preview: (id: number) => ["share-change-events", id, "preview"] as const,
   },
   cashTransfers: {
     root: ["cash-transfers"] as const,
