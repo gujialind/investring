@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Python 版本与生产镜像（python:3.12-slim）保持一致
       - name: Setup Python 3.12
@@ -98,7 +98,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
@@ -171,7 +171,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
@@ -215,7 +215,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Node 版本与 frontend/Dockerfile、frontend/.nvmrc 保持一致
       - name: Setup Node 24
@@ -275,7 +275,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # ---- 后端：建库 → 迁移 → seed → 启动（生产启动顺序：create_all 由 main.py import 期完成）----
       - name: Setup Python 3.12
@@ -435,7 +435,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -468,7 +468,7 @@ jobs:
       e2e_morph: ${{ steps.detect.outputs.hit }}
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -492,7 +492,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
@@ -532,7 +532,7 @@ jobs:
 
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -685,7 +685,7 @@ jobs:
     steps:
       # 默认 checkout PR merge commit：用 PR 版 normalizer 处理两侧 raw，自洽
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Download raw JSON
         uses: actions/download-artifact@v4
