@@ -14,7 +14,7 @@ pymysql==1.2.0  # issue #252: PYSEC-2026-502 修复版
 
 # Data
 pandas==3.0.5
-numpy==2.5.2
+numpy==2.5.3
 python-dateutil==2.9.0.post0
 
 # HTTP & Network
