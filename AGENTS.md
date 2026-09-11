@@ -192,7 +192,7 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 
 * **一切改动经 `feature/` → PR → `main`**：从最新 `origin/main` 不从本地旧 ref 重建。拉短命分支（`feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`；AI 代理可用 `trae/xxx`、`codex/xxx` 前缀），
 
-* **文档类例外（#456，对 #211 规则的修订而非推翻）**：`ci.yml` 的 `push` 触发器带 `paths-ignore`（`**/*.md`、`docs/**`），纯文档改动合入**不重建镜像、不重部署**。两条不可动摇的边界：**`pull_request` 触发器不得加任何 `paths-ignore`**（ruleset 的 required check `CI OK` 会在 docs-only PR 上永不产出 → PR 永久卡住，与 #377 同型死锁），故**合入前的完整 CI 验证一点没少**，省掉的只是合入后在 main 上重复跑一次；模式只做后缀/目录式匹配，绝不写宽（写宽会让代码改动静默不跑 CI）。副作用：`deploy/YYYYMMDD-SHA` 标签不再每次合入都推进（见 `docs/reference/versioning.md` §3）。
+* **文档类例外（#456，对 #211 规则的修订而非推翻）**：`ci.yml` 的 `push` 触发器带 `paths-ignore`（`**/*.md`、`docs/**`），纯文档改动合入**不重建镜像、不重部署**。两条不可动摇的边界：**`pull_request` 触发器不得加任何 `paths-ignore`**（ruleset 的 required check `CI OK` 会在 docs-only PR 上永不产出 → PR 永久卡住，与 #377 同型死锁），故**合入前的完整 CI 验证一点没少**，省掉的只是合入后在 main 上重复跑一次；模式只做后缀/目录式匹配，绝不写宽（写宽会让代码改动静默不跑 CI）。副作用：`deploy/YYYYMMDD-SHA` 标签不再每次合入都推进（见 `docs/reference/versioning.md` §3）。审查侧的对应处置见 `docs/reference/code-review.md` §4.6。
 
 * 手动部署（`deploy.yml` `workflow_dispatch`）只接受已有镜像 tag（回滚/重部署）。
 

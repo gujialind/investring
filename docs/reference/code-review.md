@@ -218,7 +218,7 @@ L2 语义审查（专攻「绿而错」）
 
 ### 4.6 合入
 
-* **合入是人工关卡**：`CI OK` 与 L2 审查均通过后，仍**须用户明确确认才可执行合入**——合入即触发 CD、直接动生产，AI 不得自行合入。
+* **合入是人工关卡**：`CI OK` 与 L2 审查均通过后，仍**须用户明确确认才可执行合入**——合入即触发 CD、直接动生产（**纯文档改动除外**，见下条），AI 不得自行合入。
 * `CI OK` 必须绿（`skipped` 视为通过——`changes`/`e2e-compare` 系在非 e2e PR 与 push 事件下跳过；`paths-ignore` 已按 #456 落地，见 `ci.yml` 汇总 job 与 `on.push` 注释）。
 * **`pull_request` 触发器不得加 `paths-ignore`**（#456 硬约束）：ruleset `protect main` 的 required status check 是 `CI OK`，一旦 PR 侧被路径过滤，docs-only PR 上该检查永不产出 → 合入按钮永久灰掉，与 #377（改 PR base 不触发 CI → required check 无法满足）同型死锁。**PR 侧不过滤 = 合入前仍是完整 CI**；#456 省掉的只是合入后在 main 上重复跑的那一次。
 * 合入 `main` **即触发 CD 自动部署**（**纯文档改动除外**：#456 起仅含 `.md` 的改动合入不产生 CI run ⇒ 不重部署、不推进 `deploy/*` 标签，见 `AGENTS.md` §3.1），因此「部署影响」节与上线冒烟不是形式主义。
