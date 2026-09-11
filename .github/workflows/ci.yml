@@ -4,6 +4,12 @@
 # 范围：后端测试 + CLI 契约校验 + 前端 lint/类型/构建门禁 + 前端 E2E（issue #168）
 #        + E2E 形态对比（issue #410：纯测试重构 PR 的 pass/skip 形态双侧 diff 门禁）
 # 触发条件：push 到 main（合入后）或 pull request 到 main（issue #211 单分支模型）
+#           push 侧带 paths-ignore，纯文档改动合入不触发 CI ⇒ 不触发 CD（issue #456；
+#           约束与地雷见下方 `on.push` 注释）。pull_request 侧刻意无过滤——required
+#           check `CI OK` 不能在 docs-only PR 上缺席。
+# 注：文档并非与 CI 完全无关——`backend/tests/unit/test_error_codes_doc_sync.py`（#418）
+#     以 `docs/reference/business-constraints.md` 为断言输入。该测试在 PR 侧照常运行
+#     （验证发生在合入前），main 侧纯文档合入不再复跑属预期，不是缺口。
 # 测试数据库：
 #   - SQLite（conftest.py 默认模式，快速反馈）
 #   - MySQL 8.4 service 容器（对齐生产 RDS，覆盖方言差异 + 迁移链验证）
@@ -14,6 +20,22 @@ name: CI
 on:
   push:
     branches: [main]
+    # 文档类改动不重建镜像（issue #456）：被过滤时 GitHub 不产生 CI run →
+    # deploy.yml 的 workflow_run 不触发 → 不重部署。实测背景：PR #454（纯 .md）
+    # 合入后仍跑了一整轮 CD，重建前后端镜像并重启生产容器。
+    #
+    # ⚠️ 必须写 `**/*.md`，不能写 `**.md`：`**` 后无 `/` 时退化为 `*.md`，
+    #    只匹配根目录（实测本仓 34 个 tracked .md 只命中 11 个，子目录 23 个漏网）。
+    # ⚠️ 绝不能给下面的 pull_request 加 paths-ignore：ruleset `protect main` 的
+    #    required check 是 `CI OK`，docs-only PR 上它会永不产出 → PR 永久卡住，
+    #    与 #377（改 PR base 不触发 CI）同型死锁。PR 侧不过滤恰好保证合入前仍有完整验证。
+    # 刻意只做后缀/目录式匹配，不用 `docs*`、`*.md*` 或「忽略根目录」这类宽匹配——
+    # 写宽了会让代码改动静默不跑 CI，与「跑了且通过」肉眼不可区分。
+    # 已知特例（改了仍会部署，刻意不纳入）：.qoder/hooks/*.sh（本地 AI 工具钩子，
+    # 不参与构建；.qoder/ 下其余 14 个 tracked 文件都是 .md，已被上面的模式覆盖）。
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
     branches: [main]
     # labeled：e2e-compare 的 e2e-morph-expected 豁免靠打标签触发重跑

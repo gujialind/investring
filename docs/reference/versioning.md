@@ -44,6 +44,9 @@
 
 `vX.Y.Z` 与 `deploy/*` 标签指向同一 commit，镜像同时携带 `:vX.Y.Z` 与 `:sha7`，从版本号可完整追溯上线日期。
 
+* **`deploy/*` 只在真正部署时推进**（#456）：纯文档改动合入 main 不触发 CD，也就不打 `deploy/*` 标签，故该标签**可能落后于 main tip**。这不是漏打——它标示的是「当前在跑的镜像对应的 commit」，不是 main tip；追溯上线版本时以它为准，不要拿 main tip 反推。
+* **发布 PR 不受影响**：`scripts/release.py` 的发布 commit 必改 `VERSION`（非 `.md`），该 commit 不会落进 `ci.yml` 的 `paths-ignore` 模式，仍会正常构建、部署并打 `deploy/*`。所以「版本 tag 与部署 tag 同 commit」这条仍然成立。
+
 ## 4. 发布流程（两阶段：发布 PR → 打 tag）
 
 main 的 ruleset 要求一切改动经 PR 且 CI OK（**直接推送会被拒绝，无 admin 豁免**），而 `v` 标签必须落在 main tip（PR 以 merge-commit 合并）deploy.yml 才能识别「被部署 commit 的语义版本」，故发布分两阶段：
@@ -68,5 +71,5 @@ python3 scripts/release.py tag v0.1.1          # 3. 阶段二：在 origin/main 
 ## 5. 镜像与部署标签
 
 * `deploy.yml` 构建时检测被部署 commit 是否带 `v*` 标签，命中则镜像在 `:sha7`、`:latest` 之外**额外推送 `:vX.Y.Z`**。
-* `deploy/YYYYMMDD-SHORTSHA` git 标签机制不变（部署标记，与语义版本正交）。
+* `deploy/YYYYMMDD-SHORTSHA` git 标签机制不变（部署标记，与语义版本正交；推进时机见 §3——纯文档合入不推进）。
 * 手动 `workflow_dispatch` 回滚/重部署只接受已有镜像 tag，`:vX.Y.Z` 亦可用。
