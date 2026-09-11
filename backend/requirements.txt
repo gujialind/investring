@@ -27,7 +27,7 @@ certifi==2026.7.22
 apscheduler==3.11.3
 
 # Database migration
-alembic==1.19.1
+alembic==1.19.2
 
 # External data
 tushare==1.4.29
