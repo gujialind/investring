@@ -367,7 +367,7 @@ jobs:
       # 浏览器二进制缓存（issue #172）：key 绑定 package-lock.json
       # （@playwright/test 版本决定所需浏览器构建）；未命中时回退全新安装
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
@@ -622,7 +622,7 @@ jobs:
           cp -r public .next/standalone/public
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
