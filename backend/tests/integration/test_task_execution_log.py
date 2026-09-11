@@ -38,16 +38,37 @@ def _only_log(db) -> TaskExecutionLog:
     """取当次执行记录，**并 refresh**——断言一律针对落库值而非内存态。
 
     必须 refresh 的原因（#406，MySQL job 实测）：`task_execution_log` 的
-    `started_at` / `finished_at` 是 `DateTime`（无小数位），MySQL 的 DATETIME 按**秒**
-    截断。不 refresh 时读到的是内存里的原始微秒值，`finished_at - started_at` 有小数差；
-    refresh 后两者同为整秒（短任务差 0），而 `duration_ms` 是落库前按未截断值算的，
-    于是「duration_ms == finished_at - started_at」这条断言在 MySQL 上必红、在 SQLite
-    上（保留微秒）通过。生产读侧看到的也是截断后的值，故断言口径应以落库值表达。
+    `started_at` / `finished_at` 是 `DateTime`（无小数位），MySQL 存 DATETIME(0) 时按**秒
+    取整**（#458 复核口径：MySQL 8 默认是 round，`TIME_TRUNCATE_FRACTIONAL` 打开才是截断，
+    单列误差都不超过 0.5s）。不 refresh 时读到的是内存里的原始微秒值，
+    `finished_at - started_at` 有小数差；refresh 后两者同为整秒，而 `duration_ms` 是落库前
+    按**未取整**值算的，于是「duration_ms == finished_at - started_at」这条断言在 MySQL 上
+    必红、在 SQLite 上（保留微秒）通过。生产读侧看到的也是取整后的值，故断言口径应以落库值
+    表达；两者的允许差距见 `_duration_matches_wall_clock`。
     """
     logs = db.query(TaskExecutionLog).order_by(TaskExecutionLog.id).all()
     assert len(logs) == 1, f"期望恰好一条执行记录，实际 {len(logs)} 条"
     db.refresh(logs[0])
     return logs[0]
+
+
+# 「两列各自取整到秒」相对真实耗时的固有漂移上界（#458）：duration_ms 由 task_runner
+# 用**未取整**的内存值算（`int((finished_at - started_at).total_seconds() * 1000)`），
+# 而 started_at / finished_at 落库时**各自独立**取整到整秒（单列误差 ≤ 0.5s）。
+# 先各自取整再相减 ≠ 先相减再取整 ⇒ 漂移 = (e(finished) - e(started)) * 1000 ∈ (-1000, 1000) ms，
+# **方向可正可负**，两端同向取整时甚至可以是 0。取闭区间：round 模式下 ±1000ms 可达
+# （截断模式下退化为 (-1000, 0)，同样落在区间内），故换 sql_mode 也无需改判据。
+DURATION_TOLERANCE_MS = 1000
+
+
+def _duration_matches_wall_clock(duration_ms: int, wall_ms: int) -> bool:
+    """duration_ms 与「落库两列之差」是否在秒级取整漂移内自洽（#458）。
+
+    ⚠️ 别当强判据用：SQLite 保留微秒时 `wall_ms == duration_ms`，区间必然成立；它的判别力
+    在 MySQL（wall_ms 是整秒倍数）与「量级/单位错误」上——如 duration_ms 误按秒计
+    （245000 vs wall_ms=245）必红。守住「耗时被真实度量」的是调用点的 `duration_ms > 0`。
+    """
+    return wall_ms - DURATION_TOLERANCE_MS <= duration_ms <= wall_ms + DURATION_TOLERANCE_MS
 
 
 class TestManualTrigger:
@@ -67,13 +88,18 @@ class TestManualTrigger:
         assert log.started_at is not None and log.finished_at is not None
         assert log.finished_at >= log.started_at
 
-        # duration_ms 有真实值且 >= 0。**刻意不断言 equality**：两列的 DateTime 无小数位，
-        # MySQL 按秒截断而 duration_ms 按未截断值计算，短任务在 MySQL 上就是
-        # 「duration_ms=16、两列同秒」。跨库稳定的判据是「非空 + 非负 + 与两列量级一致」。
+        # duration_ms 有真实值且 > 0。**刻意不断言 equality**：两列的 DateTime 无小数位，
+        # 落库时各自被取整到整秒，而 duration_ms 按未取整值计算，短任务在 MySQL 上就是
+        # 「duration_ms=16、两列同秒」；跨秒边界时反过来会「duration_ms=245、两列差 1000」
+        # （#458 实测）。故判据拆成两条互补断言：> 0 守住「耗时被真实度量」（#406 改用
+        # >= 0 时丢掉了它，恒 0 的缺陷从此无人拦），区间判据守住「与落库两列量级自洽」。
         assert log.duration_ms is not None
-        assert log.duration_ms >= 0
+        # > 0 而非 >= 0：即便 sync_product_prices 被 mock，run_nav_sync 仍对每个产品做真实
+        # DB I/O（SELECT max(price_date) + INSERT NavSyncDetail），派发不会亚毫秒——
+        # 与 TestScheduledTrigger 同口径的那条断言一致。
+        assert log.duration_ms > 0
         wall_ms = int((log.finished_at - log.started_at).total_seconds() * 1000)
-        assert log.duration_ms >= wall_ms  # 截断只可能让墙钟差变小，不可能变大
+        assert _duration_matches_wall_clock(log.duration_ms, wall_ms)
 
         # records_* 自洽：total == success + failed
         assert result["products_count"] == log.records_total
@@ -235,3 +261,31 @@ class TestDurationClockSafety:
         log = _only_log(test_db)
         assert log.duration_ms >= 0
         assert isinstance(log.started_at, datetime)
+
+
+class TestDurationWallClockTolerance:
+    """±1000ms 判据的边界守门（#458）：只吸收秒级取整漂移，不吸收真实缺陷。
+
+    纯算术、不依赖 DB 方言，两个 job 都跑——issue #458 的验收断言「构造跨秒边界场景必须
+    通过」与「构造真实缺陷场景必须报红」在此固化为常驻用例，避免演示一次就蒸发
+    （code-review.md §0 第 5 类「覆盖无声蒸发」）。
+    """
+
+    def test_straddling_second_boundary_passes(self):
+        """#458 实测形态：真实耗时 245ms，两端反向取整后落库成跨 1 秒"""
+        assert _duration_matches_wall_clock(duration_ms=245, wall_ms=1000)
+
+    def test_both_columns_rounded_same_way_passes(self):
+        """漂移的另一侧：两端同向取整（短任务常见），两列同秒而 duration_ms 仍是真值"""
+        assert _duration_matches_wall_clock(duration_ms=245, wall_ms=0)
+
+    def test_real_defects_fail(self):
+        assert not _duration_matches_wall_clock(duration_ms=0, wall_ms=5000)  # 耗时未度量
+        assert not _duration_matches_wall_clock(duration_ms=245_000, wall_ms=245)  # 单位错：秒当毫秒
+
+    def test_tolerance_edges_are_inclusive(self):
+        """round 模式下 ±1000ms 可达，故必须闭区间（写成 < 1000 会在边界上翻车）"""
+        assert _duration_matches_wall_clock(duration_ms=0, wall_ms=1000)
+        assert _duration_matches_wall_clock(duration_ms=2000, wall_ms=1000)
+        assert not _duration_matches_wall_clock(duration_ms=2001, wall_ms=1000)
+        assert not _duration_matches_wall_clock(duration_ms=-1, wall_ms=1000)
