@@ -1500,6 +1500,43 @@ class TestShareChangeEventMarketScoping:
         assert float(confirmed.cash_change) == preview["cash_change"]
         assert float(confirmed.shares_change) == preview["shares_change"]
 
+    def test_fund_level_event_missing_position_in_target_market(self, client, admin_headers, test_db):
+        """event.market 无持仓、但另一市场有持仓时预览/确认均报 MISSING_POSITION_SNAPSHOT"""
+        _setup_lof_baseline(test_db, "SPV_M5", otc_platform=None)  # 只建 CN_EXCHANGE 持仓
+        event = self._create(test_db, "SPV_M5", event_type="share_split", ratio=Decimal("2"))
+
+        preview = client.get(
+            f"/api/share-change-events/{event.id}/preview", headers=admin_headers
+        )
+        assert preview.status_code == 422
+        assert preview.json()["detail"]["error"] == "MISSING_POSITION_SNAPSHOT"
+
+        confirm = client.post(
+            f"/api/share-change-events/{event.id}/confirm", headers=admin_headers
+        )
+        assert confirm.status_code == 422
+        assert confirm.json()["detail"]["error"] == "MISSING_POSITION_SNAPSHOT"
+
+    def test_forced_adjustment_position_not_found_for_target_market(self, client, admin_headers, test_db):
+        """forced_adjustment 按 (market, platform) 精查，目标 market 无持仓报 POSITION_NOT_FOUND"""
+        _setup_lof_baseline(test_db, "SPV_M6", otc_platform=None)  # 只建 CN_EXCHANGE 持仓
+        event = self._create(
+            test_db, "SPV_M6", event_type="forced_adjustment",
+            platform_code="MYCF", shares_change=Decimal("-10"),
+        )
+
+        preview = client.get(
+            f"/api/share-change-events/{event.id}/preview", headers=admin_headers
+        )
+        assert preview.status_code == 422
+        assert preview.json()["detail"]["error"] == "POSITION_NOT_FOUND"
+
+        confirm = client.post(
+            f"/api/share-change-events/{event.id}/confirm", headers=admin_headers
+        )
+        assert confirm.status_code == 422
+        assert confirm.json()["detail"]["error"] == "POSITION_NOT_FOUND"
+
 
 class TestShareChangeEventListFilter:
     """列表服务端筛选 + 分页（#274，形态对齐调仓列表 #126/#155）"""
