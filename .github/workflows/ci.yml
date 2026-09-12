@@ -3,10 +3,21 @@
 # ============================================================================
 # 范围：后端测试 + CLI 契约校验 + 前端 lint/类型/构建门禁 + 前端 E2E（issue #168）
 #        + E2E 形态对比（issue #410：纯测试重构 PR 的 pass/skip 形态双侧 diff 门禁）
-# 触发条件：push 到 main（合入后）或 pull request 到 main（issue #211 单分支模型）
+# 触发条件：push 到 main（合入后）、pull request 到 main（issue #211 单分支模型）、
+#           schedule nightly（issue #472）、workflow_dispatch 手动全量。
 #           push 侧带 paths-ignore，纯文档改动合入不触发 CI ⇒ 不触发 CD（issue #456；
 #           约束与地雷见下方 `on.push` 注释）。pull_request 侧刻意无过滤——required
 #           check `CI OK` 不能在 docs-only PR 上缺席。
+#
+# 路径感知裁剪（issue #462）：PR 侧只跑改动触达的 job（`changes` job 输出
+# backend / frontend / cli / scripts / e2e_morph，各 job 以 `needs.changes.outputs.*`
+# 为 if 条件）；push / schedule / workflow_dispatch 侧一律保守全量（main 必须完整验证，
+# 且 nightly 的意义就是全量）。裁剪安全性依赖 `CI OK` 把 skipped 视为通过
+# （本文件 ci-ok job 的判据），不会重现 #377/#456 的 required check 死锁。
+# 组合破坏盲区（A 只改后端、B 只改前端，各自绿但组合坏）由 nightly 全量兜底（#472）。
+# 路径映射见 `changes` job 的注释；改映射必须同步考虑 `test_error_codes_doc_sync.py`
+# 对 docs/ 的断言依赖与 E2E 种子文件对 frontend 的依赖。
+#
 # 注：文档并非与 CI 完全无关——`backend/tests/unit/test_error_codes_doc_sync.py`（#418）
 #     以 `docs/reference/business-constraints.md` 为断言输入。该测试在 PR 侧照常运行
 #     （验证发生在合入前），main 侧纯文档合入不再复跑属预期，不是缺口。
@@ -41,18 +52,43 @@ on:
     # labeled：e2e-compare 的 e2e-morph-expected 豁免靠打标签触发重跑
     #（手动 re-run 不刷新 event payload，看不到新标签）
     types: [opened, synchronize, reopened, labeled]
+  # nightly 全量体检（issue #472）：
+  #   1. 组合破坏兜底——路径裁剪后每个 PR 只跑自己触碰的部分，A+B 组合起来的 main
+  #      没有任何一次 CI 验证过；nightly 每晚跑一次完整 CI（全不裁剪）。
+  #   2. 时间炸弹提前报警——纯时间流逝引发的失败（#468 型：夹具日历/过滤窗跟着真实
+  #      时间走）在 PR 侧天然拦不住（提 PR 时还没到期），nightly 每天问一次「今天还
+  #      满足所有测试假设吗」，在爆炸前数月以「nightly 变红」报警。
+  # 20:00 UTC = 北京时间次日 04:00（低峰）。schedule 只认默认分支最新 commit，
+  # 且不受 paths-ignore 影响。⚠️ 必须与 deploy.yml 的 `workflow_run.event == 'push'`
+  # 守卫配套：否则 nightly 绿灯会被判成「main CI 成功」触发一整轮 CD（#456 实测过的浪费）。
+  schedule:
+    - cron: '0 20 * * *'
+  # 手动全量（不等 cron 验证 nightly 路径 / main 上按需重跑完整 CI）。
+  # 手动触发的 run 同样被 deploy.yml 的事件守卫挡住，不会触发 CD。
+  workflow_dispatch:
 
 # 并发控制：按「事件类型 + 源分支」分组，同组只保留最新运行。
 # 事件类型入组（issue #211）：push（合入 main 后）与 pull_request（feature→main）分属不同组，
 # 互不取消——required check 语义下「被取消」= 未通过会卡住 PR。
-# head_ref（PR 源分支名）优先，push 事件回落到 ref_name（分支名）。
+# head_ref（PR 源分支名）优先，push 事件回落到 ref_name（分支名）；schedule 得
+# `ci-schedule-main`，与 push 组天然隔离。
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+# 顶层 env 收敛（issue #462）：SECRET_KEY / SCHEDULER_ENABLED / DEBUG 此前在 8-10 个
+# step 上重复声明，改一处口径要在多处同步。DEBUG 恒 false：CI 无需 SQL echo（日志降噪，
+# 原 backend-test / cli-contract-check 走 settings 默认 True，行为随之变化）。
+env:
+  SECRET_KEY: test-secret-key-for-ci
+  SCHEDULER_ENABLED: "false"
+  DEBUG: "false"
+
 jobs:
   backend-test:
     name: "Backend Tests"
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -80,9 +116,6 @@ jobs:
       # 覆盖率仅在本 job 收集；口径（含分支）与硬阈值 fail_under 见
       # backend/pyproject.toml [tool.coverage.*]（issue #254 设防期，#171 观察期已结束）
       - name: Run tests with pytest
-        env:
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
         run: |
           pytest tests/ -q --tb=short --strict-markers --cov=app --cov-report=xml --cov-report=term-missing
 
@@ -99,6 +132,8 @@ jobs:
   # 隐式排序、排序规则等），并验证生产启动顺序（create_all → alembic upgrade head）
   backend-test-mysql:
     name: "Backend Tests (MySQL)"
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -154,9 +189,6 @@ jobs:
       - name: Verify migration chain (create_all + alembic upgrade head)
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_migration?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
           # 可逆性豁免开关：仅限引入不可逆迁移（如 DROP 列）的 PR 临时置 true，
           # 合入后必须改回 false（issue #170）
           SKIP_DOWNGRADE: "false"
@@ -176,18 +208,23 @@ jobs:
       - name: Run tests with pytest (MySQL)
         env:
           TEST_DB_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_test?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: |
           pytest tests/ -q --tb=short --strict-markers
 
-  # CLI 契约防漂移校验（issue #170 扩展）：
+  # CLI 契约防漂移校验（issue #170 扩展）、scripts 单测（#462 由独立 micro job 并入）：
   #   1. openapi.json 漂移门禁——进程内生成 schema 与已提交契约比对
   #   2. ir-cli 响应字段契约校验
   #   3. ir-cli 单元测试
+  #   4. scripts/tests 单测（scripts/ 不在 --cov=app 覆盖率口径内，故与 ir-cli 同处
+  #      无覆盖率的轻量 job；原样保留从仓库根跑的调用方式）
+  # 触发面 = ir-cli / backend / scripts 任一（openapi 漂移门禁依赖 backend 应用）。
   cli-contract-check:
     name: "CLI Contract Check"
+    needs: changes
+    if: >-
+      needs.changes.outputs.cli == 'true' ||
+      needs.changes.outputs.backend == 'true' ||
+      needs.changes.outputs.scripts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -210,9 +247,6 @@ jobs:
       # openapi.json 漂移门禁：改 router/schema 忘记重新导出时 exit 1
       # （import app.main 会对临时 sqlite 执行 create_all + init_scheduled_tasks，无需起服务）
       - name: Check openapi.json drift
-        env:
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
         run: python backend/check_openapi.py
 
       # 不一致时 exit 1：请运行 `python ir-cli/scripts/gen_response_fields.py` 重新生成并提交
@@ -225,10 +259,15 @@ jobs:
           pip install -e ir-cli pytest
           pytest ir-cli/tests -q
 
+      - name: Run scripts tests
+        run: python -m pytest scripts/tests -q
+
   # 前端门禁：前端已容器化部署，类型/语法错误与构建失败必须在 CI 拦住
   # （历史上因无前端门禁漏过任务页 map 崩溃等问题）
   frontend-check:
     name: "Frontend Lint & Build"
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -279,6 +318,8 @@ jobs:
   #   - 前端 next.config.js 将 /api/* rewrite 到 localhost:8000，故需真实后端
   frontend-e2e:
     name: "Frontend E2E"
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -326,9 +367,6 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: |
           python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
@@ -340,18 +378,12 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: python scripts/seed_e2e.py
 
       - name: Start backend
         working-directory: backend
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: |
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../backend-e2e.log 2>&1 &
           for i in $(seq 1 30); do
@@ -481,50 +513,80 @@ jobs:
   # 非空 diff 拦合入，预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
   # 标签豁免。两侧构建源同为 PR head，唯一变量是 frontend/e2e/ 目录；CI runner 天然
   # 隔离，本地脚本 verify-e2e-pr.sh 的隔离层（挑端口/独立 db/swap spec/trap）随之整删。
+  # 变更路径检测（issue #462 起同时服务 job 裁剪与 E2E 形态对比触发）。
+  # 本 job **全事件运行**：若只在 PR 侧运行，push 时它被 skip，各 job 因
+  # `needs` 命中 skip 而整体跳过（即使写了 `if: github.event_name == 'push'`——
+  # GitHub 会把默认的 success() 与 if 相与，skipped 依赖使 success() 为假），
+  # 于是合入 main 后一个实质测试都不跑而 CD 照常部署。
+  # 非 PR 事件输出保守全量，e2e_morph 除外（compare 只是 PR 侧防线，详见 detect 步骤注释）。
   changes:
-    name: "Detect E2E Morphology Inputs"
-    if: github.event_name == 'pull_request'
+    name: "Detect Changed Paths"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      e2e_morph: ${{ steps.detect.outputs.hit }}
+      backend: ${{ steps.detect.outputs.backend }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      cli: ${{ steps.detect.outputs.cli }}
+      scripts: ${{ steps.detect.outputs.scripts }}
+      e2e_morph: ${{ steps.detect.outputs.e2e_morph }}
     steps:
-      - name: Checkout PR head
+      - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          # PR 侧检出头 commit（fetch-depth 0 供 base...HEAD diff）；
+          # push / schedule / workflow_dispatch 侧 head.sha 为空，回落 github.sha
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      # 纯 git 检测（不引第三方 action）。路径清单含 playwright.config.ts 与
-      # 种子文件——它们同样改变 pass/skip 形态；ci.yml 自身在列（本 job 的 dogfood）。
+      # 纯 git 检测（不引第三方 action）。
+      # 非 PR 事件一律保守「全量」：main 必须完整验证，nightly 的意义就是全量；
+      # 但 e2e_morph 恒 false——compare 只拦 PR 侧的「测试重构假绿灯」，
+      # 置 true 会让每次合入 main 多跑两轮全量 E2E。
+      # PR 侧路径映射（改映射必须重新审视下方注释里的既有依赖）：
+      #   backend   ← backend/ 或 docs/（test_error_codes_doc_sync.py 以
+      #               docs/reference/business-constraints.md 为断言输入）
+      #   frontend  ← frontend/ 或 E2E 种子文件（种子破坏必须让 frontend-e2e 真红：
+      #               compare 对两侧同形失败会判空 diff，兜不住）
+      #   cli       ← ir-cli/（openapi 漂移门禁另依赖 backend，条件里已 OR）
+      #   scripts   ← scripts/
+      #   .github/workflows/ 命中则**四个栈全 true**：CI 配置改动无法预判影响面，
+      #               而改配置的 PR 正是最需要完整验证的场合（代价 = 回到裁剪前的全量）
+      #   e2e_morph ← 形态输入清单：e2e 目录、playwright 配置、种子与 normalizer
+      #               （它们同样改变 pass/skip 形态）。ci.yml 自身在列是 dogfood，
+      #               代价是每次改 ci.yml 都触发两侧全量 E2E——#467 将移除该条目。
       - id: detect
         run: |
-          if git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" \
-            | grep -qE '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/|\.github/workflows/ci\.yml)'; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            echo "cli=true" >> "$GITHUB_OUTPUT"
+            echo "scripts=true" >> "$GITHUB_OUTPUT"
+            echo "e2e_morph=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-
-  # normalizer 单测独立成 micro job：不挂 backend-test（该 job 带 --cov=app +
-  # fail_under=80，scripts/tests 不在覆盖率口径内，混入信号混乱）
-  scripts-test:
-    name: "Scripts Tests"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Run scripts tests
-        run: |
-          pip install pytest
-          python -m pytest scripts/tests -q
+          git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" > /tmp/changed.txt
+          hit() { grep -qE "$1" /tmp/changed.txt && echo true || echo false; }
+          wf=$(hit '^\.github/workflows/')
+          emit() {  # $1=输出名 $2=该栈是否命中
+            if [ "$2" = "true" ] || [ "$wf" = "true" ]; then
+              echo "$1=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$1=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          emit backend "$(hit '^(backend/|docs/)')"
+          emit frontend "$(hit '^(frontend/|backend/tests/seed_base\.py$|backend/scripts/seed_e2e\.py$)')"
+          emit cli "$(hit '^ir-cli/')"
+          emit scripts "$(hit '^scripts/')"
+          emit e2e_morph "$(hit '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/|\.github/workflows/ci\.yml)')"
+          # 输出缺失/写错会让所有 job 静默 skip 而 `CI OK` 仍绿（= 假绿），显式校验
+          for k in backend frontend cli scripts e2e_morph; do
+            n=$(grep -cE "^$k=(true|false)$" "$GITHUB_OUTPUT" || true)
+            if [ "$n" != "1" ]; then
+              echo "::error::changes 输出 $k 异常（期望 1 条 true/false，实得 $n 条）"
+              exit 1
+            fi
+          done
 
   # 栈步骤与 frontend-e2e 逐行同构（MySQL/建库/迁移/种子/uvicorn/构建/浏览器）；
   # 差异仅：baseline 侧换 e2e 目录、--retries=0、JSON reporter 落文件。
@@ -592,9 +654,6 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: |
           python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
@@ -603,18 +662,12 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: python scripts/seed_e2e.py
 
       - name: Start backend
         working-directory: backend
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-          SECRET_KEY: test-secret-key-for-ci
-          SCHEDULER_ENABLED: "false"
-          DEBUG: "false"
         run: |
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../backend-e2e-compare.log 2>&1 &
           for i in $(seq 1 30); do
@@ -746,10 +799,43 @@ jobs:
           echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
           exit 1
 
+  # nightly 卫生检查（issue #472，仅 schedule 运行）：逃生阀回收的标签侧。
+  # 打上 e2e-morph-expected 的开放 PR 会豁免形态 diff 门禁；长期挂着该标签等于
+  # 长期豁免，须周期性暴露（warning 级、恒 exit 0，不进 ci-ok 判定）。
+  nightly-hygiene:
+    name: "Nightly Hygiene"
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Scan stale e2e-morph-expected labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          stale=$(gh pr list --repo "${{ github.repository }}" --state open \
+            --label e2e-morph-expected --json number,title,createdAt \
+            --jq '[.[] | select((.createdAt | fromdateiso8601) < (now - 14*86400))]
+                  | .[] | "#\(.number) \(.title)（创建于 \(.createdAt)）"')
+          if [ -n "$stale" ]; then
+            echo "::warning::以下开放 PR 挂着 e2e-morph-expected 超过 14 天，形态 diff 长期被豁免，请复核是否仍需保留"
+            echo "$stale"
+            {
+              echo "### ⚠️ e2e-morph-expected 标签残留"
+              echo '```'
+              echo "$stale"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "✅ 无长期残留的 e2e-morph-expected 标签"
+          fi
+
   # 汇总门禁（issue #211）：作为 main 分支唯一的 required status check。
   # 不直接把 matrix 展开的 Docker Build Smoke / 偏发的 Frontend E2E 设为 required，
   # 而是用本 job needs 全部实质 job 后统一判定——任一 failure/cancelled 即失败，
-  # skipped 视为通过（changes/e2e-compare 系在非 e2e PR 与 push 事件下跳过，issue #410）。
+  # skipped 视为通过（路径裁剪后未触达的 job 与 compare 系在非 e2e PR 下跳过，issue #410/#462）。
   ci-ok:
     name: "CI OK"
     if: always()
@@ -761,7 +847,6 @@ jobs:
       - frontend-e2e
       - docker-build-smoke
       - changes
-      - scripts-test
       - e2e-compare-capture
       - e2e-compare
     runs-on: ubuntu-latest
