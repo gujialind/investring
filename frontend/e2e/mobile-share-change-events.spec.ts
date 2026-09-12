@@ -141,7 +141,9 @@ test.describe('移动端份额变动事件页（#276）', () => {
 
     // 预览要求「权益登记日有持仓快照」+「除息日晚于最新快照日」，故本用例落在
     // active 组合 E2E_ACTIVE（draft 组合 E2E_PORT 零快照是该组合的契约、不改）。
-    // 两个日期按 API 现状动态推导，避免写死日期在某些运行日失效（日历止 2026-12-31）：
+    // 两个日期按 API 现状动态推导，避免写死日期在某些运行日失效（#468 起种子日历
+    // 终点滚动到 today+1 年，查询年份须跟随最新快照而非固定 2026，否则跨年后
+    // ex_date 找不到、用例静默 skip）：
     // entitlement = 最新快照日、ex_date = 最新快照日之后的第一个交易日。
     // entitlement 必须取最新快照日而非最早（#460 评审）：下方持仓取自 /api/positions
     // 最新快照，若最早快照日尚无该 (product, market, platform) 持仓行，创建期放行、
@@ -161,7 +163,10 @@ test.describe('移动端份额变动事件页（#276）', () => {
     const entitlementDate = latestSnapshot;
 
     const calendar = await (
-      await page.request.get('/api/trading-calendar?year=2026', { headers })
+      await page.request.get(
+        `/api/trading-calendar?year=${latestSnapshot.slice(0, 4)}`,
+        { headers },
+      )
     ).json();
     const openDays: string[] = (calendar as { calendar_date: string; is_open: boolean }[])
       .filter((r) => r.is_open)
