@@ -1204,7 +1204,7 @@ def _generate_portfolio_position(
                 if cash_key not in positions:
                     positions[cash_key] = {"shares": None, "cash_amount": Decimal("0"), "cost_price": None}
                 positions[cash_key]["cash_amount"] += Decimal(str(event.cash_change))
-            # issue #263：cash_dividend 恒有 shares_change=0（_compute_event_fields），
+            # issue #263：cash_dividend 恒有 shares_change=0（compute_event_fields），
             # 跳过份额应用段；forced_adjustment 份额为用户直填，须落入下方份额应用段
             if event.event_type == "cash_dividend":
                 continue

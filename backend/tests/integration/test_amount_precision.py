@@ -16,7 +16,6 @@ from datetime import date
 from decimal import Decimal
 
 from app.models.portfolio_position import PortfolioPosition
-from app.models.share_change_event import ShareChangeEvent
 from app.models.trade import Trade
 from app.models.manual_market_value import ManualMarketValue
 from app.services.cash_transfer_service import create_cash_transfer
@@ -25,7 +24,7 @@ from app.services.position_service import (
     calculate_available_cash,
     update_cash_position,
 )
-from app.services.share_change_event_service import _compute_event_fields
+from app.services.share_change_event_service import compute_event_fields
 from app.services.subscription_service import (
     confirm_single_subscription,
     create_subscription,
@@ -192,25 +191,39 @@ class TestEventCashChangePrecision:
 
     def test_cash_dividend_cash_change_two_decimals(self, test_db):
         """现金分红：6837.30 份 × 每份 0.0256 元 = 175.03488 → 175.03"""
-        event = ShareChangeEvent(
-            event_type="cash_dividend",
-            entitlement_shares=Decimal("6837.30"),
-            div_cash=Decimal("0.0256"),
+        result = compute_event_fields(
+            "cash_dividend", Decimal("6837.30"), div_cash=Decimal("0.0256")
         )
-        _compute_event_fields(event)
-        assert event.cash_change == Decimal("175.03")
+        assert result.cash_change == Decimal("175.03")
+        assert result.shares_change == Decimal("0")
+        assert result.shares_after == Decimal("6837.30")
+
+    def test_reinvest_dividend_amount_quantized_before_shares(self, test_db):
+        """#425：分红再投资的「金额 → 份额」转换必须先量化红利金额到分。
+
+        5377.61 × 0.0119 = 63.993559 → 分 63.99 → / 1.0899 = 58.711808… → 58.71
+        跳过金额量化的一步式算法得 58.72（博时实际派发 58.71，差 0.01 份）
+        """
+        result = compute_event_fields(
+            "reinvest_dividend",
+            Decimal("5377.61"),
+            div_cash=Decimal("0.0119"),
+            reinvest_nav=Decimal("1.0899"),
+        )
+        assert result.shares_change == Decimal("58.71")
+        assert result.shares_after == Decimal("5436.32")
+        assert result.cash_change == Decimal("0")
 
     def test_forced_adjustment_user_cash_change_quantized(self, test_db):
         """强制调整：用户填写 4 位 cash_change 量化为 2 位"""
-        event = ShareChangeEvent(
-            event_type="forced_adjustment",
-            entitlement_shares=Decimal("100.00"),
+        result = compute_event_fields(
+            "forced_adjustment",
+            Decimal("100.00"),
             shares_change=Decimal("10.005"),
             cash_change=Decimal("100.005"),
         )
-        _compute_event_fields(event)
-        assert event.shares_change == Decimal("10.01")
-        assert event.cash_change == Decimal("100.01")
+        assert result.shares_change == Decimal("10.01")
+        assert result.cash_change == Decimal("100.01")
 
 
 class TestManualCashOverridePrecision:

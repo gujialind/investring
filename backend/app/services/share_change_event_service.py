@@ -9,7 +9,7 @@ service 层只抛领域异常（BusinessError/NotFoundError），不 import fast
 import logging
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from sqlalchemy.orm import Session
 
@@ -35,52 +35,274 @@ logger = logging.getLogger(__name__)
 FUND_LEVEL_TYPES = {"share_split", "share_merge", "bonus_share"}
 PLATFORM_LEVEL_TYPES = {"cash_dividend", "reinvest_dividend", "forced_adjustment"}
 
+# 确认与预览共用的拒绝文案（#460 评审：单点定义，杜绝「同码不同消息」两侧漂移）
+MSG_POSITION_SNAPSHOT_MISSING = "权益登记日持仓快照不存在"
+MSG_FUND_LEVEL_NO_HOLDINGS = "权益登记日无持仓，无需确认"
 
-def _compute_event_fields(event: ShareChangeEvent) -> None:
-    """按 event_type 计算 shares_change/shares_after/cash_change。
-    forced_adjustment 由用户直接填写，不自动计算（份额仅量化）。
 
-    份额类字段统一量化到 2 位（四舍五入），且保证 shares_after 与
-    shares_change 严格自洽：乘除产生新份额的类型（split/merge）先量化
-    shares_after 再反算 shares_change；增量型（reinvest/bonus）先量化
-    shares_change 再用 es + shares_change 重算 shares_after。
-    cash_change 是金额，同样量化到 2 位（issue #94）。
+class EventFieldResult(NamedTuple):
+    """事件变动的计算结果（纯数据，不挂 ORM 对象）。
+
+    「份额类字段统一量化到 2 位、shares_after 与 shares_change 严格自洽」
+    这组不变量由 compute_event_fields 单点定义——它只算不写，确认路径负责
+    把结果写回事件（含审计 diff 语义），预览路径直接原样返回（issue #424）。
     """
-    es = event.entitlement_shares or Decimal("0")
-    if event.event_type == "cash_dividend":
-        event.cash_change = quantize_amount(es * Decimal(str(event.div_cash or 0)))
-        event.shares_change = Decimal("0")
-        event.shares_after = es
-    elif event.event_type == "reinvest_dividend":
-        event.shares_change = quantize_shares(
-            es * Decimal(str(event.div_cash or 0)) / Decimal(str(event.reinvest_nav or 1))
+
+    shares_change: Optional[Decimal]
+    shares_after: Decimal
+    cash_change: Optional[Decimal]
+
+
+def compute_event_fields(
+    event_type: str,
+    entitlement_shares: Optional[Decimal],
+    *,
+    ratio: Optional[Decimal] = None,
+    div_cash: Optional[Decimal] = None,
+    reinvest_nav: Optional[Decimal] = None,
+    shares_change: Optional[Decimal] = None,
+    cash_change: Optional[Decimal] = None,
+) -> Optional[EventFieldResult]:
+    """按 event_type 计算 shares_change/shares_after/cash_change（纯函数，issue #424）。
+
+    确认（confirm_share_change_event / _confirm_fund_level_event）与确认预览
+    （compute_share_change_event_preview）共用本实现，「预览 == 确认」由此保证；
+    本函数**不修改任何 ORM 对象**，调用方自行决定写回或原样返回。
+
+    规则：
+    - cash_dividend：金额口径，`cash_change = quantize_amount(es × div_cash)`
+    - reinvest_dividend：唯一「金额 → 份额」的类型——**红利金额先量化到分**，
+      再按再投资净值折算份额（与 cash_dividend 同口径，亦与基金公司算法一致：
+      先按分确定应得红利，再折算份额，issue #425）
+    - share_split / share_merge：先量化 shares_after 再反算 shares_change（乘除产生新份额）
+    - bonus_share / reinvest_dividend：先量化 shares_change 再用 es + shares_change 重算 shares_after
+    - forced_adjustment：shares_change / cash_change 由用户直接填写，此处只量化；
+      两者皆为空时返回 None（「无用户填报的变动量可预览」，确认路径先由
+      _validate_adjustment_not_empty 拦截，预览路径同）
+
+    份额类字段统一量化到 2 位（四舍五入），cash_change 是金额同样量化到 2 位（issue #94）。
+    """
+    es = entitlement_shares or Decimal("0")
+    if event_type == "cash_dividend":
+        return EventFieldResult(
+            shares_change=Decimal("0"),
+            shares_after=es,
+            cash_change=quantize_amount(es * Decimal(str(div_cash or 0))),
         )
-        event.shares_after = es + event.shares_change
-        event.cash_change = Decimal("0")
-    elif event.event_type == "share_split":
-        event.shares_after = quantize_shares(es * Decimal(str(event.ratio or 1)))
-        event.shares_change = event.shares_after - es
-        event.cash_change = Decimal("0")
-    elif event.event_type == "share_merge":
-        event.shares_after = quantize_shares(es / Decimal(str(event.ratio or 1)))
-        event.shares_change = event.shares_after - es
-        event.cash_change = Decimal("0")
-    elif event.event_type == "bonus_share":
-        event.shares_change = quantize_shares(es * Decimal(str(event.ratio or 0)))
-        event.shares_after = es + event.shares_change
-        event.cash_change = Decimal("0")
-    elif event.event_type == "forced_adjustment":
-        # shares_change / cash_change 由用户直接填写；份额与金额均量化到 2 位（issue #94）
-        if event.shares_change is not None:
-            event.shares_change = quantize_shares(Decimal(str(event.shares_change)))
-        if event.cash_change is not None:
-            event.cash_change = quantize_amount(Decimal(str(event.cash_change)))
+    if event_type == "reinvest_dividend":
+        # issue #425：红利金额先量化到分（与 cash_dividend 同口径，亦与基金公司算法一致：
+        # 先按「分」确定应得红利，再按再投资净值折算份额）。跳过这一步会把
+        # 「金额量化损失（< 0.005 元）」带进份额，跨四舍五入边界时差 0.01 份。
+        dividend_amount = quantize_amount(es * Decimal(str(div_cash or 0)))
+        new_shares = quantize_shares(dividend_amount / Decimal(str(reinvest_nav or 1)))
+        return EventFieldResult(
+            shares_change=new_shares,
+            shares_after=es + new_shares,
+            cash_change=Decimal("0"),
+        )
+    if event_type == "share_split":
+        shares_after = quantize_shares(es * Decimal(str(ratio or 1)))
+        return EventFieldResult(
+            shares_change=shares_after - es, shares_after=shares_after, cash_change=Decimal("0")
+        )
+    if event_type == "share_merge":
+        shares_after = quantize_shares(es / Decimal(str(ratio or 1)))
+        return EventFieldResult(
+            shares_change=shares_after - es, shares_after=shares_after, cash_change=Decimal("0")
+        )
+    if event_type == "bonus_share":
+        new_shares = quantize_shares(es * Decimal(str(ratio or 0)))
+        return EventFieldResult(
+            shares_change=new_shares,
+            shares_after=es + new_shares,
+            cash_change=Decimal("0"),
+        )
+    if event_type == "forced_adjustment":
+        # issue #263：shares_change / cash_change 是用户直填值（唯一存处）
+        if shares_change is None and cash_change is None:
+            return None
+        # **未填写的一项保持 None，绝不折成 0**（与重构前逐字一致）：快照的事件应用
+        # 循环以 `event.shares_change is None` 判定「纯现金调整」并跳过份额段
+        # （snapshot_service），若把 None 折成 Decimal("0")，对 CASH 产品的合法纯现金
+        # 调整会被现金行守卫误杀为 POSITION_NOT_FOUND。
+        return EventFieldResult(
+            shares_change=(
+                quantize_shares(Decimal(str(shares_change))) if shares_change is not None else None
+            ),
+            shares_after=es,
+            cash_change=(
+                quantize_amount(Decimal(str(cash_change))) if cash_change is not None else None
+            ),
+        )
+    # 未知类型：维持重构前「不计算、不写字段」的行为（event_type 是自由字符串，
+    # 无创建期白名单；此处新增拒绝会改变既有记录的确认行为），返回 None 由调用方跳过
+    return None
+
+
+def _require_entitlement_snapshot(db: Session, event: ShareChangeEvent) -> None:
+    """权益登记日持仓快照存在性探针（确认与预览共用单点，MISSING_POSITION_SNAPSHOT）。
+
+    惰性设计：只在持仓查询未命中时由 resolve_entitlement_shares /
+    _confirm_fund_level_event 调用——命中路径零额外查询（#460 评审：「探针 +
+    重查」的双查询模式让每次预览对同一数据两次往返）。
+    """
+    probe = db.query(PortfolioPosition).filter(
+        PortfolioPosition.portfolio_code == event.portfolio_code,
+        PortfolioPosition.snapshot_date == event.entitlement_date,
+    ).first()
+    if not probe:
+        raise BusinessError("MISSING_POSITION_SNAPSHOT", MSG_POSITION_SNAPSHOT_MISSING)
+
+
+def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
+    """读取事件的权益登记日权益份额（确认与预览共用口径，issue #424）。
+
+    快照存在、但按口径无命中持仓行时返回 `Decimal("0")`——与确认路径现状一致，
+    不在此处新增「无持仓即拒绝」的语义（forced_adjustment 的精查是例外，见 Raises）。
+
+    Raises:
+        BusinessError: MISSING_POSITION_SNAPSHOT——权益登记日持仓快照不存在
+            （惰性探针，仅持仓查询未命中时触发，与确认路径同码同消息）；
+            POSITION_NOT_FOUND——forced_adjustment 在权益登记日无
+            (产品, market, 平台) 持仓行（issue #278：LOF market 误填提前快失败；
+            探针先于精查，快照缺失时优先报 MISSING_POSITION_SNAPSHOT）
+    """
+    if event.platform_code is None:
+        # 基金级事件：各平台持仓份额之和
+        positions = db.query(PortfolioPosition).filter(
+            PortfolioPosition.portfolio_code == event.portfolio_code,
+            PortfolioPosition.product_code == event.product_code,
+            PortfolioPosition.snapshot_date == event.entitlement_date,
+            PortfolioPosition.shares > 0,
+        ).all()
+        if not positions:
+            _require_entitlement_snapshot(db, event)
+            return Decimal("0")
+        return sum((Decimal(str(pos.shares or 0)) for pos in positions), Decimal("0"))
+
+    if event.event_type == "forced_adjustment":
+        ent_position = db.query(PortfolioPosition).filter(
+            PortfolioPosition.portfolio_code == event.portfolio_code,
+            PortfolioPosition.product_code == event.product_code,
+            PortfolioPosition.market == event.market,
+            PortfolioPosition.platform_code == event.platform_code,
+            PortfolioPosition.snapshot_date == event.entitlement_date,
+        ).first()
+        if not ent_position:
+            _require_entitlement_snapshot(db, event)
+            raise BusinessError(
+                "POSITION_NOT_FOUND",
+                f"权益登记日 {event.entitlement_date} 无对应持仓 "
+                f"{event.product_code}({event.market}) 平台 {event.platform_code}，"
+                f"请核对产品/市场/平台",
+            )
+        return Decimal(str(ent_position.shares or 0))
+
+    # 平台级事件：按 platform_code 过滤读取
+    entitlement_position = db.query(PortfolioPosition).filter(
+        PortfolioPosition.portfolio_code == event.portfolio_code,
+        PortfolioPosition.product_code == event.product_code,
+        PortfolioPosition.platform_code == event.platform_code,
+        PortfolioPosition.snapshot_date == event.entitlement_date,
+    ).first()
+    if not entitlement_position:
+        _require_entitlement_snapshot(db, event)
+        return Decimal("0")
+    return Decimal(str(entitlement_position.shares or 0))
+
+
+def apply_event_fields(event: ShareChangeEvent) -> None:
+    """把 compute_event_fields 的结果写回事件对象（唯一写回点，issue #424）。
+
+    仅确认路径调用——写回是**刻意**的：`record_audit` 的 diff（`_diff_fields`）读事件
+    当前字段，值必须落在对象上才进得了审计载荷与库；预览路径不得调用本函数，
+    否则 pending 对象被改后列表行会显示未落库的预览值（#424 引入预览时的核心约束）。
+
+    forced_adjustment 双空时 compute_event_fields 返回 None，此时不写回任何字段
+    （确认路径的前置校验已先拦截双空）。
+
+    **forced_adjustment 的两项语义**（与重构前逐字一致，#263/#424）：
+    - `shares_change` / `cash_change` 为空时**不写回**（保持 None）——快照的事件应用循环
+      以 `event.shares_change is None` 判定「纯现金调整」并跳过份额段，折成 0 会让
+      对 CASH 产品的合法纯现金调整被现金行守卫误杀（snapshot_service）；
+    - `shares_after` 恒不写回：它是用户直填的「调整后余额」（与 shares_change 同为用户
+      输入、unconfirm 同样不清空），照「es + shares_change」推导既会覆盖用户输入，
+      也会让纯现金调整凭空获得一个 shares_after。
+    """
+    result = compute_event_fields(
+        event.event_type,
+        event.entitlement_shares,
+        ratio=event.ratio,
+        div_cash=event.div_cash,
+        reinvest_nav=event.reinvest_nav,
+        shares_change=event.shares_change,
+        cash_change=event.cash_change,
+    )
+    if result is None:
+        return
+    if result.shares_change is not None:
+        event.shares_change = result.shares_change
+    if event.event_type != "forced_adjustment":
+        event.shares_after = result.shares_after
+    if result.cash_change is not None:
+        event.cash_change = result.cash_change
+
+
+def compute_share_change_event_preview(db: Session, event: ShareChangeEvent) -> dict:
+    """确认前预览事件变动量（纯计算，不落库），与真实确认共用同一实现（issue #424）。
+
+    只做查询与计算：**不修改 event 对象、不 flush/commit、不产审计**。confirm 路径
+    写回落库，本函数把同一份计算结果原样返回，据此保证「预览 == 确认」。
+
+    Returns:
+        {"entitlement_shares": Decimal, "shares_change": Decimal|None,
+         "shares_after": Decimal|None, "cash_change": Decimal|None}
+        —— forced_adjustment 双空时三个变动字段为 None（与确认同一拒绝口径）；
+        forced_adjustment 的 shares_after 恒为 None——确认路径不把该字段纳入计算写回
+        （见 apply_event_fields），预览照实回 None，不编造确认不会产生的值
+
+    Raises:
+        BusinessError: INVALID_STATUS——非 pending（与确认同一条消息）；
+            EMPTY_ADJUSTMENT / SHARES_CHANGE_ON_CASH_PRODUCT / MISSING_POSITION_SNAPSHOT /
+            POSITION_NOT_FOUND——全部与确认路径同源同码同消息
+    """
+    # 与确认路径同一组前置校验（公共 preamble，同序同码同消息，杜绝预览与确认分叉）
+    _validate_confirm_preconditions(db, event)
+
+    entitlement_shares = resolve_entitlement_shares(db, event)
+    if event.platform_code is None and entitlement_shares == 0:
+        # 基金级事件在权益登记日无任何 shares > 0 持仓时确认会失败
+        # （_confirm_fund_level_event 抛 ValueError → MISSING_POSITION_SNAPSHOT）。
+        # 预览若照常返回 0/0.00 就是「假预览」：看着能确认、点下去才炸。
+        # 文案与确认路径共用同一常量（#460 评审：原两侧同码不同消息）
+        raise BusinessError("MISSING_POSITION_SNAPSHOT", MSG_FUND_LEVEL_NO_HOLDINGS)
+    result = compute_event_fields(
+        event.event_type,
+        entitlement_shares,
+        ratio=event.ratio,
+        div_cash=event.div_cash,
+        reinvest_nav=event.reinvest_nav,
+        shares_change=event.shares_change,
+        cash_change=event.cash_change,
+    )
+    is_forced_adjustment = event.event_type == "forced_adjustment"
+
+    # 刻意不复刻创建期的平台覆盖校验（check_platform_coverage）：那是「录入完整性」
+    # 规则而非状态门，塞进只读预览会与确认路径行为分叉（#424）
+    return {
+        "entitlement_shares": entitlement_shares,
+        "shares_change": result.shares_change if result else None,
+        "shares_after": (
+            None if (result is None or is_forced_adjustment) else result.shares_after
+        ),
+        "cash_change": result.cash_change if result else None,
+    }
 
 
 # issue #279：现金型/在途虚拟产品（product_type 口径，种子/迁移 0006），
 # 份额变动不得作用于非净值型资产（cash_amount IS NOT NULL 行）
 CASH_LIKE_PRODUCT_TYPES = {"CASH", "IN_TRANSIT"}
-# 确认时结构上必然产生份额变动的事件类型（_compute_event_fields 由基数/比例推导，
+# 确认时结构上必然产生份额变动的事件类型（compute_event_fields 由基数/比例推导，
 # 与用户是否显式填写 shares_change 无关）
 STRUCTURAL_SHARE_TYPES = {"share_split", "share_merge", "bonus_share", "reinvest_dividend"}
 
@@ -124,6 +346,26 @@ def _validate_product_allows_shares_change(
             "SHARES_CHANGE_ON_CASH_PRODUCT",
             f"{product_code} 为现金型/在途虚拟产品，不接受份额变动",
         )
+
+
+def _validate_confirm_preconditions(db: Session, event: ShareChangeEvent) -> None:
+    """确认与确认预览共用的前置校验序列（#424；#460 评审抽公共 preamble）。
+
+    「预览 == 确认」要求两条路径的前置拒绝同序、同码、同消息——新增/调整确认
+    前置时改此一处，两路径同时生效，杜绝静默分叉。含：状态门 + #279 双校验
+    （forced_adjustment 双空、现金型产品份额变动；确认侧兜底防存量脏数据或
+    绕过创建/更新入口直造的记录）。权益登记日快照存在性探针不在此——它内聚在
+    resolve_entitlement_shares / _confirm_fund_level_event 的未命中分支
+    （惰性探针，命中零额外查询，见 _require_entitlement_snapshot）。
+    """
+    if event.status != "pending":
+        raise BusinessError("INVALID_STATUS", "仅 pending 状态可确认")
+    _validate_adjustment_not_empty(
+        event.event_type, event.shares_change, event.cash_change
+    )
+    _validate_product_allows_shares_change(
+        db, event.product_code, event.market, event.event_type, event.shares_change
+    )
 
 
 def check_platform_coverage(
@@ -172,7 +414,10 @@ def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
     ).all()
 
     if not all_positions:
-        raise ValueError("权益登记日无持仓，无需确认")
+        # 惰性探针：快照缺失报 MISSING_POSITION_SNAPSHOT（BusinessError 直传，
+        # 不经 ValueError 包装）；快照存在才是「无持仓」——文案与预览共用常量
+        _require_entitlement_snapshot(db, event)
+        raise ValueError(MSG_FUND_LEVEL_NO_HOLDINGS)
 
     total_shares = Decimal("0")
     now = datetime.now()
@@ -200,7 +445,7 @@ def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
                 status="confirmed",
                 confirmed_at=now,
             )
-            _compute_event_fields(child)
+            apply_event_fields(child)
             db.add(child)
         db.flush()
         sp.commit()
@@ -211,7 +456,7 @@ def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
     # 父记录设汇总值
     event.entitlement_shares = total_shares
     event.shares_before = total_shares
-    _compute_event_fields(event)
+    apply_event_fields(event)
     event.status = "confirmed"
     event.confirmed_at = now
 
@@ -440,24 +685,9 @@ def update_share_change_event(
 
 def confirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareChangeEvent:
     """确认份额变动事件（回写 entitlement_shares、计算、基金级自动拆分）。不 commit。"""
-    if event.status != "pending":
-        raise BusinessError("INVALID_STATUS", "仅 pending 状态可确认")
-
-    # issue #279：确认侧兜底校验（防存量脏数据或绕过创建/更新入口直造的记录）
-    _validate_adjustment_not_empty(
-        event.event_type, event.shares_change, event.cash_change
-    )
-    _validate_product_allows_shares_change(
-        db, event.product_code, event.market, event.event_type, event.shares_change
-    )
-
-    # 校验权益登记日持仓快照是否存在
-    position_snapshot = db.query(PortfolioPosition).filter(
-        PortfolioPosition.portfolio_code == event.portfolio_code,
-        PortfolioPosition.snapshot_date == event.entitlement_date,
-    ).first()
-    if not position_snapshot:
-        raise BusinessError("MISSING_POSITION_SNAPSHOT", "权益登记日持仓快照不存在")
+    # 前置校验与预览共用同一 preamble（同序同码同消息）：状态门 + #279 双校验；
+    # 快照存在性探针内聚在 resolve_entitlement_shares / _confirm_fund_level_event
+    _validate_confirm_preconditions(db, event)
 
     if event.platform_code is None:
         # 基金级事件：自动拆分为各平台子记录
@@ -466,39 +696,13 @@ def confirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareCha
         except ValueError as e:
             raise BusinessError("MISSING_POSITION_SNAPSHOT", str(e))
     else:
-        if event.event_type == "forced_adjustment":
-            # issue #278：确认侧精查——权益登记日必须存在 (产品, market, 平台)
-            # 持仓行，否则事件指向不存在的持仓（LOF market 误填是最典型场景），
-            # 确认后会在快照生成中以 POSITION_NOT_FOUND 硬拒绝，此处提前快失败
-            ent_position = db.query(PortfolioPosition).filter(
-                PortfolioPosition.portfolio_code == event.portfolio_code,
-                PortfolioPosition.product_code == event.product_code,
-                PortfolioPosition.market == event.market,
-                PortfolioPosition.platform_code == event.platform_code,
-                PortfolioPosition.snapshot_date == event.entitlement_date,
-            ).first()
-            if not ent_position:
-                raise BusinessError(
-                    "POSITION_NOT_FOUND",
-                    f"权益登记日 {event.entitlement_date} 无对应持仓 "
-                    f"{event.product_code}({event.market}) 平台 {event.platform_code}，"
-                    f"请核对产品/市场/平台",
-                )
-            entitlement_shares = Decimal(str(ent_position.shares or 0))
-        else:
-            # 平台级事件：按 platform_code 过滤读取 entitlement_shares
-            entitlement_position = db.query(PortfolioPosition).filter(
-                PortfolioPosition.portfolio_code == event.portfolio_code,
-                PortfolioPosition.product_code == event.product_code,
-                PortfolioPosition.platform_code == event.platform_code,
-                PortfolioPosition.snapshot_date == event.entitlement_date,
-            ).first()
-            entitlement_shares = (
-                Decimal(str(entitlement_position.shares or 0)) if entitlement_position else Decimal("0")
-            )
+        # 权益份额口径与预览共用单点实现（issue #424）：
+        # forced_adjustment 的 (产品, market, 平台) 精查在此（POSITION_NOT_FOUND，#278），
+        # 其余平台级按 platform_code 过滤（无命中 → 0）
+        entitlement_shares = resolve_entitlement_shares(db, event)
         event.entitlement_shares = entitlement_shares
         event.shares_before = entitlement_shares
-        _compute_event_fields(event)
+        apply_event_fields(event)
         event.status = "confirmed"
         event.confirmed_at = datetime.now()
 

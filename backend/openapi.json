@@ -4342,6 +4342,54 @@
         }
       }
     },
+    "/api/share-change-events/{id}/preview": {
+      "get": {
+        "tags": [
+          "份额变动事件"
+        ],
+        "summary": "Preview Share Change Event",
+        "description": "确认前预览：返回真实确认将写入的份额/现金变动，不落库（与 confirm 共用计算实现）。\n\n- 仅 pending 状态可预览，否则 422 INVALID_STATUS（与 confirm 同码同消息）\n- 权益登记日无持仓快照 → 422 MISSING_POSITION_SNAPSHOT；\n  forced_adjustment 无对应持仓行 → 422 POSITION_NOT_FOUND（#278）\n- 只读：不改事件状态、不写库、不产审计",
+        "operationId": "preview_share_change_event_api_share_change_events__id__preview_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareChangeEventPreviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/share-change-events/{id}": {
       "get": {
         "tags": [
@@ -10127,6 +10175,70 @@
           "entitlement_date"
         ],
         "title": "ShareChangeEventCreate"
+      },
+      "ShareChangeEventPreviewResponse": {
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/ShareChangeEventPreviewResult"
+          }
+        },
+        "type": "object",
+        "required": [
+          "preview"
+        ],
+        "title": "ShareChangeEventPreviewResponse",
+        "description": "事件确认预览响应（#424）。与 trades / subscriptions 的 preview 形状对齐：\n记录字段取自列表行，计算值取自 preview。"
+      },
+      "ShareChangeEventPreviewResult": {
+        "properties": {
+          "entitlement_shares": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entitlement Shares"
+          },
+          "shares_change": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares Change"
+          },
+          "shares_after": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares After"
+          },
+          "cash_change": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Change"
+          }
+        },
+        "type": "object",
+        "title": "ShareChangeEventPreviewResult",
+        "description": "事件确认前预览的计算结果（与真实确认共用同一计算实现，#424）。\n\n四个字段与确认后落库值逐一相等，例外都在 forced_adjustment：\nshares_change/cash_change 是用户直填值的回显；shares_after 恒为 null——\n确认路径刻意保留用户直填的「调整后余额」、不计算写回（见 apply_event_fields），\n预览照实回 null，不编造确认不会产生的值。"
       },
       "ShareChangeEventResponse": {
         "properties": {

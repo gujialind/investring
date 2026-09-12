@@ -3,6 +3,7 @@ import {
   ShareChangeEvent,
   ShareChangeEventCreate,
   ShareChangeEventUpdate,
+  ShareChangeEventPreviewResponse,
 } from "@/types/share-change-event";
 import { PaginatedResponse } from "@/types/common";
 
@@ -30,6 +31,13 @@ export const shareChangeEventApi = {
 
   get: (id: number) =>
     request<ShareChangeEvent>({ method: "GET", url: `/share-change-events/${id}` }),
+
+  /** 确认前预览（#424）：与真实确认共用后端计算实现，返回值即确认后将落库的值 */
+  preview: (id: number) =>
+    request<ShareChangeEventPreviewResponse>({
+      method: "GET",
+      url: `/share-change-events/${id}/preview`,
+    }),
 
   create: (data: ShareChangeEventCreate, options?: { forceCover?: boolean }) =>
     request<ShareChangeEvent>({

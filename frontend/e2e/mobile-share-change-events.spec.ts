@@ -1,13 +1,23 @@
 /**
  * 前端 E2E 测试：移动端份额变动事件页（#276）
  *
- * 数据说明：组合经 helpers 按 code 直达种子 draft 组合 E2E_PORT（#354），缺组合
- * 即硬失败、不 skip；份额变动事件数据种子不保证存在——列表断言兼容空态
- * （「暂无份额变动事件」），用例 4 经 REST 造一条 pending 事件（无产品/平台
- * 数据时优雅 skip）。仅 mobile project 有意义：/m 路由由 middleware 按 UA 重定向。
+ * 数据说明：组合经 helpers 按 code 直达种子组合（#354），缺组合即硬失败、不 skip；
+ * 份额变动事件数据种子不保证存在——列表断言兼容空态（「暂无份额变动事件」），
+ * 用例 4/6 经 REST 造一条 pending 事件后删除（无产品/平台数据时优雅 skip）。
+ * 用例 6（#424 确认预览）落在 active 组合 `E2E_ACTIVE`：预览要求「权益登记日有持仓
+ * 快照」，draft 组合 `E2E_PORT` 零快照是其契约、不改；两个日期按 API 现状动态推导。
+ * **不对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**（种子契约红线）。
+ * 仅 mobile project 有意义：/m 路由由 middleware 按 UA 重定向。
  */
 import { test, expect, type Page } from '@playwright/test';
-import { E2E_PORT, authHeaders, collectPageErrors, dialogByTitle, gotoPortfolioDetail } from './helpers';
+import {
+  E2E_ACTIVE,
+  E2E_PORT,
+  authHeaders,
+  collectPageErrors,
+  dialogByTitle,
+  gotoPortfolioDetail,
+} from './helpers';
 
 /** 进入 E2E_PORT 移动端详情页（经 middleware 重定向到 /m），返回组合 code */
 async function gotoMobilePortfolioDetail(page: Page): Promise<string> {
@@ -123,6 +133,126 @@ test.describe('移动端份额变动事件页（#276）', () => {
       await expect(row).toBeVisible();
     } finally {
       await page.request.delete(`/api/share-change-events/${created.id}`, { headers });
+    }
+  });
+
+  test('确认弹窗展示后端预览值；自动计算型 pending 行两列显示「--」，强制调整直填值照常显示（#424）', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile', '仅移动端项目');
+
+    // 预览要求「权益登记日有持仓快照」+「除息日晚于最新快照日」，故本用例落在
+    // active 组合 E2E_ACTIVE（draft 组合 E2E_PORT 零快照是该组合的契约、不改）。
+    // 两个日期按 API 现状动态推导，避免写死日期在某些运行日失效（日历止 2026-12-31）：
+    // entitlement = 最新快照日、ex_date = 最新快照日之后的第一个交易日。
+    // entitlement 必须取最新快照日而非最早（#460 评审）：下方持仓取自 /api/positions
+    // 最新快照，若最早快照日尚无该 (product, market, platform) 持仓行，创建期放行、
+    // 预览精查 POSITION_NOT_FOUND → 弹窗走 error 通道，用例硬失败而非 skip
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    await expect(page.getByRole('heading', { name: '管理' })).toBeVisible({ timeout: 15_000 });
+    const headers = await authHeaders(page);
+
+    const navHistory = await (
+      await page.request.get(`/api/portfolios/${E2E_ACTIVE}/nav-history`, { headers })
+    ).json();
+    const snapshotDays: string[] = (navHistory as { snapshot_date: string }[])
+      .map((r) => r.snapshot_date)
+      .sort();
+    if (snapshotDays.length === 0) test.skip(true, 'E2E_ACTIVE 无快照，无法构造有基数的预览场景');
+    const latestSnapshot = snapshotDays[snapshotDays.length - 1];
+    const entitlementDate = latestSnapshot;
+
+    const calendar = await (
+      await page.request.get('/api/trading-calendar?year=2026', { headers })
+    ).json();
+    const openDays: string[] = (calendar as { calendar_date: string; is_open: boolean }[])
+      .filter((r) => r.is_open)
+      .map((r) => r.calendar_date)
+      .sort();
+    const exDate = openDays.find((d) => d > latestSnapshot);
+    if (!exDate) test.skip(true, '交易日历内找不到晚于最新快照日的交易日');
+
+    // 权益份额取快照日的基金持仓；平台必须与持仓一致（平台级事件必填 platform_code）
+    const positions = await (
+      await page.request.get(`/api/positions?portfolio_code=${E2E_ACTIVE}&page_size=50`, { headers })
+    ).json();
+    const held = (
+      positions.items as { product_code: string; market: string; platform_code: string }[]
+    ).find((p) => p.product_code !== 'CASH');
+    if (!held) test.skip(true, 'E2E_ACTIVE 无基金持仓，无法构造平台级事件');
+    const heldProduct = held!.product_code;
+    const heldMarket = held!.market;
+    const heldPlatform = held!.platform_code;
+
+    // 造一条 pending 强制调整（用户直填值）：修复前弹窗对任何事件都渲染列表行的
+    // NULL 字段（兜底成 0.00），故直填值能精确暴露该缺陷。取非零且非整的值，
+    // 避免「恰好为 0」或格式歧义被当成结论
+    const createResp = await page.request.post('/api/share-change-events', {
+      headers,
+      data: {
+        portfolio_code: E2E_ACTIVE,
+        product_code: heldProduct,
+        market: heldMarket,
+        event_type: 'forced_adjustment',
+        ex_date: exDate,
+        entitlement_date: entitlementDate,
+        platform_code: heldPlatform,
+        shares_change: 7.77,
+        cash_change: -12.34,
+      },
+    });
+    if (!createResp.ok()) test.skip(true, `造数失败: ${createResp.status()} ${await createResp.text()}`);
+    const created = await createResp.json();
+
+    // 再造一条 pending 现金分红（自动计算型）：两列在 pending 阶段恒为 NULL，
+    // 是「--」守门（#424 附带项）的对象——forced_adjustment 直填值修复后不再走「--」
+    const divResp = await page.request.post('/api/share-change-events', {
+      headers,
+      data: {
+        portfolio_code: E2E_ACTIVE,
+        product_code: heldProduct,
+        market: heldMarket,
+        event_type: 'cash_dividend',
+        ex_date: exDate,
+        entitlement_date: entitlementDate,
+        platform_code: heldPlatform,
+        div_cash: 0.5,
+      },
+    });
+    if (!divResp.ok()) {
+      await page.request.delete(`/api/share-change-events/${created.id}`, { headers });
+      test.skip(true, `造数失败(现金分红): ${divResp.status()} ${await divResp.text()}`);
+    }
+    const divEvent = await divResp.json();
+
+    try {
+      await page.getByRole('link', { name: '份额变动事件' }).click();
+      // 同产品两条事件，按事件类型文案区分行
+      const row = page.locator('table tbody tr')
+        .filter({ hasText: created.product_code })
+        .filter({ hasText: '强制调整' })
+        .first();
+      await expect(row).toBeVisible({ timeout: 15_000 });
+
+      // forced_adjustment 的用户直填值在 pending 行照常显示（#460 评审修复：
+      // 此前两列无条件「--」，把直填值也一并隐藏）
+      await expect(row.getByText('7.77 份')).toBeVisible();
+      await expect(row.getByText('¥-12.34')).toBeVisible();
+
+      // 自动计算型事件 pending 行两列恒 NULL → 显示「--」而非误导性的 0.00（#424 附带项守门）
+      const divRow = page.locator('table tbody tr')
+        .filter({ hasText: divEvent.product_code })
+        .filter({ hasText: '现金分红' })
+        .first();
+      await expect(divRow.getByText('--')).toHaveCount(2);
+
+      // 确认弹窗：拉取 /preview 展示预期变动量（修复前这两个位置恒为 0.00 / ¥0.00）
+      await row.locator('button[title="确认"]').click();
+      const dlg = dialogByTitle(page, '确认份额变动事件');
+      await expect(dlg).toBeVisible();
+      await expect(dlg.getByText('7.77 份')).toBeVisible({ timeout: 15_000 });
+      await expect(dlg.getByText('¥-12.34')).toBeVisible();
+    } finally {
+      await page.request.delete(`/api/share-change-events/${created.id}`, { headers });
+      await page.request.delete(`/api/share-change-events/${divEvent.id}`, { headers });
     }
   });
 });

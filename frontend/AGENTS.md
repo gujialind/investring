@@ -16,6 +16,8 @@
 
 * API 层 `src/lib/api/` 按域拆分、经 `index.ts` barrel 统一导出（`@/lib/api`）；`next.config.js` 将 `/api/:path*` rewrite 到 `API_BASE_URL`（默认 localhost:8000）。
 
+* **确认类弹窗统一走对应 `/preview` 端点**：`TradeConfirmDialog`（`useTradePreview`）、`SubscriptionConfirmDialog`（`useSubscriptionPreview`）、`EventConfirmDialog`（`useShareChangeEventPreview`，#424）。**不要直接渲染列表行的计算字段**——「用户填的字段」落库了，「确认时才算的字段」在 pending 阶段是 NULL，直接渲染会被格式化兜底成误导性的 `0.00`（#424 的成因正是这里一次例外）。约定的四条：① hook 用 `retry: false` + `staleTime: 0`（弹窗重开必 refetch，预览值即确认值，不得基于过期值确认）；② 加载态取 `isLoading || isFetching`；③ 错误经 `ConfirmInfoDialog` 的 `error` 通道展示并禁用确认按钮（`getErrorMessage` 已解出后端 `detail.message`，**不要再叠「预览失败：」前缀**）；④ 内容区加 `data?.preview` 守卫，避免重开命中缓存时先渲染上一次的值。同域的**列表列**若该状态下方未计算，显示 `--` 而非 `0.00`。
+
 * 版本号：设置页「系统信息」显示构建期注入的 `NEXT_PUBLIC_APP_VERSION`（`next.config.js` 读 `package.json` version；该值由发布流程从仓库根 `VERSION` 同步，勿手改，见 `docs/reference/versioning.md`）。
 
 ### 1.3 日志（issue #407）

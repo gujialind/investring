@@ -17,6 +17,18 @@ export function useShareChangeEventList(portfolioCode: string, params?: ShareCha
   });
 }
 
+// 确认前预览 Hook（#424）：确认弹窗打开时才发请求；禁用重试，错误即时展示在弹窗内。
+// staleTime=0 保证重开弹窗必 refetch——预览值即确认值，不得基于过期值确认（同 useTradePreview）
+export function useShareChangeEventPreview(id: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.shareChangeEvents.preview(id ?? 0),
+    queryFn: () => shareChangeEventApi.preview(id!),
+    enabled: enabled && !!id,
+    retry: false,
+    staleTime: 0,
+  });
+}
+
 // 创建份额变动事件 Hook（支持 force_cover 强制提交）
 export function useCreateShareChangeEvent(portfolioCode: string) {
   const queryClient = useQueryClient();

@@ -65,3 +65,18 @@ export interface ShareChangeEventUpdate {
   ratio?: number;
   notes?: string;
 }
+
+/**
+ * 事件确认前预览的计算结果（#424，与后端 ShareChangeEventPreviewResult 对齐）。
+ * 与确认后落库值逐一相等；强制调整的 shares_after 恒为 null（确认不写回该字段）。
+ */
+export interface ShareChangeEventPreview {
+  entitlement_shares?: number;
+  shares_change?: number;
+  shares_after?: number;
+  cash_change?: number;
+}
+
+export interface ShareChangeEventPreviewResponse {
+  preview: ShareChangeEventPreview;
+}
