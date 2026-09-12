@@ -14,12 +14,14 @@
 from datetime import date, timedelta
 
 import pytest
+from sqlalchemy import func
 
 from app.models import (
     InvestorHolding, Portfolio, PortfolioPosition, PortfolioValueSnapshot,
-    PriceRecord, Subscription, Trade,
+    PriceRecord, Subscription, Trade, TradingCalendar,
 )
 from app.services.trading_utils import get_next_trading_day
+from tests import seed_base
 from tests.seed_base import seed_e2e_active
 
 
@@ -138,3 +140,43 @@ class TestE2EActiveContract:
                 PriceRecord.market == "CN_EXCHANGE",
                 PriceRecord.price_date == d,
             ).first() is not None, f"快照日 {d} 缺 510300.SH 价格行"
+
+
+class TestCalendarContract:
+    """交易日历契约（issue #468）：起点固定、终点随 today 滚动，消除日期时间炸弹"""
+
+    def test_calendar_end_covers_one_year_ahead(self, test_db):
+        """seed_base 段 4 的终点 = today + 365 天；若恰为周末则最后落库日为其前一个工作日"""
+        max_date = test_db.query(func.max(TradingCalendar.calendar_date)).scalar()
+        assert max_date is not None, "种子必须包含交易日历"
+        assert max_date >= date.today() + timedelta(days=360), (
+            f"日历终点 {max_date} 未覆盖 today + 1 年，滚动终点失效"
+        )
+
+    def test_seed_rolls_into_future_year(self, test_db, monkeypatch):
+        """模拟 2027 场景（#468 首爆点 2027-01-04）：冻结 today 后日历延伸、种子可用。
+
+        通过 monkeypatch seed_base 模块级 date 冻结 today；写入发生在 function 级
+        事务内、teardown 整体回滚，不会污染 session 日历与哨兵测试。
+        """
+
+        class _FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return date(2027, 1, 4)  # 2027 年首个交易日（周一）
+
+        monkeypatch.setattr(seed_base, "date", _FrozenDate)
+        seed_base.seed_base_data(test_db)
+        seed_base.seed_e2e_active(test_db)
+
+        max_date = test_db.query(func.max(TradingCalendar.calendar_date)).scalar()
+        assert max_date >= date(2028, 1, 4), f"冻结到 2027 后日历终点 {max_date} 未滚动"
+
+        pending = test_db.query(Trade).filter(
+            Trade.portfolio_code == "E2E_ACTIVE",
+            Trade.status == "pending",
+            Trade.product_code != "CASH",
+        ).all()
+        assert len(pending) == 1, "冻结到 2027 后 E2E_ACTIVE 种子须照常产出 pending 交易"
+        # D4 = 冻结当日（交易日）；create_trade 的交易日校验通过即证明日历已覆盖 2027
+        assert pending[0].trade_date == date(2027, 1, 4)

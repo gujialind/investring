@@ -11,6 +11,7 @@
 
 from datetime import date, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -122,21 +123,25 @@ def seed_base_data(db: Session) -> None:
             db.add(Product(**p))
     db.commit()
 
-    # 4. 交易日历（2025-01-01 到 2026-12-31，工作日为交易日）
+    # 4. 交易日历（2025-01-01 起，终点滚动到 today + 1 年；工作日为交易日）
+    #    起点固定：存量测试大量依赖 2025 年固定日期（如 conftest 的 sample_trading_day）。
+    #    终点随 date.today() 滚动（issue #468）：固定终点会让以 today 锚定的 E2E / 契约
+    #    测试随时间集体失效（首爆点 2027-01-04 阻断 CI OK 与 CD）。
+    #    幂等守卫从「表空才写」改为增量补尾：本地复用库已有旧终点时继续向后延伸，
+    #    而不是被旧数据挡住（CI 空库起跑与旧守卫行为等价）。
     start = date(2025, 1, 1)
-    end = date(2026, 12, 31)
-    existing_count = db.query(TradingCalendar).count()
-    if existing_count == 0:
-        current = start
-        while current <= end:
-            is_weekday = current.weekday() < 5  # Mon-Fri
-            db.add(TradingCalendar(
-                calendar_date=current,
-                is_open=is_weekday,
-                exchange="SSE",
-            ))
-            current += timedelta(days=1)
-        db.commit()
+    end = date.today() + timedelta(days=365)
+    last_seeded = db.query(func.max(TradingCalendar.calendar_date)).scalar()
+    current = max(start, last_seeded + timedelta(days=1)) if last_seeded else start
+    while current <= end:
+        is_weekday = current.weekday() < 5  # Mon-Fri
+        db.add(TradingCalendar(
+            calendar_date=current,
+            is_open=is_weekday,
+            exchange="SSE",
+        ))
+        current += timedelta(days=1)
+    db.commit()
 
     # 5. draft 组合（前端 E2E 冒烟依赖：无组合时业务 spec 优雅 skip，
     #    缺少它会让 datepicker/platform-select/regression 用例在 CI 静默跳过）
@@ -186,7 +191,11 @@ def seed_e2e_active(db: Session) -> None:
 
     日期锚定 date.today() 动态回溯 4 个交易日 D1<D2<D3<D4：pending 交易须落在
     前端交易列表默认「近1年」过滤窗内（#126），固定日期会随时间失效。依赖
-    seed_base_data 的日历（2025-2026）覆盖 today 及前 4 个交易日，越界响亮报错。
+    seed_base_data 的日历（2025-01-01 起、终点滚动到 today+1 年，issue #468）
+    覆盖 today 及前 4 个交易日。下方 RuntimeError 守卫是防御性校验（防未来
+    回溯逻辑改动引入真实越界）：终点越界时 get_prev_trading_day 向过去回退、
+    取到日历末段交易日，四种日期仍互异，守卫不会触发（#468 订正原 docstring
+    「越界响亮报错」的失实描述）。
 
     **禁止对 E2E_ACTIVE 跑 recalculate/catch-up/generate-next**：其 auto_confirm
     会确认 D4 pending 交易，破坏「存在可编辑 pending 交易」的 E2E 契约。
