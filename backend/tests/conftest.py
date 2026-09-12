@@ -12,6 +12,7 @@ import os
 import pytest
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Generator
 
 # ---------------------------------------------------------------------------
@@ -381,3 +382,25 @@ def only_log_line(buffer: io.StringIO, **fields) -> dict:
     matched = [line for line in lines if all(line.get(k) == v for k, v in fields.items())]
     assert len(matched) == 1, f"期望恰好 1 行匹配 {fields}，实际 {len(matched)}；全部行：{lines}"
     return matched[0]
+
+
+# ============================================================================
+# 测试分层 marker：按目录自动打标（issue #469）
+# ============================================================================
+# marker 在 pyproject.toml [tool.pytest.ini_options] 登记（--strict-markers 要求）。
+# 分层取目录事实而非逐文件声明，新增测试文件天然带标、不会漏。
+# dialect 不在此推断——它表达「仅 MySQL 方言有效」，与目录正交，由用例经
+# _mysql_only() 门控并显式 pytest.mark.dialect 声明。
+_LAYER_MARKERS = {"unit", "integration", "e2e"}
+
+
+def pytest_collection_modifyitems(items):
+    """按 tests/<layer>/ 路径自动追加 unit / integration / e2e marker。"""
+    tests_dir = Path(__file__).resolve().parent
+    for item in items:
+        try:
+            layer = item.path.resolve().relative_to(tests_dir).parts[0]
+        except (AttributeError, ValueError, IndexError):
+            continue  # 非本目录收集项（如跨目录跑 pytest）不参与分层
+        if layer in _LAYER_MARKERS:
+            item.add_marker(getattr(pytest.mark, layer))

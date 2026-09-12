@@ -44,10 +44,18 @@ dev = [
 include = ["app*"]
 
 # pytest 配置收纳（issue #172）：此前 --strict-markers 依赖 CI 命令行传递，
-# 本地裸跑 pytest 无此保护。当前无自定义 marker（仅内建 parametrize），
-# 新增自定义 marker 时须在此登记，否则 --strict-markers 会拒绝运行。
+# 本地裸跑 pytest 无此保护。自定义 marker 必须在此登记（--strict-markers），
+# unit/integration/e2e 由 conftest 按目录自动打标（issue #469），
+# dialect 由 MySQL-only 用例显式声明；登记后可用 `pytest -m ...` 选择子集。
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
+markers = [
+    "unit: 单元测试（tests/unit，按目录自动打标）",
+    "integration: 集成测试（tests/integration，按目录自动打标）",
+    "e2e: 端到端业务流程测试（tests/e2e，按目录自动打标）",
+    "slow: 明显慢于同层中位数的用例（暂未启用，登记备用）",
+    "dialect: 仅在 MySQL 方言下有效（SQLite 下 skip）的用例，由用例显式声明",
+]
 
 # 覆盖率设防（issue #254；#171 观察期结束转入设防期）：
 # 配置放 [tool.coverage.*] 而非 pytest addopts——不传 --cov 时 coverage 完全不激活，
