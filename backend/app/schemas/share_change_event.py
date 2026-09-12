@@ -60,7 +60,10 @@ class ShareChangeEventResponse(ShareChangeEventBase):
 class ShareChangeEventPreviewResult(BaseModel):
     """事件确认前预览的计算结果（与真实确认共用同一计算实现，#424）。
 
-    四个字段与确认后落库值逐一相等（forced_adjustment 例外：它是用户直填值的回显）。
+    四个字段与确认后落库值逐一相等，例外都在 forced_adjustment：
+    shares_change/cash_change 是用户直填值的回显；shares_after 恒为 null——
+    确认路径刻意保留用户直填的「调整后余额」、不计算写回（见 apply_event_fields），
+    预览照实回 null，不编造确认不会产生的值。
     """
 
     entitlement_shares: Optional[float] = None

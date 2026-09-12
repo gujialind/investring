@@ -70,8 +70,9 @@
 * **份额变动事件：计算单点、预览复用**（#424/#425）：变动量计算是纯函数 `share_change_event_service.compute_event_fields(event_type, entitlement_shares, *, …)`（返回 `EventFieldResult`，**不碰 ORM 对象**），确认与确认预览共用——「预览 == 确认」由此保证。
   - **写回刻意分离**：`apply_event_fields(event)` 是唯一写回点、**只由确认路径调用**。预览不得复用它：`record_audit` 的 `_diff_fields` 读事件当前字段，对象被预览改过后列表行会显示未落库的值；pending 对象若被 flush 还会把「预览」写进库。
   - **`forced_adjustment` 的两项语义不得「顺手修正」**：`shares_change` / `cash_change` 为空时**保持 None、不折成 0**（快照的事件应用循环以 `event.shares_change is None` 判定「纯现金调整」并跳过份额段，折成 0 会让对 CASH 产品的合法纯现金调整被现金行守卫误杀为 `POSITION_NOT_FOUND`）；`shares_after` 恒不写回（用户直填的「调整后余额」，unconfirm 同样不清空），预览照实回 `shares_after=None`。
+  - **前置校验同点**（#460 评审）：状态门 + #279 双校验抽为 `_validate_confirm_preconditions(db, event)` 公共 preamble，确认与预览各调一次——前置拒绝同序、同码、同消息靠结构保证而非约定；权益登记日快照存在性探针（`MISSING_POSITION_SNAPSHOT`）内聚在 `resolve_entitlement_shares` / `_confirm_fund_level_event` 的未命中分支（`_require_entitlement_snapshot` 惰性探针，命中零额外查询），基金级「无持仓」拒绝文案两侧共用常量 `MSG_FUND_LEVEL_NO_HOLDINGS`。
   - **权益份额口径同点**：`resolve_entitlement_shares(db, event)` 供确认与预览共用（平台级按 `platform_code` 过滤、基金级取各平台 `shares > 0` 之和、`forced_adjustment` 另做 `(产品, market, 平台)` 精查 → `POSITION_NOT_FOUND`）。
-  - `GET /api/share-change-events/{id}/preview` 只读、**pending-only**（`INVALID_STATUS`，与 confirm 同码同消息；**对 confirmed 不服务**——前端无该消费方，与 trades/subscriptions 的 preview 口径一致）；**刻意不复刻创建期的 `check_platform_coverage`**——那是「录入完整性」规则而非状态门。路由必须注册在 `GET /{id}` 之前。
+  - `GET /api/share-change-events/{id}/preview` 只读、**pending-only**（`INVALID_STATUS`，与 confirm 同码同消息；**对 confirmed 不服务**——前端无该消费方，与 trades/subscriptions 的 preview 口径一致）；**刻意不复刻创建期的 `check_platform_coverage`**——那是「录入完整性」规则而非状态门。（路由注册顺序不影响匹配：Starlette 的 `/{id}` 只匹配单段路径，`/{id}/preview` 两段路径不会被吞。）
   - **#425**：`reinvest_dividend` 是唯一「金额 → 份额」的事件类型，**先 `quantize_amount` 到分、再除以 `reinvest_nav`**（与 `cash_dividend` 同口径，亦与基金公司「先按分确定应得红利、再折算份额」一致）；跳过中间量化会把金额量化损失带进份额，跨四舍五入边界时与基金公司台账差 0.01 份。
 
 * **`audit_service.py`（#405，跨切面）**：`audit_log` / `system_error_log` 的**唯一写入路径**，埋点一律调 `record_audit` / `record_system_error`，不直接 `db.add(AuditLog(...))`。

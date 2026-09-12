@@ -135,7 +135,8 @@ def create_share_change_event(
     return new_event
 
 
-# 注意：必须注册在 GET /{id} 之前，避免路径 "preview" 被 /{id} 吞掉
+# 注册顺序不承载正确性：Starlette 的 /{id} 只匹配单段路径，/{id}/preview 是
+# 两段路径、不可能被吞；相邻放置仅为端点聚类可读（#460 评审订正原「必须注册在前」注释）
 @router.get("/{id}/preview", response_model=ShareChangeEventPreviewResponse)
 def preview_share_change_event(
     id: int,

@@ -636,12 +636,14 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                           />
                         </TableCell>
                         <TableCell className="number-cell">
-                          {/* #424：pending 行的两列恒为 NULL（自动计算型事件在 confirm 时才
-                              计算落库），显示 `--` 而非误导性的 0.00；预览值在确认弹窗内展示 */}
-                          {event.status === "pending" ? "--" : formatSharesUnit(event.shares_change)}
+                          {/* #424：自动计算型事件 pending 阶段两列为 NULL（confirm 时才计算
+                              落库），NULL 由 formatter 兜底为 `--`，不显示误导性的 0.00；
+                              forced_adjustment 的用户直填值在 pending 行照常显示（#460 评审），
+                              自动计算型的预览值在确认弹窗内展示 */}
+                          {formatSharesUnit(event.shares_change)}
                         </TableCell>
                         <TableCell className="number-cell">
-                          {event.status === "pending" ? "--" : formatCurrency(event.cash_change)}
+                          {formatCurrency(event.cash_change)}
                         </TableCell>
                         <TableCell>
                           <Badge variant={getStatusBadgeVariant(event.status)}>

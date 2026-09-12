@@ -142,7 +142,10 @@ test.describe('移动端份额变动事件页（#276）', () => {
     // 预览要求「权益登记日有持仓快照」+「除息日晚于最新快照日」，故本用例落在
     // active 组合 E2E_ACTIVE（draft 组合 E2E_PORT 零快照是该组合的契约、不改）。
     // 两个日期按 API 现状动态推导，避免写死日期在某些运行日失效（日历止 2026-12-31）：
-    // entitlement = 现有最早快照日（保证有持仓基数）、ex_date = 最新快照日之后的第一个交易日
+    // entitlement = 最新快照日、ex_date = 最新快照日之后的第一个交易日。
+    // entitlement 必须取最新快照日而非最早（#460 评审）：下方持仓取自 /api/positions
+    // 最新快照，若最早快照日尚无该 (product, market, platform) 持仓行，创建期放行、
+    // 预览精查 POSITION_NOT_FOUND → 弹窗走 error 通道，用例硬失败而非 skip
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByRole('heading', { name: '管理' })).toBeVisible({ timeout: 15_000 });
     const headers = await authHeaders(page);
@@ -154,8 +157,8 @@ test.describe('移动端份额变动事件页（#276）', () => {
       .map((r) => r.snapshot_date)
       .sort();
     if (snapshotDays.length === 0) test.skip(true, 'E2E_ACTIVE 无快照，无法构造有基数的预览场景');
-    const entitlementDate = snapshotDays[0];
     const latestSnapshot = snapshotDays[snapshotDays.length - 1];
+    const entitlementDate = latestSnapshot;
 
     const calendar = await (
       await page.request.get('/api/trading-calendar?year=2026', { headers })
@@ -199,13 +202,47 @@ test.describe('移动端份额变动事件页（#276）', () => {
     if (!createResp.ok()) test.skip(true, `造数失败: ${createResp.status()} ${await createResp.text()}`);
     const created = await createResp.json();
 
+    // 再造一条 pending 现金分红（自动计算型）：两列在 pending 阶段恒为 NULL，
+    // 是「--」守门（#424 附带项）的对象——forced_adjustment 直填值修复后不再走「--」
+    const divResp = await page.request.post('/api/share-change-events', {
+      headers,
+      data: {
+        portfolio_code: E2E_ACTIVE,
+        product_code: heldProduct,
+        market: heldMarket,
+        event_type: 'cash_dividend',
+        ex_date: exDate,
+        entitlement_date: entitlementDate,
+        platform_code: heldPlatform,
+        div_cash: 0.5,
+      },
+    });
+    if (!divResp.ok()) {
+      await page.request.delete(`/api/share-change-events/${created.id}`, { headers });
+      test.skip(true, `造数失败(现金分红): ${divResp.status()} ${await divResp.text()}`);
+    }
+    const divEvent = await divResp.json();
+
     try {
       await page.getByRole('link', { name: '份额变动事件' }).click();
-      const row = page.locator('table tbody tr').filter({ hasText: created.product_code }).first();
+      // 同产品两条事件，按事件类型文案区分行
+      const row = page.locator('table tbody tr')
+        .filter({ hasText: created.product_code })
+        .filter({ hasText: '强制调整' })
+        .first();
       await expect(row).toBeVisible({ timeout: 15_000 });
 
-      // pending 行未计算：两列显示「--」而非误导性的 0.00（#424 附带项）
-      await expect(row.getByText('--')).toHaveCount(2);
+      // forced_adjustment 的用户直填值在 pending 行照常显示（#460 评审修复：
+      // 此前两列无条件「--」，把直填值也一并隐藏）
+      await expect(row.getByText('7.77 份')).toBeVisible();
+      await expect(row.getByText('¥-12.34')).toBeVisible();
+
+      // 自动计算型事件 pending 行两列恒 NULL → 显示「--」而非误导性的 0.00（#424 附带项守门）
+      const divRow = page.locator('table tbody tr')
+        .filter({ hasText: divEvent.product_code })
+        .filter({ hasText: '现金分红' })
+        .first();
+      await expect(divRow.getByText('--')).toHaveCount(2);
 
       // 确认弹窗：拉取 /preview 展示预期变动量（修复前这两个位置恒为 0.00 / ¥0.00）
       await row.locator('button[title="确认"]').click();
@@ -215,6 +252,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
       await expect(dlg.getByText('¥-12.34')).toBeVisible();
     } finally {
       await page.request.delete(`/api/share-change-events/${created.id}`, { headers });
+      await page.request.delete(`/api/share-change-events/${divEvent.id}`, { headers });
     }
   });
 });

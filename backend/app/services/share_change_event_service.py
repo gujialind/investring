@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 FUND_LEVEL_TYPES = {"share_split", "share_merge", "bonus_share"}
 PLATFORM_LEVEL_TYPES = {"cash_dividend", "reinvest_dividend", "forced_adjustment"}
 
+# 确认与预览共用的拒绝文案（#460 评审：单点定义，杜绝「同码不同消息」两侧漂移）
+MSG_POSITION_SNAPSHOT_MISSING = "权益登记日持仓快照不存在"
+MSG_FUND_LEVEL_NO_HOLDINGS = "权益登记日无持仓，无需确认"
+
 
 class EventFieldResult(NamedTuple):
     """事件变动的计算结果（纯数据，不挂 ORM 对象）。
@@ -135,15 +139,33 @@ def compute_event_fields(
     return None
 
 
+def _require_entitlement_snapshot(db: Session, event: ShareChangeEvent) -> None:
+    """权益登记日持仓快照存在性探针（确认与预览共用单点，MISSING_POSITION_SNAPSHOT）。
+
+    惰性设计：只在持仓查询未命中时由 resolve_entitlement_shares /
+    _confirm_fund_level_event 调用——命中路径零额外查询（#460 评审：「探针 +
+    重查」的双查询模式让每次预览对同一数据两次往返）。
+    """
+    probe = db.query(PortfolioPosition).filter(
+        PortfolioPosition.portfolio_code == event.portfolio_code,
+        PortfolioPosition.snapshot_date == event.entitlement_date,
+    ).first()
+    if not probe:
+        raise BusinessError("MISSING_POSITION_SNAPSHOT", MSG_POSITION_SNAPSHOT_MISSING)
+
+
 def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
     """读取事件的权益登记日权益份额（确认与预览共用口径，issue #424）。
 
-    无命中的持仓行时返回 `Decimal("0")`——与确认路径现状一致，不在此处新增
-    「无持仓即拒绝」的语义（forced_adjustment 的精查是例外，见 Raises）。
+    快照存在、但按口径无命中持仓行时返回 `Decimal("0")`——与确认路径现状一致，
+    不在此处新增「无持仓即拒绝」的语义（forced_adjustment 的精查是例外，见 Raises）。
 
     Raises:
-        BusinessError: POSITION_NOT_FOUND——forced_adjustment 在权益登记日无
-            (产品, market, 平台) 持仓行（issue #278：LOF market 误填提前快失败）
+        BusinessError: MISSING_POSITION_SNAPSHOT——权益登记日持仓快照不存在
+            （惰性探针，仅持仓查询未命中时触发，与确认路径同码同消息）；
+            POSITION_NOT_FOUND——forced_adjustment 在权益登记日无
+            (产品, market, 平台) 持仓行（issue #278：LOF market 误填提前快失败；
+            探针先于精查，快照缺失时优先报 MISSING_POSITION_SNAPSHOT）
     """
     if event.platform_code is None:
         # 基金级事件：各平台持仓份额之和
@@ -153,6 +175,9 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
             PortfolioPosition.snapshot_date == event.entitlement_date,
             PortfolioPosition.shares > 0,
         ).all()
+        if not positions:
+            _require_entitlement_snapshot(db, event)
+            return Decimal("0")
         return sum((Decimal(str(pos.shares or 0)) for pos in positions), Decimal("0"))
 
     if event.event_type == "forced_adjustment":
@@ -164,6 +189,7 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
             PortfolioPosition.snapshot_date == event.entitlement_date,
         ).first()
         if not ent_position:
+            _require_entitlement_snapshot(db, event)
             raise BusinessError(
                 "POSITION_NOT_FOUND",
                 f"权益登记日 {event.entitlement_date} 无对应持仓 "
@@ -179,9 +205,10 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
         PortfolioPosition.platform_code == event.platform_code,
         PortfolioPosition.snapshot_date == event.entitlement_date,
     ).first()
-    return (
-        Decimal(str(entitlement_position.shares or 0)) if entitlement_position else Decimal("0")
-    )
+    if not entitlement_position:
+        _require_entitlement_snapshot(db, event)
+        return Decimal("0")
+    return Decimal(str(entitlement_position.shares or 0))
 
 
 def apply_event_fields(event: ShareChangeEvent) -> None:
@@ -235,35 +262,20 @@ def compute_share_change_event_preview(db: Session, event: ShareChangeEvent) -> 
         （见 apply_event_fields），预览照实回 None，不编造确认不会产生的值
 
     Raises:
-        BusinessError: INVALID_STATUS——非 pending（两侧用同一条常量消息）；
+        BusinessError: INVALID_STATUS——非 pending（与确认同一条消息）；
             EMPTY_ADJUSTMENT / SHARES_CHANGE_ON_CASH_PRODUCT / MISSING_POSITION_SNAPSHOT /
-            POSITION_NOT_FOUND——全部与确认路径同源同码
+            POSITION_NOT_FOUND——全部与确认路径同源同码同消息
     """
-    if event.status != "pending":
-        raise BusinessError("INVALID_STATUS", "仅 pending 状态可确认")
-    # 与确认路径同一组前置校验（同函数同码，杜绝预览与确认分叉）
-    _validate_adjustment_not_empty(event.event_type, event.shares_change, event.cash_change)
-    _validate_product_allows_shares_change(
-        db, event.product_code, event.market, event.event_type, event.shares_change
-    )
-
-    # 权益登记日持仓快照存在性：确认路径同款前置（MISSING_POSITION_SNAPSHOT）
-    position_snapshot = db.query(PortfolioPosition).filter(
-        PortfolioPosition.portfolio_code == event.portfolio_code,
-        PortfolioPosition.snapshot_date == event.entitlement_date,
-    ).first()
-    if not position_snapshot:
-        raise BusinessError("MISSING_POSITION_SNAPSHOT", "权益登记日持仓快照不存在")
+    # 与确认路径同一组前置校验（公共 preamble，同序同码同消息，杜绝预览与确认分叉）
+    _validate_confirm_preconditions(db, event)
 
     entitlement_shares = resolve_entitlement_shares(db, event)
     if event.platform_code is None and entitlement_shares == 0:
         # 基金级事件在权益登记日无任何 shares > 0 持仓时确认会失败
         # （_confirm_fund_level_event 抛 ValueError → MISSING_POSITION_SNAPSHOT）。
         # 预览若照常返回 0/0.00 就是「假预览」：看着能确认、点下去才炸。
-        raise BusinessError(
-            "MISSING_POSITION_SNAPSHOT",
-            f"{event.product_code} 在权益登记日 {event.entitlement_date} 无持仓份额，无需确认",
-        )
+        # 文案与确认路径共用同一常量（#460 评审：原两侧同码不同消息）
+        raise BusinessError("MISSING_POSITION_SNAPSHOT", MSG_FUND_LEVEL_NO_HOLDINGS)
     result = compute_event_fields(
         event.event_type,
         entitlement_shares,
@@ -336,6 +348,26 @@ def _validate_product_allows_shares_change(
         )
 
 
+def _validate_confirm_preconditions(db: Session, event: ShareChangeEvent) -> None:
+    """确认与确认预览共用的前置校验序列（#424；#460 评审抽公共 preamble）。
+
+    「预览 == 确认」要求两条路径的前置拒绝同序、同码、同消息——新增/调整确认
+    前置时改此一处，两路径同时生效，杜绝静默分叉。含：状态门 + #279 双校验
+    （forced_adjustment 双空、现金型产品份额变动；确认侧兜底防存量脏数据或
+    绕过创建/更新入口直造的记录）。权益登记日快照存在性探针不在此——它内聚在
+    resolve_entitlement_shares / _confirm_fund_level_event 的未命中分支
+    （惰性探针，命中零额外查询，见 _require_entitlement_snapshot）。
+    """
+    if event.status != "pending":
+        raise BusinessError("INVALID_STATUS", "仅 pending 状态可确认")
+    _validate_adjustment_not_empty(
+        event.event_type, event.shares_change, event.cash_change
+    )
+    _validate_product_allows_shares_change(
+        db, event.product_code, event.market, event.event_type, event.shares_change
+    )
+
+
 def check_platform_coverage(
     db: Session,
     *,
@@ -382,7 +414,10 @@ def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
     ).all()
 
     if not all_positions:
-        raise ValueError("权益登记日无持仓，无需确认")
+        # 惰性探针：快照缺失报 MISSING_POSITION_SNAPSHOT（BusinessError 直传，
+        # 不经 ValueError 包装）；快照存在才是「无持仓」——文案与预览共用常量
+        _require_entitlement_snapshot(db, event)
+        raise ValueError(MSG_FUND_LEVEL_NO_HOLDINGS)
 
     total_shares = Decimal("0")
     now = datetime.now()
@@ -650,24 +685,9 @@ def update_share_change_event(
 
 def confirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareChangeEvent:
     """确认份额变动事件（回写 entitlement_shares、计算、基金级自动拆分）。不 commit。"""
-    if event.status != "pending":
-        raise BusinessError("INVALID_STATUS", "仅 pending 状态可确认")
-
-    # issue #279：确认侧兜底校验（防存量脏数据或绕过创建/更新入口直造的记录）
-    _validate_adjustment_not_empty(
-        event.event_type, event.shares_change, event.cash_change
-    )
-    _validate_product_allows_shares_change(
-        db, event.product_code, event.market, event.event_type, event.shares_change
-    )
-
-    # 校验权益登记日持仓快照是否存在
-    position_snapshot = db.query(PortfolioPosition).filter(
-        PortfolioPosition.portfolio_code == event.portfolio_code,
-        PortfolioPosition.snapshot_date == event.entitlement_date,
-    ).first()
-    if not position_snapshot:
-        raise BusinessError("MISSING_POSITION_SNAPSHOT", "权益登记日持仓快照不存在")
+    # 前置校验与预览共用同一 preamble（同序同码同消息）：状态门 + #279 双校验；
+    # 快照存在性探针内聚在 resolve_entitlement_shares / _confirm_fund_level_event
+    _validate_confirm_preconditions(db, event)
 
     if event.platform_code is None:
         # 基金级事件：自动拆分为各平台子记录
