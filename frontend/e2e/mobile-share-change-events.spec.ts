@@ -136,7 +136,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
     }
   });
 
-  test('确认弹窗展示后端预览值，pending 行两列为「--」（#424）', async ({ page }, testInfo) => {
+  test('确认弹窗展示后端预览值；自动计算型 pending 行两列显示「--」，强制调整直填值照常显示（#424）', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '仅移动端项目');
 
     // 预览要求「权益登记日有持仓快照」+「除息日晚于最新快照日」，故本用例落在
