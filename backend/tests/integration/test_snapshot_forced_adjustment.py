@@ -485,6 +485,81 @@ class TestEventPositionGuards:
         assert Decimal(str(cash_row.cash_amount)) == Decimal("1080.00")
 
 
+class TestFundLevelEventMarketScopedSnapshot:
+    """issue #461：LOF 双市场基金级拆分只作用于 event.market 的持仓行。
+
+    修复前 all_positions 跨市场聚合、子记录 market 恒写 event.market——同平台时
+    两条子记录落在同一 fund_key 上重复累加（OTC 50 → 200），跨平台时快照生成
+    直接 POSITION_NOT_FOUND。应用侧按 (product_code, market, platform_code) 匹配。
+    """
+
+    LOF = "LOF461.SZ"
+    PORT = "FA_LOF461"
+
+    def _ensure_lof_price(self, db, market: str, d: date, price: float = 1.0):
+        if not db.query(PriceRecord).filter(
+            PriceRecord.product_code == self.LOF,
+            PriceRecord.market == market,
+            PriceRecord.price_date == d,
+        ).first():
+            create_price_record(db, self.LOF, market, d, price)
+
+    def _pos_market(self, db, market: str, d: date):
+        return db.query(PortfolioPosition).filter(
+            PortfolioPosition.portfolio_code == self.PORT,
+            PortfolioPosition.product_code == self.LOF,
+            PortfolioPosition.market == market,
+            PortfolioPosition.snapshot_date == d,
+        ).one()
+
+    def _setup(self, db):
+        create_portfolio(db, code=self.PORT, status="active")
+        create_product(db, code=self.LOF, market="CN_EXCHANGE",
+                       product_type="LOF", asset_class_code="ASSET_STOCK", confirm_days=0)
+        create_product(db, code=self.LOF, market="CN_OTC",
+                       product_type="LOF", asset_class_code="ASSET_STOCK")
+        create_position_snapshot(
+            db, self.PORT, self.LOF, "CN_EXCHANGE", snapshot_date=D0,
+            shares=100.0, unit_price=1.0, cost_price=1.0,
+            market_value=100.0, platform_code="MYCF",
+        )
+        create_position_snapshot(
+            db, self.PORT, self.LOF, "CN_OTC", snapshot_date=D0,
+            shares=50.0, unit_price=1.0, cost_price=1.0,
+            market_value=50.0, platform_code="MYCF",
+        )
+        create_position_snapshot(
+            db, self.PORT, "CASH", "", snapshot_date=D0,
+            cash_amount=1000.0, unit_price=None, cost_price=None,
+            market_value=1000.0, platform_code="MYCF",
+        )
+        create_value_snapshot(db, self.PORT, D0,
+                              total_value=1150, total_shares=1150, unit_price=1.0)
+        create_investor_holding(db, self.PORT, "VIEWER", D0, shares=1150)
+        self._ensure_lof_price(db, "CN_EXCHANGE", EX_DAY)
+        self._ensure_lof_price(db, "CN_OTC", EX_DAY)
+
+    def test_fund_level_split_scopes_market_in_snapshot(self, test_db):
+        """验收：market=CN_OTC 拆分 ×2 → 快照日 OTC 50→100、EX 持仓恒 100"""
+        self._setup(test_db)
+        event = svc_create_event(
+            test_db, portfolio_code=self.PORT, event_type="share_split",
+            product_code=self.LOF, market="CN_OTC",
+            ex_date=EX_DAY, entitlement_date=D0, ratio=Decimal("2"),
+        )
+        test_db.flush()
+        confirm_share_change_event(test_db, event)
+        test_db.flush()
+
+        result = generate_daily_snapshots(test_db, self.PORT, EX_DAY)
+        assert result["success"] is True, result
+
+        otc = self._pos_market(test_db, "CN_OTC", EX_DAY)
+        exch = self._pos_market(test_db, "CN_EXCHANGE", EX_DAY)
+        assert Decimal(str(otc.shares)) == Decimal("100.00")     # 50 × 2
+        assert Decimal(str(exch.shares)) == Decimal("100.00")    # 不受 OTC 事件影响
+
+
 class TestAutoConfirmEventDelegation:
     """auto_confirm 事件段委托公共确认实现（#278/#279）：
     失败仅记录不阻断、重算路径不绕过校验"""

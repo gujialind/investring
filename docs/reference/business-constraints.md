@@ -47,9 +47,9 @@
 
 ## 份额变动事件
 
-* **分级**：基金级（`share_split`/`share_merge`/`bonus_share`，`platform_code` 空，确认时按平台自动拆子记录）；平台级（`cash_dividend`/`reinvest_dividend`/`forced_adjustment`，每个有持仓平台各录 1 条）。
+* **分级**：基金级（`share_split`/`share_merge`/`bonus_share`，`platform_code` 空，确认时在 `event.market` 内按平台自动拆子记录）；平台级（`cash_dividend`/`reinvest_dividend`/`forced_adjustment`，每个有持仓 `(market, 平台)` 各录 1 条）。两类事件均以 `event.market` 为边界（#461）：LOF 一码多市场时另一市场的持仓不参与计算与覆盖校验，两市场须分别录入。
 
-* 日期约束：`ex_date > entitlement_date` 且均为交易日；`ex_date` 须晚于最新快照日。平台级未全覆盖有持仓平台默认阻断（`PLATFORM_NOT_COVERED`），`force_cover=true` 降为 warning。
+* 日期约束：`ex_date > entitlement_date` 且均为交易日；`ex_date` 须晚于最新快照日。平台级未全覆盖该 market 下有持仓平台默认阻断（`PLATFORM_NOT_COVERED`），`force_cover=true` 降为 warning。
 
 * 输入校验（#279，创建/更新/确认三路径同口径）：`forced_adjustment` 必须至少一项（`shares_change`/`cash_change`）非空，否则 `EMPTY_ADJUSTMENT`；现金型产品（`product_type` 为 CASH/IN_TRANSIT）不接受份额变动（结构型事件无条件拒、其余类型显式 `shares_change` 拒，`SHARES_CHANGE_ON_CASH_PRODUCT`）。
 
@@ -135,7 +135,7 @@
 | `MARKET_CHANGE_REFERENCED` | 422 | 更新产品且 `market` **实际变化**（新值非 None 且 != 原值）时，旧 `(code, market)` 已被任一 `trade` / `share_change_event` / `portfolio_position` 引用（三类计数任一 > 0）；系统虚拟产品先被 `SYSTEM_PRODUCT_PROTECTED` 拦截 | services/product_service.py:370 |
 | `MISSING_NAV` | 422 | 净值严格匹配、禁止向前回退（根 §2.6）：① 快照侧按产品 `nav_lag_days` 定取价日（0 = 当日、N = 前第 N 个交易日），任一持仓缺该日 `price_record` 即拒绝生成（`db.add_all` 前抛，整体回滚）；预校验中**纯** price_data 失败同报此码，与其他检查项混合失败则降级 ValueError → `VALIDATION_FAILED`。② 调仓确认侧场外净值型基金（OEF/LOF × CN_OTC/HK_MUTUAL）缺 T 日（`trade_date`）净值即拒绝确认，`sync_nav=true` 时自动回填后重试一次、回填异常或仍缺也报此码。catch-up/recalculate 逐日循环捕获后写进 `results[].errors`（响应仍 200） | services/snapshot_service.py:1381; services/trade_service.py:390 |
 | `MISSING_OR_INVALID_PRICE` | 422 | 创建调仓时价格闸门：`product.market == "CN_EXCHANGE"`（场内）且未传 `price`；或任意市场显式传入的 `price <= 0` | services/trade_service.py:715; :719 |
-| `MISSING_POSITION_SNAPSHOT` | 422 | 份额变动事件缺基数快照（确认与**确认预览**同码，两侧口径一致）：① `entitlement_date` 该组合**无任何** `portfolio_position` 行（两路径同款前置，预览在 `compute_share_change_event_preview` 内）；② 基金级事件（`platform_code is None`）自动拆分时该产品在 `entitlement_date` 无 `shares > 0` 的持仓行（确认侧 `_confirm_fund_level_event` 的 `ValueError` 被包装为此码，预览侧在计算前显式拒绝——否则会返回 0/0.00 的「假预览」，看着能确认、点下去才炸） | services/share_change_event_service.py::confirm_share_change_event; ::compute_share_change_event_preview; ::resolve_entitlement_shares |
+| `MISSING_POSITION_SNAPSHOT` | 422 | 份额变动事件缺基数快照（确认与**确认预览**同码，两侧口径一致）：① `entitlement_date` 该组合**无任何** `portfolio_position` 行（两路径同款前置，预览在 `compute_share_change_event_preview` 内）；② 基金级事件（`platform_code is None`）自动拆分时该产品在 `entitlement_date` 的 `event.market` 下无 `shares > 0` 的持仓行（确认侧 `_confirm_fund_level_event` 的 `ValueError` 被包装为此码，预览侧在计算前显式拒绝——否则会返回 0/0.00 的「假预览」，看着能确认、点下去才炸；#461：口径以 `event.market` 为边界，另一市场有持仓不算命中） | services/share_change_event_service.py::confirm_share_change_event; ::compute_share_change_event_preview; ::resolve_entitlement_shares |
 | `NAV_NOT_AVAILABLE` | 422 | 申赎确认/预览的净值决策落到兜底：申请日无 `portfolio_value_snapshot`，**且**已存在 `confirm_date <= apply_date` 的 confirmed 申购（即资金已到账、不在 1.0000 首窗内，根 §2.8）。首窗内不抛、按 1.0000 计价 | services/subscription_service.py:48(class NavNotAvailableError); :166 |
 | `NEGATIVE_CASH` | 422 | 快照持仓生成时，任一平台 CASH 行（`cash_amount IS NOT NULL`）计算出的 `cash_amount < 0` 即硬阻断（#203 由告警升级），抛出点在 `db.add_all` 之前、调用方整体回滚；存量脏数据另经 status 端点 `negative_cash_platforms` 暴露 | services/snapshot_service.py:1410 |
 | `NON_TRADING_DAY` | 422 | 目标日期不在 `trading_calendar.is_open`：调仓创建/PUT 的 `trade_date`（`validate_trade_date` 共用）、申赎创建/PUT 的 `apply_date`、跨平台现金转移的 `transfer_date`、现金手动重估的 `update_date`（缺省取 `date.today()`）。快照生成侧同型检查抛 ValueError 而非此码 | services/trade_service.py:44; services/position_service.py:780 |
@@ -144,7 +144,7 @@
 | `OLD_PASSWORD_REQUIRED` | 400 | `PUT /api/auth/password`：需验旧密码的分支（`current_user.role != "admin"` **或** `target_code == current_user.code`，即改自己的密码）下请求体未提供 `old_password`。router 直接抛 `HTTPException`，不经 `BusinessError` | routers/auth.py:157 |
 | `PENDING_TRANSACTIONS_EXIST` | 422 | ① 关闭组合时该组合存在 pending 申赎或 pending 调仓（两类计数任一 > 0）；② 修改产品 `product_type` 且值**实际变化**时，该产品存在 pending `trade` 或 pending `share_change_event`（`details` 带两类计数） | services/portfolio_service.py:303; services/product_service.py:333 |
 | `PLATFORM_NOT_ALLOWED` | 422 | 创建份额变动事件时 `event_type` 属基金级（`share_split` / `share_merge` / `bonus_share`）却指定了 `platform_code`（空串已在入口归一为 None，故只有真值触发） | services/share_change_event_service.py::create_share_change_event |
-| `PLATFORM_NOT_COVERED` | 422 | 创建平台级事件（`cash_dividend` / `reinvest_dividend` / `forced_adjustment`）时，`entitlement_date` 该产品有 `shares > 0` 持仓的平台，未被「同 `ex_date` 的非 cancelled 平台级事件 ∪ 本次 `platform_code`」全覆盖；传 `force_cover=true` 降级为 warning | services/share_change_event_service.py::check_platform_coverage |
+| `PLATFORM_NOT_COVERED` | 422 | 创建平台级事件（`cash_dividend` / `reinvest_dividend` / `forced_adjustment`）时，`entitlement_date` 该产品**同 `market`** 有 `shares > 0` 持仓的平台，未被「同 `(产品, market)`、同 `ex_date` 的非 cancelled 平台级事件 ∪ 本次 `platform_code`」全覆盖（#461：持仓侧与已录事件侧都按 market 收窄，LOF 另一市场的持仓/事件不参与）；传 `force_cover=true` 降级为 warning | services/share_change_event_service.py::check_platform_coverage |
 | `PLATFORM_NOT_FOUND` | 404 | 传入平台 code 在 `platform` 表查无记录（全部站点均 `NotFoundError`，恒 404）：调仓的 `platform_code` 与 `cash_platform_code`、申赎创建与 PUT 的 `platform_code`、平台级事件的 `platform_code`、现金转移的转出/转入平台、现金手动重估的 `platform_code` | services/trade_service.py:700; services/subscription_service.py:476 |
 | `PLATFORM_REQUIRED` | 422 | 创建份额变动事件时 `event_type` 属平台级（cash_dividend / reinvest_dividend / forced_adjustment）而 `platform_code` 为空（空串先归一为 None，#343）；创建调仓交易未传 `platform_code`——基金腿平台决定持仓归属，缺省会让买入现金闸门退化为全组合聚合 | services/share_change_event_service.py::create_share_change_event; services/trade_service.py:698 |
 | `PORTFOLIO_ALREADY_CLOSED` | 422 | `close_portfolio`：目标组合 status 已为 closed 时重复关闭被拒（组合不存在走 `_get_portfolio_or_404` 的 404） | services/portfolio_service.py:294 |

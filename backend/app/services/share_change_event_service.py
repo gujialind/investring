@@ -145,6 +145,8 @@ def _require_entitlement_snapshot(db: Session, event: ShareChangeEvent) -> None:
     惰性设计：只在持仓查询未命中时由 resolve_entitlement_shares /
     _confirm_fund_level_event 调用——命中路径零额外查询（#460 评审：「探针 +
     重查」的双查询模式让每次预览对同一数据两次往返）。
+    刻意 **market 无关**（#461）：判定「该组合该日持仓快照整体是否存在」，
+    market 维度的命中由调用方带 market 的过滤查询承担，此处不得加 market。
     """
     probe = db.query(PortfolioPosition).filter(
         PortfolioPosition.portfolio_code == event.portfolio_code,
@@ -159,6 +161,9 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
 
     快照存在、但按口径无命中持仓行时返回 `Decimal("0")`——与确认路径现状一致，
     不在此处新增「无持仓即拒绝」的语义（forced_adjustment 的精查是例外，见 Raises）。
+    持仓口径均以 `event.market` 为边界（issue #461）：基金级取 `event.market` 下
+    各平台 `shares > 0` 之和，平台级按 `(market, platform_code)` 读行——LOF
+    一码多市场时不得跨市场聚合或任取一行。
 
     Raises:
         BusinessError: MISSING_POSITION_SNAPSHOT——权益登记日持仓快照不存在
@@ -168,10 +173,11 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
             探针先于精查，快照缺失时优先报 MISSING_POSITION_SNAPSHOT）
     """
     if event.platform_code is None:
-        # 基金级事件：各平台持仓份额之和
+        # 基金级事件：event.market 下各平台持仓份额之和
         positions = db.query(PortfolioPosition).filter(
             PortfolioPosition.portfolio_code == event.portfolio_code,
             PortfolioPosition.product_code == event.product_code,
+            PortfolioPosition.market == event.market,
             PortfolioPosition.snapshot_date == event.entitlement_date,
             PortfolioPosition.shares > 0,
         ).all()
@@ -198,10 +204,12 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
             )
         return Decimal(str(ent_position.shares or 0))
 
-    # 平台级事件：按 platform_code 过滤读取
+    # 平台级事件：按 (market, platform_code) 过滤读取（#461：唯一约束含 market，
+    # 缺 market 时 LOF 双市场同平台会任取一行、按错误市场的份额计算）
     entitlement_position = db.query(PortfolioPosition).filter(
         PortfolioPosition.portfolio_code == event.portfolio_code,
         PortfolioPosition.product_code == event.product_code,
+        PortfolioPosition.market == event.market,
         PortfolioPosition.platform_code == event.platform_code,
         PortfolioPosition.snapshot_date == event.entitlement_date,
     ).first()
@@ -373,16 +381,21 @@ def check_platform_coverage(
     *,
     portfolio_code: str,
     product_code: str,
+    market: str,
     entitlement_date: date,
     ex_date: date,
     platform_code: Optional[str],
 ) -> List[str]:
-    """检查同 ex_date 的平台级事件是否覆盖所有有持仓的平台。
-    返回未覆盖的平台列表（空列表表示全覆盖）。
+    """检查同 `(product_code, market)`、同 ex_date 的平台级事件是否覆盖
+    该市场下所有有持仓的平台。返回未覆盖的平台列表（空列表表示全覆盖）。
+
+    issue #461：两侧查询都以 market 为边界——LOF 一码多市场时，另一市场的
+    持仓不应被要求覆盖（假阳性 422），另一市场已录事件也不得算作已覆盖（假阴性）。
     """
     positions = db.query(PortfolioPosition.platform_code).filter(
         PortfolioPosition.portfolio_code == portfolio_code,
         PortfolioPosition.product_code == product_code,
+        PortfolioPosition.market == market,
         PortfolioPosition.snapshot_date == entitlement_date,
         PortfolioPosition.shares > 0,
     ).distinct().all()
@@ -391,6 +404,7 @@ def check_platform_coverage(
     existing = db.query(ShareChangeEvent.platform_code).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.product_code == product_code,
+        ShareChangeEvent.market == market,
         ShareChangeEvent.ex_date == ex_date,
         ShareChangeEvent.status != "cancelled",
         ShareChangeEvent.platform_code.isnot(None),
@@ -403,12 +417,17 @@ def check_platform_coverage(
 
 
 def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
-    """基金级事件确认：自动拆分为各平台子记录。
+    """基金级事件确认：在 `event.market` 范围内按平台拆子记录。
     供 confirm_share_change_event 和 auto_confirm_after_snapshot 共用。
+
+    issue #461：持仓查询必须带 market——LOF 一码多市场时两市场持仓是独立行，
+    跨市场摊派会让子记录 market/platform 错位（快照按 (产品, market, 平台)
+    精确匹配 → 同平台份额错摊、跨平台 POSITION_NOT_FOUND）。
     """
     all_positions = db.query(PortfolioPosition).filter(
         PortfolioPosition.portfolio_code == event.portfolio_code,
         PortfolioPosition.product_code == event.product_code,
+        PortfolioPosition.market == event.market,
         PortfolioPosition.snapshot_date == event.entitlement_date,
         PortfolioPosition.shares > 0,
     ).all()
@@ -562,6 +581,7 @@ def create_share_change_event(
         # 全覆盖校验（默认阻断，force_cover 降为 warning）
         uncovered = check_platform_coverage(
             db, portfolio_code=portfolio_code, product_code=product_code,
+            market=market,
             entitlement_date=entitlement_date, ex_date=ex_date, platform_code=platform_code,
         )
         if uncovered:
