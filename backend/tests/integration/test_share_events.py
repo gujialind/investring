@@ -17,6 +17,49 @@ from app.models.portfolio_position import PortfolioPosition
 from app.schemas.share_change_event import ShareChangeEventResponse
 
 
+# ---- issue #461：LOF 一码多市场测试基线（同 code 双市场产品 + 双平台 + ENT/EX 交易日） ----
+
+LOF461_CODE = "LOF461.SZ"
+LOF461_ENT = date(2025, 12, 8)   # 权益登记日（基线快照日）
+LOF461_EX = date(2025, 12, 10)   # 除息日
+
+
+def _setup_lof_products(test_db, portfolio_code):
+    create_portfolio(test_db, code=portfolio_code, status="active")
+    create_product(test_db, code=LOF461_CODE, market="CN_EXCHANGE",
+                   product_type="LOF", asset_class_code="ASSET_STOCK")
+    create_product(test_db, code=LOF461_CODE, market="CN_OTC",
+                   product_type="LOF", asset_class_code="ASSET_STOCK")
+    create_platform(test_db, code="MYCF")
+    create_platform(test_db, code="HBZQ")
+    ensure_trading_day(test_db, LOF461_ENT, is_open=True)
+    ensure_trading_day(test_db, LOF461_EX, is_open=True)
+
+
+def _setup_lof_baseline(test_db, portfolio_code, *, exch_shares=100.0, otc_shares=50.0,
+                        exch_platform="MYCF", otc_platform="MYCF"):
+    """双市场权益登记日基线；platform 传 None 表示该市场不建持仓行。
+    CN_EXCHANGE 行先建——修复前平台级 .first() 会读到它，让用例在修复前真红。"""
+    _setup_lof_products(test_db, portfolio_code)
+    total = 0.0
+    if exch_platform:
+        create_position_snapshot(
+            test_db, portfolio_code, LOF461_CODE, "CN_EXCHANGE",
+            snapshot_date=LOF461_ENT, shares=exch_shares, unit_price=1.0,
+            cost_price=1.0, market_value=exch_shares, platform_code=exch_platform,
+        )
+        total += exch_shares
+    if otc_platform:
+        create_position_snapshot(
+            test_db, portfolio_code, LOF461_CODE, "CN_OTC",
+            snapshot_date=LOF461_ENT, shares=otc_shares, unit_price=1.0,
+            cost_price=1.0, market_value=otc_shares, platform_code=otc_platform,
+        )
+        total += otc_shares
+    create_value_snapshot(test_db, portfolio_code, LOF461_ENT,
+                          total_value=total, total_shares=total, unit_price=1.0)
+
+
 class TestShareChangeEventCreate:
     """份额变动事件创建测试"""
 
@@ -188,6 +231,71 @@ class TestShareChangeEventCreate:
         )
         assert resp.status_code in (200, 201)
         assert resp.json()["status"] == "pending"
+
+    def test_platform_coverage_scopes_holdings_to_market(self, client, admin_headers, test_db):
+        """#461：另一市场持仓的平台不参与覆盖校验（修复前 held_platforms 跨市场合并 → 假阳性 422）"""
+        _setup_lof_baseline(
+            test_db, "SCE_FC3",
+            exch_shares=100.0, otc_shares=100.0,
+            exch_platform="HBZQ", otc_platform="MYCF",
+        )
+        resp = client.post(
+            "/api/share-change-events",
+            json={
+                "portfolio_code": "SCE_FC3",
+                "product_code": LOF461_CODE,
+                "market": "CN_OTC",
+                "event_type": "cash_dividend",
+                "ex_date": "2025-12-10",
+                "entitlement_date": "2025-12-08",
+                "event_source": "manual",
+                "div_cash": 0.5,
+                "platform_code": "MYCF",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), f"Response: {resp.status_code} {resp.json()}"
+
+    def test_platform_coverage_excludes_other_market_events(self, client, admin_headers, test_db):
+        """#461：另一市场已录事件不算作本市场平台的覆盖（修复前 existing 跨市场合并 → 假阴性放行）"""
+        _setup_lof_products(test_db, "SCE_FC4")
+        for platform, shares in (("MYCF", 100.0), ("HBZQ", 200.0)):
+            create_position_snapshot(
+                test_db, "SCE_FC4", LOF461_CODE, "CN_OTC",
+                snapshot_date=LOF461_ENT, shares=shares, unit_price=1.0,
+                cost_price=1.0, market_value=shares, platform_code=platform,
+            )
+        # 存量数据：另一市场（CN_EXCHANGE）的事件恰好落在 HBZQ——修复前会把它误判为已覆盖
+        create_share_change_event(
+            test_db, "SCE_FC4", LOF461_CODE, "CN_EXCHANGE",
+            event_type="cash_dividend", ex_date=LOF461_EX,
+            entitlement_date=LOF461_ENT, platform_code="HBZQ",
+            div_cash=Decimal("0.5"),
+        )
+        payload = {
+            "portfolio_code": "SCE_FC4",
+            "product_code": LOF461_CODE,
+            "market": "CN_OTC",
+            "event_type": "cash_dividend",
+            "ex_date": "2025-12-10",
+            "entitlement_date": "2025-12-08",
+            "event_source": "manual",
+            "div_cash": 0.5,
+            "platform_code": "MYCF",
+        }
+        resp = client.post("/api/share-change-events", json=payload, headers=admin_headers)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "PLATFORM_NOT_COVERED"
+
+        # 补录同市场同 ex_date 的 HBZQ 事件后不再阻断
+        create_share_change_event(
+            test_db, "SCE_FC4", LOF461_CODE, "CN_OTC",
+            event_type="cash_dividend", ex_date=LOF461_EX,
+            entitlement_date=LOF461_ENT, platform_code="HBZQ",
+            div_cash=Decimal("0.5"),
+        )
+        resp2 = client.post("/api/share-change-events", json=payload, headers=admin_headers)
+        assert resp2.status_code in (200, 201), f"Response: {resp2.status_code} {resp2.json()}"
 
 
 class TestShareChangeEventList:
@@ -1274,6 +1382,123 @@ class TestShareChangeEventPreview:
         )
         assert confirm.status_code == 422
         assert confirm.json()["detail"]["error"] == "MISSING_POSITION_SNAPSHOT"
+
+
+class TestShareChangeEventMarketScoping:
+    """issue #461：LOF 一码多市场时事件持仓口径按 `event.market` 收窄。
+
+    确认（_confirm_fund_level_event）、预览（resolve_entitlement_shares）两处必须是
+    同一 market 边界——快照应用侧按 (产品, market, 平台) 精确匹配持仓行，跨市场聚合
+    会份额错摊（同平台）或快照生成 POSITION_NOT_FOUND（跨平台）。
+    """
+
+    def _create(self, test_db, portfolio_code, *, event_type, market="CN_OTC", **kwargs):
+        return create_share_change_event(
+            test_db, portfolio_code, LOF461_CODE, market,
+            event_type=event_type, ex_date=LOF461_EX, entitlement_date=LOF461_ENT,
+            **{"status": "pending", **kwargs},
+        )
+
+    def _preview(self, client, admin_headers, event_id):
+        resp = client.get(
+            f"/api/share-change-events/{event_id}/preview", headers=admin_headers
+        )
+        assert resp.status_code == 200, f"Response: {resp.status_code} {resp.json()}"
+        return resp.json()["preview"]
+
+    def _children(self, test_db, event_id):
+        return test_db.query(ShareChangeEvent).filter(
+            ShareChangeEvent.parent_event_id == event_id
+        ).all()
+
+    def test_fund_level_split_same_platform_scopes_event_market(self, client, admin_headers, test_db):
+        """同平台双市场（EX 100 / OTC 50）：拆分只摊派 event.market 持仓，子记录恰 1 条"""
+        _setup_lof_baseline(test_db, "SPV_M1")  # 两市场同平台 MYCF
+        event = self._create(test_db, "SPV_M1", event_type="share_split", ratio=Decimal("2"))
+
+        resp = client.post(f"/api/share-change-events/{event.id}/confirm", headers=admin_headers)
+        assert resp.status_code == 200, f"Response: {resp.status_code} {resp.json()}"
+        test_db.expire_all()
+
+        confirmed = test_db.query(ShareChangeEvent).filter(ShareChangeEvent.id == event.id).one()
+        assert confirmed.entitlement_shares == Decimal("50.00")   # 仅 OTC，修复前 150
+        assert confirmed.shares_change == Decimal("50.00")
+        assert confirmed.shares_after == Decimal("100.00")
+
+        children = self._children(test_db, event.id)
+        assert len(children) == 1
+        assert children[0].market == "CN_OTC"
+        assert children[0].platform_code == "MYCF"
+        assert children[0].entitlement_shares == Decimal("50.00")
+        assert children[0].shares_after == Decimal("100.00")
+
+    def test_fund_level_split_cross_platform_confirm_succeeds(self, client, admin_headers, test_db):
+        """跨平台双市场（EX/MYCF、OTC/HBZQ）：子记录只覆盖 event.market 的行
+
+        修复前子记录 platform 取自另一市场持仓行（CN_OTC/MYCF），快照应用时
+        fund_key 不命中 → POSITION_NOT_FOUND 硬炸。"""
+        _setup_lof_baseline(test_db, "SPV_M2", exch_platform="MYCF", otc_platform="HBZQ")
+        event = self._create(test_db, "SPV_M2", event_type="share_split", ratio=Decimal("2"))
+
+        resp = client.post(f"/api/share-change-events/{event.id}/confirm", headers=admin_headers)
+        assert resp.status_code == 200, f"Response: {resp.status_code} {resp.json()}"
+        test_db.expire_all()
+
+        children = self._children(test_db, event.id)
+        assert {(c.market, c.platform_code) for c in children} == {("CN_OTC", "HBZQ")}
+        assert children[0].entitlement_shares == Decimal("50.00")
+        confirmed = test_db.query(ShareChangeEvent).filter(ShareChangeEvent.id == event.id).one()
+        assert confirmed.entitlement_shares == Decimal("50.00")
+
+    def test_fund_level_preview_scopes_event_market(self, client, admin_headers, test_db):
+        """预览只含 event.market 持仓（修复前 150），且与确认落库值逐一相等"""
+        _setup_lof_baseline(test_db, "SPV_M3")
+        event = self._create(test_db, "SPV_M3", event_type="share_split", ratio=Decimal("2"))
+
+        preview = self._preview(client, admin_headers, event.id)
+        assert preview["entitlement_shares"] == 50.0   # 修复前 150（跨市场合计）
+        assert preview["shares_change"] == 50.0
+        assert preview["shares_after"] == 100.0
+
+        client.post(f"/api/share-change-events/{event.id}/confirm", headers=admin_headers)
+        test_db.expire_all()
+        confirmed = test_db.query(ShareChangeEvent).filter(ShareChangeEvent.id == event.id).one()
+        assert preview == {
+            "entitlement_shares": float(confirmed.entitlement_shares),
+            "shares_change": float(confirmed.shares_change),
+            "shares_after": float(confirmed.shares_after),
+            "cash_change": float(confirmed.cash_change),
+        }
+
+    @pytest.mark.parametrize(
+        "event_type,expected",
+        [
+            ("cash_dividend", {"cash_change": 25.0, "shares_change": 0.0}),
+            ("reinvest_dividend", {"cash_change": 0.0, "shares_change": 25.0}),
+        ],
+    )
+    def test_platform_level_dividend_uses_event_market_shares(
+        self, client, admin_headers, test_db, event_type, expected
+    ):
+        """平台级分红按 (market, platform) 读行：同平台双市场取 OTC 50，不是 EX 100"""
+        _setup_lof_baseline(test_db, "SPV_M4")
+        event = self._create(
+            test_db, "SPV_M4", event_type=event_type, platform_code="MYCF",
+            div_cash=Decimal("0.5"), reinvest_nav=Decimal("1"),
+        )
+
+        preview = self._preview(client, admin_headers, event.id)
+        assert preview["entitlement_shares"] == 50.0   # 修复前 .first() 取 CN_EXCHANGE 100
+        assert preview["cash_change"] == expected["cash_change"]
+        assert preview["shares_change"] == expected["shares_change"]
+
+        resp = client.post(f"/api/share-change-events/{event.id}/confirm", headers=admin_headers)
+        assert resp.status_code == 200, f"Response: {resp.status_code} {resp.json()}"
+        test_db.expire_all()
+        confirmed = test_db.query(ShareChangeEvent).filter(ShareChangeEvent.id == event.id).one()
+        assert float(confirmed.entitlement_shares) == preview["entitlement_shares"]
+        assert float(confirmed.cash_change) == preview["cash_change"]
+        assert float(confirmed.shares_change) == preview["shares_change"]
 
 
 class TestShareChangeEventListFilter:
