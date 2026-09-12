@@ -101,6 +101,11 @@ htmlcov/
 .coverage
 .coverage.*
 coverage.xml
+# 前端覆盖率（issue #464）与 JUnit 报告（#465，CI 注解/诊断品用）
+frontend/coverage/
+frontend/junit.xml
+backend/junit.xml
+diff-cover.md
 
 # Playwright
 frontend/playwright-report/

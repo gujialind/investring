@@ -8,7 +8,7 @@
 
 ## 0. 为什么需要这份标准
 
-本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 与 nightly 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）。
+本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 与 nightly 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮 **+ 增量覆盖率门禁**（diff-cover 只约束 PR 改动行，堵「新代码靠既有覆盖掩护」，口径与本地复现见 `backend/AGENTS.md`「跑测试」）、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）；失败用例经 JUnit 注解直接标到 PR 文件行、覆盖率摘要进 PR 页（同一批 CI 步骤内产出，无需人工翻 artifact）。
 
 > ⚠️ **本文刻意不写 job 数量、覆盖率阈值等易漂移的具体数值**——第一版曾写「六个 job」「`fail_under=80`」，三天内即双双失实（#410 扩容 CI、#405 把阈值棘轮到 82）。数值一律指向源码，本文只陈述**判定口径**。
 
