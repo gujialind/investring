@@ -1017,6 +1017,7 @@ class TestSystemErrorLogOnUnhandledException:
     # 字符集只在 MySQL 成立，故 SQLite job 跳过、CI backend-test-mysql 才真验收。
     FOUR_BYTE_MESSAGE = "绩效算炸了 💥 扩展 𠀋"
 
+    @pytest.mark.dialect
     def test_four_byte_message_still_lands_one_row(
         self, client, admin_headers, monkeypatch, error_log_db
     ):

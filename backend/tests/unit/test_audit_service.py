@@ -510,6 +510,7 @@ class TestSystemErrorPathTruncation:
         with error_log_db() as session:
             assert session.query(SystemErrorLog).one().request_path is None
 
+    @pytest.mark.dialect
     def test_overlong_path_fits_real_column(self):
         """真实列宽兜底：SQLite 不校验 String 长度，截断的实际效果只在 MySQL 成立"""
         from app.database import SessionLocal, engine
@@ -545,6 +546,7 @@ class TestSystemErrorPathTruncation:
             session.close()
 
 
+@pytest.mark.dialect
 class TestSystemErrorFourByteCharset:
     """#427：自由文本含 4 字节 UTF-8 字符（emoji、CJK 扩展 B）时仍须落一行。
 

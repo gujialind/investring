@@ -327,6 +327,7 @@ class TestUpgradeTablePresenceGuard:
         assert warned, "缺表必须响亮告警"
 
 
+@pytest.mark.dialect
 class TestMysqlColumnCharset:
     """真实列字符集：必须不是库级继承的 utf8mb3。"""
 
@@ -348,6 +349,7 @@ class TestMysqlColumnCharset:
                 assert not bad, f"{name} 仍有非 {LOG_TABLE_CHARSET} 列：{bad}"
 
 
+@pytest.mark.dialect
 class TestMysqlProbeSemantics:
     """探测表达式本身的行为：在真实 MySQL 上把 `_FOUR_BYTE_PROBE` 跑出来验。
 
@@ -448,6 +450,7 @@ class TestMysqlProbeSemantics:
         assert value == FOUR_BYTE_TEXT, f"转码改写了数据：{value!r}"
 
 
+@pytest.mark.dialect
 class TestMysqlFourByteWrites:
     """4 字节字符必须能写入并原样读回（#427 的验收断言）。"""
 
