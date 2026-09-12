@@ -154,7 +154,7 @@
 cd backend && pytest tests -q
 ```
 
-- **本地默认跑影响面子集**：全量耗时长，全量回归由 CI 兜底（合入前 `CI OK` 强制）。按改动文件圈定，如 `pytest tests/test_snapshot_service.py -q -x` 或 `pytest tests -q -k snapshot`；影响面拿不准就宁宽勿窄。上面整条命令留给怀疑大改动或合入前自检。
+- **本地默认跑影响面子集**：全量耗时长，全量回归由 CI 兜底——PR 侧 CI 按路径裁剪 job，但**触碰的栈仍跑全量**（改后端即 SQLite + MySQL 两套全量，映射见 `.github/workflows/ci.yml` 的 `changes` job）；跨栈组合与纯时间流逝型失效由 nightly 全量（issue #472）兜底。按改动文件圈定，如 `pytest tests/test_snapshot_service.py -q -x` 或 `pytest tests -q -k snapshot`；影响面拿不准就宁宽勿窄。上面整条命令留给怀疑大改动或合入前自检。
 - **影响面圈定程序**（改动后按改动区域对照下表圈定子集，多区域取并集；表外区域按 `-k <领域词>` 就近圈定）：
 
   | 改动区域 | 最小子集 |
