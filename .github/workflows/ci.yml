@@ -98,6 +98,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          # fetch-depth 0：diff-cover 需要 PR base.sha 可达（默认浅克隆只有 head）
+          fetch-depth: 0
 
       # Python 版本与生产镜像（python:3.12-slim）保持一致
       - name: Setup Python 3.12
@@ -114,10 +117,50 @@ jobs:
 
       # SQLite 模式运行全量测试（unit + integration + e2e）；
       # 覆盖率仅在本 job 收集；口径（含分支）与硬阈值 fail_under 见
-      # backend/pyproject.toml [tool.coverage.*]（issue #254 设防期，#171 观察期已结束）
+      # backend/pyproject.toml [tool.coverage.*]（issue #254 设防期，#171 观察期已结束）。
+      # --junitxml 供 PR 注解（#465）；--durations=20 暴露慢用例（并行分片/超时调优的
+      # 数据来源），二者都不影响退出码。
       - name: Run tests with pytest
         run: |
-          pytest tests/ -q --tb=short --strict-markers --cov=app --cov-report=xml --cov-report=term-missing
+          pytest tests/ -q --tb=short --strict-markers --cov=app --cov-report=xml --cov-report=term-missing \
+            --junitxml=junit.xml --durations=20
+
+      # 增量覆盖率门禁（issue #464）：只约束本 PR 改动行，堵住「新模块 0% 覆盖被既有
+      # 高覆盖稀释通过」的缺口；全局 fail_under=82 仍兜整体退化，两者职责正交。
+      # ⚠️ 必须从仓库根运行并传 backend/coverage.xml：coverage.xml 的 <source> 是
+      # 绝对路径 + filename 相对 app/，从 backend/ 跑会拼不上路径而漏报全部改动行。
+      # base.sha 三点式 diff = 本 PR 自身改动（含 main 侧后续合入不受影响）。
+      - name: Diff coverage gate (PR changed lines)
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          diff-cover backend/coverage.xml \
+            --compare-branch=${{ github.event.pull_request.base.sha }} \
+            --fail-under=80 --format markdown:diff-cover.md
+
+      - name: Append diff coverage summary
+        if: always() && github.event_name == 'pull_request'
+        working-directory: .
+        run: cat diff-cover.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      # 覆盖率摘要进 PR 页（issue #465）——失败/成功后都写，便于对比趋势
+      - name: Append coverage summary
+        if: always()
+        working-directory: backend
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          import xml.etree.ElementTree as ET
+
+          if not os.path.exists("coverage.xml"):
+              print("### 后端覆盖率\n⚠️ 未生成 coverage.xml，无法汇总")
+              raise SystemExit(0)
+          root = ET.parse("coverage.xml").getroot()
+          print("### 后端覆盖率（SQLite 全量，line+branch 合并口径）")
+          print(f"- 行覆盖：{float(root.get('line-rate', 0)) * 100:.2f}%")
+          print(f"- 分支覆盖：{float(root.get('branch-rate', 0)) * 100:.2f}%")
+          print("- 全局阈值 `fail_under` 见 `backend/pyproject.toml`（跌破即红）")
+          PY
 
       - name: Upload coverage report
         if: always()
@@ -125,8 +168,23 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
-          path: backend/coverage.xml
+          path: |
+            backend/coverage.xml
+            backend/junit.xml
+            diff-cover.md
           retention-days: 14
+
+      # 失败用例以 PR 注解标到文件行（issue #465）。annotate_only 只发 workflow
+      # command 注解、不建 check run，公共库只读 token 即可用；解析失败/无文件也不
+      # 染红 job（#414 诊断品约定 + fail_on_* 全默认 false）。
+      - name: Publish test annotations (PR)
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: backend/junit.xml
+          test_files_prefix: backend/
+          annotate_only: true
 
   # MySQL 门禁：覆盖 SQLite 测不出的方言差异（VARCHAR 长度、DECIMAL 截断、
   # 隐式排序、排序规则等），并验证生产启动顺序（create_all → alembic upgrade head）
@@ -139,6 +197,12 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # 可逆性豁免开关（issue #170）：仅限引入不可逆迁移（如 DROP 列）的 PR 临时置 true，
+    # 合入后必须改回 false。放 job 级 env 是为了让下方「残留检查」的 if 能读它
+    # （step 级 env 不在 if 的可用上下文里）。
+    env:
+      SKIP_DOWNGRADE: "false"
 
     services:
       mysql:
@@ -189,9 +253,6 @@ jobs:
       - name: Verify migration chain (create_all + alembic upgrade head)
         env:
           DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_migration?charset=utf8mb4
-          # 可逆性豁免开关：仅限引入不可逆迁移（如 DROP 列）的 PR 临时置 true，
-          # 合入后必须改回 false（issue #170）
-          SKIP_DOWNGRADE: "false"
         run: |
           python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
@@ -204,6 +265,14 @@ jobs:
           else
             echo "::warning::SKIP_DOWNGRADE=true，跳过迁移可逆性验证，合入后请移除此豁免"
           fi
+
+      # 逃生阀回收（issue #464）：仅在 main（push）侧拦截残留——PR 侧补录不可逆迁移时
+      # 必须能用豁免（且豁免本身就是 PR 期的临时动作），故不在 PR 上失败。
+      - name: Guard SKIP_DOWNGRADE residue (main only)
+        if: always() && github.event_name == 'push' && env.SKIP_DOWNGRADE != 'false'
+        run: |
+          echo "::error::main 上 SKIP_DOWNGRADE=${SKIP_DOWNGRADE} 残留：迁移降级验证被跳过，请改回 false"
+          exit 1
 
       - name: Run tests with pytest (MySQL)
         env:
@@ -295,9 +364,51 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
 
-      # 单元测试（issue #253）：lib 纯逻辑层快速拦截，置于耗时的 build 之前
+      # 单元测试（issue #253）：lib 纯逻辑层快速拦截，置于耗时的 build 之前。
+      # issue #464 起带 --coverage（阈值见 vitest.config.ts，未达标即 exit 1）。
       - name: Unit tests
         run: npm run test
+
+      # 覆盖率摘要进 PR 页（issue #465）；tests 失败时也写，便于看是阈值还是断言红
+      - name: Append coverage summary
+        if: always()
+        working-directory: frontend
+        run: |
+          node - <<'JS' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require("fs");
+          const p = "coverage/coverage-summary.json";
+          if (!fs.existsSync(p)) {
+            console.log("### 前端覆盖率\n⚠️ 未生成覆盖率报告（单测未跑到产出阶段）");
+            process.exit(0);
+          }
+          const t = JSON.parse(fs.readFileSync(p, "utf8")).total;
+          console.log("### 前端覆盖率（src/lib 纯逻辑层，src/lib/api 薄封装不计入）");
+          console.log(`- 行覆盖：${t.lines.pct}%（${t.lines.covered}/${t.lines.total}）`);
+          console.log(`- 分支覆盖：${t.branches.pct}%`);
+          console.log(`- 函数覆盖：${t.functions.pct}%`);
+          console.log("- 阈值见 `frontend/vitest.config.ts`（未达标时上一步已红）");
+          JS
+
+      - name: Upload frontend coverage report
+        if: always()
+        continue-on-error: true  # 诊断品上传失败不染红 job（#414）
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-coverage
+          path: |
+            frontend/coverage/
+            frontend/junit.xml
+          retention-days: 14
+
+      # 失败用例以 PR 注解标到文件行（issue #465），同 backend-test 的处置
+      - name: Publish test annotations (PR)
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: frontend/junit.xml
+          test_files_prefix: frontend/
+          annotate_only: true
 
       # next build 内部也会跑 lint + tsc，但单独前置两步能更快定位失败原因
       - name: Next.js build

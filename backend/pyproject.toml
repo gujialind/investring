@@ -38,6 +38,8 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "factory-boy>=3.3.0",
+    # 增量覆盖率门禁（issue #464）；安装来源仍是 requirements.txt，此处仅登记
+    "diff-cover>=10.5.1",
 ]
 
 [tool.setuptools.packages.find]
