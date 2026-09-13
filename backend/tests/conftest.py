@@ -395,12 +395,17 @@ _LAYER_MARKERS = {"unit", "integration", "e2e"}
 
 
 def pytest_collection_modifyitems(items):
-    """按 tests/<layer>/ 路径自动追加 unit / integration / e2e marker。"""
+    """按 tests/<layer>/ 路径自动追加 unit / integration / e2e marker。
+
+    只吞「不在本目录」这一种情况（`relative_to` 抛 ValueError，如跨目录跑 pytest）；
+    其余异常（`item.path` 缺失 / 路径为空）意味着 pytest 收集形态变了，直接抛出——
+    分层标记一旦静默缺失，将来按 `-m` 过滤就是静默丢覆盖（#382 教训）。
+    """
     tests_dir = Path(__file__).resolve().parent
     for item in items:
         try:
             layer = item.path.resolve().relative_to(tests_dir).parts[0]
-        except (AttributeError, ValueError, IndexError):
-            continue  # 非本目录收集项（如跨目录跑 pytest）不参与分层
+        except ValueError:
+            continue  # 非本目录收集项，不参与分层
         if layer in _LAYER_MARKERS:
             item.add_marker(getattr(pytest.mark, layer))
