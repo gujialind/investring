@@ -146,11 +146,22 @@ class TestCalendarContract:
     """交易日历契约（issue #468）：起点固定、终点随 today 滚动，消除日期时间炸弹"""
 
     def test_calendar_end_covers_one_year_ahead(self, test_db):
-        """seed_base 段 4 的终点 = today + 365 天；若恰为周末则最后落库日为其前一个工作日"""
+        """种子日历终点 = today + CALENDAR_LOOKAHEAD_DAYS（段 4 逐日落库，周末也落一行 is_open=False）"""
         max_date = test_db.query(func.max(TradingCalendar.calendar_date)).scalar()
         assert max_date is not None, "种子必须包含交易日历"
-        assert max_date >= date.today() + timedelta(days=360), (
-            f"日历终点 {max_date} 未覆盖 today + 1 年，滚动终点失效"
+        expected_end = date.today() + timedelta(days=seed_base.CALENDAR_LOOKAHEAD_DAYS)
+        # ① 终点与常量同源：段 4 逐日落库 ⇒ max 恒等于终点。下界留 1 天容差，防 pytest
+        #    会话跨午夜（种子在会话早期写入、断言在其后执行）。
+        assert expected_end - timedelta(days=1) <= max_date <= expected_end, (
+            f"日历终点 {max_date} 不在 [today+{seed_base.CALENDAR_LOOKAHEAD_DAYS - 1}, "
+            f"today+{seed_base.CALENDAR_LOOKAHEAD_DAYS}]：滚动终点与常量脱钩"
+        )
+        # ② 哨兵前提独立卡死（不随常量漂移）：test_trading_day / test_snapshot_service 的
+        #    「日历未同步」用例取 today + 400，终点一旦盖到那里，这些用例会静默失去语义
+        #    （周末哨兵恰好 is_open=False 时仍会通过）。
+        assert max_date < date.today() + timedelta(days=400), (
+            f"日历终点 {max_date} 已覆盖「日历未同步」哨兵 today+400："
+            "调大 CALENDAR_LOOKAHEAD_DAYS 时必须同步上移哨兵日期"
         )
 
     def test_seed_rolls_into_future_year(self, test_db, monkeypatch):
@@ -170,7 +181,8 @@ class TestCalendarContract:
         seed_base.seed_e2e_active(test_db)
 
         max_date = test_db.query(func.max(TradingCalendar.calendar_date)).scalar()
-        assert max_date >= date(2028, 1, 4), f"冻结到 2027 后日历终点 {max_date} 未滚动"
+        expected_end = date(2027, 1, 4) + timedelta(days=seed_base.CALENDAR_LOOKAHEAD_DAYS)
+        assert max_date >= expected_end, f"冻结到 2027 后日历终点 {max_date} 未滚动到 {expected_end}"
 
         pending = test_db.query(Trade).filter(
             Trade.portfolio_code == "E2E_ACTIVE",

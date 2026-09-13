@@ -80,7 +80,9 @@ test.describe('移动端份额变动事件页（#276）', () => {
     const code = await gotoMobilePortfolioDetail(page);
 
     // API 造数：种子不保证有事件数据，经 REST 造一条 pending 现金分红事件；
-    // 双日期取种子日历内固定交易日（2025-2026 工作日，见 seed_base）
+    // 双日期是种子日历内的两个固定工作日（2026-09-01/02，日历自 2025-01-01 起长期有效）。
+    // 这里写死是安全的：E2E_PORT 零快照 ⇒ 事件不要求「除息日晚于最新快照日」，不受
+    // 「日期锚定 today」影响（与 E2E_ACTIVE 的用例不同，#468 评审）
     const headers = await authHeaders(page);
 
     const products = await (await page.request.get('/api/products?page_size=1', { headers })).json();

@@ -25,6 +25,12 @@ from app.constants.asset_dimensions import (
 from app.utils.security import get_password_hash
 
 
+# 日历终点前瞻天数：种子写入（段 4）与契约测试断言共用，改一处即两侧同步（issue #468）。
+# 「日历未同步」哨兵（today + 400）与端到端「越界」假设都以它为基准：调大它会让哨兵
+# 落进日历内，故 test_seed_contract 同时卡上界。
+CALENDAR_LOOKAHEAD_DAYS = 365
+
+
 def seed_base_data(db: Session) -> None:
     """种子基础数据：维度字典、适用关系、平台、产品、日历、draft 组合 E2E_PORT、用户。
 
@@ -123,14 +129,14 @@ def seed_base_data(db: Session) -> None:
             db.add(Product(**p))
     db.commit()
 
-    # 4. 交易日历（2025-01-01 起，终点滚动到 today + 1 年；工作日为交易日）
+    # 4. 交易日历（2025-01-01 起，终点滚动到 today + CALENDAR_LOOKAHEAD_DAYS 天；工作日为交易日）
     #    起点固定：存量测试大量依赖 2025 年固定日期（如 conftest 的 sample_trading_day）。
     #    终点随 date.today() 滚动（issue #468）：固定终点会让以 today 锚定的 E2E / 契约
     #    测试随时间集体失效（首爆点 2027-01-04 阻断 CI OK 与 CD）。
     #    幂等守卫从「表空才写」改为增量补尾：本地复用库已有旧终点时继续向后延伸，
     #    而不是被旧数据挡住（CI 空库起跑与旧守卫行为等价）。
     start = date(2025, 1, 1)
-    end = date.today() + timedelta(days=365)
+    end = date.today() + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)
     last_seeded = db.query(func.max(TradingCalendar.calendar_date)).scalar()
     current = max(start, last_seeded + timedelta(days=1)) if last_seeded else start
     while current <= end:
