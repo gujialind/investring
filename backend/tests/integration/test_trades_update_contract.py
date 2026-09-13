@@ -12,7 +12,6 @@ from tests.factories import (
 )
 from app.models.trade import Trade
 from app.models.portfolio import Portfolio
-from app.schemas.trade import TradeResponse
 
 
 class TestTradesOpenApiContract:
