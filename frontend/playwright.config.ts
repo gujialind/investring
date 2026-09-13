@@ -1,4 +1,4 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/test';
 
 /**
  * InvestRing 前端 E2E 测试配置
@@ -17,6 +17,17 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env.BASE_URL || 'http://localhost:3000';
 const webServerPort = Number(new URL(baseURL).port) || 3000;
 
+// 报告器：html + list 恒定；PLAYWRIGHT_JSON_OUTPUT_FILE 存在时追加 json（#466 主 E2E job
+// 用它汇总 flaky 用例）。刻意在配置里追加而非用 CLI --reporter：CLI 会整体替换本列表，
+// html 的 open:'never' 等配置随之丢失。形态对比采集仍走 CLI --reporter（见 e2e-stack.yml）。
+const reporters: NonNullable<PlaywrightTestConfig['reporter']> = [
+  ['html', { open: 'never' }],
+  ['list'],
+];
+if (process.env.PLAYWRIGHT_JSON_OUTPUT_FILE) {
+  reporters.push(['json']);
+}
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -30,11 +41,7 @@ export default defineConfig({
   fullyParallel: true,
   workers: process.env.CI ? 2 : undefined,
 
-  // 报告器
-  reporter: [
-    ['html', { open: 'never' }],
-    ['list'],
-  ],
+  reporter: reporters,
 
   use: {
     baseURL,

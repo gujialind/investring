@@ -1,0 +1,271 @@
+# ============================================================================
+# E2E 栈 reusable workflow（issue #467）
+# ============================================================================
+# `frontend-e2e` 与 `e2e-compare-capture` 的栈步骤原本逐行同构（MySQL service /
+# 建库 / 迁移 / 种子 / uvicorn / 前端生产构建与 standalone 组装 / 浏览器缓存与安装），
+# 双份维护必然漂移。抽成本 workflow 后两侧差异只剩显式入参。
+#
+# 两种模式：
+#   - main    ：全量 E2E 门禁（retries 由调用方给 2，容错偶发抖动），产出 html 报告
+#               与 flaky 汇总用的 JSON；失败证据 + 后端日志进单一 artifact。
+#   - capture ：E2E 形态对比采集（retries=0 保形态真实、workers=2、JSON 落文件供
+#               scripts/e2e_normalize.py 归一化）；baseline 侧只换 frontend/e2e 目录。
+#
+# ⚠️ GitHub 硬约束（改本文件前必读）：
+#   1. 调用方 `uses:` job 上只能写 name/uses/with/secrets/strategy/needs/if/
+#      concurrency/permissions/cache-mode——`timeout-minutes`、`services`、`env`
+#      **必须留在本文件内**（故下面不搬走）；caller 的 workflow 级 env 也不传播。
+#   2. called workflow 读不到 caller 的 matrix——capture 的 side 必须经 `with` 传入。
+#   3. artifact 名必须由调用方参数化：同一 workflow run 内 artifact 重名 = 上传硬失败。
+#   4. `github.*` 上下文是 caller 的（故 baseline 换目录可直接读 pull_request.base.sha）。
+#
+# 不变量（勿改，均来自 #401/#410/#414）：
+#   - baseline 侧**只换 frontend/e2e/**，两侧构建源同为 PR head（测试重构 + src 补
+#     data-testid 的 PR 仍可比对）；
+#   - capture 的 raw JSON artifact 是 normalizer 的必需输入 → `if-no-files-found: error`；
+#   - 其余诊断品 artifact 一律 `if: always()` + `continue-on-error`（#414：上传失败不染红）。
+# ============================================================================
+
+name: E2E Stack
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "main（全量门禁）或 capture（形态对比采集）"
+        required: true
+        type: string
+      side:
+        description: "capture 用：candidate / baseline（baseline 换 frontend/e2e 目录）"
+        required: false
+        type: string
+        default: candidate
+      artifact_prefix:
+        description: "artifact 名前缀（main=playwright-report，capture=e2e-raw-<side>）"
+        required: true
+        type: string
+      retries:
+        description: "Playwright --retries（main=2 容错、capture=0 保形态真实）"
+        required: true
+        type: string
+      log_file:
+        description: "后端启动日志落盘名（进失败证据 artifact）"
+        required: true
+        type: string
+
+# 与 ci.yml 顶层同口径；caller 的 env 不传播，故在此重复声明
+env:
+  SECRET_KEY: test-secret-key-for-ci
+  SCHEDULER_ENABLED: "false"
+  DEBUG: "false"
+
+jobs:
+  e2e:
+    name: "E2E Stack"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -uroot -proot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # fetch-depth 0：baseline 侧要 checkout base.sha 的 frontend/e2e。
+      # PR 侧检出头 commit；push / schedule / dispatch 侧 head.sha 为空，回落 github.sha。
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      # baseline 侧只换 e2e 目录，构建源仍是 PR head——「同一构建、唯一变量是
+      # frontend/e2e/**」不变量（#401 场景：测试重构 + src 补 data-testid 依赖这一点）。
+      # 先 rm -rf 再 checkout：head 独有 spec 会残留跑成并集（旧脚本 SWAP_ORPHANS
+      # 同源坑）；e2e/.auth/admin.json 是 gitignore 的、由 setup project 重建，删了无妨。
+      - name: Swap e2e to base (baseline only)
+        if: inputs.mode == 'capture' && inputs.side == 'baseline'
+        run: |
+          rm -rf frontend/e2e
+          git checkout ${{ github.event.pull_request.base.sha }} -- frontend/e2e
+
+      # ---- 后端：建库 → 迁移 → seed → 启动（生产启动顺序：create_all 由 main.py import 期完成）----
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）
+      - name: Create database
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot -e "
+            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+
+      # 复刻生产启动顺序（对齐 backend-test-mysql）：create_all 先建全表，
+      # alembic upgrade head 增量修补——迁移链依赖 create_all 已建表
+      # （如 0007 直接 UPDATE product），单独跑迁移会报表不存在
+      - name: Create schema and run migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+        run: |
+          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
+          alembic upgrade head
+
+      # 种子 ADMIN/admin@2026 + draft 组合 E2E_PORT + active 组合 E2E_ACTIVE
+      # （E2E 登录与业务 spec 按 code 直达依赖，勿删；种子体与 pytest 同源：
+      # backend/tests/seed_base.py，issue #222 / #354）
+      - name: Seed E2E base data
+        working-directory: backend
+        env:
+          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+        run: python scripts/seed_e2e.py
+
+      - name: Start backend
+        working-directory: backend
+        env:
+          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../${{ inputs.log_file }} 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/health
+
+      # ---- 前端：生产构建 + webServer 由 playwright.config.ts 自动起 standalone server.js（:3000）----
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # E2E 跑生产构建形态（issue #171）：standalone server.js 与 Docker
+      # 容器完全同形态（next start 与 output:'standalone' 不兼容）；
+      # API_BASE_URL 默认 localhost:8000，build 时固化的 rewrites 恰与
+      # 本 job 后端地址一致，无需额外传参。
+      # standalone 不包含 public/ 与 .next/static/，组装步骤与 Dockerfile 一致。
+      - name: Build frontend (production)
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          npm run build
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public
+
+      # 浏览器二进制缓存（issue #172）：key 绑定 package-lock.json
+      # （@playwright/test 版本决定所需浏览器构建）；未命中时回退全新安装
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      # 桌面 chromium + 移动 webkit（mobile 用 iPhone 13 描述符，
+      # 见 playwright.config.ts 注释；PR #169 遗留的 webkit 307 取消问题
+      # 已定位为 dev 竞态并修复，恢复真实 Safari 内核覆盖）。
+      # 拆步 + 预置 apt-get update：--with-deps 内置 update 遇首选镜像
+      # （azure.archive.ubuntu.com）不可达时会长时间重试卡死；先单独
+      # update 让 apt 完成镜像回退，后续内置 update 全 Hit 很快。
+      # timeout-minutes 兼作快速失败护栏（正常 ≤5 分钟）。
+      - name: Update apt index
+        run: sudo apt-get update
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        timeout-minutes: 15
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright webkit
+        working-directory: frontend
+        timeout-minutes: 15
+        run: npx playwright install --with-deps webkit
+
+      # main 模式：PLAYWRIGHT_JSON_OUTPUT_FILE 触发 playwright.config.ts 追加 json
+      # reporter（#466 flaky 汇总的输入；不改 CLI reporter，避免覆盖 html 的配置）。
+      - name: Run Playwright tests (main)
+        if: inputs.mode == 'main'
+        working-directory: frontend
+        env:
+          CI: "true"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/e2e-flaky.json
+        run: npx playwright test --retries=${{ inputs.retries }}
+
+      # capture 模式：--retries=0 让 flaky 不能被洗成 passed（形态对比失真，见
+      # frontend/AGENTS.md §4）；rc 非 0 不直接失败——用例状态已进 JSON，
+      # 由 compare job 的形态 diff 判定。
+      - name: Run Playwright tests (capture)
+        if: inputs.mode == 'capture'
+        working-directory: frontend
+        env:
+          CI: "true"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/e2e-raw-${{ inputs.side }}.json
+        run: |
+          rc=0
+          npx playwright test --retries=${{ inputs.retries }} --workers=2 --reporter=list,json || rc=$?
+          echo "playwright rc=$rc（非 0 = 有用例未通过，状态已进 JSON）"
+
+      # flaky 显性化（#466）：retries 保留（偶发抖动不阻断 PR），但重试转绿的用例
+      # 必须可见——汇总数量与清单进 Step Summary，flaky>0 时脚本经 **stderr** 发
+      # ::warning::（stdout 已被重定向到 Step Summary，注解走 stderr 才不会被写进报告）。
+      - name: Summarize flaky tests
+        if: always() && inputs.mode == 'main'
+        run: python3 scripts/e2e_flaky_summary.py --input /tmp/e2e-flaky.json >> "$GITHUB_STEP_SUMMARY"
+
+      # 失败证据（trace/截图/视频）+ 后端启动日志（后端启动失败时的定位证据，
+      # issue #172），always 上传保证失败时也能取到
+      - name: Upload Playwright report
+        if: always() && inputs.mode == 'main'
+        continue-on-error: true  # 诊断品上传失败不染红 job（artifact 服务间歇 403，#414）
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_prefix }}
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+            ${{ inputs.log_file }}
+          retention-days: 14
+
+      # capture 的 raw JSON 是 normalizer 的必需输入 → 缺失必须响亮失败（不加 continue-on-error）
+      - name: Upload raw JSON
+        if: always() && inputs.mode == 'capture'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_prefix }}
+          path: /tmp/e2e-raw-${{ inputs.side }}.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload failure evidence
+        if: always() && inputs.mode == 'capture'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_prefix }}-results
+          path: |
+            frontend/test-results/
+            ${{ inputs.log_file }}
+          retention-days: 14
+          if-no-files-found: warn
