@@ -10,6 +10,9 @@
 #               与 flaky 汇总用的 JSON；失败证据 + 后端日志进单一 artifact。
 #   - capture ：E2E 形态对比采集（retries=0 保形态真实、workers=2、JSON 落文件供
 #               scripts/e2e_normalize.py 归一化）；baseline 侧只换 frontend/e2e 目录。
+#               **只在形态触发时被实跑**（命中 frontend/e2e、playwright 配置、种子、
+#               normalizer、scripts/tests 时）——只改本文件不会触发它，改 capture 分支
+#               请手动确认一次形态 PR 的 CI（#467 评审登记）。
 #
 # ⚠️ GitHub 硬约束（改本文件前必读）：
 #   1. 调用方 `uses:` job 上只能写 name/uses/with/secrets/strategy/needs/if/
@@ -79,12 +82,18 @@ jobs:
           --health-retries 10
 
     steps:
+      # ref 按模式区分（#467 评审）：
+      #   capture —— 必须检 PR head：baseline 侧要 checkout base.sha 的 frontend/e2e，
+      #              且「两侧构建源同为 PR head」是不变量（#401）；
+      #   main    —— 回落 github.sha（即默认 ref：PR 事件 = merge commit、push 事件 =
+      #              head commit），保持抽栈前的语义：PR 绿 ⇒ 与当时 base 合并后可绿。
+      #              抽栈时曾统一为 head，等于让 frontend-e2e 少验证「head+base 组合」，
+      #              故按模式拆回。
       # fetch-depth 0：baseline 侧要 checkout base.sha 的 frontend/e2e。
-      # PR 侧检出头 commit；push / schedule / dispatch 侧 head.sha 为空，回落 github.sha。
-      - name: Checkout PR head
+      - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.mode == 'capture' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       # baseline 侧只换 e2e 目录，构建源仍是 PR head——「同一构建、唯一变量是

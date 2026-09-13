@@ -103,6 +103,31 @@ def test_missing_input_is_not_fatal(tmp_path, capsys):
     assert captured.err == ""
 
 
+def test_total_mismatch_fails_loud(tmp_path, capsys):
+    # 逐节点只收到 1 条，stats 却报 5 条 → 与 normalizer 同口径的形态守卫，必须响亮失败
+    # （只比 flaky 数会漏掉这类「节点整片识别不到」的形态变化）
+    data = report(
+        [file_suite([
+            spec_node("普通用例", None, [entry("chromium", "expected", "passed")]),
+        ])],
+        stats(expected=5),
+    )
+    with pytest.raises(SystemExit) as exc:
+        run(tmp_path, data, capsys)
+    assert exc.value.code != 0
+    assert "reporter stats 总数" in str(exc.value)
+
+
+def test_zero_records_fails_loud(tmp_path, capsys):
+    # reporter 产出 0 条用例记录 = 运行/过滤配置坏了（--grep/--project 全滤掉或形态变化）；
+    # job 可能仍绿，必须响亮失败而不是打印「无 flaky」放过
+    data = report([], stats())
+    with pytest.raises(SystemExit) as exc:
+        run(tmp_path, data, capsys)
+    assert exc.value.code != 0
+    assert "0 条用例记录" in str(exc.value)
+
+
 def test_file_falls_back_to_ancestor_suite(tmp_path, capsys):
     # spec 节点自身缺 file 时回落祖先 suite 的 file（与 normalizer 同口径）
     data = report(

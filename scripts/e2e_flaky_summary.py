@@ -12,8 +12,10 @@
 # - 用例节点 = 同时含 title 与 tests 的节点（title 在节点自身；tests[] 不含 title，
 #   Playwright 1.62 起 t["title"] 必 KeyError）；
 # - tests[].status == 'flaky' = 至少失败一次后最终通过；
-# - stats.flaky 与逐节点收集数必须一致：不一致说明 reporter 形态已变，响亮失败
-#   （假绿灯比崩掉更坏，同 normalizer 的口径守卫）。
+# - 形态守卫①：四类之和（expected+unexpected+flaky+skipped）必须等于逐节点收集数；
+#   守卫②：0 条用例记录视为异常；守卫③：stats.flaky 与逐节点 flaky 数一致——
+#   任一不一致说明 reporter 形态/过滤配置已变，响亮失败（假绿灯比崩掉更坏，同
+#   normalizer 的口径守卫）。
 #
 # 退出码：flaky 本身**不**影响退出码（重试通过不阻断 PR，只要求可见）；文件缺失
 # （playwright 没跑到产出阶段，E2E job 自己已经红了）也只提示不失败；只有形态守卫
@@ -68,7 +70,23 @@ def main(argv=None):
         data = json.load(f)
 
     flaky, total = collect(data)
-    reported = data.get("stats", {}).get("flaky", 0)
+    stats = data.get("stats", {})
+    # 形态守卫①（与 e2e_normalize.py 同口径）：四类之和必须等于逐节点收集数。
+    # 只比 flaky 数会漏掉「节点整片识别不到、恰好 0 flaky」的形态变化（假绿灯）。
+    reported_total = sum(stats.get(k, 0) for k in ("expected", "unexpected", "flaky", "skipped"))
+    if reported_total != total:
+        sys.exit(
+            f"❌ 逐节点收集 {total} 条 ≠ reporter stats 总数 {reported_total}："
+            "JSON reporter 形态可能已变（口径见 scripts/e2e_normalize.py）"
+        )
+    # 形态守卫②：一条用例记录都没有 = 运行/过滤配置坏了（reporter 形态变化或
+    # --grep/--project 把用例全滤掉）。job 可能仍绿，此处必须响亮失败。
+    if total == 0:
+        sys.exit(
+            "❌ reporter 产出 0 条用例记录：E2E 形态或过滤配置异常（静默丢覆盖），"
+            "请检查 playwright 配置与本步骤的调用参数"
+        )
+    reported = stats.get("flaky", 0)
     if reported != len(flaky):
         sys.exit(
             f"❌ stats.flaky={reported} ≠ 逐节点收集 {len(flaky)}："

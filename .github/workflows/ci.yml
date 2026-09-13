@@ -543,7 +543,8 @@ jobs:
       #   cli       ← ir-cli/（openapi 漂移门禁另依赖 backend，条件里已 OR）
       #   scripts   ← scripts/
       #   .github/workflows/ 命中则**四个栈全 true**：CI 配置改动无法预判影响面，
-      #               而改配置的 PR 正是最需要完整验证的场合（代价 = 回到裁剪前的全量）
+      #               而改配置的 PR 正是最需要完整验证的场合（代价 = 回到裁剪前的全量）。
+      #               四个栈不含 e2e_morph——形态强制位对它无效（emit 传 nowf，见下条）。
       #   e2e_morph ← 形态输入清单：e2e 目录、playwright 配置、种子与 normalizer
       #               （它们同样改变 pass/skip 形态）。
       #               **刻意不含 .github/workflows/**（#467）**：原先把 ci.yml 自身列入
@@ -565,8 +566,8 @@ jobs:
           git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" > /tmp/changed.txt
           hit() { grep -qE "$1" /tmp/changed.txt && echo true || echo false; }
           wf=$(hit '^\.github/workflows/')
-          emit() {  # $1=输出名 $2=该栈是否命中
-            if [ "$2" = "true" ] || [ "$wf" = "true" ]; then
+          emit() {  # $1=输出名 $2=该栈是否命中 $3=nowf（不吃 workflow 全局强制，仅 e2e_morph）
+            if [ "$2" = "true" ] || { [ "${3:-}" != "nowf" ] && [ "$wf" = "true" ]; }; then
               echo "$1=true" >> "$GITHUB_OUTPUT"
             else
               echo "$1=false" >> "$GITHUB_OUTPUT"
@@ -576,7 +577,7 @@ jobs:
           emit frontend "$(hit '^(frontend/|backend/tests/seed_base\.py$|backend/scripts/seed_e2e\.py$)')"
           emit cli "$(hit '^ir-cli/')"
           emit scripts "$(hit '^scripts/')"
-          emit e2e_morph "$(hit '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/)')"
+          emit e2e_morph "$(hit '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/)')" nowf
           # 输出缺失/写错会让所有 job 静默 skip 而 `CI OK` 仍绿（= 假绿），显式校验
           for k in backend frontend cli scripts e2e_morph; do
             n=$(grep -cE "^$k=(true|false)$" "$GITHUB_OUTPUT" || true)
