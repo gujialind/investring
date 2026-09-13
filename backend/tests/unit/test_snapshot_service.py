@@ -9,7 +9,7 @@
 # ============================================================================
 
 import pytest
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.services.snapshot_service import (
@@ -83,7 +83,8 @@ class TestIsTradingDay:
 
     def test_unknown_date_returns_false(self, test_db):
         """交易日历中不存在的日期应返回 False"""
-        assert _is_trading_day(test_db, date(2030, 1, 1)) is False
+        # 哨兵恒取滚动终点（today + 365 天，seed_base 段 4）之外（issue #468）
+        assert _is_trading_day(test_db, date.today() + timedelta(days=400)) is False
 
 
 class TestValidateTradingDay:

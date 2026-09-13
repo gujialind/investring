@@ -14,12 +14,14 @@
 from datetime import date, timedelta
 
 import pytest
+from sqlalchemy import func
 
 from app.models import (
     InvestorHolding, Portfolio, PortfolioPosition, PortfolioValueSnapshot,
-    PriceRecord, Subscription, Trade,
+    PriceRecord, Subscription, Trade, TradingCalendar,
 )
 from app.services.trading_utils import get_next_trading_day
+from tests import seed_base
 from tests.seed_base import seed_e2e_active
 
 
@@ -138,3 +140,55 @@ class TestE2EActiveContract:
                 PriceRecord.market == "CN_EXCHANGE",
                 PriceRecord.price_date == d,
             ).first() is not None, f"快照日 {d} 缺 510300.SH 价格行"
+
+
+class TestCalendarContract:
+    """交易日历契约（issue #468）：起点固定、终点随 today 滚动，消除日期时间炸弹"""
+
+    def test_calendar_end_covers_one_year_ahead(self, test_db):
+        """种子日历终点 = today + CALENDAR_LOOKAHEAD_DAYS（段 4 逐日落库，周末也落一行 is_open=False）"""
+        max_date = test_db.query(func.max(TradingCalendar.calendar_date)).scalar()
+        assert max_date is not None, "种子必须包含交易日历"
+        expected_end = date.today() + timedelta(days=seed_base.CALENDAR_LOOKAHEAD_DAYS)
+        # ① 终点与常量同源：段 4 逐日落库 ⇒ max 恒等于终点。下界留 1 天容差，防 pytest
+        #    会话跨午夜（种子在会话早期写入、断言在其后执行）。
+        assert expected_end - timedelta(days=1) <= max_date <= expected_end, (
+            f"日历终点 {max_date} 不在 [today+{seed_base.CALENDAR_LOOKAHEAD_DAYS - 1}, "
+            f"today+{seed_base.CALENDAR_LOOKAHEAD_DAYS}]：滚动终点与常量脱钩"
+        )
+        # ② 哨兵前提独立卡死（不随常量漂移）：test_trading_day / test_snapshot_service 的
+        #    「日历未同步」用例取 today + 400，终点一旦盖到那里，这些用例会静默失去语义
+        #    （周末哨兵恰好 is_open=False 时仍会通过）。
+        assert max_date < date.today() + timedelta(days=400), (
+            f"日历终点 {max_date} 已覆盖「日历未同步」哨兵 today+400："
+            "调大 CALENDAR_LOOKAHEAD_DAYS 时必须同步上移哨兵日期"
+        )
+
+    def test_seed_rolls_into_future_year(self, test_db, monkeypatch):
+        """模拟 2027 场景（#468 首爆点 2027-01-04）：冻结 today 后日历延伸、种子可用。
+
+        通过 monkeypatch seed_base 模块级 date 冻结 today；写入发生在 function 级
+        事务内、teardown 整体回滚，不会污染 session 日历与哨兵测试。
+        """
+
+        class _FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return date(2027, 1, 4)  # 2027 年首个交易日（周一）
+
+        monkeypatch.setattr(seed_base, "date", _FrozenDate)
+        seed_base.seed_base_data(test_db)
+        seed_base.seed_e2e_active(test_db)
+
+        max_date = test_db.query(func.max(TradingCalendar.calendar_date)).scalar()
+        expected_end = date(2027, 1, 4) + timedelta(days=seed_base.CALENDAR_LOOKAHEAD_DAYS)
+        assert max_date >= expected_end, f"冻结到 2027 后日历终点 {max_date} 未滚动到 {expected_end}"
+
+        pending = test_db.query(Trade).filter(
+            Trade.portfolio_code == "E2E_ACTIVE",
+            Trade.status == "pending",
+            Trade.product_code != "CASH",
+        ).all()
+        assert len(pending) == 1, "冻结到 2027 后 E2E_ACTIVE 种子须照常产出 pending 交易"
+        # D4 = 冻结当日（交易日）；create_trade 的交易日校验通过即证明日历已覆盖 2027
+        assert pending[0].trade_date == date(2027, 1, 4)

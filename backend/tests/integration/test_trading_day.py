@@ -7,11 +7,19 @@
 # - GET /api/trading-calendar/is-open
 #
 # 测试日历背景（conftest 种子数据）：
-# 2025-01-01 ~ 2026-12-31，周一至周五为交易日（is_open=True）。
+# 2025-01-01 起、终点滚动到 today+1 年（issue #468），周一至周五为交易日（is_open=True）。
 # 超出该范围的日期视为"日历数据缺失"，应返回 CALENDAR_NOT_SYNCED 的 422。
+# 终点侧哨兵取 today+400 天（恒在滚动终点之外，语义不随时间漂移）；起点固定
+# 2025-01-01，故早于起点的哨兵可用固定日期。
 # ============================================================================
 
+from datetime import date, timedelta
+
 import pytest
+
+# 终点侧「日历未同步」哨兵：seed_base 段 4 的日历终点 = today + 365 天，
+# today + 400 天恒在日历外。
+CALENDAR_GAP_DATE = date.today() + timedelta(days=400)
 
 
 class TestNextTradingDay:
@@ -50,10 +58,10 @@ class TestNextTradingDay:
         assert resp.json()["trading_day"] == "2025-01-09"
 
     def test_next_trading_day_calendar_not_synced(self, client, viewer_headers):
-        """超出日历范围（2027 年未同步）应返回 CALENDAR_NOT_SYNCED 422"""
+        """超出日历终点范围（滚动终点之后未同步）应返回 CALENDAR_NOT_SYNCED 422"""
         resp = client.get(
             "/api/trading-calendar/next",
-            params={"from_date": "2027-06-01"},
+            params={"from_date": CALENDAR_GAP_DATE.isoformat()},
             headers=viewer_headers,
         )
         assert resp.status_code == 422
@@ -150,10 +158,10 @@ class TestIsOpen:
         assert data["is_open"] is False
 
     def test_is_open_calendar_not_synced(self, client, viewer_headers):
-        """日历中无该日期记录（2030 年未同步）应返回 CALENDAR_NOT_SYNCED 422"""
+        """日历中无该日期记录（超出滚动终点）应返回 CALENDAR_NOT_SYNCED 422"""
         resp = client.get(
             "/api/trading-calendar/is-open",
-            params={"date": "2030-01-01"},
+            params={"date": CALENDAR_GAP_DATE.isoformat()},
             headers=viewer_headers,
         )
         assert resp.status_code == 422

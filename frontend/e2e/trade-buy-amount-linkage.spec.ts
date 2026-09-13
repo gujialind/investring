@@ -19,6 +19,8 @@
  * 种子零现金而买入创建按扣款平台校验可用现金，落库用例先经 API
  * 「申购+确认」向所选平台注入现金（申购确认日 T+1，申请日取交易日前一工作日，
  * 种子日历工作日即交易日；首购按净值 1.0 确认，残留申购不清理、重复注入无害）。
+ * 交易日期经交易日历 API 锚定「today 起最近一个交易日」（#468）：周末/非交易日
+ * 改选该日而非 test.skip，覆盖 7/7 确定化，消除跨日 skip→run 的 e2e-morph 假 diff。
  * 落库用例真实创建一笔买入并在用例内删除清理；创建前另经 API 清除同自然键
  * 残留（上轮中途失败或 CI 重试的遗留），防双 project 时间交叠/重试撞
  * DUPLICATE_TRADE。提交契约用例经 page.route 拦截 + abort，
@@ -55,6 +57,48 @@ function toISODate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * 取「today 起最近一个交易日」（含 today）：查当年日历，当年尚无开市日则回看
+ * 上一年末。只依赖交易日历 API 事实、不假设周末规则（#468）。
+ */
+async function nearestTradingDay(
+  page: Page,
+  headers: { Authorization: string },
+): Promise<string> {
+  const today = toISODate(new Date());
+  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
+    const rows = (await (
+      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
+    ).json()) as { calendar_date: string; is_open: boolean }[];
+    const open = rows
+      .filter((r) => r.is_open && r.calendar_date <= today)
+      .map((r) => r.calendar_date)
+      .sort();
+    if (open.length > 0) return open[open.length - 1];
+  }
+  throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
+}
+
+/**
+ * 经交易日期 DatePicker 显式选日（表单默认 today，非交易日须改选）。
+ * 目标与 today 相差至多 2 天，日历默认展示选中月，必要时按月翻一次。
+ */
+async function selectTradeDate(
+  page: Page,
+  dlg: Locator,
+  targetISO: string,
+): Promise<void> {
+  const trigger = dlg.locator('button#trade_date');
+  await trigger.click();
+  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
+  if ((await day.count()) === 0) {
+    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
+    await page.locator(`button.rdp-button_${dir}`).click();
+  }
+  await day.click();
+  await expect(trigger).toHaveText(targetISO);
 }
 
 /**
@@ -250,15 +294,15 @@ test.describe('买入金额双字段联动（#193）', () => {
   // ---- 用例 7：落库口径 + 编辑预填——列表金额为净额，编辑双维度差恰为手续费 ----
   test('创建买入后列表显示净额，编辑弹窗预填双维度', async ({ page }) => {
     const errors = collectPageErrors(page);
-    const now = new Date();
-    if (now.getDay() === 0 || now.getDay() === 6) {
-      test.skip(true, '今天非交易日（周末），表单默认交易日期会被后端拒绝');
-    }
-    const tradeDate = toISODate(now);
     const { dlg, portfolioCode } = await openSubmitTradeDialog(page, E2E_PORT);
     const product = await pickFirstProduct(page, dlg);
     const platformCode = await pickFirstPlatform(page, dlg);
     const headers = await authHeaders(page);
+    // 锚定「today 起最近一个交易日」（#468）：周末/非交易日改选该日而非 skip
+    const tradeDate = await nearestTradingDay(page, headers);
+    if (tradeDate !== toISODate(new Date())) {
+      await selectTradeDate(page, dlg, tradeDate);
+    }
     await purgePendingSameBuys(page, headers, portfolioCode, product.code, product.market, platformCode, tradeDate);
     await injectCashViaSubscription(page, headers, portfolioCode, platformCode, tradeDate);
 

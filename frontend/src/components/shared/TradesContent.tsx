@@ -841,6 +841,7 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
                 <div className="space-y-2">
                   <Label htmlFor="trade_date">交易日期</Label>
                   <DatePicker
+                    id="trade_date"
                     date={parseDateOnly(formData.trade_date)}
                     onSelect={(date) => {
                       setFormData({ ...formData, trade_date: toDateOnly(date) });
@@ -1083,6 +1084,7 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
                 <div className="space-y-2">
                   <Label htmlFor="edit_trade_date">交易日期</Label>
                   <DatePicker
+                    id="edit_trade_date"
                     date={parseDateOnly(editFormData.trade_date)}
                     onSelect={(date) => {
                       setEditFormData({ ...editFormData, trade_date: toDateOnly(date) });
