@@ -218,6 +218,7 @@ class TestSqliteIsANoOp:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.dialect
 class TestMysqlCanonicalState:
     def test_fresh_schema_already_has_the_explicit_name(self):
         """#433 的模型改动是否已足够：全新库（create_all）建出的就是显式名，只此一条。"""
@@ -265,6 +266,7 @@ class TestMysqlCanonicalState:
         assert names == [migration.TARGET_FK], names
 
 
+@pytest.mark.dialect
 class TestMysqlConvergesFromDuplicatedState:
     """生产现状：`fk_nav_sync_detail_job_id` + `nav_sync_detail_ibfk_2` 并存。"""
 
@@ -342,6 +344,7 @@ class TestMysqlConvergesFromDuplicatedState:
                 _restore_canonical_state(conn)
 
 
+@pytest.mark.dialect
 class TestMysqlPromotesAutomaticallyNamedFk:
     """#433 之前由 `create_all` 建的旧库：只有 `*_ibfk_N`，名字要提升为显式名。"""
 

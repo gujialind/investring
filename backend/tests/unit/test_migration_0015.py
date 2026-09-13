@@ -176,6 +176,7 @@ class TestSqliteIsANoOp:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.dialect
 class TestMysqlForeignKeys:
     """`_foreign_keys` 必须与 information_schema 对齐，且复合键被正确聚合。"""
 
@@ -227,6 +228,7 @@ class TestMysqlForeignKeys:
         assert all(cs for cs in charsets.values()), charsets
 
 
+@pytest.mark.dialect
 class TestMysqlRoundTripPreservesForeignKeysAndData:
     """「拆 → 转 → 建」往返：外键条数不变、定义不变、4 字节数据不变。
 
@@ -306,6 +308,7 @@ class TestMysqlRoundTripPreservesForeignKeysAndData:
                 _run(migration.upgrade, conn)
 
 
+@pytest.mark.dialect
 class TestIdempotency:
     """已是目标 charset 时必须空转——新库路径（create_all 已建 utf8mb4）依赖这一点。"""
 
