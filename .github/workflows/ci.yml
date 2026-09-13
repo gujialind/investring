@@ -30,6 +30,12 @@
 
 name: CI
 
+# 最小权限（#464 评审）：本 workflow 只读仓库——各 job 无写需求（诊断品走 artifact /
+# Step Summary），nightly-hygiene 单独声明 pull-requests: read。收紧后即使第三方
+# action（如 junit 注解）被投毒也拿不到写权限。
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -120,8 +126,10 @@ jobs:
 
       # 增量覆盖率门禁（issue #464）：只约束本 PR 改动行，堵住「新模块 0% 覆盖被既有
       # 高覆盖稀释通过」的缺口；全局 fail_under=82 仍兜整体退化，两者职责正交。
-      # ⚠️ 必须从仓库根运行并传 backend/coverage.xml：coverage.xml 的 <source> 是
-      # 绝对路径 + filename 相对 app/，从 backend/ 跑会拼不上路径而漏报全部改动行。
+      # 从仓库根运行并传 backend/coverage.xml：diff-cover 自行按 git root 对齐
+      # coverage.xml 的 <source>（绝对路径 + filename 相对 app/；实测 cwd 不影响选行，
+      # 见 #464 评审）；显式 working-directory 是为了让 `diff-cover.md` 落在仓库根
+      # （Summary 与 artifact 依赖该相对路径）。
       # base.sha 三点式 diff = 本 PR 自身改动（含 main 侧后续合入不受影响）。
       - name: Diff coverage gate (PR changed lines)
         if: github.event_name == 'pull_request'
@@ -135,6 +143,19 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         working-directory: .
         run: cat diff-cover.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      # 门禁退化可见化（#464 评审）：路径映射若断裂，diff-cover 会输出
+      # 「No lines with coverage information」并 exit 0——门禁静默空转（改动行一行没被
+      # 约束而 CI 全绿）。有新增行落在 backend/app/ 时发 warning 提示人工确认；
+      # 刻意不 fail：只改注释/docstring 的 PR 也会合法地没有可测行，硬拦会误伤。
+      - name: Warn on unmapped diff (PR)
+        if: always() && github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          added=$(git diff --numstat "${{ github.event.pull_request.base.sha }}...HEAD" -- backend/app | awk '{s+=$1} END {print s+0}')
+          if [ "${added}" -gt 0 ] && grep -q 'No lines with coverage information' diff-cover.md 2>/dev/null; then
+            echo "::warning::本次改动往 backend/app/ 新增了 ${added} 行，但 diff-cover 未测到任何改动行——可能是 coverage.xml↔git 路径映射断裂、增量门禁空转，请人工确认"
+          fi
 
       # 覆盖率摘要进 PR 页（issue #465）——失败/成功后都写，便于对比趋势
       - name: Append coverage summary
