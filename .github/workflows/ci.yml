@@ -259,6 +259,10 @@ jobs:
           pip install -e ir-cli pytest
           pytest ir-cli/tests -q
 
+      # scripts/ 与 scripts/tests/ 保持 stdlib-only（+ pytest）：原 scripts-test
+      # micro job 只装 pytest，该约束是环境强制的；#462 并入本 job 后环境里有
+      # backend requirements 与 ir-cli，误引入第三方 import 不会再被发现——
+      # 故把约定写在这里（新增第三方依赖前请先改这条注释并说明理由）。
       - name: Run scripts tests
         run: python -m pytest scripts/tests -q
 
