@@ -8,7 +8,7 @@
 
 ## 0. 为什么需要这份标准
 
-本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 与 nightly 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）。
+本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）。
 
 > ⚠️ **本文刻意不写 job 数量、覆盖率阈值等易漂移的具体数值**——第一版曾写「六个 job」「`fail_under=80`」，三天内即双双失实（#410 扩容 CI、#405 把阈值棘轮到 82）。数值一律指向源码，本文只陈述**判定口径**。
 
@@ -221,7 +221,7 @@ L2 语义审查（专攻「绿而错」）
 * **合入是人工关卡**：`CI OK` 与 L2 审查均通过后，仍**须用户明确确认才可执行合入**——合入即触发 CD、直接动生产（**纯文档改动除外**，见下条），AI 不得自行合入。
 * `CI OK` 必须绿（`skipped` 视为通过——路径裁剪后未触达的 job 与 `e2e-compare` 系在非 e2e PR 下跳过；`paths-ignore` 已按 #456 落地，见 `ci.yml` 汇总 job 与 `on.push` 注释）。
 * **`pull_request` 触发器不得加 `paths-ignore`**（#456 硬约束）：ruleset `protect main` 的 required status check 是 `CI OK`，一旦 PR 侧被路径过滤，docs-only PR 上该检查永不产出 → 合入按钮永久灰掉，与 #377（改 PR base 不触发 CI → required check 无法满足）同型死锁。
-* **PR 侧不设路径过滤器，但 #462 起 job 级按路径裁剪**：PR 只跑改动触达的栈（backend / frontend / cli / scripts，映射见 `ci.yml` 的 `changes` job），未触达栈显示 skipped。触碰的栈仍是**全量**（改 backend 即 SQLite + MySQL 全部套件、改 frontend 即 lint/tsc/单测/build/全量 E2E）。跨栈组合破坏（A 只改后端、B 只改前端，各自绿但组合坏）与纯时间流逝型失效（#468 型）由 **nightly 全量 CI**（#472，每日 UTC 20:00，全 job 不裁剪 + `nightly-hygiene`）与合入 main 后的 push 全量兜底。
+* **PR 侧不设路径过滤器，但 #462 起 job 级按路径裁剪**：PR 只跑改动触达的栈（backend / frontend / cli / scripts，映射见 `ci.yml` 的 `changes` job），未触达栈显示 skipped。触碰的栈仍是**全量**（改 backend 即 SQLite + MySQL 全部套件、改 frontend 即 lint/tsc/单测/build/全量 E2E）。跨栈组合破坏（A 只改后端、B 只改前端，各自绿但组合坏）与纯时间流逝型失效（#468 型）由合入 main 后的 push 侧保守全量与下一个触碰该栈的 PR 兜底（刻意不引入 nightly 定时体检，取舍论证见 #482）。
 * 合入 `main` 的 push 侧**不做任何裁剪**（保守全量，另有 `e2e_morph` 恒 false 以免每次合入都跑两轮 compare），仍**即触发 CD 自动部署**（**纯文档改动除外**：#456 起仅含 `.md` 的改动合入不产生 CI run ⇒ 不重部署、不推进 `deploy/*` 标签，见 `AGENTS.md` §3.1），因此「部署影响」节与上线冒烟不是形式主义。
 * 上线冒烟按 PR 模板清单执行（health check + `ir portfolio list` + 关键数据抽查），**在合入之后**。
 

@@ -4,17 +4,19 @@
 # 范围：后端测试 + CLI 契约校验 + 前端 lint/类型/构建门禁 + 前端 E2E（issue #168）
 #        + E2E 形态对比（issue #410：纯测试重构 PR 的 pass/skip 形态双侧 diff 门禁）
 # 触发条件：push 到 main（合入后）、pull request 到 main（issue #211 单分支模型）、
-#           schedule nightly（issue #472）、workflow_dispatch 手动全量。
+#           workflow_dispatch 手动全量。
 #           push 侧带 paths-ignore，纯文档改动合入不触发 CI ⇒ 不触发 CD（issue #456；
 #           约束与地雷见下方 `on.push` 注释）。pull_request 侧刻意无过滤——required
 #           check `CI OK` 不能在 docs-only PR 上缺席。
 #
 # 路径感知裁剪（issue #462）：PR 侧只跑改动触达的 job（`changes` job 输出
 # backend / frontend / cli / scripts / e2e_morph，各 job 以 `needs.changes.outputs.*`
-# 为 if 条件）；push / schedule / workflow_dispatch 侧一律保守全量（main 必须完整验证，
-# 且 nightly 的意义就是全量）。裁剪安全性依赖 `CI OK` 把 skipped 视为通过
-# （本文件 ci-ok job 的判据），不会重现 #377/#456 的 required check 死锁。
-# 组合破坏盲区（A 只改后端、B 只改前端，各自绿但组合坏）由 nightly 全量兜底（#472）。
+# 为 if 条件）；push / workflow_dispatch 侧一律保守全量（main 必须完整验证）。裁剪
+# 安全性依赖 `CI OK` 把 skipped 视为通过（本文件 ci-ok job 的判据），不会重现
+# #377/#456 的 required check 死锁。
+# 组合破坏盲区（A 只改后端、B 只改前端，各自绿但组合坏）与纯时间型失效（#468 型：
+# 夹具日历/过滤窗跟着真实时间走）由 push 侧保守全量与下一个触碰该栈的 PR 兜底——
+# 刻意不引入 nightly 定时体检（#472 declined）。裁剪取舍的完整论证见 #482。
 # 路径映射见 `changes` job 的注释；改映射必须同步考虑 `test_error_codes_doc_sync.py`
 # 对 docs/ 的断言依赖与 E2E 种子文件对 frontend 的依赖。
 #
@@ -52,26 +54,17 @@ on:
     # labeled：e2e-compare 的 e2e-morph-expected 豁免靠打标签触发重跑
     #（手动 re-run 不刷新 event payload，看不到新标签）
     types: [opened, synchronize, reopened, labeled]
-  # nightly 全量体检（issue #472）：
-  #   1. 组合破坏兜底——路径裁剪后每个 PR 只跑自己触碰的部分，A+B 组合起来的 main
-  #      没有任何一次 CI 验证过；nightly 每晚跑一次完整 CI（全不裁剪）。
-  #   2. 时间炸弹提前报警——纯时间流逝引发的失败（#468 型：夹具日历/过滤窗跟着真实
-  #      时间走）在 PR 侧天然拦不住（提 PR 时还没到期），nightly 每天问一次「今天还
-  #      满足所有测试假设吗」，在爆炸前数月以「nightly 变红」报警。
-  # 20:00 UTC = 北京时间次日 04:00（低峰）。schedule 只认默认分支最新 commit，
-  # 且不受 paths-ignore 影响。⚠️ 必须与 deploy.yml 的 `workflow_run.event == 'push'`
-  # 守卫配套：否则 nightly 绿灯会被判成「main CI 成功」触发一整轮 CD（#456 实测过的浪费）。
-  schedule:
-    - cron: '0 20 * * *'
-  # 手动全量（不等 cron 验证 nightly 路径 / main 上按需重跑完整 CI）。
-  # 手动触发的 run 同样被 deploy.yml 的事件守卫挡住，不会触发 CD。
+  # 手动全量（main 上按需重跑完整 CI，或对任意 ref 触发全量验证；唯一的
+  # per-branch 全量手段）。
+  # ⚠️ 手动触发的 run 同样被 deploy.yml 的 `workflow_run.event == 'push'` 守卫挡住，
+  # 不会触发 CD——该守卫不可删，理由见 deploy.yml setup job 注释。
   workflow_dispatch:
 
 # 并发控制：按「事件类型 + 源分支」分组，同组只保留最新运行。
 # 事件类型入组（issue #211）：push（合入 main 后）与 pull_request（feature→main）分属不同组，
 # 互不取消——required check 语义下「被取消」= 未通过会卡住 PR。
-# head_ref（PR 源分支名）优先，push 事件回落到 ref_name（分支名）；schedule 得
-# `ci-schedule-main`，与 push 组天然隔离。
+# head_ref（PR 源分支名）优先，非 PR 事件（push / workflow_dispatch）无 head_ref，
+# 回落 ref_name（分支名）后按「事件类型 + 分支」自然分组。
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
@@ -538,14 +531,15 @@ jobs:
         uses: actions/checkout@v7
         with:
           # PR 侧检出头 commit（fetch-depth 0 供 base...HEAD diff）；
-          # push / schedule / workflow_dispatch 侧 head.sha 为空，回落 github.sha
+          # push / workflow_dispatch 侧 head.sha 为空，回落 github.sha
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       # 纯 git 检测（不引第三方 action）。
-      # 非 PR 事件一律保守「全量」：main 必须完整验证，nightly 的意义就是全量；
+      # 非 PR 事件（push / workflow_dispatch）一律保守「全量」：main 必须完整验证；
       # 但 e2e_morph 恒 false——compare 只拦 PR 侧的「测试重构假绿灯」，
       # 置 true 会让每次合入 main 多跑两轮全量 E2E。
+      # 裁剪取舍与「为何不做 nightly 定时体检」的完整论证见 #482（决策记录）。
       # PR 侧路径映射（改映射必须重新审视下方注释里的既有依赖）：
       #   backend   ← backend/ 或 docs/（test_error_codes_doc_sync.py 以
       #               docs/reference/business-constraints.md 为断言输入）
@@ -802,39 +796,6 @@ jobs:
           fi
           echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
           exit 1
-
-  # nightly 卫生检查（issue #472，仅 schedule 运行）：逃生阀回收的标签侧。
-  # 打上 e2e-morph-expected 的开放 PR 会豁免形态 diff 门禁；长期挂着该标签等于
-  # 长期豁免，须周期性暴露（warning 级、恒 exit 0，不进 ci-ok 判定）。
-  nightly-hygiene:
-    name: "Nightly Hygiene"
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Scan stale e2e-morph-expected labels
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          stale=$(gh pr list --repo "${{ github.repository }}" --state open \
-            --label e2e-morph-expected --json number,title,createdAt \
-            --jq '[.[] | select((.createdAt | fromdateiso8601) < (now - 14*86400))]
-                  | .[] | "#\(.number) \(.title)（创建于 \(.createdAt)）"')
-          if [ -n "$stale" ]; then
-            echo "::warning::以下开放 PR 挂着 e2e-morph-expected 超过 14 天，形态 diff 长期被豁免，请复核是否仍需保留"
-            echo "$stale"
-            {
-              echo "### ⚠️ e2e-morph-expected 标签残留"
-              echo '```'
-              echo "$stale"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "✅ 无长期残留的 e2e-morph-expected 标签"
-          fi
 
   # 汇总门禁（issue #211）：作为 main 分支唯一的 required status check。
   # 不直接把 matrix 展开的 Docker Build Smoke / 偏发的 Frontend E2E 设为 required，
