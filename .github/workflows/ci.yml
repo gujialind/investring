@@ -550,9 +550,10 @@ jobs:
       #               **刻意不含 .github/workflows/**（#467）**：原先把 ci.yml 自身列入
       #               是 dogfood，代价是任何 ci.yml 改动（哪怕只改注释）都触发
       #               baseline+candidate 两轮全量 E2E；CI 配置改动已由上面的
-      #               「四栈全 true」覆盖（含 frontend-e2e 的正面验证），形态对比
-      #               不必再跑一遍。e2e-stack.yml 同理不入列——把同一问题搬到新文件
-      #               没有收益，栈改动由 frontend-e2e 自身兜。
+      #               「四栈全 true」覆盖，形态对比不必再跑一遍。e2e-stack.yml 同理
+      #               不入列——把同一问题搬到新文件没有收益；栈的 main 模式由
+      #               frontend-e2e 正面验证，但 **capture 分支不因只改 workflow 而实跑**
+      #               （缺口与手动确认口径见 e2e-stack.yml 头部）。
       - id: detect
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then

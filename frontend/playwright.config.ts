@@ -53,7 +53,7 @@ export default defineConfig({
   // 自动启动生产构建服务（issue #171）：E2E 直接跑 standalone server.js，
   // 与 Docker 容器完全同形态（next start 与 output:'standalone' 不兼容）。
   // CI/本地运行前需先 npm run build 并组装 standalone 静态资源
-  // （cp .next/static 与 public 入 .next/standalone，见 ci.yml / Dockerfile）。
+  // （cp .next/static 与 public 入 .next/standalone，见 e2e-stack.yml / Dockerfile）。
   // 历史上曾跑在 next dev 上，按需编译/Fast Refresh full reload 竞态
   // 是 PR #169 类 flaky 的根因，切生产构建后此类竞态结构性消失。
   webServer: {
