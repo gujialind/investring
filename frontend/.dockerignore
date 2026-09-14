@@ -28,4 +28,4 @@ Dockerfile
 .dockerignore
 
 # 文档
-*.md
+**/*.md

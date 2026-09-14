@@ -11,32 +11,35 @@ package-lock.json
 package.json
 
 # Python
-__pycache__/
-*.py[cod]
-.venv/
+# ⚠️ 一律用 `**/` 前缀：dockerignore 的单段模式只锚定上下文根（`abc` 只匹配 `./abc`，
+#    不像 gitignore 那样匹配任意深度），`backend/` 下的同名文件靠 `**/` 才排得掉
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
 .venv-openapi/
-venv/
-*.egg-info/
-.mypy_cache/
-.pytest_cache/
+**/venv/
+**/*.egg-info/
+**/.mypy_cache/
+**/.pytest_cache/
 
 # Vendored deps (migrated away, may still exist locally)
 backend/deps/
-# Local wheel cache — 落在此处会被 `COPY backend/ .` 带进运行镜像层
+# 本地 pip 安装目录（`pip install --target` 式解包结果，非 whl 缓存）；
+# 带 `backend/` 前缀故能命中 `COPY backend/ .` 的范围，不进运行镜像层
 backend/.packages/
 
 # Tests (not needed in production image)
 backend/tests/
 
-# Coverage & test reports（本地生成物；`backend/` 下两项会被 `COPY backend/ .` 带进镜像）
-.coverage
-.coverage.*
-coverage.xml
-junit.xml
+# Coverage & test reports（本地/CI 生成物；三件真身在 `backend/` 下，靠 `**/` 才命中）
+**/.coverage
+**/.coverage.*
+**/coverage.xml
+**/junit.xml
 
 # Environment (secrets should not leak into image layers!)
 .env
-*.env
+**/*.env
 backend/.env
 
 # IDE
@@ -66,17 +69,16 @@ Dockerfile*
 
 # Docs & specs (not runtime)
 docs/
-*.md
-AGENTS.md
+**/*.md
 
 # CLI (not needed in backend image)
 ir-cli/
 backend/cli/
 
 # DB files
-*.db
-*.sqlite3
+**/*.db
+**/*.sqlite3
 
 # Logs
-logs/
-*.log
+**/logs/
+**/*.log
