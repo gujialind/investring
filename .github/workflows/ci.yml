@@ -443,6 +443,7 @@ jobs:
   # 前端 E2E 门禁（issue #168）：真实浏览器验证登录/页面渲染/防 P0 复发，
   # 拦截"接口正确但用户用不了"的问题（白屏崩溃、死链、双导航等）。
   # 后端跑在 MySQL 8.4 上（对齐 backend-test-mysql 的"对齐生产 RDS"哲学）。
+  # 栈步骤已抽到 .github/workflows/e2e-stack.yml（issue #467），本 job 只保留触发条件与入参。
   #
   # 运行前提（勿删）：
   #   - E2E 登录用例依赖 ADMIN/admin@2026 用户，业务 spec 经 e2e/helpers.ts 按 code
@@ -455,151 +456,12 @@ jobs:
     name: "Frontend E2E"
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h localhost -uroot -proot"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      # ---- 后端：建库 → 迁移 → seed → 启动（生产启动顺序：create_all 由 main.py import 期完成）----
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install backend dependencies
-        working-directory: backend
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）
-      - name: Create database
-        run: |
-          mysql -h 127.0.0.1 -uroot -proot -e "
-            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
-
-      # 复刻生产启动顺序（对齐 backend-test-mysql）：create_all 先建全表，
-      # alembic upgrade head 增量修补——迁移链依赖 create_all 已建表
-      # （如 0007 直接 UPDATE product），单独跑迁移会报表不存在
-      - name: Create schema and run migrations
-        working-directory: backend
-        env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-        run: |
-          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
-          alembic upgrade head
-
-      # 种子 ADMIN/admin@2026 + draft 组合 E2E_PORT + active 组合 E2E_ACTIVE
-      # （E2E 登录与业务 spec 按 code 直达依赖，勿删；种子体与 pytest 同源：
-      # backend/tests/seed_base.py，issue #222 / #354）
-      - name: Seed E2E base data
-        working-directory: backend
-        env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-        run: python scripts/seed_e2e.py
-
-      - name: Start backend
-        working-directory: backend
-        env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-        run: |
-          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../backend-e2e.log 2>&1 &
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:8000/health && break
-            sleep 2
-          done
-          curl -sf http://127.0.0.1:8000/health
-
-      # ---- 前端：生产构建 + webServer 由 playwright.config.ts 自动起 standalone server.js（:3000）----
-      - name: Setup Node 24
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      # E2E 跑生产构建形态（issue #171）：standalone server.js 与 Docker
-      # 容器完全同形态（next start 与 output:'standalone' 不兼容）；
-      # API_BASE_URL 默认 localhost:8000，build 时固化的 rewrites 恰与
-      # 本 job 后端地址一致，无需额外传参。
-      # standalone 不包含 public/ 与 .next/static/，组装步骤与 Dockerfile 一致。
-      - name: Build frontend (production)
-        working-directory: frontend
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
-        run: |
-          npm run build
-          cp -r .next/static .next/standalone/.next/static
-          cp -r public .next/standalone/public
-
-      # 浏览器二进制缓存（issue #172）：key 绑定 package-lock.json
-      # （@playwright/test 版本决定所需浏览器构建）；未命中时回退全新安装
-      - name: Cache Playwright browsers
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-
-      # 桌面 chromium + 移动 webkit（mobile 用 iPhone 13 描述符，
-      # 见 playwright.config.ts 注释；PR #169 遗留的 webkit 307 取消问题
-      # 已定位为 dev 竞态并修复，恢复真实 Safari 内核覆盖）。
-      # 拆步 + 预置 apt-get update：--with-deps 内置 update 遇首选镜像
-      # （azure.archive.ubuntu.com）不可达时会长时间重试卡死；先单独
-      # update 让 apt 完成镜像回退，后续内置 update 全 Hit 很快。
-      # timeout-minutes 兼作快速失败护栏（正常 ≤5 分钟）。
-      - name: Update apt index
-        run: sudo apt-get update
-
-      - name: Install Playwright chromium
-        working-directory: frontend
-        timeout-minutes: 15
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright webkit
-        working-directory: frontend
-        timeout-minutes: 15
-        run: npx playwright install --with-deps webkit
-
-      - name: Run Playwright tests
-        working-directory: frontend
-        env:
-          CI: "true"
-        run: npx playwright test
-
-      # 失败证据（trace/截图/视频）+ 后端启动日志（后端启动失败时的定位证据，
-      # issue #172），always 上传保证失败时也能取到
-      - name: Upload Playwright report
-        if: always()
-        continue-on-error: true  # 诊断品上传失败不染红 job（artifact 服务间歇 403，#414）
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          path: |
-            frontend/playwright-report/
-            frontend/test-results/
-            backend-e2e.log
-          retention-days: 14
+    uses: ./.github/workflows/e2e-stack.yml
+    with:
+      mode: main
+      artifact_prefix: playwright-report
+      retries: "2"
+      log_file: backend-e2e.log
 
   # Dockerfile 构建冒烟（issue #170）：每个 PR 验证两个 Dockerfile 可构建，
   # 避免「构建问题合入 main 触发 CD 才暴露」（#141 ACR 拒推 provenance 即此类）。
@@ -643,11 +505,6 @@ jobs:
           provenance: false
           sbom: false
 
-  # E2E 形态对比（issue #410）：纯测试重构 PR 的「假绿灯」防线——base 与 PR 两侧
-  # 各跑一遍全量 E2E，归一化（scripts/e2e_normalize.py）成 TSV 后 diff，期望空 diff；
-  # 非空 diff 拦合入，预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
-  # 标签豁免。两侧构建源同为 PR head，唯一变量是 frontend/e2e/ 目录；CI runner 天然
-  # 隔离，本地脚本 verify-e2e-pr.sh 的隔离层（挑端口/独立 db/swap spec/trap）随之整删。
   # 变更路径检测（issue #462 起同时服务 job 裁剪与 E2E 形态对比触发）。
   # 本 job **全事件运行**：若只在 PR 侧运行，push 时它被 skip，各 job 因
   # `needs` 命中 skip 而整体跳过（即使写了 `if: github.event_name == 'push'`——
@@ -686,10 +543,17 @@ jobs:
       #   cli       ← ir-cli/（openapi 漂移门禁另依赖 backend，条件里已 OR）
       #   scripts   ← scripts/
       #   .github/workflows/ 命中则**四个栈全 true**：CI 配置改动无法预判影响面，
-      #               而改配置的 PR 正是最需要完整验证的场合（代价 = 回到裁剪前的全量）
+      #               而改配置的 PR 正是最需要完整验证的场合（代价 = 回到裁剪前的全量）。
+      #               四个栈不含 e2e_morph——形态强制位对它无效（emit 传 nowf，见下条）。
       #   e2e_morph ← 形态输入清单：e2e 目录、playwright 配置、种子与 normalizer
-      #               （它们同样改变 pass/skip 形态）。ci.yml 自身在列是 dogfood，
-      #               代价是每次改 ci.yml 都触发两侧全量 E2E——#467 将移除该条目。
+      #               （它们同样改变 pass/skip 形态）。
+      #               **刻意不含 .github/workflows/**（#467）**：原先把 ci.yml 自身列入
+      #               是 dogfood，代价是任何 ci.yml 改动（哪怕只改注释）都触发
+      #               baseline+candidate 两轮全量 E2E；CI 配置改动已由上面的
+      #               「四栈全 true」覆盖，形态对比不必再跑一遍。e2e-stack.yml 同理
+      #               不入列——把同一问题搬到新文件没有收益；栈的 main 模式由
+      #               frontend-e2e 正面验证，但 **capture 分支不因只改 workflow 而实跑**
+      #               （缺口与手动确认口径见 e2e-stack.yml 头部）。
       - id: detect
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
@@ -703,8 +567,8 @@ jobs:
           git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" > /tmp/changed.txt
           hit() { grep -qE "$1" /tmp/changed.txt && echo true || echo false; }
           wf=$(hit '^\.github/workflows/')
-          emit() {  # $1=输出名 $2=该栈是否命中
-            if [ "$2" = "true" ] || [ "$wf" = "true" ]; then
+          emit() {  # $1=输出名 $2=该栈是否命中 $3=nowf（不吃 workflow 全局强制，仅 e2e_morph）
+            if [ "$2" = "true" ] || { [ "${3:-}" != "nowf" ] && [ "$wf" = "true" ]; }; then
               echo "$1=true" >> "$GITHUB_OUTPUT"
             else
               echo "$1=false" >> "$GITHUB_OUTPUT"
@@ -714,7 +578,7 @@ jobs:
           emit frontend "$(hit '^(frontend/|backend/tests/seed_base\.py$|backend/scripts/seed_e2e\.py$)')"
           emit cli "$(hit '^ir-cli/')"
           emit scripts "$(hit '^scripts/')"
-          emit e2e_morph "$(hit '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/|\.github/workflows/ci\.yml)')"
+          emit e2e_morph "$(hit '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/)')" nowf
           # 输出缺失/写错会让所有 job 静默 skip 而 `CI OK` 仍绿（= 假绿），显式校验
           for k in backend frontend cli scripts e2e_morph; do
             n=$(grep -cE "^$k=(true|false)$" "$GITHUB_OUTPUT" || true)
@@ -724,169 +588,26 @@ jobs:
             fi
           done
 
-  # 栈步骤与 frontend-e2e 逐行同构（MySQL/建库/迁移/种子/uvicorn/构建/浏览器）；
-  # 差异仅：baseline 侧换 e2e 目录、--retries=0、JSON reporter 落文件。
+  # E2E 形态对比（issue #410）：纯测试重构 PR 的「假绿灯」防线——base 与 PR 两侧
+  # 各跑一遍全量 E2E，归一化（scripts/e2e_normalize.py）成 TSV 后 diff，期望空 diff；
+  # 非空 diff 拦合入，预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
+  # 标签豁免。两侧构建源同为 PR head，唯一变量是 frontend/e2e/ 目录；栈步骤已抽到
+  # .github/workflows/e2e-stack.yml（issue #467），baseline 换目录在 called workflow 内完成。
   e2e-compare-capture:
     name: "E2E Capture (${{ matrix.side }})"
     needs: changes
     if: needs.changes.outputs.e2e_morph == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     strategy:
       fail-fast: false  # 一侧挂了另一侧仍跑完留证
       matrix:
         side: [baseline, candidate]
-
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h localhost -uroot -proot"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-
-    steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      # baseline 侧只换 e2e 目录，构建源仍是 PR head——「同一构建、唯一变量是
-      # frontend/e2e/**」不变量（#401 场景：测试重构 + src 补 data-testid 依赖这一点）。
-      # 先 rm -rf 再 checkout：head 独有 spec 会残留跑成并集（旧脚本 SWAP_ORPHANS
-      # 同源坑）；e2e/.auth/admin.json 是 gitignore 的、由 setup project 重建，删了无妨。
-      - name: Swap e2e to base (baseline only)
-        if: matrix.side == 'baseline'
-        run: |
-          rm -rf frontend/e2e
-          git checkout "${{ github.event.pull_request.base.sha }}" -- frontend/e2e
-
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install backend dependencies
-        working-directory: backend
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）
-      - name: Create database
-        run: |
-          mysql -h 127.0.0.1 -uroot -proot -e "
-            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
-
-      - name: Create schema and run migrations
-        working-directory: backend
-        env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-        run: |
-          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
-          alembic upgrade head
-
-      - name: Seed E2E base data
-        working-directory: backend
-        env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-        run: python scripts/seed_e2e.py
-
-      - name: Start backend
-        working-directory: backend
-        env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
-        run: |
-          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../backend-e2e-compare.log 2>&1 &
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:8000/health && break
-            sleep 2
-          done
-          curl -sf http://127.0.0.1:8000/health
-
-      - name: Setup Node 24
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build frontend (production)
-        working-directory: frontend
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
-        run: |
-          npm run build
-          cp -r .next/static .next/standalone/.next/static
-          cp -r public .next/standalone/public
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-
-      - name: Update apt index
-        run: sudo apt-get update
-
-      - name: Install Playwright chromium
-        working-directory: frontend
-        timeout-minutes: 15
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright webkit
-        working-directory: frontend
-        timeout-minutes: 15
-        run: npx playwright install --with-deps webkit
-
-      # CI=true 保 reuseExistingServer=false；--retries=0 覆盖 config（CI?2:0）——
-      # retry 会把 flaky 洗成 passed，形态对比失真。用例 fail 是合法数据（进 JSON →
-      # TSV → diff），rc 吞掉不拦本 job，成败由 e2e-compare 判定。
-      # PLAYWRIGHT_JSON_OUTPUT_FILE 必须显式落文件：--reporter=list,json 下 list
-      # 也打 stdout，混流会毁 JSON。
-      - name: Run Playwright tests (capture)
-        working-directory: frontend
-        env:
-          CI: "true"
-          PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/e2e-raw-${{ matrix.side }}.json
-        run: |
-          rc=0
-          npx playwright test --retries=0 --workers=2 --reporter=list,json || rc=$?
-          echo "playwright rc=$rc（非 0 = 有用例未通过，状态已进 JSON）"
-
-      # JSON 缺失 = 运行本身坏了（构建/webServer/配置），响亮失败而非静默空 diff
-      - name: Upload raw JSON
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-raw-${{ matrix.side }}
-          path: /tmp/e2e-raw-${{ matrix.side }}.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload failure evidence
-        if: always()
-        continue-on-error: true  # 诊断品上传失败不染红 job（#414）；上方 raw JSON 是 compare 必需输入、保持阻塞
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-raw-${{ matrix.side }}-results
-          path: |
-            frontend/test-results/
-            backend-e2e-compare.log
-          if-no-files-found: warn
-          retention-days: 14
+    uses: ./.github/workflows/e2e-stack.yml
+    with:
+      mode: capture
+      side: ${{ matrix.side }}
+      artifact_prefix: e2e-raw-${{ matrix.side }}
+      retries: "0"
+      log_file: backend-e2e-compare.log
 
   e2e-compare:
     name: "E2E Morphology Compare"
