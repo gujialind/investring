@@ -187,8 +187,9 @@ cd backend && pytest tests -q
   `cd backend && pytest tests -q --cov=app --cov-report=xml`，再从**仓库根**跑 diff-cover
   （diff-cover 自行按 git root 对齐 `<source>` 绝对路径，实测 cwd 不影响选行；从仓库根跑
   是为了 `diff-cover.md` 落在仓库根，Summary/artifact 依赖该相对路径）。阈值 80 低于全局 82：
-  首次启用避免大面积红，观察一期后可上调。该门禁只覆盖 `--cov=app` 收集到的文件
-  （alembic/scripts 等不在口径内），由全局阈值兜底。**退化可见化**：若映射断裂，diff-cover 会
+  首次启用避免大面积红，观察一期后可上调。该门禁与全局阈值度量的是**同一个集合**——
+  只有 `--cov=app` 收集到的文件（`pyproject.toml` `source = ["app"]`），alembic/scripts
+  等口径外文件**不受任何覆盖率门禁约束**。**退化可见化**：若映射断裂，diff-cover 会
   报 `No lines with coverage information` 并 exit 0（静默空转），故 CI 在有新增行落
   `backend/app/` 时发 `::warning::` 提示人工确认（不 fail：只改注释的 PR 也会合法地无可测行）。
 
