@@ -15,9 +15,17 @@ playwright.config.ts
 test-results/
 playwright-report/
 
+# 覆盖率与测试报告（本地/CI 生成，非构建输入）
+coverage/
+junit.xml
+
+# 本地工具目录
+.mimosa/
+.playwright-cli/
+
 # Docker
 Dockerfile
 .dockerignore
 
 # 文档
-*.md
+**/*.md

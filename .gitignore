@@ -42,11 +42,7 @@ yarn.lock
 
 # AI IDE
 .trae/
-.qoder/*
-!.qoder/rules/
-!.qoder/hooks/
-!.qoder/agents/
-!.qoder/skills/
+.qoder/
 .claude/
 
 # AI Coding Assistants (multi-IDE)
@@ -58,6 +54,7 @@ yarn.lock
 .qoderignore
 .workbuddy
 .mimosa/
+.codebuddy/
 
 # Hermes skills (project-level)
 /skills/
