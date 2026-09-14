@@ -5,12 +5,8 @@
 #   - TestShareEventInputNormalize（#343）：platform_code 空串归一 NULL（基金级）/
 #     平台级必填 PLATFORM_REQUIRED、product_code 必填/空串
 #
-# ---- issue #461：LOF 一码多市场测试基线（同 code 双市场产品 + 双平台 + ENT/EX 交易日） ----
-# 基线常量与 helper 由 share_event_helpers.py 承载：LOF461_CODE = "LOF461.SZ" 在 CN_EXCHANGE
-# 与 CN_OTC 各建一条 LOF 产品记录；LOF461_ENT = 2025-12-08（权益登记日/基线快照日）、
-# LOF461_EX = 2025-12-10（除息日）均置为交易日；平台为 MYCF / HBZQ。
-# 事件持仓口径按 event.market 收窄：确认与预览共用同一 market 边界，另一市场的持仓与已录
-# 事件不参与本市场的份额计算与平台覆盖校验，故同一 LOF 的两市场须分别录入事件。
+# 本文件用例属 #258/#343，不依赖 #461；LOF 一码多市场基线（#461）的完整背景与回归断言
+# 见 test_share_events_market_scoping.py 头部（断言落点）。
 
 from datetime import date
 

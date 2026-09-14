@@ -4,10 +4,14 @@
 #   - TestShareChangeEventListFilter（#274）：列表服务端筛选 + 分页
 #   - TestShareEventListProductName（#342）：list 读取侧派生 product_name
 #   - TestShareEventOpenApiContract（#342）：openapi 分页响应契约守护
-# #461 依赖：TestShareChangeEventMarketScoping 的全部用例基于一码多市场基线（LOF461_CODE 同 code
-# 双市场产品 + MYCF/HBZQ 双平台 + ENT/EX = 2025-12-08/2025-12-10），由 share_event_helpers.py
-# 的 _setup_lof_baseline 构建；事件按 event.market 收窄，两市场须分别录入事件。
-# LOF 双市场基线的完整背景见 test_share_events_market_semantics.py 头部（#461）
+# ---- issue #461：LOF 一码多市场测试基线（同 code 双市场产品 + 双平台 + ENT/EX 交易日） ----
+# 基线常量与 helper 由 share_event_helpers.py 承载：LOF461_CODE = "LOF461.SZ" 在 CN_EXCHANGE
+# 与 CN_OTC 各建一条 LOF 产品记录；LOF461_ENT = 2025-12-08（权益登记日/基线快照日）、
+# LOF461_EX = 2025-12-10（除息日）均置为交易日；平台为 MYCF / HBZQ。
+# 事件持仓口径按 event.market 收窄：确认与预览共用同一 market 边界，另一市场的持仓与已录
+# 事件不参与本市场的份额计算与平台覆盖校验，故同一 LOF 的两市场须分别录入事件。
+# 本文件是 #461 回归断言的落点：TestShareChangeEventMarketScoping 全部用例基于该基线（由
+# _setup_lof_baseline 构建）；#258/#343 的 market 补全与入参归一语义见 market_semantics.py。
 
 import pytest
 from datetime import date

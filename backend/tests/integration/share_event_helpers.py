@@ -3,7 +3,7 @@
 #   - test_share_events_create.py：LOF461_CODE / LOF461_ENT / LOF461_EX / _setup_lof_products / _setup_lof_baseline
 #   - test_share_events_market_scoping.py：LOF461_CODE / LOF461_ENT / LOF461_EX / _setup_lof_baseline
 # 无 test_ 前缀，pytest 不收集；本模块不做用例收集。
-# LOF 双市场基线的完整背景见 test_share_events_market_semantics.py 头部（#461）
+# LOF 双市场基线的完整背景见 test_share_events_market_scoping.py 头部（#461）
 # ============================================================================
 
 from datetime import date

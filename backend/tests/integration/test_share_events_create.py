@@ -7,7 +7,7 @@
 # #461 依赖：TestShareChangeEventCreate 的两条 LOF 用例基于一码多市场基线（LOF461_CODE 同 code
 # 双市场产品 + MYCF/HBZQ 双平台 + ENT/EX = 2025-12-08/2025-12-10），常量与 _setup_lof_baseline
 # 由 share_event_helpers.py 提供；事件按 event.market 收窄，两市场须分别录入事件。
-# LOF 双市场基线的完整背景见 test_share_events_market_semantics.py 头部（#461）
+# LOF 双市场基线的完整背景见 test_share_events_market_scoping.py 头部（#461）
 
 from datetime import date, datetime
 from decimal import Decimal
