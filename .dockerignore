@@ -28,6 +28,12 @@ backend/.packages/
 # Tests (not needed in production image)
 backend/tests/
 
+# Coverage & test reports（本地生成物；`backend/` 下两项会被 `COPY backend/ .` 带进镜像）
+.coverage
+.coverage.*
+coverage.xml
+junit.xml
+
 # Environment (secrets should not leak into image layers!)
 .env
 *.env
@@ -46,6 +52,10 @@ backend/.env
 .codebuddy/
 .mimosa/
 
+# 本地工具脚手架 / 缓存
+.dsh/
+.playwright-cli/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -55,7 +65,7 @@ docker-compose*.yml
 Dockerfile*
 
 # Docs & specs (not runtime)
-Docs/
+docs/
 *.md
 AGENTS.md
 
@@ -69,3 +79,4 @@ backend/cli/
 
 # Logs
 logs/
+*.log
