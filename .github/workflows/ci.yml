@@ -31,8 +31,8 @@
 name: CI
 
 # 最小权限（#464 评审）：本 workflow 只读仓库——各 job 无写需求（诊断品走 artifact /
-# Step Summary），nightly-hygiene 单独声明 pull-requests: read。收紧后即使第三方
-# action（如 junit 注解）被投毒也拿不到写权限。
+# Step Summary；标签判定读 event payload，不走 API），故收紧到 contents: read。收紧后
+# 即使第三方 action（如 junit 注解）被投毒也拿不到写权限。
 permissions:
   contents: read
 
