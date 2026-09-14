@@ -65,7 +65,7 @@
 
 其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现。其他服务职责读各文件 docstring。
 
-* **`app/utils/quantize.py` 是精度的唯一入口**（#428）：三个 helper 与三个精度一一对应——`quantize_shares` / `quantize_amount`（2 位）、`quantize_nav`（4 位），**均显式 `rounding=ROUND_HALF_UP`**。调用点禁止写 `Decimal("0.01")` / `Decimal("0.0001")` 字面量再 `quantize()`：不传 `rounding=` 即吃 Decimal 上下文缺省的 **ROUND_HALF_EVEN**，两者只在「末位后一位恰为 5」的边界值上分叉——#428 前 7 处 4 位站点（快照构造点的 `total_value`/`unit_price`/`unit_price_change_pct`/`in_transit_total`、`cost_per_share`、场外确认对账的两侧）全是这种静默漂移，而 `quantize.py` 的 docstring 早已声称「均为 HALF_UP」。守门：`tests/unit/test_quantize.py::TestQuantizeNav`（含 HALF_UP/HALF_EVEN 判别式）、`tests/unit/test_quantize.py::TestAmountToSharesTwoStepQuantization`（#425：金额 → 份额必须先量化金额到分）、`tests/unit/test_snapshot_service.py::TestValueSnapshotFourDecimalRounding`（构造点边界值，取 `total_value/total_shares` 恰落第 5 位为 5 的商，改回缺省即红）、`tests/integration/test_trades.py::TestTradePreview` 的两条 4 位对账边界用例。`cost_per_share` 构造点同时**去掉了外层 `float()`**（与 #421 把快照构造点从 float 改回保标度 Decimal 同口径，列是 `Numeric(10,4)`）。
+* **`app/utils/quantize.py` 是精度的唯一入口**（#428）：三个 helper 与三个精度一一对应——`quantize_shares` / `quantize_amount`（2 位）、`quantize_nav`（4 位），**均显式 `rounding=ROUND_HALF_UP`**。调用点禁止写 `Decimal("0.01")` / `Decimal("0.0001")` 字面量再 `quantize()`：不传 `rounding=` 即吃 Decimal 上下文缺省的 **ROUND_HALF_EVEN**，两者只在「末位后一位恰为 5」的边界值上分叉——#428 前 7 处 4 位站点（快照构造点的 `total_value`/`unit_price`/`unit_price_change_pct`/`in_transit_total`、`cost_per_share`、场外确认对账的两侧）全是这种静默漂移，而 `quantize.py` 的 docstring 早已声称「均为 HALF_UP」。守门：`tests/unit/test_quantize.py::TestQuantizeNav`（含 HALF_UP/HALF_EVEN 判别式）、`tests/unit/test_quantize.py::TestAmountToSharesTwoStepQuantization`（#425：金额 → 份额必须先量化金额到分）、`tests/unit/test_snapshot_service.py::TestValueSnapshotFourDecimalRounding`（构造点边界值，取 `total_value/total_shares` 恰落第 5 位为 5 的商，改回缺省即红）、`tests/integration/test_trades_validation_preview.py::TestTradePreview` 的两条 4 位对账边界用例。`cost_per_share` 构造点同时**去掉了外层 `float()`**（与 #421 把快照构造点从 float 改回保标度 Decimal 同口径，列是 `Numeric(10,4)`）。
 
 * **份额变动事件：计算单点、预览复用**（#424/#425）：变动量计算是纯函数 `share_change_event_service.compute_event_fields(event_type, entitlement_shares, *, …)`（返回 `EventFieldResult`，**不碰 ORM 对象**），确认与确认预览共用——「预览 == 确认」由此保证。
   - **写回刻意分离**：`apply_event_fields(event)` 是唯一写回点、**只由确认路径调用**。预览不得复用它：`record_audit` 的 `_diff_fields` 读事件当前字段，对象被预览改过后列表行会显示未落库的值；pending 对象若被 flush 还会把「预览」写进库。
@@ -161,8 +161,8 @@ cd backend && pytest tests -q
   | --- | --- |
   | `snapshot_service.py`（生成/重算/级联回退） | `pytest tests/unit/test_snapshot_service.py tests/integration -q -k snapshot` |
   | `position_service.py`（可用现金/份额） | `pytest tests/unit/test_position_service.py tests/integration -q -k "position or in_transit or cash"` |
-  | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades.py tests/integration/test_trade_cash_check.py -q` |
-  | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions.py -q` |
+  | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
+  | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration -q -k precision` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
