@@ -152,7 +152,13 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         working-directory: .
         run: |
-          added=$(git diff --numstat "${{ github.event.pull_request.base.sha }}...HEAD" -- backend/app | awk '{s+=$1} END {print s+0}')
+          # 默认 shell 是 `bash -e {0}`（无 pipefail），git diff 失败会被 awk 吞成 added=0
+          # 而静默跳过告警——显式开 pipefail 并单独报告该失败（仍不 fail：守卫本身是诊断品）
+          set -o pipefail
+          if ! added=$(git diff --numstat "${{ github.event.pull_request.base.sha }}...HEAD" -- backend/app | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::无法计算 backend/app 的改动行（git diff 失败，如 base.sha 不可达）——本轮空转守卫未生效，请人工确认增量门禁是否仍有约束"
+            exit 0
+          fi
           if [ "${added}" -gt 0 ] && grep -q 'No lines with coverage information' diff-cover.md 2>/dev/null; then
             echo "::warning::本次改动往 backend/app/ 新增了 ${added} 行，但 diff-cover 未测到任何改动行——可能是 coverage.xml↔git 路径映射断裂、增量门禁空转，请人工确认"
           fi
@@ -160,6 +166,7 @@ jobs:
       # 覆盖率摘要进 PR 页（issue #465）——失败/成功后都写，便于对比趋势
       - name: Append coverage summary
         if: always()
+        continue-on-error: true  # 诊断品解析失败不染红 job（#414），与同批 artifact/注解口径一致
         working-directory: backend
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -390,6 +397,7 @@ jobs:
       # 覆盖率摘要进 PR 页（issue #465）；tests 失败时也写，便于看是阈值还是断言红
       - name: Append coverage summary
         if: always()
+        continue-on-error: true  # 诊断品解析失败不染红 job（#414），与同批 artifact/注解口径一致
         working-directory: frontend
         run: |
           node - <<'JS' >> "$GITHUB_STEP_SUMMARY"
