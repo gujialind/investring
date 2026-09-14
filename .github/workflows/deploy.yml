@@ -64,11 +64,15 @@ jobs:
   setup:
     name: "确定部署版本"
     runs-on: ubuntu-latest
-    # workflow_run 仅在 main 分支 CI 成功时继续；手动触发总是继续
+    # workflow_run 仅在「push 触发的」main CI 成功时继续；手动触发总是继续。
+    # ⚠️ event == 'push' 守卫不可删：workflow_run 对 CI 的**任何**触发源都会触发
+    # （含手动 workflow_dispatch 跑出来的全量 CI 成功），少了它，一次手动全量的绿灯
+    # 会被判成「main CI 成功」→ 重建前后端镜像、重启生产容器（#456 实测过的浪费）。
     if: >
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main') ||
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push') ||
       github.event_name == 'workflow_dispatch'
     outputs:
       # 要部署的镜像 tag（前后端共用）
