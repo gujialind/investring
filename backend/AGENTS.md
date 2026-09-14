@@ -180,6 +180,18 @@ cd backend && pytest tests -q
 - **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under=82`（2026-09-08 实测基线 82.15% 下取整，#405 审计埋点后上调）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败。
   - **棘轮规则**：`fail_under` 只升不降；任何 PR 全量实测总覆盖率超当前阈值 ≥1pp 时，顺手把阈值上调到实测值下取整（随该 PR 提交）；分支覆盖不单设独立阈值（branch=true 下 fail_under 已是分支含口径）。
   - 注意 fail_under 作用于 `--cov` 收集的那次运行：本地跑**子集**加 `--cov` 必然跌破阈值（子集覆盖不了全量代码），属预期，阈值只对全量运行有语义。
+- **增量覆盖率门禁（#464）**：CI `backend-test` 在 pytest 之后跑
+  `diff-cover backend/coverage.xml --compare-branch=<PR base.sha> --fail-under=80`，
+  只约束**本 PR 改动行**——堵住「新模块 0% 覆盖被既有高覆盖稀释通过」。与全局
+  `fail_under=82` 职责正交（增量防新码裸奔、全局防整体退化），两者并行。本地复现：
+  `cd backend && pytest tests -q --cov=app --cov-report=xml`，再从**仓库根**跑 diff-cover
+  （diff-cover 自行按 git root 对齐 `<source>` 绝对路径，实测 cwd 不影响选行；从仓库根跑
+  是为了 `diff-cover.md` 落在仓库根，Summary/artifact 依赖该相对路径）。阈值 80 低于全局 82：
+  首次启用避免大面积红，观察一期后可上调。该门禁与全局阈值度量的是**同一个集合**——
+  只有 `--cov=app` 收集到的文件（`pyproject.toml` `source = ["app"]`），alembic/scripts
+  等口径外文件**不受任何覆盖率门禁约束**。**退化可见化**：若映射断裂，diff-cover 会
+  报 `No lines with coverage information` 并 exit 0（静默空转），故 CI 在有新增行落
+  `backend/app/` 时发 `::warning::` 提示人工确认（不 fail：只改注释的 PR 也会合法地无可测行）。
 
 ## 3. 种子数据（单一事实来源）
 

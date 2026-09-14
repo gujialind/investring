@@ -61,3 +61,6 @@ pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 pytest-mock==3.15.1
 factory-boy==3.3.3
+# 增量覆盖率门禁（issue #464）：CI backend-test 对 coverage.xml + PR base 求改动行
+# 覆盖率并设硬阈值。同 pytest 系先例——requirements.txt 是镜像与 CI 的唯一安装来源。
+diff-cover==10.5.1
