@@ -11,15 +11,20 @@
 # 与 #472（nightly 全量）无关：不跑测试、不跑 E2E、不参与 required check；
 # deploy.yml 只订阅 workflows: ["CI"]，不产生任何部署噪音。决策记录见 #483。
 #
-# 变红的两种含义，都需人处理：① 查询链路本身坏了（令牌/权限/网络/标签被删）；
-#   ② 真的检出长期残留。**检出即红是刻意的**（#496 评审结论）：定时 run 只有失败才发
-#   通知，warning 注解 + Step Summary 都是 pull-only —— 绿 run 等于没有通知任何人，
-#   而那正是本巡检要消灭的失效模式。
+# 为什么检出即红（#498 起）：warning 注解与 Step Summary 都是 pull-only，而绿 run 的通知
+#   本身不带信号（官方文档：启用 Actions 通知后「任何你触发的 run 完成」即通知，含成功，
+#   可自设为「仅失败」；定时 workflow 的通知发给最初创建它的用户）——只有失败态才天然表示
+#   「需要人看一眼」，且在「仅失败」偏好下唯一有效。
 #
-# 口径：以 PR timeline 的 labeled 事件时间为准（标签摘下再加会重新计时）；取不到时
-#       回退 PR createdAt，并在输出里显式标注为「回退：PR 创建于」，不与真实打标时间
-#       混同。原实现（PR #475 commit d88abd0 删除的 nightly-hygiene job）直接用
-#       createdAt（口径更粗）。
+# 变红的三种含义，都需人处理：
+#   ① 查询链路坏了（令牌/权限/网络/标签被删，或巡检脚本自身异常）——均有 ::error:: 说明；
+#   ② 真的检出长期残留；
+#   ③ 打标时间取不到而回退（口径退化，可能漏检）——同样必须可见，否则「巡检自己退化」
+#      会被读成「无残留」。
+#
+# 口径：以 PR timeline 的 labeled 事件时间为准（标签摘下再加会重新计时）；取不到时回退
+#       PR createdAt，在输出里显式标注为「回退：PR 创建于」，并计入上文 ③。
+#       原实现（PR #475 commit d88abd0 删除的 nightly-hygiene job）直接用 createdAt。
 # ============================================================================
 
 name: Label Hygiene
@@ -56,6 +61,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # 裸红也要能被识别成「机制坏了」而非「检出」：三处刻意的失败出口都自带 ::error::，
+          # 意外异常则由本 trap 补一条说明（行号在上一行日志里）
+          trap 'echo "::error::巡检自身异常（非检出）：见上方日志"' ERR
           THRESHOLD_DAYS="${THRESHOLD_DAYS_INPUT:-14}"
           case "$THRESHOLD_DAYS" in
             ''|*[!0-9]*)
@@ -80,6 +88,7 @@ jobs:
 
           scanned=0
           hit=0
+          fallback=0
           hit_nums=""
           stale=""
           # 尾行兜底 `|| [ -n "$n" ]`：输入最后一行若缺换行，read 会失败且吞掉该行
@@ -103,6 +112,7 @@ jobs:
             else
               labeled_at="$created"
               when="回退：PR 创建于 ${labeled_at}"
+              fallback=$((fallback + 1))
             fi
             age=$(python3 -c "import sys,datetime;p=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));print((datetime.datetime.now(datetime.timezone.utc)-p).days)" "$labeled_at")
             if [ "$age" -ge "$THRESHOLD_DAYS" ]; then
@@ -112,9 +122,13 @@ jobs:
             fi
           done < "$list"
 
+          extra=""
+          if [ "$fallback" -gt 0 ]; then
+            extra="；另有 ${fallback} 条取不到打标时间（已回退创建时间，口径可能偏早）"
+          fi
           if [ "$hit" -gt 0 ]; then
             # 注解里带上 PR 号与计数：注解比 log/Summary 更靠近人的视野（#496 评审 🟡-1）
-            echo "::error::${hit} 个开放 PR（${hit_nums% }）挂着 e2e-morph-expected 满 ${THRESHOLD_DAYS} 天，形态 diff 长期被豁免，请复核是否仍需保留（已扫描 ${scanned} 个，明细见 Step Summary）"
+            echo "::error::${hit} 个开放 PR（${hit_nums% }）挂着 e2e-morph-expected 满 ${THRESHOLD_DAYS} 天，形态 diff 长期被豁免，请复核是否仍需保留（已扫描 ${scanned} 个，明细见 Step Summary）${extra}"
             printf '%s' "$stale"
             {
               echo "### ⚠️ e2e-morph-expected 标签残留（挂载满 ${THRESHOLD_DAYS} 天）"
@@ -123,6 +137,12 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             # 检出即红：绿 run 不会通知任何人（见文件头）
+            exit 1
+          fi
+          if [ "$fallback" -gt 0 ]; then
+            # 口径退化同样是「需要人看一眼」：回退用 createdAt（≤ 真实打标时间）会漏检，
+            # 静默放绿等于把「巡检自己退化」读成「无残留」（#498 评审 🟡-1）
+            echo "::error::本次扫描的 ${scanned} 个开放 PR 里有 ${fallback} 个取不到打标时间（已回退 PR 创建时间）⇒ 巡检口径退化、可能漏检，请查 timeline 端点/权限后重跑"
             exit 1
           fi
           echo "✅ 无长期残留的 e2e-morph-expected 标签（已扫描 ${scanned} 个挂载该标签的开放 PR，阈值 ${THRESHOLD_DAYS} 天）"
