@@ -8,7 +8,7 @@
 
 ## 0. 为什么需要这份标准
 
-本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮 **+ 增量覆盖率门禁**（diff-cover 只约束 PR 改动行，堵「新代码靠既有覆盖掩护」，口径与本地复现见 `backend/AGENTS.md`「跑测试」）、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）；失败用例经 JUnit 注解直接标到 PR 文件行、覆盖率摘要进 PR 页（同一批 CI 步骤内产出，无需人工翻 artifact）。**逃生阀回收也有门禁兜底**：`SKIP_DOWNGRADE` 由 main 侧守卫拦残留，`e2e-morph-expected` 标签挂载过久由独立定时巡检**检出即红**（`.github/workflows/label-hygiene.yml`：定时 run 只有失败才发通知，warning + 绿 run 等于没人被通知；决策见 #483）。
+本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮 **+ 增量覆盖率门禁**（diff-cover 只约束 PR 改动行，堵「新代码靠既有覆盖掩护」，口径与本地复现见 `backend/AGENTS.md`「跑测试」）、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）；失败用例经 JUnit 注解直接标到 PR 文件行、覆盖率摘要进 PR 页（同一批 CI 步骤内产出，无需人工翻 artifact）。**逃生阀回收也有门禁兜底**：`SKIP_DOWNGRADE` 由 main 侧守卫拦残留，`e2e-morph-expected` 标签挂载过久由独立定时巡检**检出即红**（`.github/workflows/label-hygiene.yml`：warning 注解与绿 run 的通知都不带信号，失败态才天然表示「需要人看一眼」，在「仅失败」通知偏好下也是唯一有效档位；决策见 #483）。
 
 > ⚠️ **本文刻意不写 job 数量、覆盖率阈值等易漂移的具体数值**——第一版曾写「六个 job」「`fail_under=80`」，三天内即双双失实（#410 扩容 CI、#405 把阈值棘轮到 82）。数值一律指向源码，本文只陈述**判定口径**。
 
@@ -157,7 +157,7 @@ L2 语义审查（专攻「绿而错」）
 | 前端 `components/shared/*Content.tsx` | **表格/图表列结构改动必须目检**（`scripts/visual-verify.sh`）——E2E 断言定位与文本、不断言像素，列宽挤压与 CJK 竖排只有人眼看图能拦（#355 即 issue 里人眼发现、e2e 全程绿灯） |
 | 前端双端改动 | `variant` 一般只改栅格列数/筛选栏折叠/控件宽度，故桌面断言多能 1:1 移植；**移动端路由是否存在以 `src/app/m/` 为准，不靠印象**（#371）；合法端专属 skip 只有两类：功能确实缺、输入设备语义缺 |
 | 前端数值/色彩 | `format*` 系函数（禁止组件内 `toFixed`）；份额用 `formatSharesUnit`；空值占位 `--`；红绿仅用于盈亏 |
-| `frontend/e2e/**` | 定位器走 `data-testid`（已有 ESLint 守门）；`skip` 合法性；选择框交互一律走 `e2e/helpers.ts` 不复制定位器（#372）；**禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**；纯测试重构（pass/skip 形态应不变）由 CI `e2e-compare` 系 job 自动做归一化 diff 兜底，**形态变化属预期时才打 `e2e-morph-expected` 标签豁免**——打标签前先确认变化真是预期的；豁免是 PR 期的临时动作，标签长期挂载会被 `label-hygiene.yml` 定时巡检点名 |
+| `frontend/e2e/**` | 定位器走 `data-testid`（已有 ESLint 守门）；`skip` 合法性；选择框交互一律走 `e2e/helpers.ts` 不复制定位器（#372）；**禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**；纯测试重构（pass/skip 形态应不变）由 CI `e2e-compare` 系 job 自动做归一化 diff 兜底，**形态变化属预期时才打 `e2e-morph-expected` 标签豁免**——打标签前先确认变化真是预期的；豁免是 PR 期的临时动作，标签长期挂载会被 `label-hygiene.yml` 定时巡检点名（**run 变红、注解带 PR 号**） |
 | 依赖变更 | `backend/requirements.txt` 是镜像与 CI 的唯一安装来源（`pyproject.toml` 的 `dependencies` 不参与构建）；**传递依赖不显式 pin 就等于没 pin**（#314：多数传递依赖仍浮动，清单以该 issue 与 `requirements.txt` 为准） |
 | 脚本/工具（`scripts/**`） | 退出码是否反映失败（#409：参数错误返回 0 使调用方无法判定）；失败/中断路径是否恢复现场（#398 分支恢复）；**「从未产出过结论」类缺陷**（#402：内嵌 normalizer 崩了却一直没人发现，因为没人校验产物——现由 `scripts/tests/test_e2e_normalize.py` 锁定 JSON reporter 形态假设）；**工具链升级后先跑其单测**（Playwright 升级 → 该测试即 #402 的机器化防线）；新增脚本是否纳入 `scripts/tests/` 单测（由 `cli-contract-check` job 运行，#462 起并入） |
 
