@@ -17,6 +17,8 @@
 # 组合破坏盲区（A 只改后端、B 只改前端，各自绿但组合坏）与纯时间型失效（#468 型：
 # 夹具日历/过滤窗跟着真实时间走）由 push 侧保守全量与下一个触碰该栈的 PR 兜底——
 # 刻意不引入 nightly 定时体检（#472 declined）。裁剪取舍的完整论证见 #482。
+# 注：`label-hygiene.yml` 是另一个独立的定时 workflow，只查 e2e-morph-expected 标签
+#     残留、不跑任何 CI job，与「不做 nightly 定时体检」无关（#483）。
 # 路径映射见 `changes` job 的注释；改映射必须同步考虑 `test_error_codes_doc_sync.py`
 # 对 docs/ 的断言依赖与 E2E 种子文件对 frontend 的依赖。
 #
