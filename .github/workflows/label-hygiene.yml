@@ -1,0 +1,105 @@
+# ============================================================================
+# 逃生阀回收：e2e-morph-expected 标签的周期性巡检（issue #483）
+# ============================================================================
+# 背景：给 PR 打 e2e-morph-expected 可豁免 E2E 形态 diff 门禁（ci.yml 的 e2e-compare）。
+#       标签长期不摘 = 长期免检，故周期性曝光「挂太久」的标签（warning 级）。
+#
+# 为什么独立 workflow，而不是挂回 ci.yml：
+#   ① ci.yml 的 job 权限已收紧到 contents: read，本巡检需要 PR / issues 读权限；
+#   ② 给 ci.yml 加 schedule 会让 schedule 事件跑遍全部 job（＝#472 被否的 nightly
+#      全量），否则得给每个 job 逐个加 event_name 守卫。
+# 与 #472（nightly 全量）无关：本 workflow 不跑测试、不跑 E2E、不参与 required check，
+# 而且正常情况下恒 exit 0（变红只可能是查询本身失败——令牌/权限/网络/标签被删，
+# 那种情况必须可见）。deploy.yml 只订阅 workflows: ["CI"]，故不产生任何部署噪音。
+# 决策记录见 #483。
+#
+# 口径：以 PR timeline 的 labeled 事件时间为准（标签摘下再加会重新计时）；原实现
+#       （PR #475 commit d88abd0 删除的 nightly-hygiene job）用的是 PR createdAt，
+#       口径更粗。查不到 labeled 事件时回退 createdAt 并显式告警（不静默降级）。
+# ============================================================================
+
+name: Label Hygiene
+
+on:
+  schedule:
+    # 每周一 09:00 UTC（错开 security-scan 的 08:00）
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      threshold_days:
+        description: "标签挂载满几天算残留（默认 14；调低可验证告警渲染）"
+        required: false
+        default: "14"
+
+permissions:
+  contents: read
+  pull-requests: read   # 开放 PR 清单与 PR timeline
+  issues: read          # labels 端点
+
+jobs:
+  stale-label-scan:
+    name: "Scan stale e2e-morph-expected labels"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # 用 github.event.inputs（schedule 事件下无此键 ⇒ 空串）而非 inputs 上下文，
+      # 默认值在脚本里兜底；脚本因此可脱离 Actions 原样本地彩排。
+      THRESHOLD_DAYS_INPUT: ${{ github.event.inputs.threshold_days }}
+    steps:
+      - name: Scan open PRs holding the label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          THRESHOLD_DAYS="${THRESHOLD_DAYS_INPUT:-14}"
+          case "$THRESHOLD_DAYS" in
+            ''|*[!0-9]*)
+              echo "::error::threshold_days 必须是非负整数，实得 '$THRESHOLD_DAYS'"
+              exit 1
+              ;;
+          esac
+          # 正向控制：标签若被改名/删除，本巡检会退化成永久空转且仍然打印 ✅（覆盖无声
+          # 蒸发）。探一次标签本身，拿不到即红——同时兼作仓库/令牌可达性的主动校验。
+          if ! gh api "repos/$GITHUB_REPOSITORY/labels/e2e-morph-expected" --jq .name > /dev/null; then
+            echo "::error::标签 e2e-morph-expected 取不到（被改名/删除、仓库不可达或权限不足？）：本巡检已失效，请核实后同步本 workflow 或撤下"
+            exit 1
+          fi
+          list=/tmp/labeled-prs.tsv
+          # 用 REST issues 端点而非 `gh pr list --label`：后者走 search API，实测仓库
+          # 无法解析时**静默 exit 0 + 空结果**（gh 2.96），会被读成「没有残留」——静默
+          # 假绿。REST 侧 404/401/限流均非零退出，配合 set -e 直接让本 workflow 红。
+          # --paginate 逐页取全，不存在 `gh pr list --limit N` 式的静默截断。
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues?state=open&labels=e2e-morph-expected&per_page=100" \
+            --jq '.[] | select(.pull_request) | [.number, .title, .created_at] | @tsv' > "$list"
+
+          stale=""
+          while IFS=$'\t' read -r n title created; do
+            [ -z "$n" ] && continue
+            # timeline 查不到 labeled 事件时回退 createdAt，并显式告警（不静默降级）
+            if ! labeled_at=$(gh api --paginate \
+                 "repos/$GITHUB_REPOSITORY/issues/$n/timeline" \
+                 --jq '.[] | select(.event=="labeled" and .label.name=="e2e-morph-expected") | .created_at' \
+                 | tail -1); then
+              echo "::warning::PR #$n timeline 查询失败，回退用 PR 创建时间（口径可能偏早）"
+              labeled_at=""
+            fi
+            labeled_at="${labeled_at:-$created}"
+            age=$(python3 -c "import sys,datetime;p=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));print((datetime.datetime.now(datetime.timezone.utc)-p).days)" "$labeled_at")
+            if [ "$age" -ge "$THRESHOLD_DAYS" ]; then
+              stale="${stale}#$n ${title}（标签挂载 ${age} 天，打标于 ${labeled_at}）"$'\n'
+            fi
+          done < "$list"
+
+          if [ -n "$stale" ]; then
+            echo "::warning::以下开放 PR 挂着 e2e-morph-expected 超过 ${THRESHOLD_DAYS} 天，形态 diff 长期被豁免，请复核是否仍需保留"
+            printf '%s' "$stale"
+            {
+              echo "### ⚠️ e2e-morph-expected 标签残留（> ${THRESHOLD_DAYS} 天）"
+              echo '```'
+              printf '%s' "$stale"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "✅ 无长期残留的 e2e-morph-expected 标签（阈值 ${THRESHOLD_DAYS} 天）"
+          fi
