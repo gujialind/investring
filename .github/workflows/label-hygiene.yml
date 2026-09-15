@@ -2,20 +2,24 @@
 # 逃生阀回收：e2e-morph-expected 标签的周期性巡检（issue #483）
 # ============================================================================
 # 背景：给 PR 打 e2e-morph-expected 可豁免 E2E 形态 diff 门禁（ci.yml 的 e2e-compare）。
-#       标签长期不摘 = 长期免检，故周期性曝光「挂太久」的标签（warning 级）。
+#       标签长期不摘 = 长期免检，故周期性曝光「挂太久」的标签。
 #
 # 为什么独立 workflow，而不是挂回 ci.yml：
 #   ① ci.yml 的 job 权限已收紧到 contents: read，本巡检需要 PR / issues 读权限；
 #   ② 给 ci.yml 加 schedule 会让 schedule 事件跑遍全部 job（＝#472 被否的 nightly
 #      全量），否则得给每个 job 逐个加 event_name 守卫。
-# 与 #472（nightly 全量）无关：本 workflow 不跑测试、不跑 E2E、不参与 required check，
-# 而且正常情况下恒 exit 0（变红只可能是查询本身失败——令牌/权限/网络/标签被删，
-# 那种情况必须可见）。deploy.yml 只订阅 workflows: ["CI"]，故不产生任何部署噪音。
-# 决策记录见 #483。
+# 与 #472（nightly 全量）无关：不跑测试、不跑 E2E、不参与 required check；
+# deploy.yml 只订阅 workflows: ["CI"]，不产生任何部署噪音。决策记录见 #483。
 #
-# 口径：以 PR timeline 的 labeled 事件时间为准（标签摘下再加会重新计时）；原实现
-#       （PR #475 commit d88abd0 删除的 nightly-hygiene job）用的是 PR createdAt，
-#       口径更粗。查不到 labeled 事件时回退 createdAt 并显式告警（不静默降级）。
+# 变红的两种含义，都需人处理：① 查询链路本身坏了（令牌/权限/网络/标签被删）；
+#   ② 真的检出长期残留。**检出即红是刻意的**（#496 评审结论）：定时 run 只有失败才发
+#   通知，warning 注解 + Step Summary 都是 pull-only —— 绿 run 等于没有通知任何人，
+#   而那正是本巡检要消灭的失效模式。
+#
+# 口径：以 PR timeline 的 labeled 事件时间为准（标签摘下再加会重新计时）；取不到时
+#       回退 PR createdAt，并在输出里显式标注为「回退：PR 创建于」，不与真实打标时间
+#       混同。原实现（PR #475 commit d88abd0 删除的 nightly-hygiene job）直接用
+#       createdAt（口径更粗）。
 # ============================================================================
 
 name: Label Hygiene
@@ -42,8 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      # 用 github.event.inputs（schedule 事件下无此键 ⇒ 空串）而非 inputs 上下文，
-      # 默认值在脚本里兜底；脚本因此可脱离 Actions 原样本地彩排。
+      # 用 github.event.inputs（schedule 事件下无此键 ⇒ 空串），默认值在脚本里兜底，
+      # 于是同一份脚本可在本地以 `GITHUB_REPOSITORY=… bash <脚本>` 原样彩排
+      # （告警分支另需 GITHUB_STEP_SUMMARY 指向一个可写文件）。
       THRESHOLD_DAYS_INPUT: ${{ github.event.inputs.threshold_days }}
     steps:
       - name: Scan open PRs holding the label
@@ -58,8 +63,8 @@ jobs:
               exit 1
               ;;
           esac
-          # 正向控制：标签若被改名/删除，本巡检会退化成永久空转且仍然打印 ✅（覆盖无声
-          # 蒸发）。探一次标签本身，拿不到即红——同时兼作仓库/令牌可达性的主动校验。
+          # 正向控制：标签若被改名/删除，本巡检会退化成永久空转且仍然报「无残留」（覆盖
+          # 无声蒸发）。探一次标签本身，拿不到即红——同时兼作仓库/令牌可达性的主动校验。
           if ! gh api "repos/$GITHUB_REPOSITORY/labels/e2e-morph-expected" --jq .name > /dev/null; then
             echo "::error::标签 e2e-morph-expected 取不到（被改名/删除、仓库不可达或权限不足？）：本巡检已失效，请核实后同步本 workflow 或撤下"
             exit 1
@@ -73,33 +78,51 @@ jobs:
             "repos/$GITHUB_REPOSITORY/issues?state=open&labels=e2e-morph-expected&per_page=100" \
             --jq '.[] | select(.pull_request) | [.number, .title, .created_at] | @tsv' > "$list"
 
+          scanned=0
+          hit=0
+          hit_nums=""
           stale=""
-          while IFS=$'\t' read -r n title created; do
+          # 尾行兜底 `|| [ -n "$n" ]`：输入最后一行若缺换行，read 会失败且吞掉该行
+          while IFS=$'\t' read -r n title created || [ -n "$n" ]; do
             [ -z "$n" ] && continue
-            # timeline 查不到 labeled 事件时回退 createdAt，并显式告警（不静默降级）
-            if ! labeled_at=$(gh api --paginate \
+            scanned=$((scanned + 1))
+            labeled_at=""
+            if labeled_at=$(gh api --paginate \
                  "repos/$GITHUB_REPOSITORY/issues/$n/timeline" \
                  --jq '.[] | select(.event=="labeled" and .label.name=="e2e-morph-expected") | .created_at' \
                  | tail -1); then
+              # 查询成功但零匹配：同样要显式降级（#496 评审 🟡-3：原来只捕非零退出，
+              # 空结果会静默落进成功路径，还会把创建时间当打标时间打印）
+              [ -z "$labeled_at" ] && echo "::warning::PR #$n timeline 无 labeled 事件，回退用 PR 创建时间（口径可能偏早）"
+            else
               echo "::warning::PR #$n timeline 查询失败，回退用 PR 创建时间（口径可能偏早）"
               labeled_at=""
             fi
-            labeled_at="${labeled_at:-$created}"
+            if [ -n "$labeled_at" ]; then
+              when="打标于 ${labeled_at}"
+            else
+              labeled_at="$created"
+              when="回退：PR 创建于 ${labeled_at}"
+            fi
             age=$(python3 -c "import sys,datetime;p=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));print((datetime.datetime.now(datetime.timezone.utc)-p).days)" "$labeled_at")
             if [ "$age" -ge "$THRESHOLD_DAYS" ]; then
-              stale="${stale}#$n ${title}（标签挂载 ${age} 天，打标于 ${labeled_at}）"$'\n'
+              hit=$((hit + 1))
+              hit_nums="${hit_nums}#$n "
+              stale="${stale}#$n ${title}（标签挂载 ${age} 天，${when}）"$'\n'
             fi
           done < "$list"
 
-          if [ -n "$stale" ]; then
-            echo "::warning::以下开放 PR 挂着 e2e-morph-expected 超过 ${THRESHOLD_DAYS} 天，形态 diff 长期被豁免，请复核是否仍需保留"
+          if [ "$hit" -gt 0 ]; then
+            # 注解里带上 PR 号与计数：注解比 log/Summary 更靠近人的视野（#496 评审 🟡-1）
+            echo "::error::${hit} 个开放 PR（${hit_nums% }）挂着 e2e-morph-expected 满 ${THRESHOLD_DAYS} 天，形态 diff 长期被豁免，请复核是否仍需保留（已扫描 ${scanned} 个，明细见 Step Summary）"
             printf '%s' "$stale"
             {
-              echo "### ⚠️ e2e-morph-expected 标签残留（> ${THRESHOLD_DAYS} 天）"
+              echo "### ⚠️ e2e-morph-expected 标签残留（挂载满 ${THRESHOLD_DAYS} 天）"
               echo '```'
               printf '%s' "$stale"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "✅ 无长期残留的 e2e-morph-expected 标签（阈值 ${THRESHOLD_DAYS} 天）"
+            # 检出即红：绿 run 不会通知任何人（见文件头）
+            exit 1
           fi
+          echo "✅ 无长期残留的 e2e-morph-expected 标签（已扫描 ${scanned} 个挂载该标签的开放 PR，阈值 ${THRESHOLD_DAYS} 天）"
