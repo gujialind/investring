@@ -69,9 +69,20 @@ export function groupTradeRows(trades: Trade[]): TradeRow[] {
 /**
  * 现金子行派生数据（规范 §8）：主行为买入 → 现金扣款（-）；主行为卖出 → 现金到账（+）。
  * 符号为语义修饰，展示层手工前缀，不回写数值、不走涨跌色 token。
+ *
+ * `arrived=false`（#493）：配对现金腿自身生效日尚未到（卖出到账腿可携带未来
+ * `confirm_date`，其余腿在生效前必为 pending），主行状态讲的是基金腿，
+ * 故在此显式区分——**未来到账的 confirmed 现金不得标成已经到账**。
+ * 缺省 true = 沿用旧行为（买入扣款腿创建即 confirmed、现金日 = 下单日 T）。
  */
-export function cashSubMeta(main: Trade): { label: "现金扣款" | "现金到账"; sign: "-" | "+" } {
-  return main.trade_type === "buy" ? { label: "现金扣款", sign: "-" } : { label: "现金到账", sign: "+" };
+export function cashSubMeta(
+  main: Trade,
+  options?: { arrived?: boolean }
+): { label: "现金扣款" | "现金到账" | "现金待到账"; sign: "-" | "+" } {
+  if (main.trade_type === "buy") return { label: "现金扣款", sign: "-" };
+  return options?.arrived === false
+    ? { label: "现金待到账", sign: "+" }
+    : { label: "现金到账", sign: "+" };
 }
 
 /**

@@ -103,6 +103,23 @@ describe("cashSubMeta", () => {
     expect(cashSubMeta(makeTrade({ trade_type: "buy" }))).toEqual({ label: "现金扣款", sign: "-" });
     expect(cashSubMeta(makeTrade({ trade_type: "sell" }))).toEqual({ label: "现金到账", sign: "+" });
   });
+
+  // #493：卖出到账腿可携带未来 confirm_date（此时快照记 IN_TRANSIT_SELL），
+  // 主行状态讲的是基金腿，现金子行须自行区分「已到账 / 待到账」
+  it("卖出未到账 → 现金待到账；买入方向不受 arrived 影响（扣款即事实）", () => {
+    expect(cashSubMeta(makeTrade({ trade_type: "sell" }), { arrived: false })).toEqual({
+      label: "现金待到账",
+      sign: "+",
+    });
+    expect(cashSubMeta(makeTrade({ trade_type: "sell" }), { arrived: true })).toEqual({
+      label: "现金到账",
+      sign: "+",
+    });
+    expect(cashSubMeta(makeTrade({ trade_type: "buy" }), { arrived: false })).toEqual({
+      label: "现金扣款",
+      sign: "-",
+    });
+  });
 });
 
 describe("cashOrphanLabel", () => {

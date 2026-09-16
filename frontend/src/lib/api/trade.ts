@@ -1,5 +1,12 @@
 import { request } from "./client";
-import { Trade, TradeCreate, TradeUpdate, TradePreviewResponse } from "@/types/trade";
+import {
+  Trade,
+  TradeConfirmParams,
+  TradeConfirmResponse,
+  TradeCreate,
+  TradePreviewResponse,
+  TradeUpdate,
+} from "@/types/trade";
 import { PaginatedResponse } from "@/types/common";
 
 /**
@@ -42,11 +49,22 @@ export const tradeApi = {
   delete: (id: number) =>
     request<void>({ method: "DELETE", url: `/trades/${id}` }),
 
-  preview: (id: number) =>
-    request<TradePreviewResponse>({ method: "GET", url: `/trades/${id}/preview` }),
+  /**
+   * 确认预览（#493）：业务输入一律走 **query 参数**（`confirm_date` / `price` /
+   * `cash_confirm_date` / `cash_platform_code`），与后端 preview 端点协议一致。
+   * 零写入：只查询与计算，不落库。
+   */
+  preview: (id: number, params?: TradeConfirmParams) =>
+    request<TradePreviewResponse>({ method: "GET", url: `/trades/${id}/preview`, params }),
 
-  confirm: (id: number, data?: { confirm_date?: string; price?: number }) =>
-    request<Trade>({ method: "POST", url: `/trades/${id}/confirm`, data }),
+  /**
+   * 确认（#493）：同样是 **query 参数**协议——历史上这里发的是 JSON body，
+   * 后端只读 query，故 `confirm_date`/`price` 一直被静默忽略，新增的
+   * `cash_confirm_date`/`cash_platform_code`（卖出到账信息）更会整体丢失。
+   * 外层响应结构保持现状，交易本体在 `trade` 字段（见 TradeConfirmResponse）。
+   */
+  confirm: (id: number, params?: TradeConfirmParams) =>
+    request<TradeConfirmResponse>({ method: "POST", url: `/trades/${id}/confirm`, params }),
 
   cancel: (id: number) =>
     request<Trade>({ method: "POST", url: `/trades/${id}/cancel` }),

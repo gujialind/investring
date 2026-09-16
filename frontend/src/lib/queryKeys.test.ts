@@ -79,7 +79,13 @@ describe("queryKeys 全域工厂", () => {
       },
       {
         root: queryKeys.trades.root,
-        keys: [queryKeys.trades.list(), queryKeys.trades.detail(1), queryKeys.trades.preview(1)],
+        keys: [
+          queryKeys.trades.list(),
+          queryKeys.trades.detail(1),
+          queryKeys.trades.preview(1),
+          queryKeys.trades.previewWith(1),
+          queryKeys.trades.previewWith(1, { cash_confirm_date: "2026-09-18" }),
+        ],
       },
       {
         root: queryKeys.subscriptions.root,
@@ -129,5 +135,41 @@ describe("queryKeys 全域工厂", () => {
         expect(key.length).toBeGreaterThan(root.length);
       }
     }
+  });
+});
+
+// #493 §3.4.3：预览键必须把**有效业务选项**纳入——到账日/到账平台/确认日/价格任一变化
+// 都要换 key 触发重新预览，否则「预览值即确认值」的约定会被过期预览破坏。
+describe("queryKeys.trades.previewWith（#493 有效选项分键）", () => {
+  it("同一交易、不同有效现金选项 → 不同 key", () => {
+    const base = queryKeys.trades.previewWith(7, { confirm_date: "2026-09-18" });
+    const otherDate = queryKeys.trades.previewWith(7, {
+      confirm_date: "2026-09-18",
+      cash_confirm_date: "2026-09-21",
+    });
+    const otherPlatform = queryKeys.trades.previewWith(7, {
+      confirm_date: "2026-09-18",
+      cash_platform_code: "TTJJ",
+    });
+    expect(otherDate).not.toEqual(base);
+    expect(otherPlatform).not.toEqual(base);
+    expect(otherDate).not.toEqual(otherPlatform);
+  });
+
+  it("缺省值（undefined）与显式值分属不同 key，缺省统一落 null 槽位", () => {
+    expect(queryKeys.trades.previewWith(7)).toEqual([
+      "trades",
+      7,
+      "preview",
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(queryKeys.trades.previewWith(7)).toEqual(queryKeys.trades.previewWith(7, {}));
+  });
+
+  it("previewWith 键前缀覆盖 preview(id) 家族（无选项时前 3 段一致）", () => {
+    expect(queryKeys.trades.previewWith(7).slice(0, 3)).toEqual(queryKeys.trades.preview(7));
   });
 });

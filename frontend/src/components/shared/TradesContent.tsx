@@ -46,7 +46,7 @@ import {
 import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
-import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
+import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
 import Link from "next/link";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
@@ -91,6 +91,29 @@ type ConfirmState =
   | { action: "unconfirm"; id: number }
   | { action: "delete"; id: number }
   | null;
+
+/**
+ * 调仓 CASH 腿判定（#493 §3.4.5）：现金孤儿行不得露出调仓 CASH 生命周期操作按钮——
+ * 这类腿只能由基金腿驱动，直接 confirm/unconfirm/cancel/delete 一律 `CASH_TRADE_FORBIDDEN`。
+ * 前缀口径与 `cashOrphanLabel` 同源：12 位 hex = 现金转移组（独立生命周期，仍需按钮）、
+ * `sub_` = 申赎现金腿（生命周期在申赎页）、其余 = 调仓。
+ */
+function isRebalCashLeg(trade: Trade): boolean {
+  const g = trade.transfer_group ?? "";
+  if (trade.product_code !== "CASH") return false;
+  if (g.startsWith("sub_") || /^[0-9a-f]{12}$/.test(g)) return false;
+  return true;
+}
+
+/**
+ * 现金腿生效日尚未到（#493）：卖出到账腿可携带未来 `confirm_date`，而快照在
+ * 到账日之前记的是 `IN_TRANSIT_SELL`——列表不能把它呈现成「已到账」。
+ * 无日期（未生效的 pending 腿）按未到账处理。
+ */
+function isFutureDate(dateStr?: string | null): boolean {
+  if (!dateStr) return true;
+  return dateStr > toDateOnly(new Date());
+}
 
 const CONFIRM_TEXT: Record<ConfirmState extends infer S ? S extends { action: string } ? S["action"] : never : never, { title: string; desc: string }> = {
   confirm: { title: "确认交易", desc: "确定要确认该交易吗？" },
@@ -229,8 +252,13 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
     notes: "",
   });
   const [editAmountAnchor, setEditAmountAnchor] = useState<"actual" | "net">("actual");
-  // 顶层无条件调用（hooks 规则）；id=0 时 mutate 不会被触发（Dialog 打开时 editingTrade 必有 id）
-  const updateTrade = useUpdateTrade(editingTrade?.id ?? 0);
+  // 已确认卖出的窄例外（#493 §3.4.5）：只开放「到账日期 + 备注」，
+  // 其他财务字段仍走「先取消确认」提示（与后端 PUT 的字段白名单一一对应）
+  const [arrivalTrade, setArrivalTrade] = useState<Trade | null>(null);
+  const [arrivalFormData, setArrivalFormData] = useState({ cash_confirm_date: "", notes: "" });
+  // 顶层无条件调用（hooks 规则）；id=0 时 mutate 不会被触发（Dialog 打开时必有 id）
+  const editTradeId = editingTrade?.id ?? arrivalTrade?.id ?? 0;
+  const updateTrade = useUpdateTrade(editTradeId);
   // 命中 DUPLICATE_TRADE 时暂存待重试的交易，由确认框引导 allow_duplicate 重试
   const [duplicateTrade, setDuplicateTrade] = useState<TradeCreate | null>(null);
   const addToast = useUIStore((state) => state.addToast);
@@ -313,7 +341,10 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
       product_code: formData.product_code,
       market: formData.market || undefined,
       platform_code: formData.platform_code || undefined,
-      cash_platform_code: formData.cash_platform_code || undefined,
+      // 扣款平台仅买入可传（#493）：卖出到账平台改在确认弹窗录入，创建期传会被后端
+      // 以 CASH_PLATFORM_NOT_ALLOWED 拒绝，故此处按方向直接不发
+      cash_platform_code:
+        tradeType === "buy" ? formData.cash_platform_code || undefined : undefined,
       trade_type: tradeType,
       trade_date: formData.trade_date,
       price: formData.price ? parseFloat(formData.price) : undefined,
@@ -371,31 +402,44 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
     updateTrade.mutate(payload, { onSuccess: () => setEditingTrade(null) });
   };
 
+  // 已确认卖出的窄表单（#493 §3.4.5）：只提交 cash_confirm_date + notes 子集，
+  // 与后端 PUT 的窄例外一致（混入其他字段整体拒绝 → 故此处绝不带其他财务字段）
+  const openArrivalDialog = (trade: Trade) => {
+    setArrivalTrade(trade);
+    setArrivalFormData({
+      cash_confirm_date: trade.cash_confirm_date ?? "",
+      notes: trade.notes ?? "",
+    });
+  };
+
+  const handleArrivalSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!arrivalTrade || !arrivalFormData.cash_confirm_date) return;
+    const payload: TradeUpdate = { cash_confirm_date: arrivalFormData.cash_confirm_date };
+    // 备注只在有值时随行：空串不入 payload（exclude_unset 语义下避免误清）
+    if (arrivalFormData.notes) payload.notes = arrivalFormData.notes;
+    updateTrade.mutate(payload, { onSuccess: () => setArrivalTrade(null) });
+  };
+
   // confirm 动作由 TradeConfirmDialog 内部触发（#248），此处仅处理其余三个动作
+  // （#493：三个动作都是**整组**口径，故 portfolio_code 从 mutation variables 传，
+  //   不依赖响应里不存在的字段——cancel/unconfirm 只回 {message}、delete 无响应体）
   const runConfirm = () => {
     if (!confirmState) return;
     const { action, id } = confirmState;
-    if (action === "cancel") cancelTrade.mutate(id);
-    else if (action === "unconfirm") unconfirmTrade.mutate(id);
-    else if (action === "delete") deleteTradeMutation.mutate(id);
+    if (action === "cancel") cancelTrade.mutate({ id, portfolioCode: code });
+    else if (action === "unconfirm") unconfirmTrade.mutate({ id, portfolioCode: code });
+    else if (action === "delete") deleteTradeMutation.mutate({ id, portfolioCode: code });
     setConfirmState(null);
   };
 
   // #248 确认信息弹窗派生：被确认交易取自当前页列表（含读侧 product_name）；
-  // 现金平台由同 transfer_group 配对 CASH 腿派生（读侧无 cash_platform_code 字段），
-  // 孤儿腿/分页拆开时为空 → 弹窗展示 "--"
+  // #493：现金平台/到账日一律读基金腿的读侧派生字段（后端按配对 CASH 腿批量派生），
+  // 不再从当前页里寻找配对 CASH 行——分页/状态筛选拆散或半确认组时同样完整
   const confirmingTrade =
     confirmState?.action === "confirm"
       ? trades.find((t) => t.id === confirmState.id) ?? null
       : null;
-  const confirmingCashPlatformCode = confirmingTrade?.transfer_group
-    ? trades.find(
-        (t) =>
-          t.transfer_group === confirmingTrade.transfer_group &&
-          t.id !== confirmingTrade.id &&
-          t.product_code === "CASH"
-      )?.platform_code
-    : undefined;
   // 行掉出当前列表时（refetch/翻页/他端确认）同步清空 confirmState：open 以「行在
   // 列表中」门控属被动关闭（onOpenChange 不触发），不清 state 行重现时弹窗会自发重开
   useEffect(() => {
@@ -547,61 +591,79 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
       </TableCell>
       <TableCell className="text-right">
         {/* 操作按钮对齐后端允许矩阵（#176）：pending=确认/删除（场内无取消，
-            与后端 cancel_trade 的 CANNOT_CANCEL_EXCHANGE 一致）；confirmed=取消确认/修改引导，无删除 */}
-        {trade.status === "pending" && (
+            与后端 cancel_trade 的 CANNOT_CANCEL_EXCHANGE 一致）；confirmed=取消确认/修改引导，无删除。
+            #493：调仓 CASH 腿（含孤儿行）不露出任何生命周期按钮——后端对其
+            confirm/unconfirm/cancel/delete 一律 CASH_TRADE_FORBIDDEN，唯一驱动入口是基金腿 */}
+        {isRebalCashLeg(trade) ? null : (
           <>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => openEditDialog(trade)}
-              title="编辑"
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmState({ action: "confirm", id: trade.id })}
-              disabled={confirmTrade.isPending}
-              title="确认"
-            >
-              <CheckCircle className="h-4 w-4" />
-            </Button>
-            {trade.market !== "CN_EXCHANGE" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmState({ action: "cancel", id: trade.id })}
-                disabled={cancelTrade.isPending}
-                title="取消"
-              >
-                <XCircle className="h-4 w-4" />
-              </Button>
+            {trade.status === "pending" && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openEditDialog(trade)}
+                  title="编辑"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmState({ action: "confirm", id: trade.id })}
+                  disabled={confirmTrade.isPending}
+                  title="确认"
+                >
+                  <CheckCircle className="h-4 w-4" />
+                </Button>
+                {trade.market !== "CN_EXCHANGE" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmState({ action: "cancel", id: trade.id })}
+                    disabled={cancelTrade.isPending}
+                    title="取消"
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmState({ action: "delete", id: trade.id })}
+                  disabled={deleteTradeMutation.isPending}
+                  title="删除"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmState({ action: "delete", id: trade.id })}
-              disabled={deleteTradeMutation.isPending}
-              title="删除"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </>
-        )}
-        {trade.status === "confirmed" && (
-          <>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmState({ action: "unconfirm", id: trade.id })}
-              title="取消确认"
-            >
-              <Undo className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setEditHint(true)} title="修改">
-              <Pencil className="h-4 w-4" />
-            </Button>
+            {trade.status === "confirmed" && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmState({ action: "unconfirm", id: trade.id })}
+                  title="取消确认"
+                >
+                  <Undo className="h-4 w-4" />
+                </Button>
+                {trade.trade_type === "sell" ? (
+                  // 已确认卖出的窄例外（#493）：只开放到账日期 + 备注，其他财务字段仍先取消确认
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openArrivalDialog(trade)}
+                    title="修改到账日期"
+                  >
+                    <CalendarClock className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => setEditHint(true)} title="修改">
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                )}
+              </>
+            )}
           </>
         )}
       </TableCell>
@@ -611,7 +673,9 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
   // 现金子行（规范 §8）：首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
   // （资金流向非涨跌语义，禁用 gain/loss token）；操作列空、不单独响应 hover
   const renderCashSubRow = (main: Trade, sub: Trade) => {
-    const meta = cashSubMeta(main);
+    // #493：现金腿生效日未到时标注「现金待到账」——状态列显示的是主行（基金腿）的已确认，
+    // 故须在子行显式区分，避免把未来到账的 confirmed 现金标成已经到账
+    const meta = cashSubMeta(main, { arrived: !isFutureDate(sub.confirm_date) });
     const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
     return (
       <TableRow key={`cash-${sub.id}`} className="bg-muted/50 hover:bg-muted/50">
@@ -622,7 +686,7 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
           </span>
         </TableCell>
         {/* 空占位以 colSpan 折叠（#355）：主行 10 列 = 产品·平台·类型·金额·份额·手续费·价格·日期·状态·操作，
-            子行 = 标签 + 2(平台·类型) + 金额 + 6(份额·手续费·价格·日期·状态·操作)。
+            子行 = 标签(1) + 平台·类型(2) + 金额(1) + 份额·手续费·价格(3) + 生效日(1) + 状态·操作(2) = 10。
             子行槽位纯位置耦合、tsc/lint 拦不住，折叠后 span 写错会立刻在视觉上暴露而非静默错一列 */}
         <TableCell colSpan={2} />
         <TableCell className="number-cell">
@@ -631,7 +695,14 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
             {formatCurrency(sub.amount ?? 0)}
           </span>
         </TableCell>
-        <TableCell colSpan={6} />
+        <TableCell colSpan={3} />
+        {/* 现金腿生效日（#493）：买入=扣款日 T、卖出=到账日 A；与主行「交易/确认日期」同列对齐 */}
+        <TableCell>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">
+            {sub.confirm_date ? formatDate(sub.confirm_date) : ""}
+          </span>
+        </TableCell>
+        <TableCell colSpan={2} />
       </TableRow>
     );
   };
@@ -730,18 +801,38 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
                     id="platform_code"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="cash_platform_code">
-                    现金平台（{tradeType === "buy" ? "扣款" : "到账"}，可选）
-                  </Label>
-                  <SearchablePlatformSelect
-                    platforms={platforms}
-                    value={formData.cash_platform_code || null}
-                    onChange={(v) => setFormData({ ...formData, cash_platform_code: v ?? "" })}
-                    specialOptionLabel="同交易平台"
-                    id="cash_platform_code"
-                  />
-                </div>
+                {/* 现金平台只在买入侧出现（#493）：买入=扣款平台、创建即扣款；
+                    卖出的到账平台与到账日一律在确认弹窗录入（创建期传入后端直接拒绝） */}
+                {tradeType === "buy" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="cash_platform_code">扣款平台（可选）</Label>
+                    <SearchablePlatformSelect
+                      platforms={platforms}
+                      value={formData.cash_platform_code || null}
+                      onChange={(v) => setFormData({ ...formData, cash_platform_code: v ?? "" })}
+                      specialOptionLabel="同交易平台"
+                      id="cash_platform_code"
+                    />
+                  </div>
+                )}
+                {/* 买入创建即记账（#493 决策 1）：扣款腿当场 confirmed、基金份额待确认。
+                    不写清楚会让用户误以为「提交≠扣钱」而重复下单 */}
+                {tradeType === "buy" && (
+                  <Alert data-testid="buy-deduct-hint">
+                    <Info className="h-4 w-4" />
+                    <AlertDescription>
+                      提交即记扣款：现金按所选扣款平台当场扣减，基金份额仍待确认（等待确认日）。
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {tradeType === "sell" && (
+                  <Alert data-testid="sell-arrival-hint">
+                    <Info className="h-4 w-4" />
+                    <AlertDescription>
+                      卖出到账平台与到账日在确认时录入，缺省为到账日=基金确认日、平台=交易平台。
+                    </AlertDescription>
+                  </Alert>
+                )}
                 {tradeType === "buy" ? (
                   <>
                     <div className="space-y-2">
@@ -1114,18 +1205,88 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
         </DialogContent>
       </Dialog>
 
-      {/* #248：确认动作改为信息核对弹窗（完整记录 + 后端预览值），弹窗内二次确认才发起请求 */}
+      {/* 已确认卖出的窄表单（#493 §3.4.5）：只改到账日期（+备注），
+          其他财务字段仍走「先取消确认」——与后端 PUT 的窄例外字段白名单一一对应 */}
+      <Dialog open={!!arrivalTrade} onOpenChange={(open) => !open && setArrivalTrade(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>修改到账日期</DialogTitle>
+            <DialogDescription>
+              仅可修改到账日期与备注；其他字段请先「取消确认」再修改
+            </DialogDescription>
+          </DialogHeader>
+          {arrivalTrade && (
+            <form onSubmit={handleArrivalSubmit}>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">产品</span>
+                    <span>
+                      {formatProductName(arrivalTrade.product_name, arrivalTrade.product_code)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">份额 / 到手金额</span>
+                    <span>
+                      {formatSharesUnit(arrivalTrade.shares)} / {formatCurrency(arrivalTrade.actual_amount)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">确认日期</span>
+                    <span>{arrivalTrade.confirm_date ? formatDate(arrivalTrade.confirm_date) : "--"}</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="arrival_cash_confirm_date">到账日期</Label>
+                  <DatePicker
+                    id="arrival_cash_confirm_date"
+                    date={parseDateOnly(arrivalFormData.cash_confirm_date)}
+                    onSelect={(date) =>
+                      setArrivalFormData({ ...arrivalFormData, cash_confirm_date: toDateOnly(date) })
+                    }
+                    showTradingDays
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    到账日之前该笔资金计入「卖出在途」，不计入可用现金；组内确认日及之后已有快照时须先删除快照。
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="arrival_notes">备注</Label>
+                  <Input
+                    id="arrival_notes"
+                    value={arrivalFormData.notes}
+                    onChange={(e) =>
+                      setArrivalFormData({ ...arrivalFormData, notes: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  type="submit"
+                  disabled={updateTrade.isPending || !arrivalFormData.cash_confirm_date}
+                >
+                  {updateTrade.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  保存修改
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* #248：确认动作改为信息核对弹窗（完整记录 + 后端预览值），弹窗内二次确认才发起请求。
+          #493：到账日期/到账平台在弹窗内录入，由弹窗回传有效选项（缺省不传 → 后端取 A=C、同基金平台） */}
       <TradeConfirmDialog
         open={confirmState?.action === "confirm" && !!confirmingTrade}
         onOpenChange={(open) => !open && setConfirmState(null)}
         trade={confirmingTrade}
-        cashPlatformCode={confirmingCashPlatformCode}
-        platformNameMap={platformNameMap}
+        platforms={platforms}
         isConfirming={confirmTrade.isPending}
-        onConfirm={() => {
+        onConfirm={(params) => {
           if (confirmState?.action !== "confirm") return;
           confirmTrade.mutate(
-            { id: confirmState.id },
+            { id: confirmState.id, params },
             { onSuccess: () => setConfirmState(null) }
           );
         }}
