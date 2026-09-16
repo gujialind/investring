@@ -46,7 +46,7 @@ describe("formatAmount2", () => {
     expect(formatAmount2(0)).toBe("0.00");
   });
 
-  it("非有限数字回填空串（不把 NaN 送上屏）", () => {
+  it("非有限入参回填空串（非法输入不落屏）", () => {
     expect(formatAmount2(NaN)).toBe("");
     expect(formatAmount2(Infinity)).toBe("");
   });
@@ -109,10 +109,13 @@ describe("sellDerivedAmounts（镜像后端 _derive_sell_amounts 有价分支）
     expect(sellDerivedAmounts("abc", "10", "5")).toBeNull();
   });
 
-  it("极端数值下中间结果非有限时返回 null（不回传 NaN/Infinity）", () => {
-    // 份额×价格溢出为 Infinity → 毛额量化拿到非有限输入（L64 防御分支）
+  it("极端数值下中间结果非有限时返回 null（无法量化即不渲染）", () => {
+    // 本组锁的契约是「中间结果无法量化 ⇒ 返回 null」：
+    // ① 份额×价格溢出为 Infinity → tradeAmounts.ts L64 的 gross 守卫；
     expect(sellDerivedAmounts(1e18, 1e300, 0)).toBeNull();
-    // 手续费大到 quantizeAmount2 产出 NaN（1e19 级指数记法边界，见 #504）→ 到手无法量化（L66）
+    // ② 手续费大到 quantizeAmount2 产出 NaN（1e19 级指数记法边界，根因见 #504）→ 今日经
+    //    L66 的到手守卫返回 null；#504 按「非有限结果返回 null」修复后改由 L62 拦截，
+    //    断言不变（若 #504 选择「抛错」修法，本条须同步改）。
     expect(sellDerivedAmounts(1, 1, 1e19)).toBeNull();
   });
 });
