@@ -127,6 +127,9 @@ export function formatNav(
 
 /**
  * 格式化 4 位小数金额（对齐后端 Numeric(15,4)，用于需与后端/CLI 精确对账的场景）
+ *
+ * 当前无调用点——保留是刻意的：visual-spec §5「精确对账金额」点名的口径载体，
+ * 删除会让规范表指向不存在的 helper。预期调用方 = 按 §5 落地的对账场景展示点。
  */
 export function formatAmount4(
   num: number | string | undefined | null,
@@ -145,6 +148,9 @@ export function getNumberCellClass(): string {
 
 /**
  * 格式化金额（简化显示，大于万显示为 X.XX 万）
+ *
+ * 当前无调用点——保留是刻意的：visual-spec §5「金额（概览大字）」/ §12 点名的紧凑
+ * 格式口径载体（表格内禁用，见 §12 边界）。预期调用方 = 概览大字类展示点。
  */
 export function formatCompactCurrency(
   num: number | string | undefined | null,
@@ -168,6 +174,10 @@ export function formatCompactCurrency(
  * @param num 小数形式（如 0.0523 表示 5.23%）
  * @param decimals 小数位数（默认 2）
  * @param showSign 是否显示正负号（默认 true）
+ *
+ * 当前无调用点——保留是刻意的：visual-spec §5「百分比/收益率」/ §12 的 +/- 符号惯例
+ * 点名口径（注意 §5 明确行级占比不走本函数，见 largestRemainderPercents）。
+ * 预期调用方 = 按 §5 落地的百分比展示点（现有展示多直用 formatReturnRate）。
  */
 export function formatPercent(
   num: number | string | undefined | null,
@@ -250,6 +260,10 @@ export function getReturnColorClass(value: number | string | undefined | null): 
 /**
  * 根据收益率/涨跌值获取对应背景色类名
  * 中国市场惯例：红涨绿跌（issue #127 语义 token soft 浅底）
+ *
+ * 当前无调用点——保留是刻意的：visual-spec §2/§17 点名「涨跌色只允许由
+ * getReturnColorClass / getReturnBgClass 输出」，它是涨跌背景色的唯一合规出口。
+ * 预期调用方 = 需要浅底涨跌色的展示点（现网暂无）。
  */
 export function getReturnBgClass(value: number | string | undefined | null): string {
   if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) {
