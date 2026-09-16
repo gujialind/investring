@@ -3,7 +3,8 @@
 # ============================================================================
 # 覆盖 app/services/position_service.py 中的现金计算函数：
 # - get_cash_value（含 manual_market_value 绝对替换，辅助审计场景）
-# - calculate_available_cash（基线读快照表，回归 issue #52）
+# - calculate_available_cash（基线读快照表，回归 issue #52；
+#   无快照降级路径每笔只计一次，回归 issue #515）
 # ============================================================================
 
 from datetime import date
@@ -20,7 +21,7 @@ from tests.factories import (
     create_portfolio, create_platform, create_trade,
     create_value_snapshot, create_manual_market_value,
     create_position_snapshot, create_investor_holding, create_subscription,
-    create_investor, create_product,
+    create_investor, create_product, create_share_change_event,
 )
 
 
@@ -178,6 +179,107 @@ class TestCalculateAvailableCashWithOverride:
         cash = calculate_available_cash(test_db, "GV_P", "GV_PLAT")
         # 应读快照基线 10200，而非全量流水 6000
         assert cash == Decimal("10200")
+
+
+class TestNoSnapshotCashCountedOnce:
+    """无快照降级路径每笔只计一次（#515）
+
+    无快照时基线为 0，统一由增量段计算：流入按 confirm_date、流出（confirmed 与
+    pending sell）按 trade_date、事件按 ex_date。旧实现先用 compute_cash_balance
+    取全量已确认余额，随后又把 1970 哨兵交给同一增量段，同一批 confirmed 流水与
+    事件现金流被累计两次。
+    """
+
+    PLAT = "NS_PLAT"
+
+    def _seed(self, db, portfolio_code: str):
+        create_portfolio(db, code=portfolio_code, status="active")
+        create_platform(db, code=self.PLAT)
+
+    def _cash_buy(self, db, portfolio_code, amount, *, trade_date, confirm_date):
+        return create_trade(
+            db, portfolio_code, "CASH", "",
+            trade_type="buy", amount=amount, status="confirmed",
+            trade_date=trade_date, confirm_date=confirm_date,
+            platform_code=self.PLAT,
+        )
+
+    def _cash_sell(self, db, portfolio_code, amount, *, trade_date,
+                   confirm_date=None, status="confirmed"):
+        return create_trade(
+            db, portfolio_code, "CASH", "",
+            trade_type="sell", amount=amount, status=status,
+            trade_date=trade_date, confirm_date=confirm_date,
+            platform_code=self.PLAT,
+        )
+
+    def test_confirmed_buy_counted_once(self, test_db):
+        """单笔 confirmed CASH buy 100 → 100（旧实现 200）"""
+        self._seed(test_db, "NS_P1")
+        self._cash_buy(test_db, "NS_P1", 100,
+                       trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
+        assert calculate_available_cash(
+            test_db, "NS_P1", self.PLAT
+        ) == Decimal("100")
+
+    def test_confirmed_inflow_minus_outflow(self, test_db):
+        """confirmed buy 100 / confirmed sell 40 → 60（旧实现 120，计划 §1 反例）"""
+        self._seed(test_db, "NS_P2")
+        self._cash_buy(test_db, "NS_P2", 100,
+                       trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
+        self._cash_sell(test_db, "NS_P2", 40,
+                        trade_date=date(2025, 1, 7), confirm_date=date(2025, 1, 7))
+        assert calculate_available_cash(
+            test_db, "NS_P2", self.PLAT
+        ) == Decimal("60")
+
+    def test_event_cash_change_counted_once(self, test_db):
+        """单笔 confirmed 事件 cash_change=+50 → 50（旧实现 100）"""
+        self._seed(test_db, "NS_P3")
+        create_product(test_db, code="NS_EV", market="CN_OTC")
+        create_share_change_event(
+            test_db, "NS_P3", "NS_EV", "CN_OTC",
+            event_type="cash_dividend",
+            ex_date=date(2025, 1, 10), entitlement_date=date(2025, 1, 9),
+            status="confirmed", platform_code=self.PLAT,
+            cash_change=Decimal("50"),
+        )
+        assert calculate_available_cash(
+            test_db, "NS_P3", self.PLAT
+        ) == Decimal("50")
+
+    def test_pending_sell_counted_once(self, test_db):
+        """confirmed buy 100 / pending sell 40 → 60（pending 本就不在基线，只扣一次）"""
+        self._seed(test_db, "NS_P4")
+        self._cash_buy(test_db, "NS_P4", 100,
+                       trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
+        self._cash_sell(test_db, "NS_P4", 40,
+                        trade_date=date(2025, 1, 7), status="pending")
+        assert calculate_available_cash(
+            test_db, "NS_P4", self.PLAT
+        ) == Decimal("60")
+
+    def test_future_arrival_excluded_by_as_of(self, test_db):
+        """as_of=T 时 confirm_date > T 的 confirmed buy 不计入（未来到账排除）"""
+        self._seed(test_db, "NS_P5")
+        self._cash_buy(test_db, "NS_P5", 30,
+                       trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 7))
+        self._cash_buy(test_db, "NS_P5", 100,
+                       trade_date=date(2025, 1, 17), confirm_date=date(2025, 1, 20))
+        assert calculate_available_cash(
+            test_db, "NS_P5", self.PLAT, as_of_date=date(2025, 1, 10)
+        ) == Decimal("30")
+
+    def test_confirmed_sell_anchored_on_trade_date(self, test_db):
+        """as_of=T：confirmed sell 按 trade_date 扣减（trade_date <= T < confirm_date 仍扣）"""
+        self._seed(test_db, "NS_P6")
+        self._cash_buy(test_db, "NS_P6", 100,
+                       trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
+        self._cash_sell(test_db, "NS_P6", 40,
+                        trade_date=date(2025, 1, 7), confirm_date=date(2025, 1, 20))
+        assert calculate_available_cash(
+            test_db, "NS_P6", self.PLAT, as_of_date=date(2025, 1, 10)
+        ) == Decimal("60")
 
 
 class TestCalculateAvailableCashAsOfDate:

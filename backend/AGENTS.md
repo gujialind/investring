@@ -45,16 +45,18 @@
 
   ```
   compute_cash_balance(T)：全量历史口径 = SUM(confirmed CASH trades WHERE confirm_date <= T)
-                                       + SUM(confirmed events WHERE ex_date <= T, cash_change != 0)；无快照时降级用
+                                       + SUM(confirmed events WHERE ex_date <= T, cash_change != 0)；
+                          仅用于 cash-position 审计字段与 get_cash_value 兜底，不再作降级基线
 
-  calculate_available_cash(T?) = 最新快照日 portfolio_position 的 CASH cash_amount（基线）
+  calculate_available_cash(T?) = 最新快照日 portfolio_position 的 CASH cash_amount（基线；
+                                 无快照日时基线为 0，全部由下列增量项计算，每笔只计一次）
                                + SUM(confirmed CASH buys  WHERE confirm_date > 快照日 [AND confirm_date <= T])
                                − SUM(confirmed CASH sells WHERE confirm_date > 快照日 [AND trade_date <= T])
                                − SUM(pending CASH sells [WHERE trade_date <= T])
                                + SUM(confirmed event cash_change WHERE ex_date > 快照日 [AND ex_date <= T])
   ```
 
-  T（`as_of_date`）为空时不设上限。可用现金基线只取 `product_code == "CASH" and shares is None` 的行，在途行不计入。
+  T（`as_of_date`）为空时不设上限。可用现金基线只取 `product_code == "CASH" and shares is None` 的行，在途行不计入。无快照路径与 `calculate_available_shares` 同形（基线 0 + 增量），**不得**改回「`compute_cash_balance` 全量基线 + 1970 哨兵增量」——那是 #515 的重复计账缺陷（同一批 confirmed 流水与事件现金流被累计两次），守门用例 `tests/unit/test_position_service.py::TestNoSnapshotCashCountedOnce`。
 
 * **`trade_service.py`**：调仓创建/确认/取消（根 §2.5/§2.7）。配对腿同步的单一实现是 `sync_transfer_group`——只同步 `trade_date`/`status`/金额，**不传播 `confirm_date`**。
   - `cash_transfers.py` 以 `cross_day` 字段（`schemas/cash_transfer.py`）区分当天完成与跨天到账；跨天判断（`list_cash_transfers`）**以 buy 腿为准**——`buy.status != "confirmed"` 或 `buy.confirm_date > buy.trade_date`；`confirm_cash_transfer` 确认组内所有仍为 pending 的 CASH 腿。
