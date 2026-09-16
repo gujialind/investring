@@ -20,7 +20,9 @@ from app.models import (
     InvestorHolding, Portfolio, PortfolioPosition, PortfolioValueSnapshot,
     PriceRecord, Subscription, Trade, TradingCalendar,
 )
-from app.services.trading_utils import get_next_trading_day
+from app.services.trading_utils import (
+    get_next_trading_day, get_prev_trading_day, is_trading_day,
+)
 from tests import seed_base
 from tests.seed_base import seed_e2e_active
 
@@ -140,6 +142,31 @@ class TestE2EActiveContract:
                 PriceRecord.market == "CN_EXCHANGE",
                 PriceRecord.price_date == d,
             ).first() is not None, f"快照日 {d} 缺 510300.SH 价格行"
+
+    def test_otc_nav_window_covers_in_transit_spec(self, seeded_active_db):
+        """#493：调仓在途 E2E spec 的 D..D+4 必须都有 000300.OF 净值行。
+
+        spec（frontend/e2e/trade-in-transit.spec.ts）自建隔离组合后逐日生成快照：
+        D+1 是买入确认日快照、D+2 是卖出在途快照、**D+3 是卖出到账日快照**——到账日
+        份额已减少但仍持仓，同样必须取到价，否则 MISSING_NAV。净值口径与 spec 的
+        NAV 常量一一对应（D=1.5000、D+1=1.5500、D+2=1.6000），**改动需两侧同步**。
+        """
+        today = date.today()
+        d4 = (
+            today
+            if is_trading_day(seeded_active_db, today)
+            else get_prev_trading_day(seeded_active_db, today)
+        )
+        cursor = d4
+        for px in ("1.5000", "1.5500", "1.6000", "1.6000", "1.6000"):
+            row = seeded_active_db.query(PriceRecord).filter(
+                PriceRecord.product_code == "000300.OF",
+                PriceRecord.market == "CN_OTC",
+                PriceRecord.price_date == cursor,
+            ).first()
+            assert row is not None, f"在途 spec 需要 000300.OF 在 {cursor} 的净值行"
+            assert float(row.unit_price) == float(px)
+            cursor = get_next_trading_day(seeded_active_db, cursor)
 
 
 class TestCalendarContract:

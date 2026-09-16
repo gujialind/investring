@@ -218,7 +218,9 @@ def seed_e2e_active(db: Session) -> None:
         confirm_single_subscription, create_subscription,
     )
     from app.services.trade_service import confirm_single_trade, create_trade
-    from app.services.trading_utils import get_prev_trading_day, is_trading_day
+    from app.services.trading_utils import (
+        get_next_trading_day, get_prev_trading_day, is_trading_day,
+    )
 
     today = date.today()
     d4 = today if is_trading_day(db, today) else get_prev_trading_day(db, today)
@@ -245,6 +247,22 @@ def seed_e2e_active(db: Session) -> None:
             product_code="510300.SH", market="CN_EXCHANGE",
             price_date=nav_date, unit_price=Decimal(px), source="seed",
         ))
+    db.flush()
+
+    # #493：调仓在途 E2E spec（frontend/e2e/trade-in-transit.spec.ts）自建隔离组合后
+    # 要逐日生成快照，而其日期锚定 /api/trading-calendar 的「today 起最近一个交易日」
+    # （= d4）及其后 3 个交易日——D+3 是卖出到账日快照，份额虽已减少但仍持仓，同样
+    # 必须取到价（否则 MISSING_NAV）。故按交易日铺 D..D+4 一段窗口，而不是只埋 spec
+    # 当前会用到的那两天：固定/过窄的窗口是 #468 同型的时间炸弹。
+    # 净值口径与 spec 的 NAV 常量一一对应（D=1.5000、D+1=1.5500、D+2=1.6000），
+    # **两侧改动必须同步**；种子侧由 tests/integration/test_seed_contract.py 锁定。
+    nav_date = d4
+    for px in ("1.5000", "1.5500", "1.6000", "1.6000", "1.6000"):
+        db.add(PriceRecord(
+            product_code="000300.OF", market="CN_OTC",
+            price_date=nav_date, unit_price=Decimal(px), source="seed",
+        ))
+        nav_date = get_next_trading_day(db, nav_date)
     db.flush()
 
     # 首次申购：apply=D1、confirm=D2（T+1 自动），首窗净值 1.0000 无需行情；
