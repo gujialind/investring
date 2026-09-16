@@ -15,6 +15,7 @@
 
 from datetime import date, timedelta
 from decimal import Decimal
+import json
 
 import pytest
 
@@ -242,6 +243,30 @@ class TestBuyCreateDeductsImmediately:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "CASH_CONFIRM_DATE_NOT_ALLOWED"
 
+    def test_buy_accepts_cash_platform_equal_to_fund_platform(
+        self, client, admin_headers, test_db
+    ):
+        """买入传「等于基金腿平台」的 cash_platform_code 仍被接受（归一化为不传）
+
+        第 3 项修复只改判定时机，不动买入侧语义：同平台值照旧归一化，
+        CASH 腿仍落在基金腿平台、不发生跨平台扣款。
+        """
+        _seed_portfolio(test_db, self.CODE, cash=50000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": self.CODE, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "buy", "amount": 10000.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+                "cash_platform_code": PLAT,
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        cash_leg = _cash_leg(test_db, _fund_leg(test_db, resp.json()["id"]))
+        assert cash_leg is not None
+        assert cash_leg.platform_code == PLAT
+
 
 class TestBuyConfirmCashLegGuards:
     CODE = "IT493_BUY2"
@@ -277,6 +302,38 @@ class TestBuyConfirmCashLegGuards:
         assert cash_leg.status == "confirmed"
         assert Decimal(str(cash_leg.actual_amount)) == Decimal("10000")
         assert Decimal(str(cash_leg.amount)) == Decimal("10000")
+
+    def test_buy_confirm_rebuilds_missing_deduction_leg_with_audit_id(
+        self, client, admin_headers, test_db
+    ):
+        """扣款腿缺失时确认兜底建腿：审计 trade_id 同样非 null
+
+        覆盖 `_apply_confirm_cash_leg` 的**第二条**新建分支（#518 评审：两处
+        `attach_paired_cash_leg` 都曾在 flush 前读 `leg.id`，审计恒为 null）。
+        库态：买入组在确认前丢了扣款腿（存量异常数据，见 CASH_LEG_MISSING 同族）。
+        """
+        fund_leg = self._create(client, admin_headers, test_db)
+        test_db.delete(_cash_leg(test_db, fund_leg))
+        test_db.flush()
+        assert _cash_leg(test_db, fund_leg) is None
+
+        conf = client.post(f"/api/trades/{fund_leg.id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
+        test_db.expire_all()
+        fund_leg = _fund_leg(test_db, fund_leg.id)
+        rebuilt = _cash_leg(test_db, fund_leg)
+        assert rebuilt is not None and rebuilt.status == "confirmed"
+
+        audit = test_db.query(AuditLog).filter(
+            AuditLog.resource_type == "trade",
+            AuditLog.resource_id == str(fund_leg.id),
+            AuditLog.action == "confirm",
+        ).order_by(AuditLog.id.desc()).first()
+        assert audit is not None and audit.new_value is not None
+        payload = json.loads(audit.new_value)
+        assert payload["cash_leg"]["action"] == "created"
+        assert payload["cash_leg"]["trade_id"] is not None
+        assert payload["cash_leg"]["trade_id"] == rebuilt.id
 
     def test_confirm_rejects_correction_when_deduction_consumed(
         self, client, admin_headers, test_db
@@ -424,6 +481,70 @@ class TestSellConfirmCreatesArrivalLeg:
         assert cash_leg.confirm_date == T2
         assert Decimal(str(cash_leg.amount)) == Decimal("500")
         assert conf.json()["trade"]["cash_confirm_date"] == T2.isoformat()
+
+    def test_create_rejects_cash_platform_equal_to_fund_platform(
+        self, client, admin_headers, test_db
+    ):
+        """卖出创建期传「等于基金腿平台」的 cash_platform_code 必须拒绝（#518 评审）
+
+        回归面：该值曾被「同平台等价于不传」的归一化静默折成 None，于是同一个
+        输入 REST 放行、CLI 前置拒绝，两端行为相反。判据要求按**原始入参**判定。
+        """
+        _seed_portfolio(test_db, self.CODE, cash=10000.0, fund_shares=1000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": self.CODE, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "sell", "shares": 400.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+                "cash_platform_code": PLAT,
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422, resp.json()
+        assert resp.json()["detail"]["error"] == "CASH_PLATFORM_NOT_ALLOWED"
+        test_db.expire_all()
+        assert test_db.query(Trade).filter(Trade.portfolio_code == self.CODE).count() == 0
+
+    def test_confirm_audit_payload_carries_cash_leg_trade_id(
+        self, client, admin_headers, test_db
+    ):
+        """确认新建到账腿：confirm 审计的 cash_leg.trade_id = 实际腿 id（非 null）
+
+        回归面：`attach_paired_cash_leg` 只 `db.add`，自增 `Trade.id` 在 flush 前
+        恒为 None，紧接着取审计载荷就会把 `trade_id: null` 写进审计（#518 评审）。
+        """
+        _seed_portfolio(test_db, self.CODE, cash=10000.0, fund_shares=1000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": self.CODE, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "sell", "shares": 400.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        trade_id = resp.json()["id"]
+        conf = client.post(
+            f"/api/trades/{trade_id}/confirm",
+            params={"cash_confirm_date": T2.isoformat()},
+            headers=admin_headers,
+        )
+        assert conf.status_code == 200, conf.json()
+        test_db.expire_all()
+        cash_leg = _cash_leg(test_db, _fund_leg(test_db, trade_id))
+        assert cash_leg is not None
+
+        audit = test_db.query(AuditLog).filter(
+            AuditLog.resource_type == "trade",
+            AuditLog.resource_id == str(trade_id),
+            AuditLog.action == "confirm",
+        ).order_by(AuditLog.id.desc()).first()
+        assert audit is not None and audit.new_value is not None
+        payload = json.loads(audit.new_value)
+        assert payload["cash_leg"]["action"] == "created"
+        assert payload["cash_leg"]["trade_id"] is not None
+        assert payload["cash_leg"]["trade_id"] == cash_leg.id
 
     def test_in_transit_window_between_confirm_and_arrival(self, client, admin_headers, test_db):
         """C ≤ D < A：等额 IN_TRANSIT_SELL，CASH 未增；D = A 转 CASH"""
@@ -697,6 +818,125 @@ class TestGroupLifecycle:
         test_db.expire_all()
         assert _fund_leg(test_db, trade_id).status == "pending"
 
+    def test_delete_cancelled_group_allowed_after_snapshot(
+        self, client, admin_headers, test_db
+    ):
+        """买入 → 当天取消 → 当天快照 → 整组仍可删除（cancelled 腿无会计效力）
+
+        回归面（#518 评审的功能回退）：cancelled 腿不进入任何快照聚合，删除它对
+        历史零影响；把它算作「组内任一腿」会让这条常规路径上的整组永久删不掉，
+        而拒绝文案还要求用户为清理一个无会计影响的对象销毁快照链。
+        """
+        code = "IT493_LC7"
+        _seed_portfolio(test_db, code, cash=50000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": code, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "buy", "amount": 10000.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        trade_id = resp.json()["id"]
+        group = _fund_leg(test_db, trade_id).transfer_group
+        # 取消时无快照（放行）；整组（基金腿 + 扣款腿）一并 cancelled
+        assert client.post(f"/api/trades/{trade_id}/cancel",
+                           headers=admin_headers).status_code == 200
+        test_db.expire_all()
+        assert _fund_leg(test_db, trade_id).status == "cancelled"
+        assert _cash_leg(test_db, _fund_leg(test_db, trade_id)).status == "cancelled"
+
+        # T 日快照：cancelled 腿不阻断生成，也不进现金账（基线原样）
+        assert _gen(client, admin_headers, code, T).status_code == 200
+        test_db.expire_all()
+        positions = _positions(test_db, code, T)
+        assert Decimal(str(_by_product(positions, "CASH")[0].cash_amount)) == Decimal("50000")
+        assert _by_product(positions, "IN_TRANSIT_BUY") == []
+
+        dele = client.delete(f"/api/trades/{trade_id}", headers=admin_headers)
+        assert dele.status_code == 200, dele.json()
+        test_db.expire_all()
+        assert test_db.query(Trade).filter(Trade.transfer_group == group).count() == 0
+
+    def test_delete_blocked_when_confirmed_deduction_snapshotted(
+        self, client, admin_headers, test_db
+    ):
+        """守卫强度不回退：买入扣款腿 confirmed 且已进快照 → 删除整组仍被拒
+
+        与上一条同批（#518 评审）：修功能回退不得把守卫修没了——删掉整组会让
+        快照失去对应的现金事实（pending/confirmed 腿照旧参与保护）。
+        """
+        code = "IT493_LC8"
+        _seed_portfolio(test_db, code, cash=50000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": code, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "buy", "amount": 10000.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        trade_id = resp.json()["id"]
+        fund_leg = _fund_leg(test_db, trade_id)
+        assert fund_leg.status == "pending"
+        assert _cash_leg(test_db, fund_leg).status == "confirmed"
+        assert _gen(client, admin_headers, code, T).status_code == 200
+
+        dele = client.delete(f"/api/trades/{trade_id}", headers=admin_headers)
+        assert dele.status_code == 422, dele.json()
+        assert dele.json()["detail"]["error"] == "SNAPSHOT_DEPENDENCY"
+        assert dele.json()["detail"]["details"]["from_date"] == T.isoformat()
+        test_db.expire_all()
+        assert _fund_leg(test_db, trade_id) is not None
+        assert _cash_leg(test_db, _fund_leg(test_db, trade_id)) is not None
+
+    def test_update_new_trade_date_inside_snapshot_range_blocked(
+        self, client, admin_headers, test_db, monkeypatch
+    ):
+        """改日期时**新值**一并纳入组级保护（#493 承诺 / #518 评审补实现）
+
+        `validate_trade_date` 强制新 trade_date 晚于最新快照日，使「新值落在已
+        快照区间」在 REST 上不可达；此处临时放行那道闸门，直接检验组级保护自身
+        是否真把新值算进去——去掉 `extra_dates`（或只传联动 confirm_date）本用例
+        即转绿，是「承诺 > 实现」唯一的守门（不是「函数被调用」式空壳断言）。
+        旧值（确认日 T2）远晚于唯一快照（T），故只有新值 T 能触发拒绝。
+        """
+        import app.services.trade_service as trade_service_module
+
+        code = "IT493_LC9"
+        _seed_portfolio(test_db, code, cash=10000.0, fund_shares=1000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": code, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "sell", "shares": 400.0,
+                "platform_code": PLAT, "trade_date": T1.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        trade_id = resp.json()["id"]
+        fund_leg = _fund_leg(test_db, trade_id)
+        assert fund_leg.trade_date == T1 and fund_leg.confirm_date == T2
+        # 唯一快照在 T 日：组内旧值（T1/T2）都晚于它，不构成保护
+        assert _gen(client, admin_headers, code, T).status_code == 200
+        test_db.expire_all()
+
+        monkeypatch.setattr(
+            trade_service_module, "validate_trade_date", lambda *a, **k: None
+        )
+        upd = client.put(
+            f"/api/trades/{trade_id}", json={"trade_date": T.isoformat()},
+            headers=admin_headers,
+        )
+        assert upd.status_code == 422, upd.json()
+        assert upd.json()["detail"]["error"] == "SNAPSHOT_DEPENDENCY"
+        assert upd.json()["detail"]["details"]["from_date"] == T.isoformat()
+        test_db.expire_all()
+        assert _fund_leg(test_db, trade_id).trade_date == T1  # 零写入
+
     def test_delete_removes_whole_group(self, client, admin_headers, test_db):
         """删除 pending 卖出组：组内腿全部删除"""
         _seed_portfolio(test_db, "IT493_LC4", cash=10000.0, fund_shares=1000.0)
@@ -847,6 +1087,37 @@ class TestRebalNotAutoConfirmed:
         assert test_db.query(Trade).filter(
             Trade.transfer_group == group, Trade.status == "pending"
         ).count() == 2
+
+    def test_rebal_like_prefix_not_treated_as_rebal_group(self, test_db):
+        """`rebalX…` 不是调仓组：SQL LIKE 的 `_` 是单字符通配，须转义（#518 评审）
+
+        旧写法 `like("rebal_%")` 会把 `rebalX…` 一并排除，跨天转移分支因此静默
+        漏掉一个合法组（组号非 `rebal_` 前缀时不该被调仓判据吞掉）。这里直接验证
+        该组照常被自动确认——判据精确等价于 Python 侧 `startswith("rebal_")`。
+        """
+        code = "IT493_AC4"
+        _seed_portfolio(test_db, code, cash=50000.0)
+        group = "rebalX493"
+        create_trade(
+            test_db, code, "CASH", "", trade_type="sell", amount=1000.0,
+            platform_code=PLAT, transfer_group=group,
+            trade_date=T, confirm_date=T, status="confirmed",
+        )
+        create_trade(
+            test_db, code, "CASH", "", trade_type="buy", amount=1000.0,
+            platform_code=PLAT, transfer_group=group,
+            trade_date=T, confirm_date=T, status="pending",
+        )
+        test_db.flush()
+
+        results = auto_confirm_after_snapshot(test_db, code, D0)
+        entries = [r for r in results if r.get("transfer_group") == group]
+        assert len(entries) == 1, results
+        assert entries[0]["action"] == "auto_confirmed"
+        test_db.expire_all()
+        assert test_db.query(Trade).filter(
+            Trade.transfer_group == group, Trade.status == "pending"
+        ).count() == 0
 
     def test_cancelled_arrival_leg_not_counted_as_in_transit(self, client, admin_headers, test_db):
         """跨天转移转入腿 cancelled 不计入在途（#493 收紧 buy pending）"""

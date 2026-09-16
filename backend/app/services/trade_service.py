@@ -131,10 +131,16 @@ def validate_group_snapshot_free(
     - **纯只读**：调用方在全部校验通过前不得 setattr（校验失败必须零写入）。
     - 判据取组内最早会计生效日（`confirm_date`，缺省 `trade_date`）——半确认组
       里买入扣款腿的 T 日、卖出到账腿的 A 日都在保护范围内。
+    - **cancelled 腿不参与保护**（#518 评审）：快照只累计 confirmed 交易，
+      cancelled 腿不进入任何聚合、对历史零影响。若把它算作「组内任一腿」，
+      「T 日创建买入 → 当天取消（此时无快照、放行）→ T 日快照生成（cancelled
+      不阻断 pending 校验）」这条常规路径上的整组就永久删不掉，而拒绝文案却
+      要求用户为清理一个无会计影响的对象销毁快照链。过滤后若无参与腿且
+      `extra_dates` 为空即直接放行——保护的是**会计事实**，不是组号出现过。
     - `extra_dates`：改日期场景把**新值**一并纳入保护，否则把日期后移会让
       已入快照的旧腿脱离保护。
     """
-    legs = _group_legs(db, trade)
+    legs = [leg for leg in _group_legs(db, trade) if leg.status != "cancelled"]
     candidates = [_leg_accounting_date(leg) for leg in legs] + list(extra_dates or [])
     candidates = [d for d in candidates if d is not None]
     if not candidates:
@@ -835,6 +841,11 @@ def _apply_confirm_cash_leg(db: Session, fund_trade: Trade, plan: dict) -> Optio
       `status=confirmed`、`trade_date=C`、`confirm_date=A`；不追加第二条现金腿。
     - **买入**：核验既有扣款腿的状态与金额；不一致时校正（调用方已通过
       `validate_confirm_cash_leg` 拦住「已被快照消费」的情形）。
+
+    **新建腿后必须 `flush()` 再取审计载荷**（#518 评审）：`Trade.id` 是自增整型，
+    flush 前恒为 `None`，而 `cash_leg_audit_payload` 直接读 `leg.id`——不 flush 会
+    让 confirm 审计的 `cash_leg.trade_id` 永远是 null（create_trade 早已先 flush
+    再取载荷，本路径漏了）。flush 留在同一事务内，不 commit。
     """
     if plan["cash_leg_action"] == "none":
         return None
@@ -860,6 +871,7 @@ def _apply_confirm_cash_leg(db: Session, fund_trade: Trade, plan: dict) -> Optio
             cash_platform_code=plan["cash_platform_code"],
             cash_confirm_date=plan["cash_confirm_date"],
         )
+        db.flush()  # 新腿自增 id 落定，审计载荷才能带上真实 trade_id
         return cash_leg_audit_payload(leg, "created")
 
     # 买入：核验既有扣款腿（已被快照消费的不一致情形已在前置校验拒绝）
@@ -871,6 +883,7 @@ def _apply_confirm_cash_leg(db: Session, fund_trade: Trade, plan: dict) -> Optio
             status="confirmed",
             cash_platform_code=plan["cash_platform_code"],
         )
+        db.flush()  # 同上：兜底新建的扣款腿也要先拿到自增 id
         return cash_leg_audit_payload(leg, "created")
     existing_leg.status = "confirmed"
     existing_leg.amount = amount
@@ -1098,7 +1111,9 @@ def create_trade(
     相同的 pending/confirmed 交易视为重复，抛 DUPLICATE_TRADE；
     allow_duplicate=True 强制放行，cancelled 记录不算重复。
     cash_platform_code（issue #91）：现金腿平台，买=扣款平台、卖=到账平台，
-    缺省同基金腿；买入可用现金按扣款平台校验。
+    缺省同基金腿；买入可用现金按扣款平台校验。「同平台等价于不传」的归一化只在
+    买入侧生效；**卖出侧**创建期传任何非空 `cash_platform_code`（含等于基金腿
+    平台的值）都按原始入参拒绝（#518 评审），与 CLI 前置拒绝同码同语义。
     #493 买入/卖出的创建形态分叉：
     - 买入：创建即扣款——配对 CASH sell 腿直接 **confirmed**、现金日 = 下单日 T；
       基金腿 pending，等 T+1/T+2 确认。故 D 日快照不被 pending 交易阻断，现金已
@@ -1151,17 +1166,12 @@ def create_trade(
     if not db.query(Platform).filter(Platform.code == platform_code).first():
         raise NotFoundError("PLATFORM_NOT_FOUND", f"平台 {platform_code} 不存在")
 
-    # #91：现金腿平台规范化——与基金腿同平台时等价于不传；传入时校验存在
-    if cash_platform_code == platform_code:
-        cash_platform_code = None
-    if cash_platform_code and not db.query(Platform).filter(
-        Platform.code == cash_platform_code
-    ).first():
-        raise NotFoundError(
-            "PLATFORM_NOT_FOUND", f"现金平台 {cash_platform_code} 不存在"
-        )
-
     # #493 现金腿输入的方向闸门：创建期只有买入有现金腿，卖出腿在确认时才建。
+    # **必须在下面的「同平台等价于不传」归一化之前判定原始入参**（#518 评审）：
+    # 归一化会把「卖出 + 与基金腿同平台」静默折成 None，于是 CLI 前置拒绝的同一个
+    # 输入在 REST 上被放行（两端行为相反），「卖出创建期不接受 cash_platform_code」
+    # 这条承诺在 REST 上不成立。买入侧语义不变（归一化与存在性校验照旧执行；
+    # 唯一差别是「买入同时传非法平台与非法现金日」时错误码优先级倒转，两者皆 422）。
     if trade_type == "sell":
         if cash_platform_code:
             raise BusinessError(
@@ -1181,6 +1191,16 @@ def create_trade(
                 f"买入交易的扣款日固定为下单日 {trade_date}，"
                 f"cash_confirm_date 只接受等于该日",
             )
+
+    # #91：现金腿平台规范化——与基金腿同平台时等价于不传；传入时校验存在
+    if cash_platform_code == platform_code:
+        cash_platform_code = None
+    if cash_platform_code and not db.query(Platform).filter(
+        Platform.code == cash_platform_code
+    ).first():
+        raise NotFoundError(
+            "PLATFORM_NOT_FOUND", f"现金平台 {cash_platform_code} 不存在"
+        )
 
     # 场内交易必须提供有效价格（实时撮合价，不能用收盘价替代）；
     # 任意市场显式传价均须为正数（卖出传价参与金额推导，负价会污染推导结果）
@@ -1414,6 +1434,8 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
       平台可用现金、sell 校验可用份额，均加回自身 pending 旧值
     - 自然键防重（D5）：trade_date/金额（买）/份额（卖）变动时按创建同口径
       比对，排除自身 id，无 allow_duplicate 逃生口（编辑撞车属误操作）
+    - 组级快照保护（#493 决策 4）：组内任一非 cancelled 腿会计生效日及之后已有
+      快照则拒绝；改日期时**新值**（新 trade_date 与其联动 confirm_date）一并纳入
     - trade_date 变动联动重算 confirm_date，并经 sync_transfer_group 同步
       配对 CASH 腿（日期/状态/金额镜像）
 
@@ -1505,12 +1527,27 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
     # ---- 3. 校验（全部通过前零 setattr）----
     # 改日期先走既有交易日/快照日闸门（更具体的 NON_TRADING_DAY /
     # DATE_BEFORE_SNAPSHOT 优先），再做组级保护。
+    # 新 confirm_date 在此算出并留给下方写入段复用（同一次计算，避免两处推导漂移）。
+    new_confirm_date: Optional[date] = None
     if date_changed:
         validate_trade_date(db, trade.portfolio_code, trade_date_input)
-    # 组级快照保护（#493 决策 4）：组内任一腿确认日及之后已有快照则拒绝——
-    # 半确认组里买入扣款腿的 T、卖出到账腿的 A 都在组内，故「日期后移」
-    # 逃不过旧快照（旧值即组内各腿当前日期）。
-    validate_group_snapshot_free(db, trade)
+        product = db.query(Product).filter(
+            Product.code == trade.product_code, Product.market == trade.market
+        ).first()
+        new_confirm_date = get_next_trading_day(
+            db, trade_date_input,
+            days=(product.confirm_days or 0) if product else 0,
+        )
+    # 组级快照保护（#493 决策 4）：组内任一非 cancelled 腿确认日及之后已有快照则
+    # 拒绝——半确认组里买入扣款腿的 T、卖出到账腿的 A 都在组内，故「日期后移」
+    # 逃不过旧快照（旧值即组内各腿当前日期）。**改日期时新值一并纳入保护**
+    # （`trade_date_input` 与其联动的 `confirm_date`）：当前 `validate_trade_date`
+    # 强制新日期晚于最新快照日、该分支实际打不到，但保护不得依赖「恰有另一道闸门
+    # 先拒绝」——放宽 `validate_trade_date` 时它会静默失效（#518 评审：承诺 > 实现）。
+    validate_group_snapshot_free(
+        db, trade,
+        extra_dates=[trade_date_input, new_confirm_date] if date_changed else None,
+    )
 
     if trade.trade_type == "buy" and (amount_changed or shares_changed or date_changed):
         # 待校验的含费现金支出：有输入用输入，否则沿用现有 actual_amount
@@ -1644,16 +1681,11 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
             trade.actual_amount = x
             trade.amount = x - new_fee
 
-    # trade_date 变动：联动重算 confirm_date（输入必为交易日，不再吞非交易日）
+    # trade_date 变动：联动重算 confirm_date（输入必为交易日，不再吞非交易日）。
+    # 新值在步骤 3 已算好（同一份结果也进了组级保护的新值集合），此处只回写。
     if date_changed:
         trade.trade_date = trade_date_input
-        product = db.query(Product).filter(
-            Product.code == trade.product_code, Product.market == trade.market
-        ).first()
-        trade.confirm_date = get_next_trading_day(
-            db, trade.trade_date,
-            days=(product.confirm_days or 0) if product else 0,
-        )
+        trade.confirm_date = new_confirm_date
 
     # trade_date 变动 -> 同步配对 CASH 腿（#493 矩阵：买入扣款腿跟随 T；
     # 卖出 pending 组没有 CASH 腿，不制造 pending 调仓现金腿）
@@ -1804,7 +1836,9 @@ def delete_trade(db: Session, trade: Trade) -> None:
     """删除交易（confirmed 不可直接删除），整组级联删除配对 CASH 腿。不 commit。
 
     #493：组级快照保护——半确认组的买入扣款腿可能已进快照，删除会让快照失去
-    对应事实，故任一腿确认日及之后有快照即拒绝（须先删快照）。调仓 CASH 腿
+    对应事实，故任一**非 cancelled** 腿确认日及之后有快照即拒绝（须先删快照）；
+    cancelled 腿（整组取消后）无会计效力，删除它们对历史零影响，不纳入保护
+    （#518 评审：否则「当天取消 → 当天快照」后整组永久删不掉）。调仓 CASH 腿
     不可直接删除（只能由基金腿驱动）。
     """
     if _is_rebal_group_cash_leg(trade):

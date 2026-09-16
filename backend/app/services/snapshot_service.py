@@ -1832,8 +1832,11 @@ def auto_confirm_after_snapshot(
         Trade.transfer_group.isnot(None),
         Trade.confirm_date == next_confirm_date,
         # #471 方案 A：排除调仓组（rebal_）——调仓 CASH 腿不再有 pending 态，
-        # 但显式排除可防历史遗留的半确认组被该分支空确认（净值/份额双绕过）
-        ~Trade.transfer_group.like("rebal_%"),
+        # 但显式排除可防历史遗留的半确认组被该分支空确认（净值/份额双绕过）。
+        # `_` 在 SQL LIKE 里是单字符通配（`rebalX…` 会被误排除），故显式转义、
+        # 让判据精确等于 Python 侧的 `startswith("rebal_")`（SQLite/MySQL 同构，
+        # escape 字符走绑定参数，不经方言字符串字面量解释）。
+        ~Trade.transfer_group.like("rebal\\_%", escape="\\"),
     ).all()
     processed_groups = set()
     for trade in cross_day_pending:
