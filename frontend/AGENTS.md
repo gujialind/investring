@@ -32,7 +32,7 @@
 ## 2. 质量门禁
 
 ```bash
-../scripts/verify-frontend.sh        # 推送前本地门禁（与 CI frontend-check 同口径）
+../scripts/verify-frontend.sh        # 推送前本地门禁（与 CI frontend-check 的本地四步同口径）
 ../scripts/verify-frontend.sh --quick  # 跳过 build
 ```
 
