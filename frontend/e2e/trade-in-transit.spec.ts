@@ -305,11 +305,28 @@ async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Pro
   await expect(trigger).toHaveText(targetISO);
 }
 
+/**
+ * 取认证头前**必须先落到应用同源页面**。
+ *
+ * `authHeaders` 经 `page.evaluate` 读 `window.localStorage`，而 Playwright 新开的
+ * page 停在 `about:blank`（不透明源），直接读会抛
+ * `SecurityError: Failed to read the 'localStorage' property from 'Window':
+ * Access is denied for this document`。本 spec 的三个用例都要先经 REST 造隔离组合、
+ * 建好之前没有组合页可导航，故统一先 `goto('/')`（mobile 端由 `src/proxy.ts` 按 UA
+ * 重定向到 `/m/dashboard`，两端同为应用源）。仓库其余 spec 同样遵循
+ * 「先导航 → 取头」的顺序（如 `gotoPortfolioDetail` + 可见性等待之后再 `authHeaders`）。
+ */
+async function openAppAndAuth(page: Page): Promise<{ Authorization: string }> {
+  await page.goto('/');
+  await expect(page.locator('body')).toBeVisible();
+  return authHeaders(page);
+}
+
 test.describe('调仓在途资金生命周期（#493）', () => {
   // 两条链路分别自建隔离组合（workerIndex 区分），故两条可并行、也可单独重跑
   test('买入：创建即扣款 → T 快照在途 → 确认后份额入账', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
-    const headers = await authHeaders(page);
+    const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1] = await nextTradingDays(page, headers, d, 1);
     const code = isolatedPortfolioCode(testInfo) + 'B';
@@ -387,7 +404,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
 
   test('卖出：创建无现金腿 → 确认录入到账日 → C..A 在途 → 到账', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
-    const headers = await authHeaders(page);
+    const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1, d2] = await nextTradingDays(page, headers, d, 2);
     const code = isolatedPortfolioCode(testInfo) + 'S';
@@ -527,7 +544,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
   // CASH_TRADE_FORBIDDEN，按钮存在即诱导用户点出错误
   test('调仓 CASH 腿行不露出生命周期操作按钮', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
-    const headers = await authHeaders(page);
+    const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1] = await nextTradingDays(page, headers, d, 1);
     const code = isolatedPortfolioCode(testInfo) + 'C';
