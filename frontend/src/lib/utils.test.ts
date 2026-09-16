@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  cn,
   formatNumber,
   formatCurrency,
   formatShares,
+  formatSharesUnit,
   formatNav,
   formatAmount4,
   formatCompactCurrency,
@@ -13,6 +15,7 @@ import {
   getReturnBgClass,
   getStatusBadgeVariant,
   getSignedReturn,
+  getNumberCellClass,
   toDateOnly,
   parseDateOnly,
   formatDate,
@@ -67,6 +70,22 @@ describe("formatCurrency / formatShares / formatNav / formatAmount4", () => {
   });
 });
 
+describe("formatSharesUnit", () => {
+  it("符号在数字内、单位在外（visual-spec §12）", () => {
+    expect(formatSharesUnit(8933.891)).toBe("8,933.89 份");
+    expect(formatSharesUnit(-1000)).toBe("-1,000.00 份");
+    expect(formatSharesUnit(0)).toBe("0.00 份");
+  });
+
+  it("无效值走 fallback，不受单位影响", () => {
+    expect(formatSharesUnit(undefined)).toBe("--");
+    expect(formatSharesUnit(null)).toBe("--");
+    expect(formatSharesUnit("")).toBe("--");
+    expect(formatSharesUnit(NaN)).toBe("--");
+    expect(formatSharesUnit(null, "N/A")).toBe("N/A");
+  });
+});
+
 describe("formatCompactCurrency", () => {
   it("万/亿分档", () => {
     expect(formatCompactCurrency(9999)).toBe("¥9,999.00");
@@ -92,6 +111,8 @@ describe("formatPercent / formatReturnRate", () => {
   it("百分比数值直传", () => {
     expect(formatReturnRate(5.23)).toBe("+5.23%");
     expect(formatReturnRate(-1.23)).toBe("-1.23%");
+    expect(formatReturnRate(null)).toBe("--");
+    expect(formatReturnRate("abc")).toBe("--");
   });
 });
 
@@ -152,6 +173,8 @@ describe("涨跌色与状态徽标", () => {
     expect(getReturnBgClass(1)).toBe("bg-gain-soft");
     expect(getReturnBgClass(-1)).toBe("bg-loss-soft");
     expect(getReturnBgClass(0)).toBe("bg-muted");
+    expect(getReturnBgClass(null)).toBe("bg-muted");
+    expect(getReturnBgClass("abc")).toBe("bg-muted");
   });
 
   it("状态到 variant 的映射，未知状态回落 neutral", () => {
@@ -186,5 +209,18 @@ describe("其他工具", () => {
     expect(truncateText("短文本", 10)).toBe("短文本");
     expect(truncateText("一二三四五六", 3)).toBe("一二三...");
     expect(truncateText("", 3)).toBe("");
+  });
+
+  it("cn 过滤 falsy 参数，冲突类由 twMerge 取后者", () => {
+    expect(cn("text-sm", undefined, null, "", false, "font-bold")).toBe("text-sm font-bold");
+    expect(cn("p-2", "p-4")).toBe("p-4");
+    // 组件里的真实组合（getNumberCellClass 与颜色类不冲突，须全部保留）
+    expect(cn("text-muted-foreground", getNumberCellClass())).toBe(
+      "text-muted-foreground text-right font-mono tabular-nums"
+    );
+  });
+
+  it("getNumberCellClass 固定类串", () => {
+    expect(getNumberCellClass()).toBe("text-right font-mono tabular-nums");
   });
 });
