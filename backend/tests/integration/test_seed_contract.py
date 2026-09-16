@@ -77,8 +77,8 @@ class TestE2EActiveContract:
             Trade.status == "confirmed",
         ).all()
         assert len(confirmed) == 1
-        # 配对 CASH 腿必须同为 confirmed（验证 sync_transfer_group 生效，即
-        # create_trade 后 db.flush() 的修复：id=None 时 CASH 腿会滞留 pending）
+        # 配对 CASH 腿必须同为 confirmed（#493：买入创建即扣款，扣款腿创建期
+        # 就落 confirmed，不再由 confirm 的配对腿同步补状态）
         cash_confirmed = seeded_active_db.query(Trade).filter(
             Trade.portfolio_code == "E2E_ACTIVE",
             Trade.product_code == "CASH",

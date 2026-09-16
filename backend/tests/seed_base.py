@@ -269,9 +269,8 @@ def seed_e2e_active(db: Session) -> None:
         price=Decimal("4.0000"), amount=Decimal("60000"), fee=Decimal("0"),
         platform_code="HBZQ", notes="E2E 种子场内买入（已确认）",
     )
-    # 必须先 flush 让基金腿拿到 id：confirm 内 sync_transfer_group 以
-    # (transfer_group, id != 自身) 在库中定位配对 CASH 腿，id=None 时查不到，
-    # CASH 腿滞留 pending → 快照预校验 _check_pending_transactions 阻断
+    # flush 让创建期的配对 CASH 扣款腿（#493：买入创建即 confirmed）在同事务内
+    # 落库可见，confirm 的可用现金核验与后续快照预校验读到一致状态
     db.flush()
     confirm_single_trade(db, trade_confirmed, product_510300)
     db.flush()

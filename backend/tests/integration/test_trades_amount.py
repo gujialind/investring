@@ -247,18 +247,28 @@ class TestExchangeSellAmountDerivation:
         ).first()
 
     def test_create_derives_amount_and_cash_leg(self, client, admin_headers, test_db):
-        """不传 actual_amount：amount/actual_amount 由 shares×price 推导，CASH 腿镜像净额"""
+        """不传 actual_amount：amount/actual_amount 由 shares×price 推导
+
+        #493：卖出创建期**不建** CASH 腿（到账日/平台在确认时录入），故此处断言
+        组内只有基金腿、派生现金字段为 null；到账腿的镜像由确认路径落定
+        （见 test_confirm_keeps_derived_amount_and_cash_leg）。
+        """
         self._setup(client, test_db)
         resp = client.post("/api/trades", json=self._sell_payload(), headers=admin_headers)
         assert resp.status_code in (200, 201), resp.json()
         data = resp.json()
         assert data["amount"] == 6255.60
         assert data["actual_amount"] == 6254.97
+        # 无配对现金腿 → 只读派生字段为 null
+        assert data["cash_platform_code"] is None
+        assert data["cash_confirm_date"] is None
 
-        cash_leg = self._cash_leg(test_db)
-        assert cash_leg is not None
-        assert float(cash_leg.amount) == 6254.97
-        assert cash_leg.status == "pending"
+        assert self._cash_leg(test_db) is None
+        fund_leg = test_db.query(Trade).get(data["id"])
+        assert fund_leg.transfer_group.startswith("rebal_")
+        assert test_db.query(Trade).filter(
+            Trade.transfer_group == fund_leg.transfer_group
+        ).count() == 1
 
     def test_confirm_keeps_derived_amount_and_cash_leg(self, client, admin_headers, test_db):
         """确认（不传价）：金额保持推导值，CASH 腿 confirmed 且 = 净额"""
@@ -348,7 +358,7 @@ class TestExchangeSellAmountDerivation:
         assert buy.json()["detail"]["error"] == "MISSING_OR_INVALID_PRICE"
 
     def test_put_shares_rederives_amount_and_cash_leg(self, client, admin_headers, test_db):
-        """PUT 改份额：amount/actual_amount 随动重推导，CASH 腿镜像新净额"""
+        """PUT 改份额：amount/actual_amount 随动重推导，确认后 CASH 腿镜像新净额"""
         self._setup(client, test_db)
         resp = client.post("/api/trades", json=self._sell_payload(), headers=admin_headers)
         trade_id = resp.json()["id"]
@@ -360,9 +370,14 @@ class TestExchangeSellAmountDerivation:
         assert upd.json()["amount"] == 4812.00
         assert upd.json()["actual_amount"] == 4811.37
 
+        # #493：pending 卖出无 CASH 腿，确认时按本次净额建腿并镜像
+        conf = client.post(f"/api/trades/{trade_id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
         test_db.expire_all()
         cash_leg = self._cash_leg(test_db)
         assert float(cash_leg.amount) == 4811.37
+        assert float(cash_leg.actual_amount) == 4811.37
+        assert cash_leg.status == "confirmed"
 
     def test_put_explicit_amount_reconciliation(self, client, admin_headers, test_db):
         """PUT 显式金额：一致通过且落库保持推导值；超差 -> AMOUNT_MISMATCH"""
@@ -384,7 +399,7 @@ class TestExchangeSellAmountDerivation:
         assert bad.json()["detail"]["error"] == "AMOUNT_MISMATCH"
 
     def test_put_fee_rederives_net_amount(self, client, admin_headers, test_db):
-        """PUT 改 fee：毛额不变、净额 = 毛额 − 新 fee，CASH 腿镜像"""
+        """PUT 改 fee：毛额不变、净额 = 毛额 − 新 fee，确认后 CASH 腿镜像"""
         self._setup(client, test_db)
         resp = client.post("/api/trades", json=self._sell_payload(), headers=admin_headers)
         trade_id = resp.json()["id"]
@@ -396,9 +411,13 @@ class TestExchangeSellAmountDerivation:
         assert upd.json()["amount"] == 6255.60
         assert upd.json()["actual_amount"] == 6245.60
 
+        # #493：pending 卖出无 CASH 腿，确认时按本次净额建腿并镜像
+        conf = client.post(f"/api/trades/{trade_id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
         test_db.expire_all()
         cash_leg = self._cash_leg(test_db)
         assert float(cash_leg.amount) == 6245.60
+        assert float(cash_leg.actual_amount) == 6245.60
 
 
 class TestOtcSellAmountDerivation:

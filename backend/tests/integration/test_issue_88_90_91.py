@@ -354,7 +354,7 @@ class TestCrossPlatformCashLeg:
         assert cash_leg.confirm_date == T  # #93: 买入扣款 T 日即扣，不与基金确认日一致
 
     def test_sell_cash_leg_on_destination_platform(self, test_db):
-        """卖出：CASH buy 腿落在到账平台"""
+        """卖出：#493 到账平台在确认时录入，CASH buy 腿落在到账平台"""
         create_portfolio(test_db, code="XP_P4", status="active")
         create_platform(test_db, code="XP_TT4")
         create_platform(test_db, code="XP_ZG4")
@@ -364,13 +364,36 @@ class TestCrossPlatformCashLeg:
             test_db, "XP_P4", "000300.OF", "CN_OTC", SNAP,
             shares=1000, platform_code="XP_TT4",
         )
+        create_price_record(test_db, "000300.OF", "CN_OTC", T, unit_price=1.0)
+
+        # #493：创建期不接受到账平台（到账信息在确认时录入）
+        with pytest.raises(BusinessError) as exc:
+            create_trade_service(
+                test_db,
+                portfolio_code="XP_P4", product_code="000300.OF", market="CN_OTC",
+                trade_type="sell", trade_date=T,
+                shares=Decimal("500"), actual_amount=Decimal("500"),
+                platform_code="XP_TT4", cash_platform_code="XP_ZG4",
+            )
+        assert exc.value.code == "CASH_PLATFORM_NOT_ALLOWED"
 
         fund = create_trade_service(
             test_db,
             portfolio_code="XP_P4", product_code="000300.OF", market="CN_OTC",
             trade_type="sell", trade_date=T,
             shares=Decimal("500"), actual_amount=Decimal("500"),
-            platform_code="XP_TT4", cash_platform_code="XP_ZG4",
+            platform_code="XP_TT4",
+        )
+        test_db.flush()
+        # 创建期无 CASH 腿（半成品组，只有基金腿）
+        assert test_db.query(Trade).filter(
+            Trade.transfer_group == fund.transfer_group,
+            Trade.product_code == "CASH",
+        ).first() is None
+
+        confirm_single_trade(
+            test_db, fund, _get_product(test_db, "000300.OF", "CN_OTC"),
+            cash_platform_code="XP_ZG4",
         )
         test_db.flush()
 
@@ -380,6 +403,7 @@ class TestCrossPlatformCashLeg:
         ).first()
         assert cash_leg.trade_type == "buy"
         assert cash_leg.platform_code == "XP_ZG4"
+        assert cash_leg.status == "confirmed"
 
     def test_cancel_syncs_cross_platform_leg(self, test_db):
         """取消基金腿时跨平台 CASH 腿同步 cancelled"""
