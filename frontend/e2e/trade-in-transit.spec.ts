@@ -291,6 +291,29 @@ function fundRow(page: Page, tradeType: '买入' | '卖出'): Locator {
     .first();
 }
 
+/**
+ * 在「提交交易」弹窗内**显式**选择交易日期。
+ *
+ * 必须显式选：表单的日期默认值是 `toDateOnly(new Date())`（今天，见
+ * `TradesContent.tsx` 的 `tradeDate` 初值），非交易日提交会 422 `NON_TRADING_DAY`、
+ * 弹窗不关，`toBeHidden` 只能等到超时。`trade-buy-amount-linkage.spec.ts` 的
+ * `selectTradeDate` 早就是同一写法（其注释即「表单默认 today，非交易日须改选」），
+ * 本 spec 原先漏了这一步。目标日与 today 最多相差 4 个交易日，日历默认展示当前月，
+ * 故 `data-day` 不在当前月时按月翻一次（与 `generateSnapshot` / `pickArrivalDate` 同口径）。
+ */
+async function selectTradeDate(page: Page, dlg: Locator, targetISO: string): Promise<void> {
+  const trigger = dlg.locator('button#trade_date');
+  await trigger.click();
+  await page.locator('button.rdp-day_button').first().waitFor();
+  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
+  if ((await day.count()) === 0) {
+    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
+    await page.locator(`button.rdp-button_${dir}`).click();
+  }
+  await day.click();
+  await expect(trigger).toHaveText(targetISO);
+}
+
 /** 确认弹窗内改选到账日期（DatePicker id=cash_confirm_date，与后端 query 同名） */
 async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Promise<void> {
   const trigger = dlg.locator('button#cash_confirm_date');
@@ -339,6 +362,8 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await expect(dlg.locator('button#cash_platform_code')).toBeVisible();
     await pickProduct(page, dlg);
     await pickFundPlatform(page, dlg);
+    // 显式选交易日：表单默认「今天」，非交易日提交会 NON_TRADING_DAY（见 selectTradeDate）
+    await selectTradeDate(page, dlg, d);
     await dlg.getByLabel('实际支付金额（含费，元）').fill(String(BUY_AMOUNT));
     await dlg.getByRole('button', { name: '提交交易' }).click();
     await expect(dlg).toBeHidden({ timeout: 15_000 });
@@ -406,7 +431,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
-    const [d1, d2] = await nextTradingDays(page, headers, d, 2);
+    const [d1, d2, d3, d4] = await nextTradingDays(page, headers, d, 4);
     const code = isolatedPortfolioCode(testInfo) + 'S';
     await setupIsolatedPortfolio(page, headers, code, [d, d1, d2]);
 
@@ -414,6 +439,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const buyForm = await openSubmitTradeDialog(page, code as PortfolioCode);
     await pickProduct(page, buyForm.dlg);
     await pickFundPlatform(page, buyForm.dlg);
+    await selectTradeDate(page, buyForm.dlg, d);
     await buyForm.dlg.getByLabel('实际支付金额（含费，元）').fill(String(BUY_AMOUNT));
     await buyForm.dlg.getByRole('button', { name: '提交交易' }).click();
     await expect(buyForm.dlg).toBeHidden({ timeout: 15_000 });
@@ -439,9 +465,8 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await pickProduct(page, sellForm);
     await pickFundPlatform(page, sellForm);
     await sellForm.getByLabel('份额').fill(String(SELL_SHARES));
-    await sellForm.getByLabel('交易日期').click();
-    await page.locator('button.rdp-day_button').first().waitFor();
-    await page.locator(`button.rdp-day_button[data-day="${d2}"]`).click();
+    // 交易日 = D+2 ⇒ 该产品 confirm_days=1 ⇒ 基金确认日 C = D+3（见下方 C 断言）
+    await selectTradeDate(page, sellForm, d2);
     await sellForm.getByRole('button', { name: '提交交易' }).click();
     await expect(sellForm).toBeHidden({ timeout: 15_000 });
 
@@ -468,12 +493,13 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await sellConfirm.waitFor();
     const arrivalTrigger = sellConfirm.locator('button#cash_confirm_date');
     await expect(arrivalTrigger).toBeVisible({ timeout: 15_000 });
-    await expect(arrivalTrigger).toHaveText(d2); // 缺省 A = C = D+2
+    await expect(arrivalTrigger).toHaveText(d3); // 缺省 A = C = D+3（trade_date=D+2 + confirm_days=1）
     await expect(
       sellConfirm.getByTestId('platform-trigger').filter({ hasText: '华宝证券' }),
     ).toBeVisible();
-    // 改选到账日 → 换 query key 重新预览（预览值即确认值），期间确认按钮禁用
-    const arrival = await nextTradingDays(page, headers, d2, 1);
+    // 改选到账日 A = D+4（> C = D+3，形成 C..A 在途窗口）→ 换 query key 重新预览
+    // （预览值即确认值），期间确认按钮禁用
+    const arrival = [d4];
     await pickArrivalDate(page, sellConfirm, arrival[0]);
     await expect(sellConfirm.getByRole('button', { name: '确认' })).toBeEnabled({
       timeout: 15_000,
@@ -485,7 +511,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const afterSellConfirm = await listTrades(page, headers, code);
     const confirmedFund = afterSellConfirm.find((t) => t.id === sellFund!.id)!;
     expect(confirmedFund.status).toBe('confirmed');
-    expect(confirmedFund.confirm_date).toBe(d2);
+    expect(confirmedFund.confirm_date).toBe(d3);
     expect(confirmedFund.cash_platform_code).toBe(ARRIVAL_PLATFORM);
     expect(confirmedFund.cash_confirm_date).toBe(arrival[0]);
     expect(confirmedFund.actual_amount).toBe(SELL_SHARES * Number(NAV.D2));
@@ -495,7 +521,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     expect(arrivalLeg, '卖出确认应新建 CASH 到账腿').toBeTruthy();
     expect(arrivalLeg!.status).toBe('confirmed');
     expect(arrivalLeg!.trade_type).toBe('buy');
-    expect(arrivalLeg!.trade_date).toBe(d2);
+    expect(arrivalLeg!.trade_date).toBe(d3);
     expect(arrivalLeg!.confirm_date).toBe(arrival[0]);
 
     // 列表：主行已确认、现金子行标注「现金待到账」（未来到账不得标成已到账）
@@ -515,19 +541,30 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await arrivalDlg.getByRole('button', { name: '保存修改' }).click();
     await expect(arrivalDlg).toBeHidden({ timeout: 15_000 });
 
-    // ---- 7. C..A 之间快照记等额卖出在途、现金未增；到账日快照转 CASH ----
+    // ---- 7. C 之前无在途；C..A 之间记等额卖出在途、现金未增；A 日起转 CASH ----
+    // 卖出 trade_date = D+2、该产品 confirm_days=1 ⇒ C = D+3、A = D+4。
+    // D+2 快照是连续性必需的一格（快照必须逐交易日连续）：此时基金腿已 confirmed
+    // 但 C = D+3 > D+2，卖出尚未生效 ⇒ **无在途**、份额与现金都不动。
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'snapshots');
     await generateSnapshot(page, d2);
     const snaps = await listSnapshots(page, headers, code);
     const snapD2 = snaps.find((s) => s.snapshot_date === d2);
     expect(snapD2, `D+2 日快照缺失（${d2}）`).toBeTruthy();
-    expect(snapD2!.in_transit_total, 'C..A 之间应记等额卖出在途').toBe(
+    expect(snapD2!.in_transit_total, 'C=D+3 之前卖出尚未生效，不得记在途').toBe(0);
+
+    // D+3 = C ≤ D < A：等额卖出在途、现金未增
+    await generateSnapshot(page, d3);
+    const snapsD3 = await listSnapshots(page, headers, code);
+    const snapD3 = snapsD3.find((s) => s.snapshot_date === d3);
+    expect(snapD3, `D+3 日快照缺失（${d3}）`).toBeTruthy();
+    expect(snapD3!.in_transit_total, 'C..A 之间应记等额卖出在途').toBe(
       SELL_SHARES * Number(NAV.D2),
     );
     const cashBeforeArrival = await availableCash(page, headers, code);
     expect(cashBeforeArrival, '到账日之前现金不增加').toBe(CASH_INJECT - BUY_AMOUNT);
     await expect(page.getByText(`¥${(SELL_SHARES * Number(NAV.D2)).toLocaleString('en-US')}.00`).first()).toBeVisible();
 
+    // D+4 = A：在途归零、现金增加
     await generateSnapshot(page, arrival[0]);
     const snapsAfterArrival = await listSnapshots(page, headers, code);
     const snapArrival = snapsAfterArrival.find((s) => s.snapshot_date === arrival[0]);
