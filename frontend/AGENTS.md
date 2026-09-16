@@ -48,7 +48,7 @@ npm run test:watch   # watch 模式（不收集覆盖率）
 - 范围：**lib 层纯逻辑**（utils format 系 / tradePairs 结对 / allocation 聚合 / dimensions 维度 / validation 表单校验），node 环境，不引 jsdom/RTL——组件交互与运行时行为归 Playwright E2E（职责不重叠）。
 - 约定：测试与源码 colocated（`src/lib/*.test.ts`），显式 `import { describe, it, expect } from "vitest"`（未开 globals）；alias `@` 在 `vitest.config.ts` 手动维护。
 - 注意：`src/lib/api/` 是纯类型化 axios 薄封装（无数据转换逻辑），不在单测范围；新增 lib 纯函数应同步补测试。
-- **覆盖率阈值（#464）**：分母圈定 `src/lib/**`（排除 `src/lib/api/**` 与测试自身），全局阈值（非 perFile）受 `vitest.config.ts` 的 `thresholds` 约束（口径与来源写在该文件注释，此处不复述数值），**只升不降**：全量实测超阈值 ≥1pp 时在当次 PR 顺手上调，**上调目标也按「实测取低 1pp」下取整**（后端 `fail_under` 是「上调到实测下取整」，前端分母小、刻意多留 1pp）；阈值按该口径定，留出的余量由补测逐步收回（缺口清单见 #484）。CI 另产 `frontend/junit.xml`（PR 注解）与 `coverage/`（artifact + Step Summary 摘要）。
+- **覆盖率阈值（#464）**：分母圈定 `src/lib/**`（排除 `src/lib/api/**` 与测试自身），全局阈值（非 perFile）受 `vitest.config.ts` 的 `thresholds` 约束（口径与来源写在该文件注释，此处不复述数值），**只升不降**：全量实测超阈值 ≥1pp 时在当次 PR 顺手上调，**上调目标也按「实测取低 1pp」下取整**（后端 `fail_under` 是「上调到实测下取整」，前端分母小、刻意多留 1pp）；阈值按该口径定，留出的余量由补测逐步收回（#484 已收一轮；剩余函数级缺口是 `utils.ts` 的全仓零调用函数，清理评估见 #501；其余零散分支缺口见 #503）。CI 另产 `frontend/junit.xml`（PR 注解）与 `coverage/`（artifact + Step Summary 摘要）。
 
 ## 4. E2E（Playwright）
 
