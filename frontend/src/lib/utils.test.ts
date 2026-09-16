@@ -21,7 +21,6 @@ import {
   formatDate,
   formatMarketName,
   formatProductName,
-  truncateText,
 } from "@/lib/utils";
 
 describe("formatNumber", () => {
@@ -97,6 +96,10 @@ describe("formatCompactCurrency", () => {
   it("无效值走 fallback", () => {
     expect(formatCompactCurrency(undefined)).toBe("--");
   });
+
+  it("字符串输入走 parseFloat", () => {
+    expect(formatCompactCurrency("120000000")).toBe("¥1.20 亿");
+  });
 });
 
 describe("formatPercent / formatReturnRate", () => {
@@ -113,6 +116,11 @@ describe("formatPercent / formatReturnRate", () => {
     expect(formatReturnRate(-1.23)).toBe("-1.23%");
     expect(formatReturnRate(null)).toBe("--");
     expect(formatReturnRate("abc")).toBe("--");
+  });
+
+  it("字符串输入走 parseFloat（接口原样透传的字符串数值）", () => {
+    expect(formatPercent("0.0523")).toBe("+5.23%");
+    expect(formatReturnRate("-1.23")).toBe("-1.23%");
   });
 });
 
@@ -177,6 +185,11 @@ describe("涨跌色与状态徽标", () => {
     expect(getReturnBgClass("abc")).toBe("bg-muted");
   });
 
+  it("字符串输入走 parseFloat", () => {
+    expect(getReturnColorClass("1")).toBe("text-gain");
+    expect(getReturnBgClass("-1")).toBe("bg-loss-soft");
+  });
+
   it("状态到 variant 的映射，未知状态回落 neutral", () => {
     expect(getStatusBadgeVariant("confirmed")).toBe("success");
     expect(getStatusBadgeVariant("pending")).toBe("warning");
@@ -188,6 +201,9 @@ describe("涨跌色与状态徽标", () => {
   it("getSignedReturn 文本与颜色自洽", () => {
     expect(getSignedReturn(5.2)).toEqual({ text: "+5.20%", colorClass: "text-gain" });
     expect(getSignedReturn(undefined)).toEqual({ text: "--", colorClass: "text-muted-foreground" });
+    // 字符串输入走 parseFloat；非正值不带 + 号
+    expect(getSignedReturn("-1.5")).toEqual({ text: "-1.50%", colorClass: "text-loss" });
+    expect(getSignedReturn(0)).toEqual({ text: "0.00%", colorClass: "text-muted-foreground" });
   });
 });
 
@@ -203,12 +219,6 @@ describe("其他工具", () => {
     expect(formatProductName(null, "000001")).toBe("000001");
     expect(formatProductName("某基金", "")).toBe("--");
     expect(formatProductName(null, null)).toBe("--");
-  });
-
-  it("truncateText", () => {
-    expect(truncateText("短文本", 10)).toBe("短文本");
-    expect(truncateText("一二三四五六", 3)).toBe("一二三...");
-    expect(truncateText("", 3)).toBe("");
   });
 
   it("cn 过滤 falsy 参数，冲突类由 twMerge 取后者", () => {

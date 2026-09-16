@@ -51,38 +51,6 @@ export function formatDate(date: string | Date | number): string {
   return `${year}-${month}-${day}`;
 }
 
-/**
- * 格式化日期为 YYYY-MM-DD HH:mm:ss
- */
-export function formatDateTime(date: string | Date | number): string {
-  const d = new Date(date);
-  if (isNaN(d.getTime())) return "--";
-  const dateStr = formatDate(d);
-  const hours = String(d.getHours()).padStart(2, "0");
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-  const seconds = String(d.getSeconds()).padStart(2, "0");
-  return `${dateStr} ${hours}:${minutes}:${seconds}`;
-}
-
-/**
- * 格式化日期为相对时间（今天、昨天、N天前）
- */
-export function formatRelativeDate(date: string | Date | number): string {
-  const d = new Date(date);
-  if (isNaN(d.getTime())) return "--";
-
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return "今天";
-  if (diffDays === 1) return "昨天";
-  if (diffDays < 7) return `${diffDays} 天前`;
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)} 周前`;
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)} 个月前`;
-  return `${Math.floor(diffDays / 365)} 年前`;
-}
-
 // ==================== 金额格式化 ====================
 
 /**
@@ -343,47 +311,6 @@ export function getSignedReturn(
     text: `${sign}${n.toFixed(decimals)}%`,
     colorClass: getReturnColorClass(n),
   };
-}
-
-// ==================== 其他工具函数 ====================
-
-/**
- * 延迟函数
- */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * 生成唯一 ID
- */
-export function generateId(prefix?: string): string {
-  const id = Math.random().toString(36).substring(2, 9);
-  return prefix ? `${prefix}-${id}` : id;
-}
-
-/**
- * 截断文本
- */
-export function truncateText(text: string, maxLength: number): string {
-  if (!text || text.length <= maxLength) return text;
-  return `${text.substring(0, maxLength)}...`;
-}
-
-/**
- * 深拷贝（structuredClone 保留 Date/Map/Set 等，JSON 往返会丢失）
- */
-export function deepClone<T>(obj: T): T {
-  return structuredClone(obj);
-}
-
-/**
- * 判断是否为交易日（简单判断，非节假日）
- * 实际应调用后端 API 查询 trading_calendar
- */
-export function isWeekend(date: Date = new Date()): boolean {
-  const day = date.getDay();
-  return day === 0 || day === 6;
 }
 
 // ==================== 市场/产品类型映射 ====================

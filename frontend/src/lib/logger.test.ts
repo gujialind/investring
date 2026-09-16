@@ -165,6 +165,14 @@ describe("logger meta 透传", () => {
     expect(line).toContain("Error: boom");
   });
 
+  it("Error 的 stack 被剥离时不追加 stack 段", () => {
+    const err = new Error("no-stack");
+    err.stack = "";
+    logger.error("无栈异常", err);
+
+    expect(console.error).toHaveBeenCalledWith("[InvestRing][app][ERROR] 无栈异常 no-stack");
+  });
+
   it("循环引用不抛错，退化为 String()", () => {
     const circular: Record<string, unknown> = { name: "loop" };
     circular.self = circular;

@@ -45,6 +45,11 @@ describe("formatAmount2", () => {
     expect(formatAmount2(1000)).toBe("1000.00");
     expect(formatAmount2(0)).toBe("0.00");
   });
+
+  it("非有限数字回填空串（不把 NaN 送上屏）", () => {
+    expect(formatAmount2(NaN)).toBe("");
+    expect(formatAmount2(Infinity)).toBe("");
+  });
 });
 
 describe("netFromActual / actualFromNet（买入双字段联动公式）", () => {
@@ -102,6 +107,13 @@ describe("sellDerivedAmounts（镜像后端 _derive_sell_amounts 有价分支）
     expect(sellDerivedAmounts("100", "", "5")).toBeNull();
     expect(sellDerivedAmounts("100", "abc", "5")).toBeNull();
     expect(sellDerivedAmounts("abc", "10", "5")).toBeNull();
+  });
+
+  it("极端数值下中间结果非有限时返回 null（不回传 NaN/Infinity）", () => {
+    // 份额×价格溢出为 Infinity → 毛额量化拿到非有限输入（L64 防御分支）
+    expect(sellDerivedAmounts(1e18, 1e300, 0)).toBeNull();
+    // 手续费大到 quantizeAmount2 产出 NaN（1e19 级指数记法边界，见 #504）→ 到手无法量化（L66）
+    expect(sellDerivedAmounts(1, 1, 1e19)).toBeNull();
   });
 });
 

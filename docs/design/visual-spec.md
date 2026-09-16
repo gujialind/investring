@@ -230,7 +230,7 @@
 
 ## 12. 文案格式惯例
 
-- **日期**：统一 `YYYY-MM-DD`（`formatDate`）；带时分秒用 `formatDateTime`；相对时间（今天/N 天前）仅限通知等弱精确场景（`formatRelativeDate`）。
+- **日期**：统一 `YYYY-MM-DD`（`formatDate`）。带时分秒/相对时间（今天、N 天前）当前无消费方，对应 helper 已随死代码清理删除（#501）——需要时按本节惯例补回并在此登记。
 - **百分比**：自带 `+/-` 符号（`formatPercent`/`formatReturnRate` 默认 showSign），禁止手工拼 `+`；负号由数值自带。
 - **金额**：带 `¥`、千分位、2 位小数；概览大字可用 `formatCompactCurrency` 的万/亿紧凑格式（`¥X.XX 万` / `¥X.XX 亿`），表格内不用紧凑格式。
 - **空值占位**：统一 `--`（各 format 函数 fallback），禁止 `N/A`、`null`、空字符串上屏；JSX 内禁止手写 `-`/`"--"` 字面量当占位——空值判断交回 format 函数（`null`/`undefined`/空串/`NaN` → fallback `--`），不要用 truthy 三元短路（真 0 会被误判为缺失，如 `fee=0` 应显示 `¥0.00`；#249 起 ESLint 拦截 JSX 内 `-`）。
