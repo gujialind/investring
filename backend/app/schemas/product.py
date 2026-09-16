@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 
@@ -74,3 +74,14 @@ class ProductResponse(ProductBase):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedProductResponse(BaseModel):
+    """产品列表分页响应（issue #487 同因排查）：此前列表端点未声明响应模型，
+    直吐 ORM 整行多带 fallback_source / sync_error；items 元素复用 ProductResponse 口径。
+    sync_result / market_change_hint 为创建/更新路径专属字段，列表恒为 null。"""
+
+    items: List[ProductResponse]
+    total: int
+    page: int
+    page_size: int

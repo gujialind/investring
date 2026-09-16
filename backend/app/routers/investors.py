@@ -3,14 +3,19 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import get_db
 from app.models.investor import Investor
-from app.schemas.investor import InvestorCreate, InvestorUpdate, InvestorResponse
+from app.schemas.investor import (
+    InvestorCreate,
+    InvestorUpdate,
+    InvestorResponse,
+    PaginatedInvestorResponse,
+)
 from app.dependencies import get_current_admin
 from app.services import investor_service
 
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedInvestorResponse)
 def get_investors(
     page: Optional[int] = 1,
     page_size: Optional[int] = 20,
@@ -20,12 +25,13 @@ def get_investors(
     query = db.query(Investor)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    # issue #487：必须经响应模型收窄——此前直接 return ORM 行，全列序列化泄漏 password_hash
+    return PaginatedInvestorResponse(
+        items=[InvestorResponse.model_validate(i) for i in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=InvestorResponse)

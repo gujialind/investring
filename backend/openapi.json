@@ -170,7 +170,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedInvestorResponse"
+                }
               }
             }
           },
@@ -1292,7 +1294,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedProductResponse"
+                }
               }
             }
           },
@@ -7866,6 +7870,38 @@
         ],
         "title": "NavHistoryRecord"
       },
+      "PaginatedInvestorResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InvestorResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "PaginatedInvestorResponse",
+        "description": "投资人列表分页响应（issue #487）：此前列表端点未声明响应模型，\n直吐 ORM 整行导致 password_hash 外泄；items 元素复用 InvestorResponse 收窄口径。"
+      },
       "PaginatedPortfolioResponse": {
         "properties": {
           "items": {
@@ -7896,6 +7932,38 @@
           "page_size"
         ],
         "title": "PaginatedPortfolioResponse"
+      },
+      "PaginatedProductResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProductResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "PaginatedProductResponse",
+        "description": "产品列表分页响应（issue #487 同因排查）：此前列表端点未声明响应模型，\n直吐 ORM 整行多带 fallback_source / sync_error；items 元素复用 ProductResponse 口径。\nsync_result / market_change_hint 为创建/更新路径专属字段，列表恒为 null。"
       },
       "PaginatedShareEventResponse": {
         "properties": {
