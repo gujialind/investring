@@ -57,14 +57,24 @@ WORKFLOWS = {
         ],
         "notes": "赎回输入份额（金额=份额×申请日净值）；投资人可用份额由服务端实时校验，超额报 INSUFFICIENT_SHARES",
     },
-    "调仓买入/卖出": {
+    "调仓买入": {
         "steps": [
-            "ir position available-cash --portfolio-code X（买入前）/ ir position available-shares --portfolio-code X --product-code F（卖出前）",
-            "ir trade create --portfolio-code X --product-code F --type buy|sell --trade-date D --actual-amount N [--price P 场内必填]",
+            "ir position available-cash --portfolio-code X（按扣款平台）",
+            "ir trade create --portfolio-code X --product-code F --type buy --trade-date D --actual-amount N [--cash-platform-code P 扣款平台] [--price P 场内必填]",
             "ir trade confirm <id>（到 confirm_date 当日执行，场外需 T 日净值已同步）",
             "ir snapshot generate --portfolio-code X --target-date <confirm_date>",
         ],
-        "notes": "创建时自动生成配对 CASH 腿；pending 卖出不增加可用现金，先卖后买须两步；场内 confirm_days=0、场外非 QDII T+1、QDII T+2",
+        "notes": "创建即扣款：配对 CASH sell 腿直接 confirmed、现金日 = 下单日 T，基金腿 pending 待确认；D 日快照不被 pending 阻断，扣款等额记 IN_TRANSIT_BUY，直到基金腿确认；confirmed ≠ 现金当天可用",
+    },
+    "调仓卖出": {
+        "steps": [
+            "ir position available-shares --portfolio-code X --product-code F（卖出前）",
+            "ir trade create --portfolio-code X --product-code F --type sell --trade-date D --shares N [--price P 场内必填]（创建期不接受到账信息）",
+            "ir trade preview <id> --cash-platform-code P --cash-confirm-date A（可选，核对到账平台/到账日）",
+            "ir trade confirm <id> --cash-platform-code P --cash-confirm-date A（到账日缺省 = 基金确认日 C，到账平台缺省同基金腿）",
+            "ir snapshot generate --portfolio-code X --target-date <confirm_date>",
+        ],
+        "notes": "创建只建基金腿；到账平台/到账日在 confirm 录入（create 传入报 CASH_PLATFORM_NOT_ALLOWED / CASH_CONFIRM_DATE_NOT_ALLOWED）；确认时新建 CASH buy 到账腿 confirmed、trade_date = C、confirm_date = A，A > C 时 C 起到账日前的快照记 IN_TRANSIT_SELL；到账日修正走 ir trade update <id> --cash-confirm-date A（仅已确认卖出，可配合 --notes，组内任一腿确认日已有快照先删快照）",
     },
     "补录历史交易": {
         "steps": [

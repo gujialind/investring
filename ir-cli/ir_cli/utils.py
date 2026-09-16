@@ -32,7 +32,7 @@ DATE_FIELDS = ("_date",)
 
 # 列表默认输出的摘要字段集（对照后端 schemas）；--full 输出全字段，--fields 显式指定优先级最高
 SUMMARY_FIELDS = {
-    "trade": "id,portfolio_code,product_code,market,platform_code,trade_type,trade_date,confirm_date,status,amount,shares,price",
+    "trade": "id,portfolio_code,product_code,market,platform_code,trade_type,trade_date,confirm_date,status,amount,shares,price,cash_platform_code,cash_confirm_date",
     "subscription": "id,portfolio_code,investor_code,platform_code,sub_type,apply_date,confirm_date,status,amount,shares,unit_price",
     "position": "id,portfolio_code,product_code,market,platform_code,shares,cash_amount,market_value,unit_price,snapshot_date",
     "log_login": "id,investor_code,action,status,ip_address,failure_reason,created_at",
