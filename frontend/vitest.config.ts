@@ -17,9 +17,9 @@ import { defineConfig } from "vitest/config";
 // 分母小、刻意多留 1pp）。三轮收口：#484 首轮补测把基线从 80.64/85.11/66.33/81.35
 // 抬到 90.02/88.02/93.06/91.86；#501（删 utils.ts 的 7 个全仓零调用死代码）+ #503
 // （补齐 tradePairs/tradeAmounts/colors/logger 及 utils.ts 的零散分支）后到
-// 100/99.65/100/100；#507 把 tradePairs 的两类异常 2 腿组（均非 CASH、双 CASH 缺 sell
-// 或 buy）显式回落 single（规则注释的边界即契约），分支补齐后到全 100、阈值随棘轮
-// 98→99。
+// 100/99.65/100/100；#507 收紧 tradePairs 的异常 2 腿组规则——均非 CASH、双 CASH 均 sell
+// 由 pair 改为回落 single（与既有的均 buy 兜底对齐，规则注释的边界即契约），分支补齐
+// 后到全 100、阈值随棘轮 98→99。
 // 残余：无。⚠️ #504 落地后 tradeAmounts 的「到手无法量化」守卫将失去触发路径、产生
 // 新残余，届时同步复核本段与 frontend/AGENTS.md §3。
 // 全局阈值（非 perFile）：新文件 0% 会让总量下滑，正是要拦的「靠既有高覆盖掩护新
