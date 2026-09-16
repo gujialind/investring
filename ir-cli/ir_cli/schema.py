@@ -60,7 +60,7 @@ WORKFLOWS = {
     "调仓买入": {
         "steps": [
             "ir position available-cash --portfolio-code X（按扣款平台）",
-            "ir trade create --portfolio-code X --product-code F --type buy --trade-date D --actual-amount N [--cash-platform-code P 扣款平台] [--price P 场内必填]",
+            "ir trade create --portfolio-code X --platform-code P --product-code F --type buy --trade-date D --actual-amount N [--cash-platform-code P 扣款平台] [--price P 场内必填]",
             "ir trade confirm <id>（到 confirm_date 当日执行，场外需 T 日净值已同步）",
             "ir snapshot generate --portfolio-code X --target-date <confirm_date>",
         ],
@@ -69,7 +69,7 @@ WORKFLOWS = {
     "调仓卖出": {
         "steps": [
             "ir position available-shares --portfolio-code X --product-code F（卖出前）",
-            "ir trade create --portfolio-code X --product-code F --type sell --trade-date D --shares N [--price P 场内必填]（创建期不接受到账信息）",
+            "ir trade create --portfolio-code X --platform-code P --product-code F --type sell --trade-date D --shares N [--price P 场内必填]（创建期不接受到账信息）",
             "ir trade preview <id> --cash-platform-code P --cash-confirm-date A（可选，核对到账平台/到账日）",
             "ir trade confirm <id> --cash-platform-code P --cash-confirm-date A（到账日缺省 = 基金确认日 C，到账平台缺省同基金腿）",
             "ir snapshot generate --portfolio-code X --target-date <confirm_date>",

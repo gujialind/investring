@@ -643,7 +643,7 @@ ir trade create --portfolio-code <组合> --product-code <产品> [--market <市
 > **业务规则**（#493 单腿确认）：
 > - **买入创建即扣款**：配对 CASH sell 腿直接 `confirmed`、现金日 = 下单日 T；基金腿仍 `pending` 等 T+1/T+2 确认。创建当日的快照不再被 pending 交易阻断——现金已实扣，等额记在途（`IN_TRANSIT_BUY`），基金份额未入账。
 > - **卖出创建只建基金腿**：到账平台与到账日在 `confirm` 录入，创建期不保存「未来到账意图」。传入 `--cash-platform-code` / `cash_confirm_date` 分别返回 `CASH_PLATFORM_NOT_ALLOWED` / `CASH_CONFIRM_DATE_NOT_ALLOWED`。
-> - **`--confirm` 快捷链**：创建成功后立即确认。卖出不需要「C = T」，缺省 **A = C、到账平台同基金腿平台**；要自定义到账信息时走「先 `create` 再 `confirm`」两步。确认失败时错误 JSON 携带 `error.details.created_trade_id`——买入创建即扣款，**切勿因为确认失败而重建**，用该 id 修复问题后重新 `confirm`。
+> - **`--confirm` 快捷链**：创建成功后立即确认。卖出不需要「C = T」，缺省 **A = C、到账平台同基金腿平台**；要自定义到账信息时走「先 `create` 再 `confirm`」两步。确认**返回业务错误**（exit 1）时，错误 JSON 携带 `error.details.created_trade_id`——买入创建即扣款，**切勿因为确认失败而重建**，用该 id 修复问题后重新 `confirm`。**该逃生口只覆盖「创建成功 + 确认被后端拒绝」**：若确认在网络上超时/断连（exit 3），CLI 拿不到任何响应、自然也没有 `created_trade_id`，此时**先 `ir trade list --portfolio-code X` 查明这笔是否已创建**再决定动作，不要直接重跑 `create`。
 > - 买入的 `cash_confirm_date` 固定为下单日 T，创建期显式传其他值返回 `CASH_CONFIRM_DATE_NOT_ALLOWED`。
 
 #### `ir trade get`
