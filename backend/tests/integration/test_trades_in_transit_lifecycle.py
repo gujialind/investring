@@ -1155,3 +1155,69 @@ class TestArrivalCashNotUsableBeforeArrival:
             amount=Decimal("10500"), transfer_date=T2,
         )
         assert result["amount"] == 10500.0
+
+
+# ============================================================================
+# 记账守恒（计划 §4.1.9）
+# ============================================================================
+
+class TestConservationWithFee:
+    """有费用时断言**预期**变化，不误要求 `total_value` 恒定。
+
+    买入含费：费用是组合的对外支出，确认后不再有等额资产接住它，故总资产
+    恰降一个手续费；此前 T 日只是「现金 → 等额在途」，总资产不动。
+    """
+
+    def test_buy_fee_reduces_total_value_by_exactly_fee(
+        self, client, admin_headers, test_db
+    ):
+        code = "IT493_FEE1"
+        _seed_portfolio(test_db, code, cash=50000.0)
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": code, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "buy",
+                "actual_amount": 10000.0, "fee": 5.0, "price": NAV,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        trade_id = resp.json()["id"]
+        # 含费现金支出 10000、净额 9995（费用不买份额）
+        assert Decimal(str(resp.json()["amount"])) == Decimal("9995")
+        assert Decimal(str(resp.json()["actual_amount"])) == Decimal("10000")
+
+        # T 日：现金 -10000、等额买入在途 +10000 → 总资产不变（费用尚未落地）
+        assert _gen(client, admin_headers, code, T).status_code == 200
+        test_db.expire_all()
+        snap_t = test_db.query(PortfolioValueSnapshot).filter(
+            PortfolioValueSnapshot.portfolio_code == code,
+            PortfolioValueSnapshot.snapshot_date == T,
+        ).first()
+        assert Decimal(str(snap_t.total_value)) == Decimal("50000")
+        assert Decimal(str(snap_t.in_transit_total)) == Decimal("10000")
+
+        # T1 确认：基金按净额 9995 入账（7996 份 × 1.25）→ 总资产恰降 5
+        create_price_record(test_db, FUND, FUND_MARKET, T1, NAV)
+        conf = client.post(f"/api/trades/{trade_id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
+        assert _gen(client, admin_headers, code, T1).status_code == 200
+        test_db.expire_all()
+
+        positions = _positions(test_db, code, T1)
+        cash = _by_product(positions, "CASH")
+        fund = _by_product(positions, FUND)
+        assert _by_product(positions, "IN_TRANSIT_BUY") == []
+        assert Decimal(str(cash[0].cash_amount)) == Decimal("40000")
+        assert Decimal(str(fund[0].shares)) == Decimal("7996")
+
+        snap_t1 = test_db.query(PortfolioValueSnapshot).filter(
+            PortfolioValueSnapshot.portfolio_code == code,
+            PortfolioValueSnapshot.snapshot_date == T1,
+        ).first()
+        assert Decimal(str(snap_t1.total_value)) == Decimal("49995")
+        assert Decimal(str(snap_t1.in_transit_total)) == Decimal("0")
+        # 差额恰为手续费，不把「无常量」错当成「必须与 T 日相等」
+        assert Decimal(str(snap_t.total_value)) - Decimal(str(snap_t1.total_value)) == Decimal("5")
