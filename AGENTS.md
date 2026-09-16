@@ -111,7 +111,7 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 | 基金卖出 | 基金 sell + CASH buy（同状态/日期） | `rebal_{uuid}` |
 | 跨平台转移 | CASH sell + CASH buy | `{uuid}` |
 
-* **可用现金必须实时计算**（快照基线 + 增量；无快照时降级为全量历史口径。函数级表达式见 `backend/AGENTS.md` §1.3）。**时点口径**（#70/#78）：流出（sell）的资金承诺锚定**下单日 `trade_date`**，不论 pending/confirmed；流入（buy）须 confirmed 且 `confirm_date <= T` 才计入。故 **pending 卖出不增加可用现金**，买入只能用已有可用现金，不足时须先卖后买两步操作。
+* **可用现金必须实时计算**（快照基线 + 增量；无快照时基线为 0、退化为全量流水口径且每笔只计一次，#515。函数级表达式见 `backend/AGENTS.md` §1.3）。**时点口径**（#70/#78）：流出（sell）的资金承诺锚定**下单日 `trade_date`**，不论 pending/confirmed；流入（buy）须 confirmed 且 `confirm_date <= T` 才计入。故 **pending 卖出不增加可用现金**，买入只能用已有可用现金，不足时须先卖后买两步操作。
 * **CASH 腿来源受限**：仅由申赎、基金调仓配对、跨平台转移三条路径生成（均预置 `transfer_group`）；`trade.transfer_group` 为 NOT NULL，REST 禁止直接创建 CASH 交易。
 * **在途资金**（#93）：`IN_TRANSIT_BUY` = 已扣款但基金份额未确认；`IN_TRANSIT_SELL` = 已卖出但到账未确认。两者每日独立计算、不继承前日，`cash_amount` 恒正，计入市值但不计入可用现金。
 * **现金行判定一律用 `cash_amount IS NOT NULL`**（CHECK 约束保证与 `shares` 恰有其一），不看产品类型字符串；CASH 与在途行由此自然落入现金口径。

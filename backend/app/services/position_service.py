@@ -43,11 +43,13 @@ def compute_cash_balance(
     源1：trade 表 confirmed CASH trades（confirm_date <= as_of_date）
     源2：event 表 confirmed events（ex_date <= as_of_date, cash_change != 0）
 
-    不含 manual_market_value 覆盖。用于：
-    - 无快照时 calculate_available_cash 的降级基线
-    - cash-position 端点审计字段（computed_value）
+    不含 manual_market_value 覆盖。生产调用点只有手动重估的审计字段
+    （update_cash_position 的 computed_value）；get_cash_value 仅测试与文档引用、
+    当前无生产调用方。
     快照生成走 _generate_portfolio_position 增量累加路径，不调用此函数。
-    有快照时 calculate_available_cash 直接读 portfolio_position 快照表，亦不调用此函数。
+    calculate_available_cash 无论有无快照都不调用此函数——有快照时直接读
+    portfolio_position 快照表，无快照时基线为 0、统一走增量段（#515：此前的
+    「全量基线 + 1970 哨兵增量」会让同一批已确认流水与事件现金流重复累计）。
     """
     if as_of_date is None:
         as_of_date = date.today()
@@ -473,11 +475,21 @@ def calculate_available_cash(
 
     基线 = 最新快照日 portfolio_position 快照表中 CASH 行的 cash_amount
     （与 _generate_portfolio_position 增量范式口径一致，manual_market_value
-    覆盖已 baked in 快照，自然继承；无快照时降级为 compute_cash_balance 全量流水）
+    覆盖已 baked in 快照，自然继承；无快照时基线为 0，全部由下列增量项计算，
+    与 calculate_available_shares 的无快照形态一致——#515：此前先用
+    compute_cash_balance 取全量、再把 1970 哨兵交给同一增量段，同一批
+    confirmed 流水与事件现金流被累计两次）
     + 快照后 confirmed CASH buys（流入）
     − 快照后 confirmed CASH sells（流出）
     − pending CASH sells（已承诺未执行）
     + 快照后 confirmed event cash_change
+
+    ⚠️ 无快照时「只计一次」不等于「旧值去重」，两者有一处刻意差异：被删掉的
+    旧基线对 confirmed sells 按 confirm_date 收口，增量段按 trade_date 收口，
+    仅在恒有 trade_date <= confirm_date 时取行相同。排序反转的 confirmed CASH
+    sell（cash_confirm_date 缺顺序校验时可构造）在 as_of=T 落在两者之间时，
+    由旧行为的「已扣一次」变为新行为的「到 trade_date 才扣」——与下面 §时点口径
+    的 trade_date 锚定一致，是有意行为，见 test_confirmed_sell_trade_date_after_as_of_excluded。
 
     时点口径（#70/#78）：CASH 流出（sell）的资金承诺锚定**下单日 trade_date**，
     不论 pending/confirmed——confirmed sell 的 as_of 上限按 trade_date（而非
@@ -511,10 +523,13 @@ def calculate_available_cash(
             Decimal(str(p.cash_amount or 0)) for p in cash_query.all()
         )
     else:
-        cash = compute_cash_balance(db, portfolio_code, platform_code, as_of_date)
+        # #515：无快照时基数为 0，统一交给下方增量段；不得退回
+        # compute_cash_balance 全量口径——那会与同一批增量重复累计
+        cash = Decimal("0")
 
     if latest_date is None:
-        latest_date = date(1970, 1, 1)  # 确保 > 条件对所有 trade 生效
+        # #515：哨兵只表示「不设下界」（无快照日可比），不再兼任增量窗口下界
+        latest_date = date(1970, 1, 1)  # 确保 > 条件对所有 trade/event 生效
 
     # 快照后 confirmed CASH buys（流入：confirm_date <= as_of_date 才计入）
     after_buys = db.query(Trade).filter(

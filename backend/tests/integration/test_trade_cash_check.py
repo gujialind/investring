@@ -3,6 +3,7 @@
 # ============================================================================
 # 覆盖 issue #70/#78/#82/#182：
 # - 可用现金时点口径（流出锚定 trade_date）下的创建拦截（事故复刻）
+# - 无快照组合的超额买入拦截（#515：可用现金重复计账的危害面）
 # - confirm_single_trade 买入现金/卖出份额可用量校验（含 skip_available_check 与自身加回）
 # - create_trade 自然键防重（DUPLICATE_TRADE / allow_duplicate）
 # ============================================================================
@@ -96,6 +97,43 @@ class TestIncidentReplay:
         with pytest.raises(BusinessError) as exc:
             _create_otc_buy(test_db, "IC_P2", "IC_PL2", 3000)
         assert exc.value.code == "INSUFFICIENT_CASH"
+
+
+class TestNoSnapshotOverBuyBlocked:
+    """无快照组合的创建拦截（#515）：危害面而非仅函数返回值
+
+    无快照时可用现金曾被「compute_cash_balance 全量基线 + 1970 哨兵增量」重复
+    累计，约为真实到账额的 2 倍，于是**钱不够也能下单**，直到快照生成才以
+    NEGATIVE_CASH 暴露。本类走真实 service 路径（create_trade →
+    validate_buy_cash_with_addback），锁住「超出真实余额必拒、恰好够用放行」。
+    """
+
+    def _seed_confirmed_arrival(self, db, pc, plat, amount):
+        """无任何快照；仅一笔已确认到账（真实可用现金 = amount）"""
+        create_portfolio(db, code=pc, status="active")
+        create_platform(db, code=plat)
+        create_trade(
+            db, pc, "CASH", "",
+            trade_type="buy", amount=amount, status="confirmed",
+            trade_date=SNAP, confirm_date=SNAP, platform_code=plat,
+        )
+
+    def test_over_buy_rejected(self, test_db):
+        """真实可用 100，创建 150 的买入 → INSUFFICIENT_CASH（旧实现在此放行）"""
+        self._seed_confirmed_arrival(test_db, "NSB_P1", "NSB_PL1", 100)
+        with pytest.raises(BusinessError) as exc:
+            _create_otc_buy(test_db, "NSB_P1", "NSB_PL1", 150)
+        assert exc.value.code == "INSUFFICIENT_CASH"
+        assert Decimal(exc.value.details["available"]) == Decimal("100")
+        assert Decimal(exc.value.details["deficit"]) == Decimal("50")
+
+    def test_exact_balance_buy_allowed(self, test_db):
+        """恰好够用（100）应放行——修复不得收紧合法操作"""
+        self._seed_confirmed_arrival(test_db, "NSB_P2", "NSB_PL2", 100)
+        t = _create_otc_buy(test_db, "NSB_P2", "NSB_PL2", 100)
+        test_db.flush()
+        assert t.status == "pending"
+        assert Decimal(t.actual_amount) == Decimal("100")
 
 
 class TestConfirmCashCheck:
