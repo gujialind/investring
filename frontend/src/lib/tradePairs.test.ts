@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { groupTradeRows, cashSubMeta, cashOrphanLabel } from "@/lib/tradePairs";
+import { groupTradeRows, cashSubMeta, cashLegArrived, cashOrphanLabel } from "@/lib/tradePairs";
+import { toDateOnly } from "@/lib/utils";
 import type { Trade } from "@/types/trade";
 
 let nextId = 1;
@@ -119,6 +120,55 @@ describe("cashSubMeta", () => {
       label: "现金扣款",
       sign: "-",
     });
+  });
+});
+
+describe("cashLegArrived（#493 评审加固：口径 = confirmed 且日期不在未来）", () => {
+  const TODAY = "2026-09-18";
+
+  it("confirmed 且生效日已到（含当天）→ 已到账", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2026-09-17" }), TODAY),
+    ).toBe(true);
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: TODAY }), TODAY),
+    ).toBe(true);
+  });
+
+  it("confirmed 但生效日在未来 → 未到账（卖出到账腿 A > C，快照记 IN_TRANSIT_SELL）", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2026-09-21" }), TODAY),
+    ).toBe(false);
+  });
+
+  // 只看日期的旧口径会把这一档错标成「现金到账」，而 pending 腿不计入可用现金（根 AGENTS.md §2.5）
+  it("pending 腿即便生效日已到（跨天现金转移的转入腿到期未确认）→ 未到账", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "pending", confirm_date: "2026-09-17" }), TODAY),
+    ).toBe(false);
+    expect(cashLegArrived(makeTrade({ status: "pending", confirm_date: TODAY }), TODAY)).toBe(
+      false,
+    );
+  });
+
+  it("cancelled 腿 → 未到账（整组回退后不得再显示现金到账）", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "cancelled", confirm_date: "2026-09-17" }), TODAY),
+    ).toBe(false);
+  });
+
+  it("无生效日（尚未生效的 pending 腿）→ 未到账", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: undefined }), TODAY),
+    ).toBe(false);
+  });
+
+  // 缺省 today = 今天：买入扣款腿创建即 confirmed、现金日 = 下单日 T ⇒ 行为不变
+  it("缺省基准为当天（不传 today 时按系统日期判断）", () => {
+    expect(cashLegArrived(makeTrade({ status: "confirmed", confirm_date: toDateOnly(new Date()) }))).toBe(
+      true,
+    );
+    expect(cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2999-01-01" }))).toBe(false);
   });
 });
 

@@ -31,6 +31,13 @@ interface ConfirmInfoDialogProps {
   /** 确认请求进行中 */
   isConfirming?: boolean;
   confirmLabel?: string;
+  /**
+   * 不受 `isLoading` / `error` 门影响的**输入槽位**（#493 评审加固）：
+   * 加载或预览失败时仍渲染在提示下方，用户可**就地改正**导致 422 的业务输入
+   * （改了即换 query key 重新预览），而不是关窗重开这条死路。
+   * 只承载「用户输入 + 记录自身字段」，不得渲染预览计算值（那会重蹈 #424 覆辙）。
+   */
+  errorSlot?: ReactNode;
   children: ReactNode;
 }
 
@@ -44,6 +51,7 @@ export function ConfirmInfoDialog({
   onConfirm,
   isConfirming = false,
   confirmLabel = "确认",
+  errorSlot,
   children,
 }: ConfirmInfoDialogProps) {
   const blocked = isLoading || !!error || isConfirming;
@@ -62,14 +70,19 @@ export function ConfirmInfoDialog({
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
 
-        {isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            正在计算预览…
-          </div>
-        ) : error ? (
-          <div className="rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive-foreground">
-            预览失败：{error}
+        {isLoading || error ? (
+          <div className="space-y-3">
+            {isLoading ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                正在计算预览…
+              </div>
+            ) : (
+              <div className="rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive-foreground">
+                预览失败：{error}
+              </div>
+            )}
+            {errorSlot ? <div className="divide-y divide-border">{errorSlot}</div> : null}
           </div>
         ) : (
           <div className="divide-y divide-border">{children}</div>

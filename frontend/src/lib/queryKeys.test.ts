@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { queryKeys } from "@/lib/queryKeys";
+import { queryKeys, normalizePreviewOption } from "@/lib/queryKeys";
 
 // #344 防回归：mutation 失效键必须是列表键的真前缀，否则
 // invalidateQueries 逐元素匹配失配、列表不刷新
@@ -171,5 +171,36 @@ describe("queryKeys.trades.previewWith（#493 有效选项分键）", () => {
 
   it("previewWith 键前缀覆盖 preview(id) 家族（无选项时前 3 段一致）", () => {
     expect(queryKeys.trades.previewWith(7).slice(0, 3)).toEqual(queryKeys.trades.preview(7));
+  });
+});
+
+// #493 评审加固：归一化的判据是「与**后端本次会用的缺省**同值」——弹窗只对 pending 卖出
+// 开放、该状态恒无配对现金腿，故基准不能取 trade.cash_* 派生值（恒 undefined、归一永不
+// 触发）。此处锁定归一函数的边界，并把它与「同一有效选项 → 唯一缓存键」绑死。
+describe("normalizePreviewOption（#493 有效选项归一）", () => {
+  it("与后端缺省同值 → 归一为「不传」（undefined）", () => {
+    expect(normalizePreviewOption("2026-09-18", "2026-09-18")).toBeUndefined();
+    expect(normalizePreviewOption("HBZQ", "HBZQ")).toBeUndefined();
+  });
+
+  it("与缺省不同 → 原样传参；用户没选恒为不传", () => {
+    expect(normalizePreviewOption("2026-09-21", "2026-09-18")).toBe("2026-09-21");
+    expect(normalizePreviewOption("TTJJ", "HBZQ")).toBe("TTJJ");
+    // 「同交易平台」特殊项回传 undefined = 用户没选，与缺省无关
+    expect(normalizePreviewOption(undefined, "HBZQ")).toBeUndefined();
+  });
+
+  it("缺省未知（preview 尚未回来）→ 不归一，用户的选择原样保留", () => {
+    expect(normalizePreviewOption("2026-09-21", undefined)).toBe("2026-09-21");
+  });
+
+  it("归一后的选择与「不传」落同一个 previewWith 键（同一有效选项只有一个缓存键）", () => {
+    const defaultDate = "2026-09-18";
+    expect(
+      queryKeys.trades.previewWith(7, {
+        cash_confirm_date: normalizePreviewOption(defaultDate, defaultDate),
+        cash_platform_code: normalizePreviewOption("HBZQ", "HBZQ"),
+      }),
+    ).toEqual(queryKeys.trades.previewWith(7));
   });
 });

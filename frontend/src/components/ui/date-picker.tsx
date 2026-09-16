@@ -24,6 +24,13 @@ interface DatePickerProps {
   disabled?: boolean
   /** 标注交易日（绿色圆点），数据来自后端 trading-calendar，未加载时不标注 */
   showTradingDays?: boolean
+  /**
+   * 逐日不可选谓词（#493 加固）：**一旦提供**日历进入硬禁用模式——谓词命中的日期与
+   * 已加载年份内的非交易日都不可点选（不只是置灰），从而把未来的后端 422 提前到选择时。
+   * 不提供时保持原行为（非交易日仅置灰、可点选）。
+   * 与 `disabled` 的区别：`disabled` 禁用整个控件，本谓词只禁用部分日期。
+   */
+  dayDisabled?: (day: Date) => boolean
 }
 
 export function DatePicker({
@@ -34,6 +41,7 @@ export function DatePicker({
   className,
   disabled = false,
   showTradingDays = false,
+  dayDisabled,
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false)
   // 跟踪日历当前展示的月份，切换年份时按年拉取交易日历
@@ -75,6 +83,15 @@ export function DatePicker({
         nonTradingDay: "text-muted-foreground/60",
       }
     : undefined
+
+  // 硬禁用（#493 加固）：仅在调用方给了 dayDisabled 时启用，故既有调用点行为不变。
+  // 非交易日判据与上方置灰**逐字一致**（同样只判已加载年份，避免切年时误禁新年日期）。
+  const disabledDays = React.useMemo(() => {
+    if (!dayDisabled) return undefined
+    return (day: Date) =>
+      (loadedYears.has(day.getFullYear()) && !tradingDaySet.has(toDateOnly(day))) ||
+      dayDisabled(day)
+  }, [dayDisabled, loadedYears, tradingDaySet])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -119,6 +136,7 @@ export function DatePicker({
           selected={date}
           month={month}
           onMonthChange={setMonth}
+          disabled={disabledDays}
           modifiers={modifiers}
           modifiersClassNames={modifiersClassNames}
           onSelect={(newDate) => {

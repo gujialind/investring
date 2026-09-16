@@ -53,7 +53,7 @@ import { isSameDay, subYears } from "date-fns";
 import { ApiException } from "@/lib/api";
 import type { TradeListParams } from "@/lib/api";
 import type { Trade, TradeCreate, TradeUpdate } from "@/types/trade";
-import { cashOrphanLabel, cashSubMeta, groupTradeRows } from "@/lib/tradePairs";
+import { cashLegArrived, cashOrphanLabel, cashSubMeta, groupTradeRows } from "@/lib/tradePairs";
 import { applyBuyAmountLinkage, netFromActual, sellDerivedAmounts } from "@/lib/tradeAmounts";
 import {
   useTradeList,
@@ -103,16 +103,6 @@ function isRebalCashLeg(trade: Trade): boolean {
   if (trade.product_code !== "CASH") return false;
   if (g.startsWith("sub_") || /^[0-9a-f]{12}$/.test(g)) return false;
   return true;
-}
-
-/**
- * 现金腿生效日尚未到（#493）：卖出到账腿可携带未来 `confirm_date`，而快照在
- * 到账日之前记的是 `IN_TRANSIT_SELL`——列表不能把它呈现成「已到账」。
- * 无日期（未生效的 pending 腿）按未到账处理。
- */
-function isFutureDate(dateStr?: string | null): boolean {
-  if (!dateStr) return true;
-  return dateStr > toDateOnly(new Date());
 }
 
 const CONFIRM_TEXT: Record<ConfirmState extends infer S ? S extends { action: string } ? S["action"] : never : never, { title: string; desc: string }> = {
@@ -673,9 +663,10 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
   // 现金子行（规范 §8）：首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
   // （资金流向非涨跌语义，禁用 gain/loss token）；操作列空、不单独响应 hover
   const renderCashSubRow = (main: Trade, sub: Trade) => {
-    // #493：现金腿生效日未到时标注「现金待到账」——状态列显示的是主行（基金腿）的已确认，
-    // 故须在子行显式区分，避免把未来到账的 confirmed 现金标成已经到账
-    const meta = cashSubMeta(main, { arrived: !isFutureDate(sub.confirm_date) });
+    // #493 + 评审加固：现金腿生效日未到、或生效日已到但**仍未 confirmed**（跨天转移的
+    // 转入腿到期未确认时是 pending、不计入可用现金）→ 标注「现金待到账」——状态列显示的是
+    // 主行（基金腿）的已确认，故须在子行显式区分，避免把尚未到账的现金标成已经到账
+    const meta = cashSubMeta(main, { arrived: cashLegArrived(sub) });
     const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
     return (
       <TableRow key={`cash-${sub.id}`} className="bg-muted/50 hover:bg-muted/50">

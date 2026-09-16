@@ -33,6 +33,17 @@ export interface TradeListParams {
   confirm_date_end?: string;
 }
 
+/**
+ * cancel / unconfirm / delete 三个写端点的**真实**响应形状（#493 评审加固）：
+ * 后端只回 `{message}`，不含交易的任何字段（见 `backend/app/routers/trades.py` 三个
+ * 端点均 `return {"message": ...}`）。历史上这里声明为 `Trade`/`void`，修掉读取点后
+ * 类型仍在骗人——下一个调用方写 `data.portfolio_code` 依旧 tsc 全绿、运行时 undefined。
+ * 组合 code 一律由调用方经 mutation 变量传入。
+ */
+export interface TradeMessageResponse {
+  message: string;
+}
+
 export const tradeApi = {
   list: (params?: TradeListParams) =>
     request<PaginatedResponse<Trade>>({ method: "GET", url: "/trades", params }),
@@ -47,7 +58,7 @@ export const tradeApi = {
     request<Trade>({ method: "PUT", url: `/trades/${id}`, data }),
 
   delete: (id: number) =>
-    request<void>({ method: "DELETE", url: `/trades/${id}` }),
+    request<TradeMessageResponse>({ method: "DELETE", url: `/trades/${id}` }),
 
   /**
    * 确认预览（#493）：业务输入一律走 **query 参数**（`confirm_date` / `price` /
@@ -67,10 +78,10 @@ export const tradeApi = {
     request<TradeConfirmResponse>({ method: "POST", url: `/trades/${id}/confirm`, params }),
 
   cancel: (id: number) =>
-    request<Trade>({ method: "POST", url: `/trades/${id}/cancel` }),
+    request<TradeMessageResponse>({ method: "POST", url: `/trades/${id}/cancel` }),
 
   unconfirm: (id: number) =>
-    request<void>({ method: "POST", url: `/trades/${id}/unconfirm` }),
+    request<TradeMessageResponse>({ method: "POST", url: `/trades/${id}/unconfirm` }),
 
   batchRebalance: (portfolioCode: string, trades: TradeCreate[], idempotencyKey?: string) =>
     request<{ created_trades: Trade[] }>({

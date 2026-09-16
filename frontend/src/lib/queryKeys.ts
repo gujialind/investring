@@ -20,6 +20,22 @@ export interface TradePreviewOptions {
   cash_platform_code?: string;
 }
 
+/**
+ * 把「用户显式选择」归一为「是否要真的传参」（#493 约定⑤ → `previewWith` 分键的唯一性）：
+ * 与**后端本次会用的缺省**同值时返回 undefined（= 不传、落 null 槽位），否则原样返回。
+ *
+ * 两个边界都是刻意的：
+ * - 缺省未知（`backendDefault === undefined`，如 preview 尚未回来）**不归一**——宁可多一个
+ *   缓存键，也不把用户的选择误当归一掉（少了参数就可能让后端取到另一个有效值）；
+ * - 用户没选（`chosen === undefined`）恒为不传，与缺省无关。
+ */
+export function normalizePreviewOption<T>(
+  chosen: T | undefined,
+  backendDefault: T | undefined
+): T | undefined {
+  return chosen !== undefined && chosen !== backendDefault ? chosen : undefined;
+}
+
 export const queryKeys = {
   investors: {
     root: ["investors"] as const,

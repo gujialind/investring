@@ -1,4 +1,5 @@
 import type { Trade } from "@/types/trade";
+import { toDateOnly } from "@/lib/utils";
 
 /**
  * 调仓列表结对视图行（#126 决策⑧）：
@@ -67,12 +68,26 @@ export function groupTradeRows(trades: Trade[]): TradeRow[] {
 }
 
 /**
+ * 配对现金腿是否**已到账**（#493 评审加固；现金账本口径见根 `AGENTS.md` §2.5）：
+ * 须 **confirmed 且生效日不在未来**——只看日期会把「已到期但尚未确认」的腿
+ * （跨天现金转移的转入腿、卖出到账腿）显示成已到账，而 pending 腿**不计入可用现金**。
+ * 买入扣款腿创建即 confirmed、现金日 = 下单日 T，故行为不变。
+ * 无生效日（尚未生效的 pending 腿）按未到账处理；cancelled 腿一律未到账。
+ */
+export function cashLegArrived(sub: Trade, today: string = toDateOnly(new Date())): boolean {
+  if (!sub.confirm_date) return false;
+  return sub.status === "confirmed" && sub.confirm_date <= today;
+}
+
+/**
  * 现金子行派生数据（规范 §8）：主行为买入 → 现金扣款（-）；主行为卖出 → 现金到账（+）。
  * 符号为语义修饰，展示层手工前缀，不回写数值、不走涨跌色 token。
  *
- * `arrived=false`（#493）：配对现金腿自身生效日尚未到（卖出到账腿可携带未来
- * `confirm_date`，其余腿在生效前必为 pending），主行状态讲的是基金腿，
- * 故在此显式区分——**未来到账的 confirmed 现金不得标成已经到账**。
+ * `arrived=false`（#493）：配对现金腿尚未实际到账——判据见 `cashLegArrived`
+ * （**confirmed 且日期不在未来**，不是只看日期：卖出到账腿可携带未来
+ * `confirm_date`，跨天转移的转入腿到期未确认时仍 pending）。主行状态讲的是基金腿，
+ * 故在此显式区分——**未来到账的 confirmed 现金、以及已到期仍 pending 的现金，
+ * 都不得标成已经到账**。
  * 缺省 true = 沿用旧行为（买入扣款腿创建即 confirmed、现金日 = 下单日 T）。
  */
 export function cashSubMeta(
