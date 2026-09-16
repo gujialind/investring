@@ -40,6 +40,21 @@ describe("groupTradeRows", () => {
     expect(groupTradeRows([buy, sell])).toEqual([{ kind: "pair", main: sell, sub: buy }]);
   });
 
+  it("双 CASH 腿顺序颠倒（sell 在前）同样 sell 主、buy 子", () => {
+    const sell = makeTrade({ product_code: "CASH", trade_type: "sell", transfer_group: "abcdef123456" });
+    const buy = makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "abcdef123456" });
+    expect(groupTradeRows([sell, buy])).toEqual([{ kind: "pair", main: sell, sub: buy }]);
+  });
+
+  it("双 CASH 腿缺 sell（异常数据）回落两行 single", () => {
+    const first = makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "abcdef123457" });
+    const second = makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "abcdef123457" });
+    expect(groupTradeRows([first, second])).toEqual([
+      { kind: "single", trade: first },
+      { kind: "single", trade: second },
+    ]);
+  });
+
   it("孤儿单腿回退 single", () => {
     const t = makeTrade({ transfer_group: "rebal_solo" });
     expect(groupTradeRows([t])).toEqual([{ kind: "single", trade: t }]);

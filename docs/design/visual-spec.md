@@ -230,7 +230,7 @@
 
 ## 12. 文案格式惯例
 
-- **日期**：统一 `YYYY-MM-DD`（`formatDate`）；带时分秒用 `formatDateTime`；相对时间（今天/N 天前）仅限通知等弱精确场景（`formatRelativeDate`）。
+- **日期**：统一 `YYYY-MM-DD`（`formatDate`）。带时分秒/相对时间（今天、N 天前）当前无消费方，对应 helper 已随死代码清理删除（#501）——需要时按本节惯例补回并在此登记。
 - **百分比**：自带 `+/-` 符号（`formatPercent`/`formatReturnRate` 默认 showSign），禁止手工拼 `+`；负号由数值自带。
 - **金额**：带 `¥`、千分位、2 位小数；概览大字可用 `formatCompactCurrency` 的万/亿紧凑格式（`¥X.XX 万` / `¥X.XX 亿`），表格内不用紧凑格式。
 - **空值占位**：统一 `--`（各 format 函数 fallback），禁止 `N/A`、`null`、空字符串上屏；JSX 内禁止手写 `-`/`"--"` 字面量当占位——空值判断交回 format 函数（`null`/`undefined`/空串/`NaN` → fallback `--`），不要用 truthy 三元短路（真 0 会被误判为缺失，如 `fee=0` 应显示 `¥0.00`；#249 起 ESLint 拦截 JSX 内 `-`）。
@@ -309,3 +309,4 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 | 2026-09-05 | v1.x | 页面标题整体收敛：桌面 12 处 `<h1>` `text-3xl font-bold tracking-tight` → §5 `text-2xl font-semibold`，4 个共享组件移动分支 `font-bold` 字重同步对齐（§6 不发明端侧独有字号）；§18 该存量条目销账，另登记 3 处移动端专属薄壳页 h1 漂移（待另开 issue） | #386 |
 | 2026-09-06 | v1.x | 移动端薄壳页 h1 收敛 + 徽章/数字单元格竖排防护：①3 处移动端专属薄壳页 h1 → §5 `text-2xl font-semibold`（判定非刻意紧凑形态，§18 条目销账）；②`Badge` 基件加 `whitespace-nowrap`（徽章文案有界，防表格窄列挤压时 CJK 逐字竖排，与 #389 `NameCodeCell` 修法同族）；③`.number-cell` 工具类加 `white-space: nowrap`（数字+单位如「2,000.00 份」不折行，全站表格数字列一致生效） | #394 |
 | 2026-09-10 | v1.x | §1.5 豁免清单登记 `src/lib/logger.ts` 与其单测（新 `no-console` 护栏的唯一豁免，永久）；同批任务管理页执行历史新增「触发方式」列——来源标识无状态语义，按 §1.3 末段取 `outline`/`neutral` badge，**不占 success/warning/destructive 状态色**（状态列已表达成功/失败） | #406 / #407 |
+| 2026-09-16 | v1.x | §12 日期惯例去掉 `formatDateTime` / `formatRelativeDate`（两 helper 全仓零调用，已随 #501 死代码清理删除；需要时按本节惯例补回并在此登记）。同批保留 `formatPercent` / `formatAmount4` / `formatCompactCurrency` / `getReturnBgClass` 四个零调用 helper——它们是 §1.1 / §3 表点名的口径载体，源码注释已写明保留依据与预期调用方 | #501 |
