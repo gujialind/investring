@@ -43,8 +43,9 @@ def compute_cash_balance(
     源1：trade 表 confirmed CASH trades（confirm_date <= as_of_date）
     源2：event 表 confirmed events（ex_date <= as_of_date, cash_change != 0）
 
-    不含 manual_market_value 覆盖。用于：
-    - cash-position 端点审计字段（computed_value）与 get_cash_value 的兜底计算
+    不含 manual_market_value 覆盖。生产调用点只有手动重估的审计字段
+    （update_cash_position 的 computed_value）；get_cash_value 仅测试与文档引用、
+    当前无生产调用方。
     快照生成走 _generate_portfolio_position 增量累加路径，不调用此函数。
     calculate_available_cash 无论有无快照都不调用此函数——有快照时直接读
     portfolio_position 快照表，无快照时基线为 0、统一走增量段（#515：此前的
@@ -483,6 +484,13 @@ def calculate_available_cash(
     − pending CASH sells（已承诺未执行）
     + 快照后 confirmed event cash_change
 
+    ⚠️ 无快照时「只计一次」不等于「旧值去重」，两者有一处刻意差异：被删掉的
+    旧基线对 confirmed sells 按 confirm_date 收口，增量段按 trade_date 收口，
+    仅在恒有 trade_date <= confirm_date 时取行相同。排序反转的 confirmed CASH
+    sell（cash_confirm_date 缺顺序校验时可构造）在 as_of=T 落在两者之间时，
+    由旧行为的「已扣一次」变为新行为的「到 trade_date 才扣」——与下面 §时点口径
+    的 trade_date 锚定一致，是有意行为，见 test_confirmed_sell_trade_date_after_as_of_excluded。
+
     时点口径（#70/#78）：CASH 流出（sell）的资金承诺锚定**下单日 trade_date**，
     不论 pending/confirmed——confirmed sell 的 as_of 上限按 trade_date（而非
     confirm_date）判定，pending sell 仅在 trade_date <= as_of_date 时计提，
@@ -520,6 +528,7 @@ def calculate_available_cash(
         cash = Decimal("0")
 
     if latest_date is None:
+        # #515：哨兵只表示「不设下界」（无快照日可比），不再兼任增量窗口下界
         latest_date = date(1970, 1, 1)  # 确保 > 条件对所有 trade/event 生效
 
     # 快照后 confirmed CASH buys（流入：confirm_date <= as_of_date 才计入）

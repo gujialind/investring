@@ -281,6 +281,28 @@ class TestNoSnapshotCashCountedOnce:
             test_db, "NS_P6", self.PLAT, as_of_date=date(2025, 1, 10)
         ) == Decimal("60")
 
+    def test_confirmed_sell_trade_date_after_as_of_excluded(self, test_db):
+        """as_of=T：confirmed sell 的 trade_date > T 时不计提
+
+        出账锚定 trade_date（#70/#78）。这同时是无快照路径「只计一次」相对旧值
+        去重的唯一刻意差异点：旧基线按 confirm_date 收口，会在 T 日就扣掉这笔
+        trade_date 尚未到来的卖单；新口径不扣，到 trade_date 才扣。
+        """
+        self._seed(test_db, "NS_P7")
+        self._cash_buy(test_db, "NS_P7", 100,
+                       trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
+        # 排序反转：confirm_date(1-7) < trade_date(1-15)，可经 cash_confirm_date 构造
+        self._cash_sell(test_db, "NS_P7", 40,
+                        trade_date=date(2025, 1, 15), confirm_date=date(2025, 1, 7))
+        # as_of 早于 trade_date：承诺尚未发生，不扣
+        assert calculate_available_cash(
+            test_db, "NS_P7", self.PLAT, as_of_date=date(2025, 1, 10)
+        ) == Decimal("100")
+        # trade_date 到达后照常扣减
+        assert calculate_available_cash(
+            test_db, "NS_P7", self.PLAT, as_of_date=date(2025, 1, 16)
+        ) == Decimal("60")
+
 
 class TestCalculateAvailableCashAsOfDate:
     """calculate_available_cash 的 as_of_date 截止计算（#23）"""

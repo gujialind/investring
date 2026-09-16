@@ -46,7 +46,8 @@
   ```
   compute_cash_balance(T)：全量历史口径 = SUM(confirmed CASH trades WHERE confirm_date <= T)
                                        + SUM(confirmed events WHERE ex_date <= T, cash_change != 0)；
-                          仅用于 cash-position 审计字段与 get_cash_value 兜底，不再作降级基线
+                          生产调用点只有手动重估的审计字段 computed_value（get_cash_value
+                          当前无生产调用方），不再作降级基线
 
   calculate_available_cash(T?) = 最新快照日 portfolio_position 的 CASH cash_amount（基线；
                                  无快照日时基线为 0，全部由下列增量项计算，每笔只计一次）
