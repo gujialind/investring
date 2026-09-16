@@ -210,7 +210,7 @@ def get_available_cash(
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
-    cash = calculate_available_cash(db, portfolio_code, platform_code)
+    cash = calculate_available_cash(db, portfolio_code, platform_code, as_of_date=date.today())
     result = {"portfolio_code": portfolio_code, "available_cash": float(cash)}
     if platform_code:
         result["platform_code"] = platform_code

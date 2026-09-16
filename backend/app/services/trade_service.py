@@ -10,7 +10,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.trade import Trade
@@ -50,16 +50,118 @@ def validate_trade_date(db: Session, portfolio_code: str, trade_date: date) -> N
         )
 
 
-def _pending_cash_sell_legs(db: Session, trade: Trade) -> list:
-    """查 trade 所在 transfer_group 的 pending CASH sell 腿（买入扣款腿，#91）"""
+def _is_rebal_group_cash_leg(trade: Trade) -> bool:
+    """是否为调仓组（`rebal_`）的配对 CASH 腿（#493）。
+
+    现金腿只能由基金腿驱动；该判据以**调仓组为边界**，不动申赎（`sub_`）与
+    独立跨平台现金转移（裸 uuid）的生命周期。
+    """
+    return (
+        trade is not None
+        and trade.product_code == "CASH"
+        and bool(trade.transfer_group)
+        and trade.transfer_group.startswith("rebal_")
+    )
+
+
+def _group_legs(db: Session, trade: Trade) -> list:
+    """组内全部腿（含自身）；无组号时退化为 [trade]（#493 组级口径的基础读取）。"""
+    if trade is None:
+        return []
+    if not trade.transfer_group:
+        return [trade]
+    return db.query(Trade).filter(
+        Trade.transfer_group == trade.transfer_group
+    ).all()
+
+
+def _paired_cash_leg(db: Session, trade: Trade) -> Optional[Trade]:
+    """基金腿的反向配对 CASH 腿（#493：不要求两腿同状态）。"""
+    if not trade or not trade.transfer_group or trade.product_code == "CASH":
+        return None
+    expected_type = "sell" if trade.trade_type == "buy" else "buy"
+    return db.query(Trade).filter(
+        Trade.transfer_group == trade.transfer_group,
+        Trade.product_code == "CASH",
+        Trade.trade_type == expected_type,
+    ).first()
+
+
+def _own_cash_sell_legs(db: Session, trade: Trade) -> list:
+    """自身组内 CASH sell 腿（买入扣款腿，#91；#493 起含 confirmed）。
+
+    买入扣款腿创建即 confirmed，故加回口径必须覆盖 pending/confirmed 两态；
+    cancelled 腿不参与（金额已回退，不再占用可用现金）。
+    """
     if not trade or not trade.transfer_group:
         return []
     return db.query(Trade).filter(
         Trade.transfer_group == trade.transfer_group,
         Trade.product_code == "CASH",
         Trade.trade_type == "sell",
-        Trade.status == "pending",
+        Trade.status.in_(["pending", "confirmed"]),
     ).all()
+
+
+def _leg_accounting_date(leg: Trade) -> Optional[date]:
+    """腿的会计生效日（#493）：确认日优先，缺省退下单日。"""
+    return leg.confirm_date or leg.trade_date
+
+
+def _snapshot_count_from(db: Session, portfolio_code: str, from_date: date) -> int:
+    """该组合 `from_date` 及之后的快照张数（计数查询，只读）。"""
+    from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
+
+    return (
+        db.query(func.count(PortfolioValueSnapshot.id))
+        .filter(
+            PortfolioValueSnapshot.portfolio_code == portfolio_code,
+            PortfolioValueSnapshot.snapshot_date >= from_date,
+        )
+        .scalar()
+        or 0
+    )
+
+
+def validate_group_snapshot_free(
+    db: Session, trade: Trade, *, extra_dates: Optional[list] = None
+) -> None:
+    """组级快照保护（#493 决策 4）：组内任一腿确认日及之后已有快照 → 拒绝改动。
+
+    - **纯只读**：调用方在全部校验通过前不得 setattr（校验失败必须零写入）。
+    - 判据取组内最早会计生效日（`confirm_date`，缺省 `trade_date`）——半确认组
+      里买入扣款腿的 T 日、卖出到账腿的 A 日都在保护范围内。
+    - `extra_dates`：改日期场景把**新值**一并纳入保护，否则把日期后移会让
+      已入快照的旧腿脱离保护。
+    """
+    legs = _group_legs(db, trade)
+    candidates = [_leg_accounting_date(leg) for leg in legs] + list(extra_dates or [])
+    candidates = [d for d in candidates if d is not None]
+    if not candidates:
+        return
+    from_date = min(candidates)
+    count = _snapshot_count_from(db, trade.portfolio_code, from_date)
+    if count:
+        raise BusinessError(
+            "SNAPSHOT_DEPENDENCY",
+            f"该交易的配对组已被快照纳入（{from_date} 及之后有 {count} 张快照），"
+            f"请先删除 {from_date} 及之后的快照",
+            details={"from_date": from_date.isoformat()},
+        )
+
+
+def _require_date_not_snapshot_consumed(
+    db: Session, portfolio_code: str, consumed_date: date, what: str
+) -> None:
+    """确认期校正保护（#493 决策 5）：日期已被快照消费时不得静默改写历史。"""
+    count = _snapshot_count_from(db, portfolio_code, consumed_date)
+    if count:
+        raise BusinessError(
+            "SNAPSHOT_DEPENDENCY",
+            f"{what}（{consumed_date}）已被 {count} 张快照消费，"
+            f"请先删除 {consumed_date} 及之后的快照再校正",
+            details={"from_date": consumed_date.isoformat()},
+        )
 
 
 def validate_buy_cash_with_addback(
@@ -74,11 +176,15 @@ def validate_buy_cash_with_addback(
     """买入含费现金支出校验（#182 从 create_trade/confirm 抽取，创建/编辑/确认共用）。
 
     - new_cash_out 量化 2 位后须 > 0（INVALID_AMOUNT）
-    - 扣款平台：self_trade 的配对 pending CASH sell 腿平台（#91 跨平台扣款，
+    - 扣款平台：self_trade 的配对 CASH sell 腿平台（#91 跨平台扣款，
       同 confirm_single_trade 模式），无配对腿时回退 cash_platform
       （创建场景 = cash_platform_code or 基金腿平台），再回退 self_trade 平台
-    - 可用现金 = calculate_available_cash(as_of) + 自身 pending CASH sell 腿
-      当前 DB 金额（编辑/确认场景该腿已被计提预留，加回防双重计数；创建加回 0）
+    - 可用现金 = calculate_available_cash(as_of) + **已在本次余额口径中扣掉的**
+      自身 CASH sell 腿金额（#493：口径从「pending」扩展到 pending/confirmed，
+      因买入扣款腿创建即 confirmed；已进入快照基线的扣款同样加回——
+      `calculate_available_cash` 的基线已扣过它，不加回会把合法确认误拒）。
+      `as_of` 之前的扣款（`trade_date > as_of`）尚未被计提，**不加回**；
+      cancelled 腿不计入。每条腿只加回一次。
     - 超限抛 INSUFFICIENT_CASH（details 含 required/available/deficit）
 
     Returns:
@@ -91,7 +197,9 @@ def validate_buy_cash_with_addback(
     if cash_out_d <= 0:
         raise BusinessError("INVALID_AMOUNT", "买入金额必须大于0")
 
-    own_legs = _pending_cash_sell_legs(db, self_trade) if self_trade else []
+    # 平台判据取**全部**自身扣款腿（不受查询时点裁剪）：跨平台买入的实际扣款
+    # 平台不能因「日期前移」而丢失
+    own_legs = _own_cash_sell_legs(db, self_trade) if self_trade else []
     check_platform = cash_platform
     if own_legs:
         check_platform = own_legs[0].platform_code
@@ -101,10 +209,16 @@ def validate_buy_cash_with_addback(
     available = calculate_available_cash(
         db, portfolio_code, check_platform, as_of_date=as_of
     )
-    # 加回自身在途 CASH sell 腿：该腿已作为 pending sell 计提预留，
-    # 不加回会与新支出双重计数导致误拒
+    # 加回自身 CASH sell 腿：该腿金额已在本时点的余额口径中被扣掉（快照基线或
+    # 快照后增量），不加回会与新支出双重计数导致误拒。查询日之后的扣款尚未
+    # 被计提（时点口径锚定 trade_date），加回会高估可用现金，故排除。
     own_addback = sum(
-        (Decimal(str(leg.amount or 0)) for leg in own_legs), Decimal("0")
+        (
+            Decimal(str(leg.amount or 0))
+            for leg in own_legs
+            if as_of is None or (leg.trade_date is not None and leg.trade_date <= as_of)
+        ),
+        Decimal("0"),
     )
     available_excl_own = available + own_addback
     if cash_out_d > available_excl_own:
@@ -196,83 +310,129 @@ def get_nav_for_trade_confirmation(
     return None
 
 
+def new_transfer_group() -> str:
+    """调仓组号（`rebal_` 前缀是「调仓组」的业务标识；申赎 `sub_`、现金转移为裸 uuid）。
+
+    #493：组号在 create_trade 的**任何 flush 之前**分配，使「卖出创建时已有组号、
+    但没有 CASH 腿」这一半成品组在整个 pending 期间稳定可寻；确认时补齐 CASH 腿，
+    unconfirm 后再确认也不换组。
+    """
+    return f"rebal_{uuid.uuid4().hex[:12]}"
+
+
 def attach_paired_cash_leg(
     db: Session,
     fund_trade: Trade,
     cash_amount: Decimal,
-    confirm_date: Optional[date],
-    status: str = "pending",
+    *,
+    status: str = "confirmed",
     cash_platform_code: Optional[str] = None,
     cash_confirm_date: Optional[date] = None,
 ) -> Trade:
-    """为基金腿生成 transfer_group 并构造/加入配对 CASH 腿。
+    """为基金腿构造配对 CASH 腿（#493：买入在创建期调用，卖出在确认期调用）。
 
-    cash_amount 采用 router 语义 = 基金腿 actual_amount（买入=支出含费，卖出=收入）。
-    cash_platform_code（issue #91）：CASH 腿平台，缺省同基金腿；传入时支持
-    跨平台扣款（买）/到账（卖），两腿同 transfer_group 原子翻转。
-    cash_confirm_date（#93）：CASH 腿独立确认日，缺省时按基金腿方向推导——
-    买入扣款 T 日即扣（=trade_date），卖出到账默认与基金确认日一致（无延迟）。
-    供 REST router 与后端 CLI 共用，确保基金买/卖必配 CASH 腿。
+    组号：复用 `fund_trade.transfer_group`（create_trade 在任何 flush 前已分配），
+    仅在缺失时新生成——保证卖出组在确认补齐 CASH 腿时沿用创建期的稳定组号。
+
+    日期口径（#493，按基金腿方向分叉，不再是「组内 trade_date 恒等」）：
+    - **买入**（fund=buy）：CASH 腿为 sell（扣款）。`trade_date` = 下单日 T，
+      `confirm_date` = T——创建即 confirmed，现金当日到账/扣减。
+    - **卖出**（fund=sell）：CASH 腿为 buy（到账）。`trade_date` = 基金腿**确认日 C**
+      （不从下单日传播），`confirm_date` = 到账日 A，缺省 A=C；A>C 即「份额已扣、
+      资金在途」窗口（在途金额由 `_compute_in_transit_amounts` 承担）。
+
+    `cash_amount` 采用 router 语义 = 基金腿 actual_amount（买入=支出含费、
+    卖出=确认后到手净额）。卖出**不得**使用创建期占位金额（#493 §3.1.3）。
+    `cash_platform_code`（#91）：跨平台扣款/到账，缺省同基金腿平台。
 
     Returns:
         新建的 CASH 腿（已 db.add，未 commit）
     """
-    group = f"rebal_{uuid.uuid4().hex[:12]}"
-    fund_trade.transfer_group = group
-    # #93: CASH 腿确认日独立于基金腿
-    if cash_confirm_date is None:
-        if fund_trade.trade_type == "buy":
-            # 买入扣款：T日即扣
-            effective_cash_confirm = fund_trade.trade_date
-        else:
-            # 卖出到账：默认与基金确认日一致（无延迟）
-            effective_cash_confirm = confirm_date
+    if not fund_trade.transfer_group:
+        fund_trade.transfer_group = new_transfer_group()
+    is_buy = fund_trade.trade_type == "buy"
+    if is_buy:
+        cash_trade_date = fund_trade.trade_date
+        effective_cash_confirm = cash_confirm_date or fund_trade.trade_date
     else:
-        effective_cash_confirm = cash_confirm_date
+        # 卖出到账腿：生效锚点是基金腿确认日，不是下单日
+        cash_trade_date = fund_trade.confirm_date
+        effective_cash_confirm = cash_confirm_date or fund_trade.confirm_date
     cash_trade = Trade(
         portfolio_code=fund_trade.portfolio_code,
         platform_code=cash_platform_code or fund_trade.platform_code,
         product_code="CASH",
         market="",
-        trade_type="sell" if fund_trade.trade_type == "buy" else "buy",
+        trade_type="sell" if is_buy else "buy",
         shares=None,
         amount=cash_amount,
         price=Decimal("1"),
         fee=Decimal("0"),
         actual_amount=cash_amount,
-        trade_date=fund_trade.trade_date,
+        trade_date=cash_trade_date,
         confirm_date=effective_cash_confirm,
         status=status,
-        transfer_group=group,
+        transfer_group=fund_trade.transfer_group,
     )
     db.add(cash_trade)
     return cash_trade
 
 
-def sync_transfer_group(
-    db: Session, trade: Trade, target_status: str, confirm_date: Optional[date] = None
-):
-    """同步 transfer_group 关联的另一腿状态、日期与金额
+def cash_leg_audit_payload(
+    leg: Optional[Trade], action: str
+) -> Optional[dict]:
+    """配对 CASH 腿的审计载荷片段（#493 §3.1.8）。
 
-    - 传播 `trade.trade_date`（组内不变量：同 transfer_group 各腿 trade_date 恒等；
-      PUT 改基金腿 trade_date 时据此随动 CASH 腿，其余路径为幂等写入）
-    - 传播 `target_status`（unconfirm 时各腿独立重算期望确认日，#93）
-    - #93: 不再传播 confirm_date，各腿保持创建时设定的独立确认日
-    - 若源腿为基金腿（product_code != "CASH"），将其 actual_amount 镜像给配对
-      CASH 腿（CASH 腿金额恒等于基金腿 actual_amount）。确认时净值型基金
-      actual_amount 可能被重算，需同步；金额未变时为幂等写入
+    配对腿的创建/删除/状态与到账日期、平台变化折入**同一业务审计载荷**的
+    `cash_leg` 键，不另开第二条现金腿审计记录。
+    """
+    if leg is None:
+        return {"action": action} if action else None
+    return {
+        "action": action,
+        "trade_id": leg.id,
+        "platform_code": leg.platform_code,
+        "trade_date": leg.trade_date,
+        "confirm_date": leg.confirm_date,
+        "amount": leg.amount,
+        "status": leg.status,
+    }
+
+
+def sync_transfer_group(
+    db: Session,
+    trade: Trade,
+    target_status: str,
+    confirm_date: Optional[date] = None,
+    *,
+    propagate_dates: bool = False,
+) -> Optional[dict]:
+    """按 #493 操作矩阵同步配对 CASH 腿（组内状态不再无条件同状态）。
+
+    「两腿同状态、同 `trade_date`」是旧模型的不变量，#493 起按方向与目标状态分叉：
+
+    - `cancelled`（整组取消/回退）：组内其余腿一并置 cancelled；买入组的扣款腿
+      随之失效（现金回退），卖出组本就没有 CASH 腿。
+    - `pending`（基金腿 unconfirm）：**买入组保留 CASH confirmed**——扣款是既成
+      事实，日期与金额也不动；**卖出组删除 CASH 腿**，回到「未创建」态，再次确认
+      时按新的到账信息重建。
+    - 其它（编辑基金腿日期/金额）：只同步**买入**方向 CASH 腿——`trade_date` 与
+      `confirm_date` 恒为下单日 T、金额镜像基金腿 `actual_amount`；卖出方向不制造
+      pending 调仓 CASH 腿（到账腿只由确认路径创建）。
+
+    不传播卖出腿的 `confirm_date`（到账日 A 是独立录入量），也不制造新的
+    pending 调仓 CASH 腿。
+
+    Returns:
+        审计载荷片段（交由调用方折进同一业务审计），无变化时为 None
     """
     if not trade.transfer_group:
-        return
+        return None
+    is_fund_leg = trade.product_code != "CASH"
     paired = db.query(Trade).filter(
         Trade.transfer_group == trade.transfer_group,
         Trade.id != trade.id,
     ).all()
-    # CASH 腿金额 = 基金腿 actual_amount（买入=支出、卖出=收入）；
-    # 仅当源腿为基金腿时向 CASH 腿镜像，避免 CASH→CASH / CASH→基金误写
-    mirror_amount = None
-    if trade.product_code != "CASH":
-        mirror_amount = trade.actual_amount if trade.actual_amount is not None else trade.amount
     # #37 savepoint：配对腿更新失败回滚 savepoint，不影响外层事务
     # 保持连接级：本函数失败即 rollback + raise，从不承诺 session 继续可用，用不上
     # session 级 db.begin_nested() 的 ORM 事务状态复位——那是 #419 给 auto_confirm
@@ -280,49 +440,93 @@ def sync_transfer_group(
     # 只发生在 `with db.begin_nested():` 形式（closed 事务仍是 _trans_context_manager，
     # 夹具的 after_transaction_end 补 savepoint 时撞 InvalidRequestError 掩盖根因）；
     # 显式 begin/commit/rollback 形式不复现，详见 backend/AGENTS.md §1.3「可观测性」。
+    is_rebal_group = bool(trade.transfer_group) and trade.transfer_group.startswith("rebal_")
+    mirror_amount = None
+    if is_fund_leg:
+        mirror_amount = (
+            trade.actual_amount if trade.actual_amount is not None else trade.amount
+        )
+    audit: Optional[dict] = None
     sp = db.connection().begin_nested()
     try:
-        for paired_trade in paired:
-            # 先同步 trade_date，保证下方 unconfirm 分支用新日期重算确认日
-            paired_trade.trade_date = trade.trade_date
-            paired_trade.status = target_status
-            # #93: 各腿保持创建时设定的独立确认日，不再同步 confirm_date
-            if target_status == "pending":
-                if paired_trade.product_code == "CASH":
-                    # #93: unconfirm 时 CASH 腿回退到创建时的默认确认日
-                    if paired_trade.trade_type == "sell":
-                        # 买入的 CASH sell：回退到 trade_date（T日扣款）
-                        paired_trade.confirm_date = paired_trade.trade_date
+        if is_rebal_group:
+            cash_legs = [p for p in paired if p.product_code == "CASH"]
+            if is_fund_leg and trade.trade_type == "sell" and target_status in (
+                "pending", "cancelled",
+            ):
+                # 卖出组回退：pending = 回到「未创建」；cancelled 时若已重建过到账腿，
+                # 同样整组取消（该腿由确认路径创建，不能再留 confirmed）
+                for cash_leg in cash_legs:
+                    audit = cash_leg_audit_payload(cash_leg, "deleted")
+                    db.delete(cash_leg)
+            elif (
+                is_fund_leg and trade.trade_type == "buy"
+                and target_status == "pending" and not propagate_dates
+            ):
+                # 买入组 unconfirm：扣款既成事实——confirmed、日期、金额均保持
+                for cash_leg in cash_legs:
+                    audit = cash_leg_audit_payload(cash_leg, "kept_confirmed")
+            else:
+                for cash_leg in cash_legs:
+                    # #493：买入扣款腿创建即 confirmed、**永不回退为 pending**。
+                    # 编辑（propagate_dates=True）只同步日期与金额；若把它打回
+                    # pending，该腿会被 `calculate_available_cash` 按 trade_date
+                    # 照常扣减，却不满足 `_compute_in_transit_amounts` 的
+                    # 「CASH sell confirmed」前提，于是钱从可用现金和市值里同时
+                    # 消失（凭空少一笔）。整组取消（cancelled）仍须跟随失效。
+                    if not (
+                        is_fund_leg
+                        and trade.trade_type == "buy"
+                        and target_status == "pending"
+                    ):
+                        cash_leg.status = target_status
+                    if target_status != "cancelled" and is_fund_leg and trade.trade_type == "buy":
+                        # 买入扣款腿的生效锚点恒为下单日 T（不从 confirm_date 推导）
+                        cash_leg.trade_date = trade.trade_date
+                        cash_leg.confirm_date = trade.trade_date
+                    if target_status != "cancelled" and mirror_amount is not None:
+                        cash_leg.amount = mirror_amount
+                        cash_leg.actual_amount = mirror_amount
+                    audit = cash_leg_audit_payload(cash_leg, "status_synced")
+        else:
+            # 非调仓组（跨平台现金转移等）：保持 #493 之前的状态/日期同步行为
+            for paired_trade in paired:
+                paired_trade.trade_date = trade.trade_date
+                paired_trade.status = target_status
+                # #93: 各腿保持创建时设定的独立确认日，不再同步 confirm_date
+                if target_status == "pending":
+                    if paired_trade.product_code == "CASH":
+                        if paired_trade.trade_type == "sell":
+                            paired_trade.confirm_date = paired_trade.trade_date
+                        else:
+                            fund_leg = next(
+                                (p for p in paired if p.product_code != "CASH"), None
+                            )
+                            if fund_leg is None and is_fund_leg:
+                                fund_leg = trade
+                            if fund_leg and fund_leg.confirm_date:
+                                paired_trade.confirm_date = fund_leg.confirm_date
                     else:
-                        # 卖出的 CASH buy：回退到基金确认日（默认一致，无延迟）
-                        fund_leg = next(
-                            (p for p in paired if p.product_code != "CASH"), None
-                        )
-                        # 源腿本身可能是基金腿（unconfirm_trade 场景），补充查找
-                        if fund_leg is None and trade.product_code != "CASH":
-                            fund_leg = trade
-                        if fund_leg and fund_leg.confirm_date:
-                            paired_trade.confirm_date = fund_leg.confirm_date
-                else:
-                    # unconfirm 时需要重新计算期望确认日（基金腿按 product.confirm_days）
-                    paired_product = db.query(Product).filter(
-                        Product.code == paired_trade.product_code,
-                        Product.market == paired_trade.market,
-                    ).first()
-                    if paired_product:
-                        paired_confirm_days = paired_product.confirm_days or 0
-                        paired_trade.confirm_date = get_next_trading_day(
-                            db, paired_trade.trade_date, days=paired_confirm_days
-                        )
-            # 同步配对 CASH 腿金额（确认时净值重算后需同步）
-            if mirror_amount is not None and paired_trade.product_code == "CASH":
-                paired_trade.amount = mirror_amount
-                paired_trade.actual_amount = mirror_amount
+                        paired_product = db.query(Product).filter(
+                            Product.code == paired_trade.product_code,
+                            Product.market == paired_trade.market,
+                        ).first()
+                        if paired_product:
+                            paired_trade.confirm_date = get_next_trading_day(
+                                db, paired_trade.trade_date,
+                                days=paired_product.confirm_days or 0,
+                            )
+                if mirror_amount is not None and paired_trade.product_code == "CASH":
+                    paired_trade.amount = mirror_amount
+                    paired_trade.actual_amount = mirror_amount
+                if paired_trade.product_code == "CASH":
+                    audit = cash_leg_audit_payload(paired_trade, "status_synced")
         db.flush()  # 确保 ORM 变更在 savepoint 内写入 DB
         sp.commit()
     except Exception:
         sp.rollback()
         raise
+    return audit
 
 
 def calculate_confirm_preview(
@@ -453,6 +657,227 @@ def calculate_confirm_preview(
     }
 
 
+def resolve_cash_leg_plan(
+    db: Session,
+    trade: Trade,
+    *,
+    effective_confirm_date: date,
+    cash_platform_code: Optional[str] = None,
+    cash_confirm_date: Optional[date] = None,
+) -> dict:
+    """确认/预览共用的现金腿校验与计划（**纯只读**：不修改任何 ORM 对象）。
+
+    #493 §3.3：日期、平台、快照保护与配对现金腿计划由 preview 与 confirm 共用
+    同一实现，「预览 == 确认」由此保证；缺省值与显式覆盖走同一条校验路径。
+
+    校验：
+    - 有效基金确认日 C 须为交易日、不早于下单日 T、**严格晚于最新快照日**
+      （快照已含该基金腿则须先删快照）；
+    - 卖出到账日 A 缺省 = C，须为交易日且不早于 C；
+    - 买入扣款日固定 T：`cash_confirm_date` 只接受等于 T；买入也不允许借确认
+      改扣款平台（`cash_platform_code` 只接受等于既有扣款腿平台）；
+    - CASH 腿自身（申赎/现金转移）不参与本计划——调仓 CASH 腿在确认入口已被
+      `CASH_TRADE_FORBIDDEN` 拦截，其余现金腿保持既有生命周期。
+
+    Returns:
+        {
+          "cash_leg_action": "create"|"verify"|"none",
+          "cash_platform_code": 有效扣款/到账平台,
+          "cash_confirm_date": 有效现金日（买=T、卖=A）,
+          "fund_confirm_date": 有效基金确认日 C,
+        }
+    """
+    if trade.product_code == "CASH":
+        return {
+            "cash_leg_action": "none",
+            "cash_platform_code": None,
+            "cash_confirm_date": None,
+            "fund_confirm_date": effective_confirm_date,
+        }
+
+    if not is_trading_day(db, effective_confirm_date):
+        raise BusinessError(
+            "NON_TRADING_DAY",
+            f"确认日 {effective_confirm_date} 非交易日，请改为交易日",
+        )
+    if trade.trade_date and effective_confirm_date < trade.trade_date:
+        raise BusinessError(
+            "INVALID_DATE_ORDER",
+            f"确认日 {effective_confirm_date} 不能早于下单日 {trade.trade_date}",
+        )
+    latest_snapshot_date = get_latest_snapshot_date(db, trade.portfolio_code)
+    if latest_snapshot_date and effective_confirm_date <= latest_snapshot_date:
+        raise BusinessError(
+            "SNAPSHOT_DEPENDENCY",
+            f"基金确认日必须晚于最新快照日（{latest_snapshot_date}），"
+            f"请先删除 {latest_snapshot_date} 及之后的快照",
+            details={"from_date": latest_snapshot_date.isoformat()},
+        )
+
+    if cash_platform_code and not db.query(Platform).filter(
+        Platform.code == cash_platform_code
+    ).first():
+        raise NotFoundError(
+            "PLATFORM_NOT_FOUND", f"现金平台 {cash_platform_code} 不存在"
+        )
+
+    existing_leg = _paired_cash_leg(db, trade)
+    if trade.trade_type == "buy":
+        # 买入：扣款日与扣款平台在创建期即固定（创建即扣款），确认期不得借机改写
+        if cash_confirm_date is not None and cash_confirm_date != trade.trade_date:
+            raise BusinessError(
+                "CASH_CONFIRM_DATE_NOT_ALLOWED",
+                f"买入扣款日固定为下单日 {trade.trade_date}，"
+                f"cash_confirm_date 只接受等于该日",
+            )
+        plan_platform = (
+            existing_leg.platform_code if existing_leg
+            else (cash_platform_code or trade.platform_code)
+        )
+        if cash_platform_code and cash_platform_code != plan_platform:
+            raise BusinessError(
+                "CASH_PLATFORM_NOT_ALLOWED",
+                "买入扣款平台在创建时确定，确认时不可修改",
+            )
+        return {
+            "cash_leg_action": "verify",
+            "cash_platform_code": plan_platform,
+            "cash_confirm_date": trade.trade_date,
+            "fund_confirm_date": effective_confirm_date,
+        }
+
+    if trade.trade_type != "sell":
+        raise BusinessError("INVALID_TYPE", "类型必须为 buy 或 sell")
+
+    # 卖出：确认时才录入到账信息；A 缺省 = C，平台缺省 = 基金腿平台
+    arrival_date = cash_confirm_date if cash_confirm_date is not None else effective_confirm_date
+    if not is_trading_day(db, arrival_date):
+        raise BusinessError(
+            "NON_TRADING_DAY", f"到账日 {arrival_date} 非交易日，请改为交易日"
+        )
+    if arrival_date < effective_confirm_date:
+        raise BusinessError(
+            "INVALID_DATE_ORDER",
+            f"到账日 {arrival_date} 不能早于基金确认日 {effective_confirm_date}",
+        )
+    return {
+        "cash_leg_action": "create",
+        "cash_platform_code": cash_platform_code or trade.platform_code,
+        "cash_confirm_date": arrival_date,
+        "fund_confirm_date": effective_confirm_date,
+    }
+
+
+def compute_confirm_plan(
+    db: Session,
+    trade: Trade,
+    product: Optional[Product],
+    *,
+    confirm_date: Optional[date] = None,
+    price: Optional[Decimal] = None,
+    cash_platform_code: Optional[str] = None,
+    cash_confirm_date: Optional[date] = None,
+) -> dict:
+    """确认计划（预览与真实确认共用，**纯只读**）。
+
+    在 `calculate_confirm_preview`（NAV/份额/金额）之上叠加现金腿计划：两者共同
+    构成「确认/preview 会写入或校验什么」的单一事实来源。不修改 trade、不构腿、
+    不写审计、不 flush——`sync_nav` 只是确认端点的显式动作，预览不触发。
+    """
+    preview = calculate_confirm_preview(
+        db, trade, product, confirm_date=confirm_date, price=price
+    )
+    plan = resolve_cash_leg_plan(
+        db,
+        trade,
+        effective_confirm_date=preview["confirm_date"],
+        cash_platform_code=cash_platform_code,
+        cash_confirm_date=cash_confirm_date,
+    )
+    preview["cash_leg_action"] = plan["cash_leg_action"]
+    preview["cash_platform_code"] = plan["cash_platform_code"]
+    preview["cash_confirm_date"] = plan["cash_confirm_date"]
+    return preview
+
+
+def _cash_leg_needs_fix(existing_leg: Optional[Trade], amount: Decimal) -> bool:
+    """买入扣款腿是否与本次确认的金额/状态不一致（#493 决策 5）。"""
+    return (
+        existing_leg is None
+        or existing_leg.status != "confirmed"
+        or existing_leg.actual_amount is None
+        or quantize_amount(Decimal(str(existing_leg.actual_amount))) != amount
+    )
+
+
+def validate_confirm_cash_leg(db: Session, fund_trade: Trade, plan: dict) -> None:
+    """确认前对配对现金腿的**只读**校验（#493：校验通过前不得改变 ORM 对象）。
+
+    买入方向需要校正扣款腿时，扣款日已被快照消费即拒绝；其余情况无需前置校验
+    （卖出的到账腿由确认路径新建，日期合法性已在 `resolve_cash_leg_plan` 把住）。
+    """
+    if plan.get("cash_leg_action") != "verify":
+        return
+    amount = plan["paired_cash_amount"]
+    if amount is None:
+        return
+    expected = quantize_amount(Decimal(str(amount)))
+    if _cash_leg_needs_fix(_paired_cash_leg(db, fund_trade), expected):
+        _require_date_not_snapshot_consumed(
+            db, fund_trade.portfolio_code, fund_trade.trade_date, "买入扣款日"
+        )
+
+
+def _apply_confirm_cash_leg(db: Session, fund_trade: Trade, plan: dict) -> Optional[dict]:
+    """确认时落定配对 CASH 腿（#493 §3.1.3 / 决策 5），返回审计载荷片段。
+
+    - **卖出**：用本次确认后的净额（`paired_cash_amount`）新建/就地对齐到账腿，
+      `status=confirmed`、`trade_date=C`、`confirm_date=A`；不追加第二条现金腿。
+    - **买入**：核验既有扣款腿的状态与金额；不一致时校正（调用方已通过
+      `validate_confirm_cash_leg` 拦住「已被快照消费」的情形）。
+    """
+    if plan["cash_leg_action"] == "none":
+        return None
+    amount = plan["paired_cash_amount"]
+    if amount is None:
+        return None
+    amount = quantize_amount(Decimal(str(amount)))
+    existing_leg = _paired_cash_leg(db, fund_trade)
+
+    if plan["cash_leg_action"] == "create":
+        if existing_leg is not None:
+            # 不追加第二条现金腿：就地按本次确认结果对齐（组号不变）
+            existing_leg.platform_code = plan["cash_platform_code"]
+            existing_leg.trade_date = fund_trade.confirm_date
+            existing_leg.confirm_date = plan["cash_confirm_date"]
+            existing_leg.amount = amount
+            existing_leg.actual_amount = amount
+            existing_leg.status = "confirmed"
+            return cash_leg_audit_payload(existing_leg, "synced")
+        leg = attach_paired_cash_leg(
+            db, fund_trade, amount,
+            status="confirmed",
+            cash_platform_code=plan["cash_platform_code"],
+            cash_confirm_date=plan["cash_confirm_date"],
+        )
+        return cash_leg_audit_payload(leg, "created")
+
+    # 买入：核验既有扣款腿（已被快照消费的不一致情形已在前置校验拒绝）
+    if not _cash_leg_needs_fix(existing_leg, amount):
+        return cash_leg_audit_payload(existing_leg, "unchanged")
+    if existing_leg is None:
+        leg = attach_paired_cash_leg(
+            db, fund_trade, amount,
+            status="confirmed",
+            cash_platform_code=plan["cash_platform_code"],
+        )
+        return cash_leg_audit_payload(leg, "created")
+    existing_leg.status = "confirmed"
+    existing_leg.amount = amount
+    existing_leg.actual_amount = amount
+    return cash_leg_audit_payload(existing_leg, "corrected")
+
+
 def confirm_single_trade(
     db: Session,
     trade: Trade,
@@ -462,12 +887,14 @@ def confirm_single_trade(
     price: Optional[Decimal] = None,
     skip_available_check: bool = False,
     sync_nav: bool = False,
+    cash_confirm_date: Optional[date] = None,
+    cash_platform_code: Optional[str] = None,
 ) -> Trade:
     """
-    确认单笔调仓交易的核心逻辑，供手动确认与 auto_confirm 共用。
+    确认单笔调仓交易的核心逻辑（REST 手动确认与补录共用）。
 
-    - 计算统一委托 calculate_confirm_preview（确认与预览共用同一实现），
-      本函数负责将结果回写 trade 并置 confirmed
+    - 计算统一委托 `compute_confirm_plan`（确认与预览共用同一实现），本函数负责
+      将结果回写 trade 并置 confirmed
     - confirm_date 已在创建时设定；若传入参数则覆盖（补录场景）
     - 场外基金（OEF/LOF 且 CN_OTC/HK_MUTUAL）确认时统一获取 T 日（成交当日）净值并重算 shares/amount，
       不区分 QDII/非 QDII，一律以净值计算；缺失 T 日净值时抛 MISSING_NAV 拒绝确认
@@ -477,10 +904,13 @@ def confirm_single_trade(
       手动价不覆盖净值（不传则直接取净值）
     - 场内基金不取净值，使用创建时录入的成交价（成交价录入时必填，见 trades.py 创建校验）
     - 可用量校验（#70/#78 按生效确认日时点口径，#182 卖出份额对称补齐）：
-      买入按扣款平台校验可用现金、卖出校验可用份额（均加回自身 pending 旧值
-      防双重计数），不足抛 INSUFFICIENT_CASH / INSUFFICIENT_SHARES；
-      skip_available_check=True 跳过（auto_confirm 重算历史场景）
-    - 置 status=confirmed 并原子同步配对 CASH 腿
+      买入按扣款平台校验可用现金、卖出校验可用份额（均加回自身 pending/confirmed
+      旧值防双重计数），不足抛 INSUFFICIENT_CASH / INSUFFICIENT_SHARES；
+      skip_available_check=True 跳过（历史重放场景）
+    - **配对 CASH 腿（#493）**：卖出在确认时按本次净额新建到账腿（A 缺省 = C）；
+      买入核验既有扣款腿的状态/金额，不一致且未被快照消费时校正、已消费则拒绝。
+      确认、建腿与审计在**同一事务**内完成（本函数不 commit）。
+    - 调仓组的 CASH 腿不可直接确认（只能由基金腿驱动）→ CASH_TRADE_FORBIDDEN
 
     Args:
         db: 数据库会话
@@ -489,16 +919,29 @@ def confirm_single_trade(
         confirm_date: 覆盖确认日（补录场景）
         price: 手动价格；场外基金仅用于与 T 日净值一致性校验（不覆盖净值），
             场内基金作为覆盖成交价
-        skip_available_check: 跳过买入现金/卖出份额可用量校验（auto_confirm 专用）
+        skip_available_check: 跳过买入现金/卖出份额可用量校验（历史重放专用）
         sync_nav: MISSING_NAV 时自动回填净值并重试一次（显式选择，会访问外部数据源）
+        cash_confirm_date: 卖出到账日 A（缺省 = 本次有效确认日 C）
+        cash_platform_code: 卖出到账平台（缺省 = 基金腿平台）
 
     Returns:
         确认后的 trade 对象（未 commit，事务由调用方控制）
     """
-    try:
-        preview = calculate_confirm_preview(
-            db, trade, product, confirm_date=confirm_date, price=price
+    if _is_rebal_group_cash_leg(trade):
+        raise BusinessError(
+            "CASH_TRADE_FORBIDDEN",
+            "调仓配对 CASH 腿不可直接确认，请确认对应基金腿",
         )
+
+    def _plan() -> dict:
+        return compute_confirm_plan(
+            db, trade, product, confirm_date=confirm_date, price=price,
+            cash_platform_code=cash_platform_code,
+            cash_confirm_date=cash_confirm_date,
+        )
+
+    try:
+        preview = _plan()
     except BusinessError as e:
         if not (sync_nav and e.code == "MISSING_NAV"):
             raise
@@ -512,17 +955,13 @@ def confirm_single_trade(
                 "MISSING_NAV",
                 f"{e.message}；自动同步净值失败: {sync_err}",
             )
-        preview = calculate_confirm_preview(
-            db, trade, product, confirm_date=confirm_date, price=price
-        )
+        preview = _plan()
 
     # 可用量校验（#70/#78：按生效确认日时点口径；#182 卖出份额对称补齐）
     if not skip_available_check and trade.product_code != "CASH":
-        effective_confirm_date = (
-            confirm_date if confirm_date is not None else trade.confirm_date
-        )
+        effective_confirm_date = preview["confirm_date"]
         if trade.trade_type == "buy":
-            # 买入：按扣款平台校验可用现金（配对 pending CASH sell 腿平台 + 自身腿加回，
+            # 买入：按扣款平台校验可用现金（配对 CASH sell 腿平台 + 自身腿加回，
             # 与创建/编辑共用同一实现；金额缺失的异常数据维持旧口径跳过）
             if preview["paired_cash_amount"] is not None:
                 validate_buy_cash_with_addback(
@@ -540,6 +979,10 @@ def confirm_single_trade(
                 self_trade=trade,
             )
 
+    # ---- 校验全部通过，开始写入（#493：确认、建腿、审计同一事务）----
+    # 现金腿校正的前置校验必须在任何 setattr 之前（拒绝即零写入）
+    validate_confirm_cash_leg(db, trade, preview)
+
     # confirm_date 已在创建时设定；若传入参数则覆盖（补录场景）
     if confirm_date is not None:
         trade.confirm_date = confirm_date
@@ -552,8 +995,7 @@ def confirm_single_trade(
         trade.actual_amount = preview["actual_amount"]
 
     trade.status = "confirmed"
-    # 同步 transfer_group 配对腿（如基金调仓的配对 CASH 腿）
-    sync_transfer_group(db, trade, "confirmed", trade.confirm_date)
+    cash_leg_audit = _apply_confirm_cash_leg(db, trade, preview)
 
     logger.info(
         f"交易确认: trade_id={trade.id}, type={trade.trade_type}, "
@@ -574,6 +1016,8 @@ def confirm_single_trade(
             "amount": trade.amount,
             "actual_amount": trade.actual_amount,
             "confirm_date": trade.confirm_date,
+            "transfer_group": trade.transfer_group,
+            "cash_leg": cash_leg_audit,
         },
     )
 
@@ -655,8 +1099,14 @@ def create_trade(
     allow_duplicate=True 强制放行，cancelled 记录不算重复。
     cash_platform_code（issue #91）：现金腿平台，买=扣款平台、卖=到账平台，
     缺省同基金腿；买入可用现金按扣款平台校验。
-    cash_confirm_date（#93）：CASH 腿独立确认日（卖出到账日），缺省时由
-    attach_paired_cash_leg 按基金腿方向推导（买入=T日扣款，卖出=基金确认日）。
+    #493 买入/卖出的创建形态分叉：
+    - 买入：创建即扣款——配对 CASH sell 腿直接 **confirmed**、现金日 = 下单日 T；
+      基金腿 pending，等 T+1/T+2 确认。故 D 日快照不被 pending 交易阻断，现金已
+      实扣、等额记在途。`cash_platform_code` 可传（跨平台扣款）；
+      `cash_confirm_date` 只接受等于 trade_date（扣款日固定 T）。
+    - 卖出：**只建基金腿**，组号照常分配；到账日 `cash_confirm_date` 与到账平台
+      `cash_platform_code` 一律在 **confirm** 时录入，创建期传入报
+      CASH_CONFIRM_DATE_NOT_ALLOWED / CASH_PLATFORM_NOT_ALLOWED。
     不 commit，事务由调用方控制。返回基金腿 Trade。
     """
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
@@ -710,6 +1160,27 @@ def create_trade(
         raise NotFoundError(
             "PLATFORM_NOT_FOUND", f"现金平台 {cash_platform_code} 不存在"
         )
+
+    # #493 现金腿输入的方向闸门：创建期只有买入有现金腿，卖出腿在确认时才建。
+    if trade_type == "sell":
+        if cash_platform_code:
+            raise BusinessError(
+                "CASH_PLATFORM_NOT_ALLOWED",
+                "卖出交易在创建时不能指定到账平台，请在确认时传入 cash_platform_code",
+            )
+        if cash_confirm_date is not None:
+            raise BusinessError(
+                "CASH_CONFIRM_DATE_NOT_ALLOWED",
+                "卖出交易在创建时不能指定到账日期，请在确认时传入 cash_confirm_date",
+            )
+    elif trade_type == "buy" and cash_confirm_date is not None:
+        # 买入扣款日固定为下单日 T（创建即扣款），显式传入只接受等于 T
+        if cash_confirm_date != trade_date:
+            raise BusinessError(
+                "CASH_CONFIRM_DATE_NOT_ALLOWED",
+                f"买入交易的扣款日固定为下单日 {trade_date}，"
+                f"cash_confirm_date 只接受等于该日",
+            )
 
     # 场内交易必须提供有效价格（实时撮合价，不能用收盘价替代）；
     # 任意市场显式传价均须为正数（卖出传价参与金额推导，负价会污染推导结果）
@@ -800,13 +1271,23 @@ def create_trade(
                 details={"existing_trade_id": existing.id},
             )
 
-    # 基金腿必配 CASH 腿（显式记录现金变动；#91 支持跨平台现金腿）
+    # #493：组号在任何 flush 之前分配——买入据此建 CASH 扣款腿，卖出留作
+    # 「有组号、无 CASH 腿」的半成品，待确认时补齐（unconfirm→再确认不换组）。
+    new_trade.transfer_group = new_transfer_group()
     db.add(new_trade)
-    attach_paired_cash_leg(
-        db, new_trade, actual_amount_final, expected_confirm_date,
-        cash_platform_code=cash_platform_code,
-        cash_confirm_date=cash_confirm_date,
-    )
+    cash_leg_audit = None
+    if trade_type == "buy":
+        # #493：买入创建即扣款——CASH sell 腿直接 confirmed，现金日 = 下单日 T。
+        # 基金腿保持 pending（等待 T+1/T+2 净值确认），故 D 日快照不再被
+        # pending 交易阻断，D 日现金已实扣、等额记 IN_TRANSIT_BUY。
+        cash_leg = attach_paired_cash_leg(
+            db, new_trade, actual_amount_final,
+            status="confirmed",
+            cash_platform_code=cash_platform_code,
+        )
+        db.flush()
+        cash_leg_audit = cash_leg_audit_payload(cash_leg, "created")
+    # 卖出不建 CASH 腿：到账日与到账平台在确认时录入（#493 决策 3）
     db.flush()
 
     record_audit(
@@ -829,10 +1310,89 @@ def create_trade(
             "platform_code": new_trade.platform_code,
             "status": "pending",
             "transfer_group": new_trade.transfer_group,
+            "cash_leg": cash_leg_audit,
         },
     )
 
     return new_trade
+
+
+def _update_notes_only(db: Session, trade: Trade, update_data: dict) -> Trade:
+    """notes-only 的非会计更新分支（#493 §3.1.7）。
+
+    不重算金额、不镜像配对腿、不触发会计快照保护——备注对账本零影响；
+    pending/confirmed 均可改（状态门与 CASH 腿旁路门已在 update_trade 入口放行）。
+    """
+    old_notes = trade.notes
+    trade.notes = update_data["notes"]
+    if old_notes != trade.notes:
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_TRADE,
+            resource_id=str(trade.id),
+            resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+            old_value={"notes": old_notes},
+            new_value={"notes": trade.notes},
+        )
+    return trade
+
+
+def _update_confirmed_sell_arrival_date(
+    db: Session, trade: Trade, update_data: dict
+) -> Trade:
+    """已确认卖出的到账日修正（#493 决策 3 / §3.1.7）。
+
+    只动配对 CASH buy 腿的 `confirm_date`，**不调用普通基金金额重算**。
+    入口已保证：不传 cash_confirm_date 不进本分支（保持原值）、显式 null 与被
+    拒绝的混入字段在此前整体拒绝，故本分支命中即代表「合法子集」。
+    """
+    new_arrival = update_data["cash_confirm_date"]
+    if new_arrival is None:
+        raise BusinessError(
+            "INVALID_PARAM",
+            "cash_confirm_date 不能显式传 null；不需要修改时不传该字段",
+        )
+    cash_leg = _paired_cash_leg(db, trade)
+    if cash_leg is None:
+        raise BusinessError(
+            "CASH_LEG_MISSING",
+            "该卖出交易没有配对 CASH 腿，无法修改到账日；"
+            "请先取消确认后重新确认并录入到账信息",
+        )
+    if not is_trading_day(db, new_arrival):
+        raise BusinessError(
+            "NON_TRADING_DAY", f"到账日 {new_arrival} 非交易日，请改为交易日"
+        )
+    if trade.confirm_date and new_arrival < trade.confirm_date:
+        raise BusinessError(
+            "INVALID_DATE_ORDER",
+            f"到账日 {new_arrival} 不能早于基金确认日 {trade.confirm_date}",
+        )
+    # 组级保护 + 新到账日：旧值（组内各腿）与新值都不得落在已生成的快照区间
+    validate_group_snapshot_free(db, trade, extra_dates=[new_arrival])
+
+    old_value: dict = {}
+    new_value: dict = {}
+    if cash_leg.confirm_date != new_arrival:
+        old_value["cash_leg"] = cash_leg_audit_payload(cash_leg, "arrival_date")
+        cash_leg.confirm_date = new_arrival
+        new_value["cash_leg"] = cash_leg_audit_payload(cash_leg, "arrival_date")
+    if "notes" in update_data and update_data["notes"] != trade.notes:
+        old_value["notes"] = trade.notes
+        trade.notes = update_data["notes"]
+        new_value["notes"] = trade.notes
+    if old_value:
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_TRADE,
+            resource_id=str(trade.id),
+            resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
+            old_value=old_value,
+            new_value=new_value,
+        )
+    return trade
 
 
 def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
@@ -866,16 +1426,29 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
         修改后的 trade 对象（未 commit，事务由调用方控制）
     """
     # ---- 1. 状态拦截（纯校验，尚未写入任何字段）----
-    if trade.status == "confirmed":
-        raise BusinessError(
-            "CANNOT_MODIFY_CONFIRMED", "已确认的交易不可直接修改，请先取消确认后再修改"
-        )
-    if trade.status == "cancelled":
-        raise BusinessError("INVALID_STATUS", "已取消的交易不可修改")
-    if trade.product_code == "CASH" and set(update_data) - {"notes"}:
+    # ---- 1. 守卫（顺序即语义：CASH 腿旁路 → cancelled → confirmed → 组合状态）----
+    # notes-only 是非会计更新：不改账、不镜像配对腿、不触发快照保护（#493 §3.1.7），
+    # 故对 pending/confirmed 一律放行（cancelled 仍拒，组合状态仍须 active）。
+    is_notes_only = set(update_data) <= {"notes"}
+    if trade.product_code == "CASH" and not is_notes_only:
         raise BusinessError(
             "CASH_TRADE_FORBIDDEN",
             "CASH 腿不可直接修改，请编辑对应基金腿（仅 notes 放行）",
+        )
+    if trade.status == "cancelled":
+        raise BusinessError("INVALID_STATUS", "已取消的交易不可修改")
+    # confirmed 卖出的窄例外：只额外开放到账日修改（#493 决策 3/§3.1.7），
+    # 且必须真的传了 cash_confirm_date；混入任何其他字段整体拒绝、不部分应用。
+    confirmed_arrival_only = (
+        trade.status == "confirmed"
+        and trade.product_code != "CASH"
+        and trade.trade_type == "sell"
+        and "cash_confirm_date" in update_data
+        and set(update_data) <= {"notes", "cash_confirm_date"}
+    )
+    if trade.status == "confirmed" and not is_notes_only and not confirmed_arrival_only:
+        raise BusinessError(
+            "CANNOT_MODIFY_CONFIRMED", "已确认的交易不可直接修改，请先取消确认后再修改"
         )
     portfolio = db.query(Portfolio).filter(
         Portfolio.code == trade.portfolio_code
@@ -887,6 +1460,20 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
 
     if not update_data:
         return trade
+
+    if is_notes_only:
+        return _update_notes_only(db, trade, update_data)
+
+    if confirmed_arrival_only:
+        return _update_confirmed_sell_arrival_date(db, trade, update_data)
+
+    # pending 交易不接受 cash_confirm_date：买入扣款日固定 T、卖出到账日在确认时录入
+    if "cash_confirm_date" in update_data:
+        raise BusinessError(
+            "INVALID_PARAM",
+            "cash_confirm_date 只在已确认卖出上可改；"
+            "买入扣款日固定为下单日，卖出到账日在确认时录入",
+        )
 
     # ---- 2. 语义归一（D1）与量化：数值字段 None 视为未提供 ----
     def _dec(key: str) -> Optional[Decimal]:
@@ -916,8 +1503,14 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
     )
 
     # ---- 3. 校验（全部通过前零 setattr）----
+    # 改日期先走既有交易日/快照日闸门（更具体的 NON_TRADING_DAY /
+    # DATE_BEFORE_SNAPSHOT 优先），再做组级保护。
     if date_changed:
         validate_trade_date(db, trade.portfolio_code, trade_date_input)
+    # 组级快照保护（#493 决策 4）：组内任一腿确认日及之后已有快照则拒绝——
+    # 半确认组里买入扣款腿的 T、卖出到账腿的 A 都在组内，故「日期后移」
+    # 逃不过旧快照（旧值即组内各腿当前日期）。
+    validate_group_snapshot_free(db, trade)
 
     if trade.trade_type == "buy" and (amount_changed or shares_changed or date_changed):
         # 待校验的含费现金支出：有输入用输入，否则沿用现有 actual_amount
@@ -1062,9 +1655,13 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
             days=(product.confirm_days or 0) if product else 0,
         )
 
-    # trade_date 变动 -> 同步配对 CASH 腿（trade_date/状态/确认日回退/金额镜像）
+    # trade_date 变动 -> 同步配对 CASH 腿（#493 矩阵：买入扣款腿跟随 T；
+    # 卖出 pending 组没有 CASH 腿，不制造 pending 调仓现金腿）
+    cash_leg_audit = None
     if date_changed and trade.transfer_group:
-        sync_transfer_group(db, trade, trade.status, trade.confirm_date)
+        cash_leg_audit = sync_transfer_group(
+            db, trade, trade.status, trade.confirm_date, propagate_dates=True
+        )
 
     # 金额相关字段变动 -> 镜像配对 CASH 腿金额
     # （CASH 腿金额恒等于基金腿 actual_amount，与 sync_transfer_group 镜像规则一致）
@@ -1086,6 +1683,7 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
             if mirror_amount is not None:
                 paired.amount = mirror_amount
                 paired.actual_amount = mirror_amount
+                cash_leg_audit = cash_leg_audit_payload(paired, "amount_mirrored")
 
     _audit_new = {
         "notes": trade.notes, "price": trade.price, "fee": trade.fee,
@@ -1095,6 +1693,9 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
     }
     _old_diff = {k: v for k, v in _audit_old.items() if v != _audit_new[k]}
     _new_diff = {k: _audit_new[k] for k in _old_diff}
+    if cash_leg_audit is not None:
+        _old_diff["cash_leg"] = None
+        _new_diff["cash_leg"] = cash_leg_audit
     # 无实际变更不留痕（同 share_change_event_service 与「空删除不留痕」口径）。
     # 此处两侧恒为 Decimal——数值入参在函数开头已经 _dec() 归一，故不需要
     # audit_service._is_same 的跨类型比较
@@ -1113,7 +1714,16 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
 
 
 def cancel_trade(db: Session, trade: Trade) -> Trade:
-    """取消交易（仅 pending + 非场内），并同步配对 CASH 腿。不 commit。"""
+    """取消交易（仅 pending + 非场内），整组回退（含配对 CASH 腿）。不 commit。
+
+    #493：组级快照保护——组内任一腿确认日及之后已有快照即拒绝（已进快照的
+    现金/在途不得被事后改写，须先删快照）。调仓 CASH 腿不可直接取消。
+    """
+    if _is_rebal_group_cash_leg(trade):
+        raise BusinessError(
+            "CASH_TRADE_FORBIDDEN",
+            "调仓配对 CASH 腿不可直接取消，请取消对应基金腿",
+        )
     if trade.status != "pending":
         raise BusinessError("INVALID_STATUS", "仅 pending 状态可取消")
     if trade.market == "CN_EXCHANGE":
@@ -1121,8 +1731,9 @@ def cancel_trade(db: Session, trade: Trade) -> Trade:
             "CANNOT_CANCEL_EXCHANGE",
             "场内交易不可取消，请使用 PUT 修改字段或 DELETE 删除后重新创建",
         )
+    validate_group_snapshot_free(db, trade)
     trade.status = "cancelled"
-    sync_transfer_group(db, trade, "cancelled")
+    cash_leg_audit = sync_transfer_group(db, trade, "cancelled")
 
     record_audit(
         db,
@@ -1131,36 +1742,33 @@ def cancel_trade(db: Session, trade: Trade) -> Trade:
         resource_id=str(trade.id),
         resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
         old_value={"status": "pending"},
-        new_value={"status": "cancelled"},
+        new_value={
+            "status": "cancelled",
+            "transfer_group": trade.transfer_group,
+            "cash_leg": cash_leg_audit,
+        },
     )
 
     return trade
 
 
 def unconfirm_trade(db: Session, trade: Trade) -> Trade:
-    """取消确认（confirmed -> pending）：快照保护 + 重算 confirm_date + 同步配对腿。不 commit。"""
-    from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
-    from sqlalchemy import func as _func
+    """取消确认（confirmed -> pending）：组级快照保护 + 重算 confirm_date + 整组回退。
 
+    #493 操作矩阵：**买入组保留 CASH 扣款腿 confirmed**（扣款是既成事实，日期与
+    金额都不动，等待基金腿重新确认）；**卖出组删除配对 CASH 腿**（回到「未创建」
+    态，再次确认时重建并重新录入到账日）。调仓 CASH 腿不可直接取消确认。
+    """
+    if _is_rebal_group_cash_leg(trade):
+        raise BusinessError(
+            "CASH_TRADE_FORBIDDEN",
+            "调仓配对 CASH 腿不可直接取消确认，请取消确认对应基金腿",
+        )
     if trade.status != "confirmed":
         raise BusinessError("INVALID_STATUS", "仅 confirmed 状态可取消确认")
 
-    # 快照保护：确认日及之后已有快照则拒绝
-    if trade.confirm_date:
-        snapshots_after = (
-            db.query(_func.count(PortfolioValueSnapshot.id))
-            .filter(
-                PortfolioValueSnapshot.portfolio_code == trade.portfolio_code,
-                PortfolioValueSnapshot.snapshot_date >= trade.confirm_date,
-            )
-            .scalar()
-        )
-        if snapshots_after and snapshots_after > 0:
-            raise BusinessError(
-                "SNAPSHOT_DEPENDENCY",
-                f"该交易已被快照纳入（{trade.confirm_date} 及之后有 {snapshots_after} 张快照），"
-                f"请先删除 {trade.confirm_date} 及之后的快照",
-            )
+    # 组级快照保护（#493 决策 4）：组内任一腿确认日及之后已有快照则拒绝
+    validate_group_snapshot_free(db, trade)
 
     trade.status = "pending"
     # 重新计算期望确认日（创建时设定 confirm_date，unconfirm 后需恢复）
@@ -1172,7 +1780,7 @@ def unconfirm_trade(db: Session, trade: Trade) -> Trade:
             trade.confirm_date = get_next_trading_day(
                 db, trade.trade_date, days=product.confirm_days or 0
             )
-    sync_transfer_group(db, trade, "pending")
+    cash_leg_audit = sync_transfer_group(db, trade, "pending")
 
     record_audit(
         db,
@@ -1181,19 +1789,35 @@ def unconfirm_trade(db: Session, trade: Trade) -> Trade:
         resource_id=str(trade.id),
         resource_name=f"{trade.portfolio_code}/{trade.product_code}/{trade.trade_type}",
         old_value={"status": "confirmed"},
-        new_value={"status": "pending", "confirm_date": trade.confirm_date},
+        new_value={
+            "status": "pending",
+            "confirm_date": trade.confirm_date,
+            "transfer_group": trade.transfer_group,
+            "cash_leg": cash_leg_audit,
+        },
     )
 
     return trade
 
 
 def delete_trade(db: Session, trade: Trade) -> None:
-    """删除交易（confirmed 不可直接删除），级联删除配对 CASH 腿。不 commit。"""
+    """删除交易（confirmed 不可直接删除），整组级联删除配对 CASH 腿。不 commit。
+
+    #493：组级快照保护——半确认组的买入扣款腿可能已进快照，删除会让快照失去
+    对应事实，故任一腿确认日及之后有快照即拒绝（须先删快照）。调仓 CASH 腿
+    不可直接删除（只能由基金腿驱动）。
+    """
+    if _is_rebal_group_cash_leg(trade):
+        raise BusinessError(
+            "CASH_TRADE_FORBIDDEN",
+            "调仓配对 CASH 腿不可直接删除，请删除对应基金腿",
+        )
     if trade.status == "confirmed":
         raise BusinessError(
             "CANNOT_DELETE_CONFIRMED",
             "已确认的交易不可直接删除，请先取消确认后再删除",
         )
+    validate_group_snapshot_free(db, trade)
 
     record_audit(
         db,
@@ -1320,3 +1944,44 @@ def list_trades(
         .all()
     )
     return items, total
+
+
+def build_paired_cash_leg_map(db: Session, trades: list) -> dict:
+    """批量读取基金腿的反向配对 CASH 腿（#493 §3.3 读侧单一实现）。
+
+    Returns:
+        {(portfolio_code, transfer_group): Trade}——**只**收录基金腿所在组，
+        方向取与基金腿相反的那条（买→CASH sell、卖→CASH buy）。
+
+    设计要点：
+    - 一次查询覆盖整页，**不受**列表的 status/platform/分页筛选影响（被筛掉的
+      现金腿仍能回填到账信息），也不随行数产生 N+1 查询；
+    - 不要求两腿同状态（半确认组：基金 pending / CASH confirmed 同样可见）；
+    - CASH 腿自身不收录（派生字段只服务基金腿）；
+    - 组号为空或非基金腿的行直接跳过。
+    """
+    expected_type: dict = {}
+    groups = set()
+    portfolios = set()
+    for trade in trades:
+        if trade is None or trade.product_code == "CASH" or not trade.transfer_group:
+            continue
+        key = (trade.portfolio_code, trade.transfer_group)
+        expected_type[key] = "sell" if trade.trade_type == "buy" else "buy"
+        groups.add(trade.transfer_group)
+        portfolios.add(trade.portfolio_code)
+    if not groups:
+        return {}
+
+    legs = db.query(Trade).filter(
+        Trade.product_code == "CASH",
+        Trade.transfer_group.in_(groups),
+        Trade.portfolio_code.in_(portfolios),
+    ).all()
+
+    mapping: dict = {}
+    for leg in legs:
+        key = (leg.portfolio_code, leg.transfer_group)
+        if expected_type.get(key) == leg.trade_type:
+            mapping[key] = leg
+    return mapping

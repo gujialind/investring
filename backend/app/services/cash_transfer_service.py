@@ -79,7 +79,9 @@ def create_cash_transfer(
     if amt <= 0:
         raise BusinessError("INVALID_AMOUNT", "转移金额必须大于0")
 
-    available_cash = calculate_available_cash(db, portfolio_code, from_platform)
+    available_cash = calculate_available_cash(
+        db, portfolio_code, from_platform, as_of_date=transfer_date
+    )
     if amt > available_cash:
         raise BusinessError(
             "INSUFFICIENT_CASH",

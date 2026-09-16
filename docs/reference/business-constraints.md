@@ -11,6 +11,7 @@
   - **正向变动不计入**：入快照前保守低估，防事件被撤销后已放行的卖出成为事实超卖。
 * **投资人可用份额** = 最新快照份额 − SUM(pending 赎回) − SUM(快照未覆盖的 confirmed 赎回)。份额变动事件不并入——组合份额仅因申赎变化，事件作用于基金/平台维度、不改投资人份额账本。
 * **可用现金**两条口径的函数级表达式见 `backend/AGENTS.md` §1.3（`calculate_available_cash` / `compute_cash_balance`）。
+* **自身扣款加回**（#493，`validate_buy_cash_with_addback` 内）：校验买入支出时把**自身组内 CASH sell 腿**（pending/confirmed，买入扣款腿创建即 confirmed）的金额加回一次——它已在本时点的余额口径中被扣掉（快照基线或快照后增量），不加回会把合法确认误拒。**查询时点之后**的扣款（`trade_date > as_of`）尚未被计提，**不加回**；cancelled 腿不计入；扣款平台取自身腿的实际平台（跨平台买入不因日期前移而丢失）。
 * 卖出/赎回输入份额**先量化到 2 位再与可用份额精确比较**（无容差），超出报 `INSUFFICIENT_SHARES`；买入/转移金额同理先量化再与可用现金精确比较，不足报 `INSUFFICIENT_CASH`。`skip_available_check` 仅限 auto\_confirm 路径。
 
 ## 申购赎回
@@ -33,9 +34,19 @@
 
 * **PUT 直改与创建同口径**（#182）：编辑 pending 交易时 buy 的 amount/actual\_amount 视为含费现金支出（`actual_amount` 优先），service 层联动重算净额列并镜像 CASH 腿；sell 有价格时与创建同口径（#190）：按新 shares/price/fee 重推导、显式金额仅作对账（场内超差拒绝、场外静默），无价格占位单仍输入为准；改金额/份额/日期实时校验可用量（加回自身 pending 旧值）、非交易日直接拒绝不静默滚交易日、自然键防重排除自身（无 `allow_duplicate`）；CASH 腿仅 notes 放行；校验全部通过前零写入。
 
-* **跨平台现金腿**：基金买/卖可传 `cash_platform_code`（买 = 扣款平台、卖 = 到账平台；CLI `--cash-platform-code`），CASH 腿落在指定平台、**缺省同基金腿**；两腿仍同 `transfer_group` 原子翻转。
+* **确认的计划与写入分离**（#493）：`compute_confirm_plan`（NAV/份额/金额 + 现金腿计划）供 confirm 与 preview 共用，**纯只读**；confirm 在全部校验通过后才 setattr，配对腿校正的前置校验也在 setattr 之前（拒绝即零写入）。preview 不构腿、不改 ORM、不写审计，`sync_nav` 只属于 confirm。
 
-* **可用现金时点口径**：pending 卖出不增加可用现金；买入按扣款平台校验可用现金（根 §2.5），确认时不足同样拒绝（卖出确认对称校验份额；`skip_available_check` 仅限 auto\_confirm 路径）。
+* **跨平台现金腿**（#493 起按方向分时机）：基金买可传 `cash_platform_code`（= 扣款平台，缺省同基金腿）；基金卖**创建时不接受到账信息**，到账平台与到账日一律在 **confirm/preview** 传 `cash_platform_code` / `cash_confirm_date`（缺省 = 基金腿平台 / 本次有效确认日 C），创建期传入报 `CASH_PLATFORM_NOT_ALLOWED` / `CASH_CONFIRM_DATE_NOT_ALLOWED`。买入的扣款日固定为下单日 T（`cash_confirm_date` 只接受等于 T），确认期不允许借机改扣款平台/日期。
+
+* **买入创建即扣款**（#493）：创建买入时配对 CASH sell 腿直接 `confirmed`、`trade_date = confirm_date = T`（基金腿仍 pending）——D 日快照不再被 pending 校验阻断，现金当日实扣并等额记在途（IN\_TRANSIT\_BUY）。确认时**核验**该腿状态/金额：不一致且扣款日**未被快照消费**时校正到一致，已被消费则 `SNAPSHOT_DEPENDENCY` 拒绝（决策 5，不静默改写历史）。
+
+* **卖出确认时建到账腿**（#493）：创建只建基金腿（组号照常分配，`rebal_` 前缀）；确认按本次**确认后净额**新建 CASH buy 腿（`status=confirmed`、`trade_date` = 基金确认日 C、`confirm_date` = 到账日 A，缺省 A=C）。C ≤ D < A 的快照记等额在途（IN\_TRANSIT\_SELL），A 日起转 CASH。unconfirm 删除该腿（回到「未创建」态），再次确认沿用原组号重建。
+
+* **整组生命周期口径**（#493）：取消/删除回退整组；unconfirm 买入组**保留 CASH 扣款腿 confirmed**（扣款既成事实）、卖出组删除 CASH 腿。**组级快照保护**：组内任一腿确认日（缺省下单日）及之后已有快照 → 拒绝 update/cancel/delete/unconfirm（`SNAPSHOT_DEPENDENCY`，`details.from_date` 给出需删除的起始日）；改日期时**新值**一并纳入保护。调仓 CASH 腿只能由基金腿驱动，直接对其 confirm/unconfirm/cancel/delete 或用 PUT 改财务字段报 `CASH_TRADE_FORBIDDEN`（**notes 例外**）。
+
+* **confirmed 卖出的到账日窄例外**（#493）：PUT 只额外开放 `cash_confirm_date`（只同步配对 CASH 腿的 `confirm_date`，不调用基金金额重算）；**不传即保持、显式 null 报 `INVALID_PARAM`、混入任何其他字段整体拒绝**（`CANNOT_MODIFY_CONFIRMED`）。pending 交易传 `cash_confirm_date` 同样 `INVALID_PARAM`。**notes-only 是非会计更新**：pending/confirmed 均可改，不重算金额、不镜像配对腿、不触发快照保护（cancelled 仍拒）。
+
+* **可用现金时点口径**：pending 卖出不增加可用现金；买入按扣款平台校验可用现金（根 §2.5），确认时不足同样拒绝（卖出确认对称校验份额；`skip_available_check` 仅限 auto\_confirm 路径）。现金转移按 `transfer_date` 验资、available-cash 接口按当天时点（#493，`calculate_available_cash(as_of_date=…)`）。
 
 * **确认取价**：`confirm_date` 创建时即按 `product.confirm_days` 设定（`confirm` 可传参覆盖，补录用）；场内用成交价（录入时必填）、场外严格用 T 日净值（含 QDII；未同步则拒绝，禁止向前查找；可传 `sync_nav`/`--sync-nav` 在 MISSING\_NAV 时自动回填净值并重试一次，#90）。场外确认可选传入价格，仅与 T 日净值做一致性校验（不一致 `PRICE_NAV_MISMATCH`），不覆盖净值。快照估值侧与此正交：按产品 `nav_lag_days` 取价（`0`=当日、`N`=前第 N 个交易日），详见根 §2.6。
 
@@ -67,13 +78,13 @@
 
 ## 生命周期通用错误码
 
-* 已 confirmed 的 trade/subscription 直接 PUT → `CANNOT_MODIFY_CONFIRMED`；直接 DELETE → `CANNOT_DELETE_CONFIRMED`（须先 unconfirm）。
+* 已 confirmed 的 trade/subscription 直接 PUT → `CANNOT_MODIFY_CONFIRMED`；直接 DELETE → `CANNOT_DELETE_CONFIRMED`（须先 unconfirm）。#493 的两个窄例外：**notes-only** 对 pending/confirmed 一律放行（非会计更新）；**confirmed 卖出**额外只开放 `cash_confirm_date`（见「调仓交易」节）。
 
 * **三态状态门的通用拒绝码 `INVALID_STATUS`**（与上条是同一次 dispatch 的兄弟分支）：confirm 与确认预览要求 `pending`、cancel 要求 `pending`、unconfirm 要求 `confirmed`、PUT 拒绝 `cancelled`。**不对称点**：份额变动事件的 PUT 只拒 `confirmed`（`cancelled` 事件放行），与调仓/申赎不同。**确认预览的三条路径同码不同层**（#424）：申赎 preview 走子类 `InvalidStatusError`、调仓 preview 在 router 抛 `HTTPException`、事件 preview 由 service 抛同码 `BusinessError`（与事件 confirm 共用同一句常量消息）。逐站点触发条件见下文错误码总表。
 
 * 场内 trade cancel → `CANNOT_CANCEL_EXCHANGE`。
 
-* unconfirm 时确认日（事件为 `ex_date`）及之后已有快照 → `SNAPSHOT_DEPENDENCY`。
+* **快照保护**（#493 起为**组级**口径）：unconfirm/cancel/delete/update 时，**组内任一腿**的会计生效日（`confirm_date`，缺省 `trade_date`）及之后已有该组合快照 → `SNAPSHOT_DEPENDENCY`（`details.from_date` = 需删除的起始日）；申赎仍按自身确认日（事件按 `ex_date`）。confirm 侧保护**有效基金确认日 C**（C 及之后有快照即拒）；买入待校正的扣款腿则保护其扣款日。
 
 * 非交易日操作 → `NON_TRADING_DAY`。
 
@@ -96,9 +107,13 @@
 | `CALENDAR_NOT_SYNCED` | 422 | 交易日历覆盖不到所需日期：`/next`、`/prev` 查询返回 None 或回退等于 `from_date`（日历耗尽时 `get_next_trading_day` 返回入参本身）；`/is-open` 无该日 calendar 行；快照 catch-up / generate-next 时最新快照日的下一交易日为空或不晚于最新快照日 | routers/trading_calendar.py:42; services/snapshot_service.py:617 |
 | `CANNOT_CANCEL_EXCHANGE` | 422 | cancel 调仓交易时 `trade.market == "CN_EXCHANGE"`（场内不可取消，须 PUT 改字段或 DELETE 重建）；状态门先于此判（非 pending → `INVALID_STATUS`） | services/trade_service.py:1118 |
 | `CANNOT_DELETE_CONFIRMED` | 422 | 删除申赎或调仓交易时 `status == "confirmed"`（须先 unconfirm 回 pending）；pending/cancelled 放行 | services/subscription_service.py:670; services/trade_service.py:1191 |
-| `CANNOT_MODIFY_CONFIRMED` | 422 | PUT 直改申赎 / 调仓交易 / 份额变动事件时 `status == "confirmed"`（含基金级子记录，其恒为 confirmed）；同函数内 `cancelled` 另抛 `INVALID_STATUS`（事件 PUT 例外，见该码） | services/trade_service.py:868; services/subscription_service.py:561 |
+| `CANNOT_MODIFY_CONFIRMED` | 422 | PUT 直改申赎 / 调仓交易 / 份额变动事件时 `status == "confirmed"`（含基金级子记录，其恒为 confirmed）；同函数内 `cancelled` 另抛 `INVALID_STATUS`（事件 PUT 例外，见该码）。#493 两个窄例外**不**落本码：调仓 notes-only 对 confirmed 放行；confirmed **卖出**且字段子集 ⊆ `{notes, cash_confirm_date}` 且真的传了 `cash_confirm_date` 时走「到账日修正」分支（混入其他字段则整体拒绝回落到本码） | services/trade_service.py; services/subscription_service.py:561 |
 | `CANNOT_UNCONFIRM_CHILD` | 422 | 对 `parent_event_id` 非空的基金级事件子记录单独 unconfirm（须对父记录执行，由父级联删除子记录）；判在 `status != "confirmed"` 之后、快照保护之前 | services/share_change_event_service.py::unconfirm_share_change_event |
-| `CASH_TRADE_FORBIDDEN` | 422 | 现金腿不得旁路操作：创建调仓时解析后 `product_code == "CASH"`（现金只能经申赎 / 基金调仓配对腿 / 跨平台转移生成）；PUT 修改 CASH 腿且改动字段集合超出 `{notes}` | services/trade_service.py:690; services/trade_service.py:874 |
+| `CASH_TRADE_FORBIDDEN` | 422 | 现金腿不得旁路操作：创建调仓时解析后 `product_code == "CASH"`（现金只能经申赎 / 基金调仓配对腿 / 跨平台转移生成）；PUT 修改 CASH 腿且改动字段集合超出 `{notes}`；#493 新增：**调仓组（`transfer_group` 以 `rebal_` 开头）的 CASH 腿**被直接 confirm / unconfirm / cancel / delete（只能由基金腿驱动；该限制以调仓组为边界，不动申赎与独立现金转移的生命周期）。注意 PUT 的 CASH 腿守卫先于状态门，故已 confirmed 的调仓现金腿改财务字段仍报本码 | services/trade_service.py; services/trade_service.py |
+| `CASH_CONFIRM_DATE_NOT_ALLOWED` | 422 | 现金腿现金日的方向闸门（#493）：**卖出创建**时传 `cash_confirm_date`（到账日在确认时录入）；或**买入**（创建或确认）传入不等于下单日 T 的 `cash_confirm_date`（扣款日固定 T） | services/trade_service.py |
+| `CASH_LEG_MISSING` | 422 | 已确认卖出 PUT `cash_confirm_date` 时，组内不存在配对 CASH buy 腿（存量异常数据，无法同步到账日）；提示先 unconfirm 再重新确认以重建到账腿 | services/trade_service.py |
+| `CASH_PLATFORM_NOT_ALLOWED` | 422 | 现金腿平台的方向闸门（#493）：**卖出创建**时传 `cash_platform_code`（到账平台在确认时录入）；或**买入确认**时传与既有扣款腿平台不同的 `cash_platform_code`（扣款平台创建时确定） | services/trade_service.py |
+| `CASH_TRANSFER_NON_CASH_LEG` | —（非 HTTP 码：auto\_confirm 的 `auto_confirm_failed` 条目） | auto\_confirm 跨天转移分支在置 confirmed 前发现组内存在**非 CASH** 腿（`_confirm_pair` 的显式业务校验，替代可被 `-O` 关闭的 assert）：该分支服务跨平台现金转移，调仓腿须人工确认，不得被空确认（不取价、不建腿） | services/snapshot_service.py |
 | `CONFIRM_BEFORE_STARTED` | 422 | 申购确认预览与确认路径（同一实现）中，`sub_type == "subscribe"` 且组合 `started_at` 非空、T+1 确认日 **<** `started_at`（乱序补录闸门；等于放行以支持同日多平台，`started_at` 为空豁免，赎回不校验） | services/subscription_service.py:121 |
 | `CONFIRM_REQUIRED` | 422 | 快照批量删除未显式传 `confirm=true`（破坏性操作守卫，因逐日 commit 不可中途回滚）；`dry_run=true` 在此之前直接返回预览、不触发本码 | routers/snapshots.py:466 |
 | `DATA_SOURCE_NOT_CONFIGURED` | 503 | `POST /api/trading-calendar/sync` 捕获 `TushareNotConfiguredError`——`TUSHARE_TOKEN` 未配置（`services/tushare_client.py`） | routers/trading_calendar.py:125 |
@@ -109,7 +124,7 @@
 | `DUPLICATE_TRADE` | 422 | 自然键防重：同组合/产品/市场/平台/方向/交易日下已有 `pending`/`confirmed` 交易，买入比 `actual_amount`、卖出比量化后 `shares` 相等即命中。创建路径可传 `allow_duplicate` 放行；PUT 因改日期 / 买入金额 / 卖出份额而与他人（排除自身 id）撞车时无放行口 | services/trade_service.py:794; :984 |
 | `EMPTY_ADJUSTMENT` | 422 | `event_type == "forced_adjustment"` 且 `shares_change` 与 `cash_change` 均为 None（否则确认后零效果且无告警）；创建、PUT（按合并后生效值）、confirm（兜底防存量脏数据）三处共用同一校验 | services/share_change_event_service.py::_validate_adjustment_not_empty |
 | `FORBIDDEN` | 403 | 权限门（非资源不存在）：`get_current_admin` 要求 `current_user.role == "admin"`，非 admin 访问 admin-only 端点即拒；改密端点非 admin 且 `target_code` 指向他人 | dependencies.py:135; routers/auth.py:142 |
-| `INSUFFICIENT_CASH` | 422 | 支出超过扣款平台实时可用现金（先量化 2 位再精确比较、无容差）：调仓买入按 `as_of` 校验（创建/PUT/确认共用，加回自身 pending CASH sell 腿；确认侧 `skip_available_check` 跳过）；赎回确认按确认日校验该平台可用现金（`skip_cash_check` 跳过）；现金转移按转出平台校验 | services/trade_service.py:112; services/subscription_service.py:242 |
+| `INSUFFICIENT_CASH` | 422 | 支出超过扣款平台实时可用现金（先量化 2 位再精确比较、无容差）：调仓买入按 `as_of` 校验（创建/PUT/确认共用，加回自身 CASH sell 腿——#493 起含 pending/confirmed，且只加回查询时点已计提的扣款，见「可用量口径」节；确认侧 `skip_available_check` 跳过）；赎回确认按确认日校验该平台可用现金（`skip_cash_check` 跳过）；现金转移按转出平台校验（#493 起按 `transfer_date` 时点） | services/trade_service.py; services/subscription_service.py:242 |
 | `INSUFFICIENT_SHARES` | 422 | 卖出/赎回份额超过实时可用份额：调仓卖出（创建/PUT/确认共用 `validate_sell_shares_with_addback`，自身 pending 卖出份额加回防双重计数）；赎回创建按申请日投资人可用份额，赎回 PUT 按新份额（本条 pending 旧份额加回） | services/trade_service.py:161; services/subscription_service.py:504 |
 | `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额） | services/trade_service.py:88; services/cash_transfer_service.py:75 |
 | `INVALID_CLASSIFICATION` | 422 | 资产分类维度字典新建/编辑形态非法：`dimension` 不在五维白名单；`code` 非全大写或不带该维度前缀（ASSET_/REGION_/STYLE_/SIZE_/SEG_）；asset_class 值却传 `applicable_asset_classes`、非 asset_class 值传 `dimension_rules` 或适用大类为空（新建/更新均须 ≥1）；`dimension_rules` 的维度或规则值越界；关联的适用大类不存在/不是 asset_class 维度值，或其规则矩阵无该维度行（无行 = 禁止） | services/asset_classification_service.py:107; :65 |
@@ -124,7 +139,7 @@
 | `INVALID_MARKET` | 422 | PUT 产品时 `market` **值实际变化**且新值不在枚举（CN_EXCHANGE/CN_OTC/HK_MUTUAL）；守卫在系统虚拟产品保护（`SYSTEM_PRODUCT_PROTECTED`）之后。create 路径不校验 market 枚举（虚拟产品 `market=""` 由此可落库） | services/product_service.py:342 |
 | `INVALID_NAV_LAG_DAYS` | 422 | 产品 `nav_lag_days` 非法（`validate_nav_lag_days`）：为 null（NOT NULL 列的「清除」语义一并拒）、< 0，或场内（`CN_EXCHANGE`）不为 0。create 恒校验（默认 0）；update 按 market + nav_lag_days 合并终态**无条件**校验，故 CN_OTC→CN_EXCHANGE 迁移残留 lag>0、或存量脏值在任何 PUT 上都会被拦 | services/product_service.py:255; :243 |
 | `INVALID_OLD_PASSWORD` | 400 | 改密时 `verify_password(old_password, hash)` 不通过；仅在「非 admin，或 admin 改自己密码」这条必须验旧密码的分支触发（admin 改他人密码不校验旧密码）。未传 old_password 是 400 `OLD_PASSWORD_REQUIRED`，非本码 | routers/auth.py:165 |
-| `INVALID_PARAM` | 422 | 申赎 PUT 参数非法（`update_subscription`，状态门之后）：除 `notes`（null = 清除备注）外任一字段显式传 null——防绕过量化与可用份额闸门落库脏数据；或字段与 `sub_type` 错位——申购传 `shares`、赎回传 `amount` | services/subscription_service.py:572; :579 |
+| `INVALID_PARAM` | 422 | 申赎 PUT 参数非法（`update_subscription`，状态门之后）：除 `notes`（null = 清除备注）外任一字段显式传 null——防绕过量化与可用份额闸门落库脏数据；或字段与 `sub_type` 错位——申购传 `shares`、赎回传 `amount`。**#493 调仓侧同码**：confirmed 卖出 PUT `cash_confirm_date: null`（不传即保持原值）；**pending** 交易（买或卖）传 `cash_confirm_date`（买入扣款日固定 T、卖出到账日在确认时录入） | services/subscription_service.py:572; services/trade_service.py |
 | `INVALID_PRODUCT_TYPE` | 422 | `product_type` 不在枚举（ETF/OEF/LOF/CASH/IN_TRANSIT）（`validate_product_type`）：create 恒校验；update 仅在 product_type **实际变化**时校验（前端编辑恒带该字段，显式传原值不进门禁） | services/product_service.py:220 |
 | `INVALID_SHARES` | 422 | 份额输入为空或量化到 2 位后 <= 0：赎回创建（`shares` 为 None/≤0，以及量化后再判 ≤0）、赎回 PUT 改 `shares`；调仓卖出侧 `validate_sell_shares_with_addback`（`new_shares` 为 None，或量化后 ≤0），由卖出 create / update（shares 或 trade_date 变动时）/ confirm 三条路径共用 | services/subscription_service.py:495; services/trade_service.py:146 |
 | `INVALID_STATUS` | 422 | 三态生命周期状态门（根 §2.7）的通用拒绝码：confirm 与确认预览要求 `status == "pending"`（申赎/调仓/事件；调仓 preview 与 confirm 两处由 router 抛 `HTTPException` 422，事件 preview 由 service 抛同码 `BusinessError`，#424）；cancel 要求 pending；unconfirm 要求 confirmed；PUT 拒绝 cancelled。申赎侧经子类 `InvalidStatusError`；事件 PUT 只拒 confirmed，cancelled 事件不拦（与调仓/申赎不对称） | services/subscription_service.py:60(class InvalidStatusError); services/trade_service.py:1116 |
@@ -162,7 +177,7 @@
 | `SAME_PLATFORM` | 422 | `create_cash_transfer`：`from_platform == to_platform`，跨平台现金转移两端必须不同 | services/cash_transfer_service.py:57 |
 | `SESSION_ABORTED` | —（非 HTTP 码：200 + `results[].errors` / `auto_confirmed` 条目） | auto_confirm 单条守护判定 DB session 不可恢复时写入的根因 code（#305/#419）：进守护前 `db.is_active` 为假；或守护内 savepoint 回滚自身失败、捕获 `PendingRollbackError`、`DBAPIError.connection_invalidated`、失败后 `is_active` 仍为假。重算逐日循环见到它即 break 并追加进 `results[].errors`（触发 router 整体 rollback），catch-up / 调度路径经 `auto_confirmed` 条目透传 | services/snapshot_service.py:1666; :499 |
 | `SHARES_CHANGE_ON_CASH_PRODUCT` | 422 | 事件标的为现金型/在途产品（按 product_code(+market) 查得 `product_type ∈ {CASH, IN_TRANSIT}`），且 `event_type` 属结构性份额类型（share_split / share_merge / bonus_share / reinvest_dividend，确认时必产生份额变动）或显式填了 `shares_change`；创建、PUT（按合并后值）、确认三处均校验。纯现金调整（`shares_change` 为空，如 #279 对 CASH 的现金修正）不触发 | services/share_change_event_service.py::_validate_product_allows_shares_change |
-| `SNAPSHOT_DEPENDENCY` | 422 | unconfirm 的快照保护：已 confirmed 记录的确认日（申赎/交易取 `confirm_date`、事件取 `ex_date`）及之后已存在该组合快照即拒绝，须先删快照走级联回退。申赎侧 `check_snapshot=False`（快照删除级联自身调用）跳过本检查；交易侧 `confirm_date` 为空时不检查 | services/subscription_service.py:361; services/trade_service.py:1158 |
+| `SNAPSHOT_DEPENDENCY` | 422 | 快照保护，须先删快照走级联回退（`details.from_date` = 需删除的起始日）。① **申赎/事件**：unconfirm 时确认日（申赎取 `confirm_date`、事件取 `ex_date`）及之后已有快照即拒；申赎侧 `check_snapshot=False`（快照删除级联自身调用）跳过。② **调仓（#493 组级）**：update/cancel/delete/unconfirm 时**组内任一腿**会计生效日（`confirm_date`，缺省 `trade_date`）及之后已有快照即拒，改日期时新值一并纳入保护。③ **调仓 confirm（#493）**：有效基金确认日 C 不晚于最新快照日即拒；买入需校正既有扣款腿时扣款日已被快照消费即拒。 | services/subscription_service.py:361; services/trade_service.py |
 | `SNAPSHOT_GENERATION_FAILED` | 500 | `POST /snapshots/generate` 与 `/generate-next` 的兜底 `except Exception`：`BusinessError` 已原样上抛交全局 handler、ValueError 已翻成 422 `VALIDATION_FAILED`，剩下的非预期异常（DB/连接错误、commit 失败等）rollback 后统一 500 | routers/snapshots.py:73; :237 |
 | `SNAPSHOT_NOT_CONTINUOUS` | 422 | 单日生成的连续性校验（`check_continuity=True`；重算逐日重建 bypass）：组合已有快照时，`target_date` 既不等于最新快照日（重建最新一日）也不等于最新快照日的下一交易日——早于最新日属单独重建中间快照、晚于属跳过交易日，两者都拒；零快照首次生成不受限 | services/snapshot_service.py:874 |
 | `SNAPSHOT_REQUIRES_RECALCULATE` | 422 | 单日 generate 的「零快照失忆」守卫（#180）：组合无任何 `portfolio_value_snapshot`，且存在 `confirm_date < target_date` 的 confirmed 申赎或交易（`confirm_date` 为 NULL 的异常数据回退按 apply_date / trade_date 比较）——增量窗口无前序基线会退化为仅目标日，早期到账被静默漏掉，须改用 recalculate 从最早 `confirm_date` 逐日重建；目标日即最早到账日（`confirm_date == target_date`）不受影响 | services/snapshot_service.py:216 |

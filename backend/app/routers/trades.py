@@ -18,16 +18,39 @@ from app.dependencies import get_current_user, get_current_admin
 from app.services.product_service import build_product_name_map
 from app.services.trade_service import (
     confirm_single_trade,
-    calculate_confirm_preview,
+    compute_confirm_plan,
     create_trade as create_trade_service,
     update_trade as update_trade_service,
     cancel_trade as cancel_trade_service,
     unconfirm_trade as unconfirm_trade_service,
     delete_trade as delete_trade_service,
     list_trades,
+    build_paired_cash_leg_map,
 )
 
 router = APIRouter()
+
+
+def _fill_derived_cash_fields(
+    response: TradeResponse, trade: Trade, paired_legs: dict
+) -> TradeResponse:
+    """填充 #493 只读派生字段（现金平台/到账日）。
+
+    只服务基金腿：从**实际**配对 CASH 腿读取（半确认组同样可见），无现金腿时
+    保持 null；CASH 腿自身不回填。`paired_legs` 由
+    `build_paired_cash_leg_map` 批量产出（列表）或单笔查询产出。
+    """
+    if trade.product_code == "CASH" or not trade.transfer_group:
+        return response
+    paired = paired_legs.get((trade.portfolio_code, trade.transfer_group))
+    if paired is None:
+        return response
+    return response.model_copy(
+        update={
+            "cash_platform_code": paired.platform_code,
+            "cash_confirm_date": paired.confirm_date,
+        }
+    )
 
 
 @router.get("", response_model=PaginatedTradeResponse)
@@ -67,9 +90,15 @@ def get_trades(
     # 读侧派生 product_name（#175）：(code, market) 双键天然覆盖 LOF 与 CASH 虚拟产品
     pairs = {(t.product_code, t.market) for t in items}
     name_map = build_product_name_map(db, pairs)
+    # #493 派生现金信息：一次批量查询（不受本页 status/platform 筛选截断）
+    paired_legs = build_paired_cash_leg_map(db, items)
     enriched = [
-        TradeResponse.model_validate(t).model_copy(
-            update={"product_name": name_map.get((t.product_code, t.market))}
+        _fill_derived_cash_fields(
+            TradeResponse.model_validate(t).model_copy(
+                update={"product_name": name_map.get((t.product_code, t.market))}
+            ),
+            t,
+            paired_legs,
         )
         for t in items
     ]
@@ -104,7 +133,10 @@ def create_trade(
     )
     db.commit()
     db.refresh(new_trade)
-    return new_trade
+    return _fill_derived_cash_fields(
+        TradeResponse.model_validate(new_trade), new_trade,
+        build_paired_cash_leg_map(db, [new_trade]),
+    )
 
 
 # 注意：必须注册在 GET /{id} 之前，避免路径 "preview" 被 /{id} 吞掉
@@ -113,10 +145,17 @@ def preview_trade_confirm(
     id: int,
     confirm_date: Optional[date] = None,
     price: Optional[float] = None,
+    cash_confirm_date: Optional[date] = None,
+    cash_platform_code: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
-    """确认前预览：返回真实确认将写入的净值/份额/金额，不落库（与 confirm 共用计算实现）"""
+    """确认前预览：返回真实确认将写入的净值/份额/金额与有效现金平台/日期，不落库。
+
+    与 confirm 共用 `compute_confirm_plan`（同一组日期/平台/快照保护/配对金额
+    校验），**只查询与计算**：不修改 ORM、不构腿、不写审计；`sync_nav` 不适用
+    于预览（净值同步是确认端点的显式动作）。
+    """
     trade = db.query(Trade).filter(Trade.id == id).first()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
@@ -135,13 +174,20 @@ def preview_trade_confirm(
         raise HTTPException(status_code=404, detail="Product not found")
 
     price_decimal = Decimal(str(price)) if price is not None else None
-    preview = calculate_confirm_preview(
-        db, trade, product, confirm_date=confirm_date, price=price_decimal
+    preview = compute_confirm_plan(
+        db, trade, product, confirm_date=confirm_date, price=price_decimal,
+        cash_confirm_date=cash_confirm_date, cash_platform_code=cash_platform_code,
     )
     return TradePreviewResponse(
-        trade=TradeResponse.from_orm(trade),
+        trade=_fill_derived_cash_fields(
+            TradeResponse.model_validate(trade), trade,
+            build_paired_cash_leg_map(db, [trade]),
+        ),
         preview=TradePreviewResult(
-            **{k: v for k, v in preview.items() if k != "paired_cash_amount"}
+            **{
+                k: v for k, v in preview.items()
+                if k not in ("paired_cash_amount", "cash_leg_action")
+            }
         ),
         paired_cash_amount=preview["paired_cash_amount"],
     )
@@ -156,7 +202,10 @@ def get_trade(
     trade = db.query(Trade).filter(Trade.id == id).first()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
-    return trade
+    return _fill_derived_cash_fields(
+        TradeResponse.model_validate(trade), trade,
+        build_paired_cash_leg_map(db, [trade]),
+    )
 
 
 @router.post("/{id}/confirm")
@@ -165,6 +214,8 @@ def confirm_trade(
     confirm_date: Optional[date] = None,
     price: Optional[float] = None,
     sync_nav: bool = False,
+    cash_confirm_date: Optional[date] = None,
+    cash_platform_code: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
@@ -188,11 +239,15 @@ def confirm_trade(
     price_decimal = Decimal(str(price)) if price is not None else None
     confirm_single_trade(
         db, trade, product, confirm_date=confirm_date, price=price_decimal,
-        sync_nav=sync_nav,
+        sync_nav=sync_nav, cash_confirm_date=cash_confirm_date,
+        cash_platform_code=cash_platform_code,
     )
     db.commit()
     db.refresh(trade)
-    resp = TradeResponse.from_orm(trade)
+    resp = _fill_derived_cash_fields(
+        TradeResponse.from_orm(trade), trade,
+        build_paired_cash_leg_map(db, [trade]),
+    )
     return {
         "message": "Trade confirmed successfully",
         "id": resp.id,
@@ -246,7 +301,10 @@ def update_trade(
     update_trade_service(db, db_trade, trade.dict(exclude_unset=True))
     db.commit()
     db.refresh(db_trade)
-    return db_trade
+    return _fill_derived_cash_fields(
+        TradeResponse.model_validate(db_trade), db_trade,
+        build_paired_cash_leg_map(db, [db_trade]),
+    )
 
 
 @router.delete("/{id}")
