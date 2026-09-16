@@ -16,6 +16,7 @@ import {
 import { Loader2 } from "lucide-react";
 import { Product, ProductCreate } from "@/types/product";
 import { DIMENSION_FIELDS, DIMENSION_LABELS, RULE_DIMENSIONS } from "@/lib/dimensions";
+import { MARKET_OPTIONS } from "@/lib/market";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { useCreateProduct, useUpdateProduct } from "@/hooks/useProduct";
 
@@ -216,9 +217,13 @@ export default function ProductFormDialog({
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="">无（现金类）</option>
-                <option value="CN_EXCHANGE">A股场内</option>
-                <option value="CN_OTC">内地场外</option>
-                <option value="HK_MUTUAL">香港互认</option>
+                {/* 与筛选弹窗/产品管理页/交易选择器共用同一定义（PR #502 评审），
+                    禁止再硬编码市场中文名——label 由 formatMarketName 单一派生 */}
+                {MARKET_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="space-y-2">
