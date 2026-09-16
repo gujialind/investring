@@ -63,7 +63,9 @@ class ProductUpdate(BaseModel):
 
 class ProductResponse(ProductBase):
     data_source: Optional[str] = None
-    data_source_status: str = "pending"
+    # 列可空（models/product.py 无 server_default）：迁移 0006 裸 SQL 种入的
+    # IN_TRANSIT_BUY/SELL 该列为 NULL，声明成非空会让这些行的响应校验 500（#487 评审）
+    data_source_status: Optional[str] = None
     last_sync_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

@@ -9720,9 +9720,15 @@
             "title": "Data Source"
           },
           "data_source_status": {
-            "type": "string",
-            "title": "Data Source Status",
-            "default": "pending"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Source Status"
           },
           "last_sync_at": {
             "anyOf": [
