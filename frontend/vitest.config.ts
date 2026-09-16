@@ -23,7 +23,11 @@ import { defineConfig } from "vitest/config";
 // 修好后，tradeAmounts 的「到手无法量化」守卫失去触发路径、残余变两处），届时同步复核
 // 本段与 frontend/AGENTS.md §3。
 // 全局阈值（非 perFile）：新文件 0% 会让总量下滑，正是要拦的「靠既有高覆盖掩护新
-// 代码」。前端暂无「只看本 PR 改动行」的增量门禁（#485）。
+// 代码」。另有一条「只看本 PR 改动行」的增量门禁（#485）：CI frontend-check 在 PR
+// 事件对 coverage/lcov.info 跑 diff-cover（阈值 80，形态与后端同），故 reporter 里
+// 有 lcovonly——其 projectRoot 必须置 ".."（仓库根）：diff-cover 把 LCOV 的相对
+// SF 路径按 git root 解析，默认的 cwd 相对路径（src/lib/x.ts）会匹配不到任何改动行、
+// 门禁静默空转（CI 侧有 warning 守卫兜底，见 ci.yml「Warn on unmapped diff」）。
 // CI 另产 JUnit XML 供 PR 注解（本地保持默认 reporter，不落文件）。
 export default defineConfig({
   resolve: {
@@ -39,7 +43,7 @@ export default defineConfig({
       provider: "v8",
       include: ["src/lib/**/*.{ts,tsx}"],
       exclude: ["src/lib/api/**", "**/*.test.{ts,tsx}"],
-      reporter: ["text", "json-summary"],
+      reporter: ["text", "json-summary", ["lcovonly", { projectRoot: ".." }]],
       thresholds: {
         statements: 99,
         branches: 98,
