@@ -49,8 +49,8 @@ npm run test:watch   # watch 模式（不收集覆盖率）
 - 约定：测试与源码 colocated（`src/lib/*.test.ts`），显式 `import { describe, it, expect } from "vitest"`（未开 globals）；alias `@` 在 `vitest.config.ts` 手动维护。
 - 注意：`src/lib/api/` 是纯类型化 axios 薄封装（无数据转换逻辑），不在单测范围；新增 lib 纯函数应同步补测试。
 - **覆盖率阈值（#464）**：分母圈定 `src/lib/**`（排除 `src/lib/api/**` 与测试自身），全局阈值（非 perFile）受 `vitest.config.ts` 的 `thresholds` 约束（口径与来源写在该文件注释，此处不复述数值），**只升不降**：全量实测超阈值 ≥1pp 时在当次 PR 顺手上调，**上调目标也按「实测取低 1pp」下取整**（后端 `fail_under` 是「上调到实测下取整」，前端分母小、刻意多留 1pp）。缺口已由补测两轮收回（#484 首轮、#501 死代码清理 + #503 零散分支），**残余只有 `tradePairs.ts` 的 `groupTradeRows` 双 CASH 守卫 false 路（条件恒真、结构不可达；保留冗余守卫的溯源见 `vitest.config.ts` 注释，该「唯一」会随 #504 落地失效、届时须回来复核）**。
-- **增量覆盖率门禁（#485）**：CI `frontend-check` 在 PR 事件对 `coverage/lcov.info` 跑 `diff-cover --compare-branch=<base.sha> --fail-under=80`（与 `backend-test` 的步骤同形），只约束**本 PR 在 `src/lib/**` 的改动行**；components/hooks/`lib/api` 等不在分母内的路径无覆盖率数据、不算改动行，main 侧不拦（全局 `thresholds` 兜底）。数据源是 `vitest.config.ts` 的 `lcovonly` reporter——`projectRoot: ".."` 让 LCOV 的 `SF` 为仓库根相对路径，否则 diff-cover 匹配不到改动行、门禁静默空转（CI 侧有 warning 守卫）。
-- CI 另产 `frontend/junit.xml`（PR 注解）、`coverage/` 与 `diff-cover.md`（artifact + Step Summary 摘要）。
+- **增量覆盖率门禁（#485）**：CI `frontend-check` 在 PR 事件对 `coverage/lcov.info` 跑 `diff-cover --compare-branch=<base.sha> --fail-under=<阈值>`（阈值以 `ci.yml` 的门禁步骤为单一来源；形态与 `backend-test` 的步骤同形），只约束**本 PR 在 `src/lib/**` 的改动行**；components/hooks/`lib/api`（有意排除）等不在分母内的路径无覆盖率数据、不算改动行，main 侧不拦（全局 `thresholds` 兜底）。两处口径要点：① **分母 = 改动行 ∩ 有覆盖率数据的行**（不是「本 PR 的全部改动行」，故 `lib/api` 与测试文件的改动不会被计量）；② 数据源是 `vitest.config.ts` 的 `lcovonly` reporter，其 `projectRoot: ".."` 相对 **cwd** 解析，须在 `frontend/` 下跑 `npm run test` 才会产出仓库根相对路径（否则 diff-cover 匹配不到改动行、门禁静默空转；CI 侧有 warning 守卫与 lcov 数据源断言兜底）。**本地复现**：`cd frontend && npm run test` 产出 `coverage/lcov.info`，再从**仓库根**跑 `diff-cover frontend/coverage/lcov.info --compare-branch=origin/main`（加 `--fail-under=<与 ci.yml 一致的值>` 即完整判定；`diff-cover.md` 落在仓库根。本地无 diff-cover 时用 `uvx --from diff-cover diff-cover ...`）。
+- CI 另产 `frontend/junit.xml`（PR 注解）、`frontend/coverage/` 与**仓库根** `diff-cover.md`（artifact + Step Summary 摘要）。
 
 ## 4. E2E（Playwright）
 

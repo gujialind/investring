@@ -24,10 +24,13 @@ import { defineConfig } from "vitest/config";
 // 本段与 frontend/AGENTS.md §3。
 // 全局阈值（非 perFile）：新文件 0% 会让总量下滑，正是要拦的「靠既有高覆盖掩护新
 // 代码」。另有一条「只看本 PR 改动行」的增量门禁（#485）：CI frontend-check 在 PR
-// 事件对 coverage/lcov.info 跑 diff-cover（阈值 80，形态与后端同），故 reporter 里
-// 有 lcovonly——其 projectRoot 必须置 ".."（仓库根）：diff-cover 把 LCOV 的相对
-// SF 路径按 git root 解析，默认的 cwd 相对路径（src/lib/x.ts）会匹配不到任何改动行、
-// 门禁静默空转（CI 侧有 warning 守卫兜底，见 ci.yml「Warn on unmapped diff」）。
+// 事件对 coverage/lcov.info 跑 diff-cover（阈值以 ci.yml 的门禁步骤为单一来源，形态
+// 与后端同），故 reporter 里有 lcovonly——其 projectRoot 必须置 ".."：该值是相对
+// **cwd** 解析的（默认即 cwd 的 vitest 根），而 diff-cover 把 LCOV 的相对 SF 路径按
+// **git root** 解析，只有从仓库根的 frontend/ 下运行（CI 由 job 的 working-directory
+// 保证）才会得到 frontend/src/... 前缀；否则（如从仓库根跑 npx vitest --root frontend）
+// SF 会变成 src/lib/x.ts、匹配不到任何改动行、门禁静默空转（CI 侧有 warning 守卫与
+// lcov 数据源断言兜底，见 ci.yml 的 `Warn on unmapped diff (PR)` 与 `Assert lcov data source (PR)`）。
 // CI 另产 JUnit XML 供 PR 注解（本地保持默认 reporter，不落文件）。
 export default defineConfig({
   resolve: {

@@ -399,7 +399,7 @@ jobs:
 
       # 增量覆盖率门禁（issue #485）：只约束本 PR 在 src/lib/** 的改动行，堵住
       # 「新模块 0% 覆盖被既有高覆盖稀释通过」的前端侧缺口，形态与 backend-test 的
-      # diff-cover 步骤一致（阈值同为 80；该步也有 fetch-depth 0 与空转守卫）。
+      # diff-cover 步骤一致（阈值 80；该步也有 fetch-depth 0 与空转守卫）。
       # 数据源 = vitest 的 lcovonly reporter（coverage/lcov.info；其 projectRoot 置
       # 仓库根，SF 为 frontend/src/... 相对路径，保证 diff-cover 能按 git root 归因，
       # 见 frontend/vitest.config.ts）；components/hooks/lib-api 等不在分母内的路径
@@ -416,6 +416,21 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python -m pip install --quiet diff-cover==10.5.1
 
+      # 数据源完整性断言（#485 评审）：lcov 缺失/为空、或 SF 不是仓库根相对路径时，
+      # diff-cover 会输出「No lines with coverage information」并 exit 0——门禁静默
+      # 空转，而其守卫只会发 warning。这里把「门禁失去数据源」直接变红（fail-closed），
+      # 与下方守卫的分工：守卫管「本 PR 改动行的归因」，本步管「数据源本身可用」。
+      # SF 断言只按前缀（frontend/）而非具体分母路径写，避免与 coverage.include 的
+      # 后续调整（如 #505）耦合。
+      - name: Assert lcov data source (PR)
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          test -s frontend/coverage/lcov.info \
+            || { echo "::error::frontend/coverage/lcov.info 缺失或为空，增量门禁会静默空转"; exit 1; }
+          grep -q '^SF:frontend/' frontend/coverage/lcov.info \
+            || { echo "::error::lcov 的 SF 不是仓库根相对路径（frontend/...），增量门禁会静默空转；复核 vitest.config.ts 的 lcovonly projectRoot 与运行 cwd"; exit 1; }
+
       - name: Diff coverage gate (PR changed lines)
         if: github.event_name == 'pull_request'
         working-directory: .
@@ -431,8 +446,11 @@ jobs:
 
       # 门禁退化可见化（沿用 backend-test 的口径）：lcov.info↔git 的路径映射若断裂，
       # diff-cover 会输出「No lines with coverage information」并 exit 0——门禁静默
-      # 空转（改动行一行没被约束而 CI 全绿）。有新增行落在 frontend/src/lib/ 时发
-      # warning 提示人工确认；刻意不 fail：只改注释的 lib PR 也会合法地没有可测行。
+      # 空转（改动行一行没被约束而 CI 全绿）。
+      # scope 必须与覆盖率口径同源（frontend/vitest.config.ts 的 include∖exclude）：
+      # 排除 src/lib/api/**（有意不计分母）与 colocated 测试文件，否则「只改 api/测试」
+      # 这类常规 PR 会命中「有新增行 + 无覆盖率数据」而发假告警，把本就微弱的 warning
+      # 通道噪声化。改 include/exclude 时必须同步改这里。
       - name: Warn on unmapped diff (PR)
         if: always() && github.event_name == 'pull_request'
         working-directory: .
@@ -440,12 +458,15 @@ jobs:
           # 默认 shell 是 `bash -e {0}`（无 pipefail），git diff 失败会被 awk 吞成 added=0
           # 而静默跳过告警——显式开 pipefail 并单独报告该失败（仍不 fail：守卫本身是诊断品）
           set -o pipefail
-          if ! added=$(git diff --numstat "${{ github.event.pull_request.base.sha }}...HEAD" -- frontend/src/lib | awk '{s+=$1} END {print s+0}'); then
+          if ! added=$(git diff --numstat "${{ github.event.pull_request.base.sha }}...HEAD" \
+              -- frontend/src/lib ':(exclude)frontend/src/lib/api' \
+                 ':(exclude)frontend/src/lib/*.test.ts' ':(exclude)frontend/src/lib/*.test.tsx' \
+              | awk '{s+=$1} END {print s+0}'); then
             echo "::warning::无法计算 frontend/src/lib 的改动行（git diff 失败，如 base.sha 不可达）——本轮空转守卫未生效，请人工确认增量门禁是否仍有约束"
             exit 0
           fi
           if [ "${added}" -gt 0 ] && grep -q 'No lines with coverage information' diff-cover.md 2>/dev/null; then
-            echo "::warning::本次改动往 frontend/src/lib/ 新增了 ${added} 行，但 diff-cover 未测到任何改动行——可能是 lcov.info↔git 路径映射断裂、增量门禁空转，请人工确认"
+            echo "::warning::本次改动往 frontend/src/lib/ 新增了 ${added} 行（口径内源文件），但 diff-cover 未测到任何改动行——可能是 lcov.info↔git 路径映射断裂、增量门禁空转，请人工确认"
           fi
 
       # 覆盖率摘要进 PR 页（issue #465）；tests 失败时也写，便于看是阈值还是断言红
