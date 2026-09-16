@@ -151,7 +151,7 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 
 ### 2.9 调仓 trade 与现金转移
 
-调仓是组合内部的资产互换，**每条基金腿必有一条等额现金腿**（同 `transfer_group`、金额恒等基金腿 `actual_amount`）。#493 起两腿**状态与生效日可不同步**：买入创建即扣款（CASH sell confirmed、现金日 T；基金腿 pending 待确认），卖出确认时才建到账腿（CASH buy confirmed、`trade_date` = 基金确认日 C、`confirm_date` = 到账日 A，缺省 A=C）。**调仓 CASH 腿只能由基金腿驱动**，直接对其 confirm/unconfirm/cancel/delete 或 PUT 改财务字段一律拒绝（`CASH_TRADE_FORBIDDEN`，notes 例外）。
+调仓是组合内部的资产互换，**每条基金腿最终必有一条等额现金腿**（同 `transfer_group`、金额恒等基金腿 `actual_amount`）。#493 起两腿**状态与生效日可不同步**，且**卖出在确认前尚无现金腿**——这是刻意的「半成品组」（组号已分配、组内只有基金腿），不是数据缺失：买入创建即扣款（CASH sell confirmed、现金日 T；基金腿 pending 待确认），卖出确认时才建到账腿（CASH buy confirmed、`trade_date` = 基金确认日 C、`confirm_date` = 到账日 A，缺省 A=C）。**调仓 CASH 腿只能由基金腿驱动**，直接对其 confirm/unconfirm/cancel/delete 或 PUT 改财务字段一律拒绝（`CASH_TRADE_FORBIDDEN`，notes 例外）。
 
 * **金额口径**：买入 `amount = actual_amount − fee`（`actual_amount` 是含费现金支出）、`shares = amount / price`；卖出金额是**纯派生量**——有价格时 `amount = quantize(shares × price)`、`actual_amount = amount − fee`，显式传入的金额只作对账校验、落库恒用推导值。场外未传价时创建期占位，确认时按 T 日净值重算。
 * **确认取价**：`confirm_date` 创建时即按 `product.confirm_days` 设定（可传参覆盖，补录用）；场内用录入的成交价，场外严格用 T 日净值（未同步则拒绝，禁止向前查找）。
