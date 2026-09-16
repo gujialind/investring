@@ -46,12 +46,30 @@ describe("groupTradeRows", () => {
     expect(groupTradeRows([sell, buy])).toEqual([{ kind: "pair", main: sell, sub: buy }]);
   });
 
-  it("双 CASH 腿缺 sell（异常数据）回落两行 single", () => {
+  it("双 CASH 腿均 buy（缺 sell，异常数据）回落两行 single", () => {
     const first = makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "abcdef123457" });
     const second = makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "abcdef123457" });
     expect(groupTradeRows([first, second])).toEqual([
       { kind: "single", trade: first },
       { kind: "single", trade: second },
+    ]);
+  });
+
+  it("双 CASH 腿均 sell（缺 buy，异常数据）回落两行 single，不按「sell 主 buy 子」错配", () => {
+    const first = makeTrade({ product_code: "CASH", trade_type: "sell", transfer_group: "abcdef123458" });
+    const second = makeTrade({ product_code: "CASH", trade_type: "sell", transfer_group: "abcdef123458" });
+    expect(groupTradeRows([first, second])).toEqual([
+      { kind: "single", trade: first },
+      { kind: "single", trade: second },
+    ]);
+  });
+
+  it("两条均非 CASH（异常数据）回落两行 single，子行不错渲成现金子行", () => {
+    const f1 = makeTrade({ product_code: "F1", trade_type: "buy", transfer_group: "rebal_ff" });
+    const f2 = makeTrade({ product_code: "F2", trade_type: "sell", transfer_group: "rebal_ff" });
+    expect(groupTradeRows([f1, f2])).toEqual([
+      { kind: "single", trade: f1 },
+      { kind: "single", trade: f2 },
     ]);
   });
 
