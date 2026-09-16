@@ -15,12 +15,16 @@ const CASH_CODE = "CASH";
  * trades → 结对行。顺序敏感：分组与输出均保持传入顺序（= 后端
  * trade_date DESC, transfer_group, id DESC 排序序，决策⑪保证同组相邻）。
  *
- * 规则：
+ * 规则（边界即契约，异常形态显式回落 single、不静默错渲成现金子行，#507）：
  * 1. 按 transfer_group 分组；
  * 2. `sub_` 前缀组（申赎配对现金腿）→ 恒 single，主体在申赎页；
- * 3. 组内恰 2 条且 1 条非 CASH + 1 条 CASH → pair（基金主、现金子）；
- * 4. 组内恰 2 条均 CASH → pair（sell 主、buy 子；现金跨平台转移）；
- * 5. 其余（孤儿单腿、异常多条）→ 全部 single 回退，不错行不空白。
+ * 3. 组内恰 2 条且恰 1 条 CASH → pair（非 CASH 主、现金子）；
+ * 4. 组内恰 2 条且均 CASH → pair（sell 主、buy 子；现金跨平台转移）；
+ * 5. 其余（孤儿单腿、异常多条、恰 2 条但两腿均非 CASH、双 CASH 而缺 sell 或 buy）
+ *    → 全部 single 回退，不错行不空白。
+ *
+ * 规则 3/4 之外的 2 腿形态不可由后端数据到达（rebal_ 恒「基金腿 + CASH 腿」、
+ * 跨平台转移恒「CASH sell + CASH buy」、sub_ 恒单腿），兜底只为异常数据不产生错行。
  */
 export function groupTradeRows(trades: Trade[]): TradeRow[] {
   const groups = new Map<string, Trade[]>();
@@ -40,16 +44,18 @@ export function groupTradeRows(trades: Trade[]): TradeRow[] {
     }
     if (legs.length === 2) {
       const [a, b] = legs;
-      const fundLeg = a.product_code !== CASH_CODE ? a : b.product_code !== CASH_CODE ? b : null;
-      const cashLeg = fundLeg === a ? b : fundLeg === b ? a : null;
-      if (fundLeg && cashLeg) {
-        rows.push({ kind: "pair", main: fundLeg, sub: cashLeg });
+      const aIsCash = a.product_code === CASH_CODE;
+      const bIsCash = b.product_code === CASH_CODE;
+      // 恰一条 CASH 才成对；两腿均非 CASH（异常数据）不满足，落规则 5
+      if (aIsCash !== bIsCash) {
+        rows.push({ kind: "pair", main: aIsCash ? b : a, sub: aIsCash ? a : b });
         continue;
       }
-      if (a.product_code === CASH_CODE && b.product_code === CASH_CODE) {
+      if (aIsCash && bIsCash) {
         const sell = a.trade_type === "sell" ? a : b.trade_type === "sell" ? b : null;
         const buy = sell === a ? b : sell === b ? a : null;
-        if (sell && buy) {
+        // 缺 sell（均 buy）或另一腿非 buy（均 sell）均属异常数据，落规则 5
+        if (sell && buy && buy.trade_type === "buy") {
           rows.push({ kind: "pair", main: sell, sub: buy });
           continue;
         }
