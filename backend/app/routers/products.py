@@ -4,14 +4,19 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import get_db
 from app.models.product import Product
-from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse
+from app.schemas.product import (
+    ProductCreate,
+    ProductUpdate,
+    ProductResponse,
+    PaginatedProductResponse,
+)
 from app.dependencies import get_current_user, get_current_admin
 from app.services import product_service
 
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedProductResponse)
 def get_products(
     product_type: Optional[str] = None,
     market: Optional[str] = None,
@@ -80,12 +85,12 @@ def get_products(
         .limit(page_size)
         .all()
     )
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    return PaginatedProductResponse(
+        items=[ProductResponse.model_validate(p) for p in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=ProductResponse)

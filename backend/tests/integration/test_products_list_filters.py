@@ -9,6 +9,8 @@
 
 import time
 
+from sqlalchemy import text
+
 from tests.factories import create_product
 
 
@@ -263,6 +265,25 @@ class TestProductListVirtualFilter:
             "/api/products?page_size=100&include_virtual=true", headers=admin_headers
         ).json()
         assert included["total"] - excluded["total"] == len(self.VIRTUAL_CODES)
+
+    def test_raw_sql_virtual_row_serializes(self, client, admin_headers, test_db):
+        """迁移 0006 裸 SQL 种入的 IN_TRANSIT 行：data_source_status 为 NULL（列无
+        server_default，ORM 默认值不生效）——列表必须仍可序列化。
+        #487 评审🔴：种子/工厂走 ORM 恒有 "pending"，CI 全绿也拦不住此形态在生产 500。"""
+        test_db.execute(
+            text(
+                "INSERT INTO product "
+                "(code, market, name, product_type, asset_class_code, confirm_days, is_qdii) "
+                "VALUES ('MIG_IN_TRANSIT', '', '迁移在途', 'IN_TRANSIT', NULL, 0, 0)"
+            )
+        )
+        test_db.flush()
+        resp = client.get(
+            "/api/products?page_size=100&include_virtual=true", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        row = next(i for i in resp.json()["items"] if i["code"] == "MIG_IN_TRANSIT")
+        assert row["data_source_status"] is None
 
     def test_keyword_does_not_resurrect_virtual(self, client, admin_headers):
         """keyword 命中虚拟产品 code 时默认仍排除；include_virtual=true 才命中"""

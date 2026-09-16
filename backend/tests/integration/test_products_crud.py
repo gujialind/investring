@@ -8,17 +8,21 @@
 #     创建时仍保留默认推导器
 
 from tests.factories import create_product, create_asset_classification
+from app.schemas.product import ProductResponse
 
 
 class TestProductCRUD:
     """产品 CRUD API 测试"""
 
     def test_list_products(self, client, admin_headers):
-        """获取产品列表"""
+        """获取产品列表（issue #487：响应须经分页响应模型收窄，不多带 ORM 独有列）"""
         resp = client.get("/api/products", headers=admin_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert "items" in data
+        assert set(data.keys()) == {"items", "total", "page", "page_size"}
+        assert data["items"]
+        # 列表项口径 == ProductResponse：曾直吐 ORM 行多带 fallback_source / sync_error
+        assert set(data["items"][0].keys()) == set(ProductResponse.model_fields)
 
     def test_create_product(self, client, admin_headers, test_db):
         """创建产品"""

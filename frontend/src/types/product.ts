@@ -16,7 +16,8 @@ export interface Product {
   /** 展示标签（issue #228 起不参与快照取价判断，取价看 nav_lag_days） */
   is_qdii: boolean;
   data_source?: string;
-  data_source_status: string;
+  /** 列可空：迁移 0006 裸 SQL 种入的 IN_TRANSIT 行恒为 null（#487 评审订正） */
+  data_source_status: string | null;
   last_sync_at?: string;
   created_at?: string;
   updated_at?: string;

@@ -34,12 +34,25 @@ class TestInvestorCRUD:
         assert resp.status_code == 400
 
     def test_list_investors(self, client, admin_headers, test_db):
-        """获取投资人列表"""
+        """获取投资人列表（issue #487：响应须经分页响应模型收窄，不得泄漏 password_hash）"""
         resp = client.get("/api/investors", headers=admin_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert "items" in data
-        assert data["total"] >= 1
+        assert set(data.keys()) == {"items", "total", "page", "page_size"}
+        assert data["items"], "种子数据应至少有一个投资人（ADMIN）"
+        item = data["items"][0]
+        assert set(item.keys()) == {
+            "code",
+            "name",
+            "role",
+            "phone",
+            "email",
+            "last_login_at",
+            "created_at",
+            "updated_at",
+        }
+        # 兜底：任意嵌套层（含 future 新增包装）都不得出现凭据字段
+        assert "password_hash" not in resp.text
 
     def test_get_investor_detail(self, client, admin_headers, test_db):
         """获取单个投资人详情"""

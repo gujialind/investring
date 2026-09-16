@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 
@@ -63,7 +63,9 @@ class ProductUpdate(BaseModel):
 
 class ProductResponse(ProductBase):
     data_source: Optional[str] = None
-    data_source_status: str = "pending"
+    # 列可空（models/product.py 无 server_default）：迁移 0006 裸 SQL 种入的
+    # IN_TRANSIT_BUY/SELL 该列为 NULL，声明成非空会让这些行的响应校验 500（#487 评审）
+    data_source_status: Optional[str] = None
     last_sync_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -74,3 +76,14 @@ class ProductResponse(ProductBase):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedProductResponse(BaseModel):
+    """产品列表分页响应（issue #487 同因排查）：此前列表端点未声明响应模型，
+    直吐 ORM 整行多带 fallback_source / sync_error；items 元素复用 ProductResponse 口径。
+    sync_result / market_change_hint 为创建/更新路径专属字段，列表恒为 null。"""
+
+    items: List[ProductResponse]
+    total: int
+    page: int
+    page_size: int
