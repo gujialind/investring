@@ -112,7 +112,7 @@ export function TradeConfirmDialog({
   // 声明序在 reset 之后 ⇒ 同一次提交内先清后回填，最终值即回填值。
   useEffect(() => {
     if (preview?.confirm_date) setEffectiveConfirmDate(preview.confirm_date);
-  }, [preview?.confirm_date]); // TEMP-REVERT-B
+  }, [preview?.confirm_date, open, trade?.id]);
 
   const productName = formatProductName(trade?.product_name, trade?.product_code);
   // 有效值以预览回传为准（用户未选时即后端缺省：A = C、平台 = 基金腿平台）

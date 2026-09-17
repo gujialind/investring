@@ -576,19 +576,31 @@ test.describe('调仓在途资金生命周期（#493）', () => {
       sellConfirm.getByTestId('platform-trigger').filter({ hasText: '华宝证券' }),
     ).toBeVisible();
 
-    // #525 附项 B：关闭 → 重开同一笔。preview 已缓存、C 值不变 ⇒ 回填 effect 必须靠
-    // open/trade.id 依赖重新记回，否则 C 再也回不来：A<C 又可点、「选回 C」也不再归一
+    // 到账日下界 C（后端 INVALID_DATE_ORDER 在选择时即挡）：早于 C 的日期硬禁用。
+    // 收起日历用「再点一次触发按钮」而非点日期——react-day-picker 单选下「点已选日 = 取消选择」
+    await arrivalTrigger.click();
+    await expectDaysBeforeDisabled(page, d3);
+    await arrivalTrigger.click();
+
+    // 改选到账日 A = D+4（> C = D+3，形成 C..A 在途窗口）与到账平台 TTJJ（≠ 基金平台）
+    // → 两者都进 preview query key 重新预览（预览值即确认值），期间确认按钮禁用
+    const arrival = [d4];
+    await pickArrivalDate(page, sellConfirm, arrival[0]);
+    await pickArrivalPlatform(page, sellConfirm, ARRIVAL_PLATFORM);
+
+    // #525 附项 B（可观测半段）：关闭 → 重开同一笔不残留上次选择（回显回到后端缺省 A = C、
+    // 平台回到基金平台），须重新录入后才确认。
+    // 不可观测半段（C 回填丢失）在 UI 上不可稳定复现：父级关闭弹窗即清空 trade，preview
+    // 必经 undefined ⇒ 回填 effect 仍会重跑；依赖里补 open/trade.id 属防御性加固。
     await sellConfirm.getByRole('button', { name: '取消' }).click();
     await expect(sellConfirm).toBeHidden({ timeout: 15_000 });
     await fundRow(page, '卖出').locator('button[title="确认"]').click();
     await sellConfirm.waitFor();
     await expect(arrivalTrigger).toHaveText(d3);
-    await arrivalTrigger.click();
-    await expectDaysBeforeDisabled(page, d3);
-    await arrivalTrigger.click(); // 再点一次触发按钮收起日历（不点日期，规避「点已选日=取消选择」）
-    // 改选到账日 A = D+4（> C = D+3，形成 C..A 在途窗口）与到账平台 TTJJ（≠ 基金平台）
-    // → 两者都进 preview query key 重新预览（预览值即确认值），期间确认按钮禁用
-    const arrival = [d4];
+    await expect(
+      sellConfirm.getByTestId('platform-trigger').filter({ hasText: '华宝证券' }),
+    ).toBeVisible();
+
     await pickArrivalDate(page, sellConfirm, arrival[0]);
     await pickArrivalPlatform(page, sellConfirm, ARRIVAL_PLATFORM);
     await expect(sellConfirm.getByRole('button', { name: '确认' })).toBeEnabled({
