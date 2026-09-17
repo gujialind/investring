@@ -503,6 +503,11 @@ test.describe('调仓在途资金生命周期（#493）', () => {
   });
 
   test('卖出：创建无现金腿 → 确认录入到账日 → C..A 在途 → 到账', async ({ page }, testInfo) => {
+    // 单独放宽超时：本用例是全 spec 最长的一条（建买入 → 确认 → 3 段快照 → 确认弹窗 →
+    // 窄表单），mobile webkit 的耗时约为 chromium 的 3～4 倍（CI 实测 chromium 9.6s、
+    // mobile 30.5s 打满全局 30s）。超时不是断言失败却会被形态对比记成
+    // 「unexpected timedOut」，故按最重用例放宽，其余用例仍受全局 30s 约束。
+    test.setTimeout(60_000);
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
