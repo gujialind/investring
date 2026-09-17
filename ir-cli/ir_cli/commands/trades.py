@@ -113,13 +113,19 @@ def create(
         amount=amount,
         notes=notes,
     )
-    # 卖出创建期不接受任何到账信息（#493）：与后端 CASH_PLATFORM_NOT_ALLOWED 同码同语义，
-    # 前置拦截省一次往返，并把「改在 confirm 传」的入口直接写进 hints
+    # 卖出创建期不接受到账**平台**（#493）：与后端 CASH_PLATFORM_NOT_ALLOWED 同码同语义，
+    # 前置拦截省一次往返，并把「改在 confirm 传」的入口直接写进 hints。
+    # 只拦平台：到账**日期**没有对应的 CLI 选项，仅可能经 --json 漏入，由后端
+    # CASH_CONFIRM_DATE_NOT_ALLOWED 兜底（同为创建期拒绝，无正确性差异）。
     if body.get("trade_type") == "sell" and body.get("cash_platform_code"):
+        platform = body["cash_platform_code"]
         error(
             "CASH_PLATFORM_NOT_ALLOWED",
             "卖出交易在创建时不能指定到账平台（--cash-platform-code 创建时仅供买入扣款）",
-            hints=[f"到账平台改在确认时传入: ir trade confirm <id> --cash-platform-code {body['cash_platform_code']}"],
+            hints=[
+                f"去掉 --cash-platform-code 重新执行 create 拿到 id 后，在确认时传入: "
+                f"ir trade confirm <id> --cash-platform-code {platform}"
+            ],
         )
     if allow_duplicate:
         body["allow_duplicate"] = True

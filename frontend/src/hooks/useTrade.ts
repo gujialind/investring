@@ -189,8 +189,8 @@ export function useCancelTrade() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    // 后端 cancel 只回 {message}（无 id/portfolio_code），组合 code 由调用方经
-    // variables 传入——不能从响应里取不存在的字段
+    // 响应形状见 `TradeMessageResponse`（只回 {message}，无 id/portfolio_code）：
+    // 组合 code 由调用方经 variables 传入——不能从响应里取不存在的字段
     mutationFn: ({ id }: { id: number; portfolioCode: string }) => tradeApi.cancel(id),
     onSuccess: (_data, variables) => {
       invalidateTradeWrites(queryClient, variables.portfolioCode, variables.id);
@@ -216,7 +216,7 @@ export function useUnconfirmTrade() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    // 后端 unconfirm 只回 {message}，同上：组合 code 取自 variables
+    // 响应形状见 `TradeMessageResponse`：组合 code 取自 variables
     mutationFn: ({ id }: { id: number; portfolioCode: string }) => tradeApi.unconfirm(id),
     onSuccess: (_data, variables) => {
       invalidateTradeWrites(queryClient, variables.portfolioCode, variables.id);
@@ -251,7 +251,7 @@ export function useDeleteTrade() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    // 后端 delete 无响应体，组合 code 取自 variables
+    // 响应形状见 `TradeMessageResponse`（只回 {message}，非无响应体）：组合 code 取自 variables
     mutationFn: ({ id }: { id: number; portfolioCode: string }) => tradeApi.delete(id),
     onSuccess: (_data, variables) => {
       invalidateTradeWrites(queryClient, variables.portfolioCode, variables.id);

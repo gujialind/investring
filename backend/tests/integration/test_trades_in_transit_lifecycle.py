@@ -1211,6 +1211,16 @@ class TestOwnDeductionAddback:
         cash_leg.status = "cancelled"
         test_db.flush()
         assert _own_cash_sell_legs(test_db, fund) == []
+        # 行为面（评审 follow-up）：只断言私有 filter 会在
+        # `validate_buy_cash_with_addback` 绕开该 helper 时仍绿，而 cancelled 腿一旦
+        # 被加回就等于虚增可用现金、放行超预算买入——故直接钉住加回未发生：
+        # 可用现金仍是 10000，10001 必拒。
+        with pytest.raises(BusinessError) as exc:
+            validate_buy_cash_with_addback(
+                test_db, code, Decimal("10001"), as_of=T, self_trade=fund,
+            )
+        assert exc.value.code == "INSUFFICIENT_CASH"
+        assert Decimal(exc.value.details["available"]) == Decimal("10000.00")
 
 
 # ============================================================================

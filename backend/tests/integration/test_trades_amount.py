@@ -246,7 +246,7 @@ class TestExchangeSellAmountDerivation:
             Trade.portfolio_code == "ES_P1", Trade.product_code == "CASH"
         ).first()
 
-    def test_create_derives_amount_and_cash_leg(self, client, admin_headers, test_db):
+    def test_create_derives_amount_without_cash_leg(self, client, admin_headers, test_db):
         """不传 actual_amount：amount/actual_amount 由 shares×price 推导
 
         #493：卖出创建期**不建** CASH 腿（到账日/平台在确认时录入），故此处断言

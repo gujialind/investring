@@ -1,3 +1,5 @@
+import type { TradeConfirmParams } from "@/types/trade";
+
 /**
  * react-query queryKey 统一工厂。
  *
@@ -9,16 +11,16 @@
  * 约定：[域(复数小写/kebab-case), 子资源/操作, ...参数]
  */
 /**
- * 交易确认预览的有效业务选项（#493）：与 `types/trade.ts::TradeConfirmParams`
- * 的 preview 子集同形（不含 confirm 端独占的 sync_nav）。
+ * 交易确认预览的有效业务选项（#493）：从 `types/trade.ts::TradeConfirmParams`
+ * 的 preview 子集派生（排除 confirm 端独占的 `sync_nav`），字段集与类型只有一份
+ * 事实来源——新增预览输入时不会漏进 `previewWith` 的缓存键（漏了就是拿过期预览
+ * 当确认值，即本文件约定块要防的事）。
  * 字段为 undefined 表示「交给后端取缺省值」，与显式传值不同 key。
  */
-export interface TradePreviewOptions {
-  confirm_date?: string;
-  price?: number;
-  cash_confirm_date?: string;
-  cash_platform_code?: string;
-}
+export type TradePreviewOptions = Pick<
+  TradeConfirmParams,
+  "confirm_date" | "price" | "cash_confirm_date" | "cash_platform_code"
+>;
 
 /**
  * 把「用户显式选择」归一为「是否要真的传参」（#493 约定⑤ → `previewWith` 分键的唯一性）：

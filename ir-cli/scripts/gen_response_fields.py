@@ -67,6 +67,8 @@ NOTES_OVERRIDES = {
     "asset-classification.list.sort_order": "asset_class 维度的序位即前端饼图/分区色板序位，变更即改色",
     "asset-classification.get.dimension_rules": "仅 asset_class 维度值有值：{dimension: rule}，rule ∈ required/optional，未出现的维度 = forbidden",
     "share-event.list.product_name": "读侧派生：仅 list 端点 join 产品表填充，产品缺失为null；get/单对象端点恒为null",
+    "trade.list.cash_platform_code": "读侧派生（按配对CASH腿）：买入=扣款平台、卖出=到账平台；null=无配对现金腿（如待确认卖出，到账信息在确认时录入），CASH腿自身恒为null",
+    "trade.list.cash_confirm_date": "读侧派生（按配对CASH腿）：买入=扣款日T、卖出=到账日A（缺省A=C）；null=无配对现金腿，CASH腿自身恒为null",
 }
 
 # openapi 类型 → 缩写

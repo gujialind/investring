@@ -14,7 +14,7 @@
     PYTHONPATH=ir-cli .venv/bin/python -m pytest ir-cli/tests/ -q
 """
 import json
-from typing import Optional
+import re
 
 import pytest
 
@@ -188,7 +188,9 @@ class TestConfirmPreviewCashInputs:
         assert result.exit_code == 0
         assert "--cash-platform-code" in result.stdout
         assert "--cash-confirm-date" in result.stdout
-        assert "缺省 A=C" in result.stdout or "缺省 A=C" in result.stdout.replace("\n", "")
+        # 帮助文案按终端宽度折行（click 用 textwrap 吃掉断点空格并对续行重缩进），
+        # 故按空白归一化后再匹配，避免窄终端把该断言打红
+        assert "缺省A=C" in re.sub(r"\s+", "", result.stdout)
 
     def test_preview_sends_cash_platform_and_date_as_query(self, monkeypatch, cli):
         client = _patch_client(
