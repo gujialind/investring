@@ -1,4 +1,5 @@
 import type { Trade } from "@/types/trade";
+import { toDateOnly } from "@/lib/utils";
 
 /**
  * 调仓列表结对视图行（#126 决策⑧）：
@@ -10,6 +11,26 @@ export type TradeRow =
   | { kind: "single"; trade: Trade };
 
 const CASH_CODE = "CASH";
+
+/**
+ * 现金行判定（根 `AGENTS.md` §2.5：一律按 `product_code`，不看产品分类字符串）。
+ * 与后端 `update_trade` 的 CASH 守卫同口径（`trade.product_code == "CASH"`）。
+ */
+export function isCashLeg(trade: Trade): boolean {
+  return trade.product_code === CASH_CODE;
+}
+
+/**
+ * 已确认卖出行的「修改到账日期」窄入口是否适用（#525）：只给**基金**卖出腿。
+ *
+ * CASH 卖出腿（赎回配对 `sub_` 腿、当天完成的现金转移主腿）不是窄例外的设计对象：
+ * ① 后端 PUT 对 CASH 腿的非 notes 字段一律 `CASH_TRADE_FORBIDDEN`；② 读侧派生的
+ * `cash_confirm_date` 只填在基金腿上（CASH 腿自身恒 null）→ 弹窗预填恒空、保存钮
+ * 恒禁用，而手选日期提交必被 ① 拒绝（死路入口）。这类行回到「先取消确认」分支。
+ */
+export function canEditArrivalDate(trade: Trade): boolean {
+  return !isCashLeg(trade) && trade.trade_type === "sell";
+}
 
 /**
  * trades → 结对行。顺序敏感：分组与输出均保持传入顺序（= 后端
@@ -44,8 +65,8 @@ export function groupTradeRows(trades: Trade[]): TradeRow[] {
     }
     if (legs.length === 2) {
       const [a, b] = legs;
-      const aIsCash = a.product_code === CASH_CODE;
-      const bIsCash = b.product_code === CASH_CODE;
+      const aIsCash = isCashLeg(a);
+      const bIsCash = isCashLeg(b);
       // 恰一条 CASH 才成对；两腿均非 CASH（异常数据）不满足，落规则 5
       if (aIsCash !== bIsCash) {
         rows.push({ kind: "pair", main: aIsCash ? b : a, sub: aIsCash ? a : b });
@@ -67,11 +88,42 @@ export function groupTradeRows(trades: Trade[]): TradeRow[] {
 }
 
 /**
+ * 配对现金腿是否**已到账**（#493 评审加固；现金账本口径见根 `AGENTS.md` §2.5）：
+ * 须 **confirmed 且生效日不在未来**——只看日期会把「已到期但尚未确认」的腿
+ * （跨天现金转移的转入腿、卖出到账腿）显示成已到账，而 pending 腿**不计入可用现金**。
+ * 无生效日（尚未生效的 pending 腿）按未到账处理；cancelled 腿一律未到账。
+ *
+ * 买入方向刻意**不消费本判据**（`cashSubMeta` 直接丢弃 `arrived`）：扣款腿创建即
+ * confirmed、现金日 = 下单日 T，与下单同日完成。未来 T 的预约/补录虽可能存在
+ * （`create_trade` 只校验交易日与晚于最新快照日，不禁止未来日），但「扣款已记账」
+ * 是既成事实，与卖出「份额已扣、资金未到账」的在途语义不同源——故买入恒显示
+ * 「现金扣款」，不设「现金待扣款」态。
+ */
+export function cashLegArrived(sub: Trade, today: string = toDateOnly(new Date())): boolean {
+  if (!sub.confirm_date) return false;
+  return sub.status === "confirmed" && sub.confirm_date <= today;
+}
+
+/**
  * 现金子行派生数据（规范 §8）：主行为买入 → 现金扣款（-）；主行为卖出 → 现金到账（+）。
  * 符号为语义修饰，展示层手工前缀，不回写数值、不走涨跌色 token。
+ *
+ * `arrived=false`（#493）：配对现金腿尚未实际到账——判据见 `cashLegArrived`
+ * （**confirmed 且日期不在未来**，不是只看日期：卖出到账腿可携带未来
+ * `confirm_date`，跨天转移的转入腿到期未确认时仍 pending）。主行状态讲的是基金腿，
+ * 故在此显式区分——**未来到账的 confirmed 现金、以及已到期仍 pending 的现金，
+ * 都不得标成已经到账**。
+ * 缺省 true = 沿用旧行为（买入扣款腿创建即 confirmed、现金日 = 下单日 T）。
+ * 买入侧的 `arrived` 被刻意忽略，依据见 `cashLegArrived`。
  */
-export function cashSubMeta(main: Trade): { label: "现金扣款" | "现金到账"; sign: "-" | "+" } {
-  return main.trade_type === "buy" ? { label: "现金扣款", sign: "-" } : { label: "现金到账", sign: "+" };
+export function cashSubMeta(
+  main: Trade,
+  options?: { arrived?: boolean }
+): { label: "现金扣款" | "现金到账" | "现金待到账"; sign: "-" | "+" } {
+  if (main.trade_type === "buy") return { label: "现金扣款", sign: "-" };
+  return options?.arrived === false
+    ? { label: "现金待到账", sign: "+" }
+    : { label: "现金到账", sign: "+" };
 }
 
 /**

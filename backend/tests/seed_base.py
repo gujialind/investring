@@ -218,7 +218,9 @@ def seed_e2e_active(db: Session) -> None:
         confirm_single_subscription, create_subscription,
     )
     from app.services.trade_service import confirm_single_trade, create_trade
-    from app.services.trading_utils import get_prev_trading_day, is_trading_day
+    from app.services.trading_utils import (
+        get_next_trading_day, get_prev_trading_day, is_trading_day,
+    )
 
     today = date.today()
     d4 = today if is_trading_day(db, today) else get_prev_trading_day(db, today)
@@ -247,6 +249,22 @@ def seed_e2e_active(db: Session) -> None:
         ))
     db.flush()
 
+    # #493：调仓在途 E2E spec（frontend/e2e/trade-in-transit.spec.ts）自建隔离组合后
+    # 要逐日生成快照，而其日期锚定 /api/trading-calendar 的「today 起最近一个交易日」
+    # （= d4）及其后 3 个交易日——D+3 是卖出到账日快照，份额虽已减少但仍持仓，同样
+    # 必须取到价（否则 MISSING_NAV）。故按交易日铺 D..D+4 一段窗口，而不是只埋 spec
+    # 当前会用到的那两天：固定/过窄的窗口是 #468 同型的时间炸弹。
+    # 净值口径与 spec 的 NAV 常量一一对应（D=1.5000、D+1=1.5500、D+2=1.6000），
+    # **两侧改动必须同步**；种子侧由 tests/integration/test_seed_contract.py 锁定。
+    nav_date = d4
+    for px in ("1.5000", "1.5500", "1.6000", "1.6000", "1.6000"):
+        db.add(PriceRecord(
+            product_code="000300.OF", market="CN_OTC",
+            price_date=nav_date, unit_price=Decimal(px), source="seed",
+        ))
+        nav_date = get_next_trading_day(db, nav_date)
+    db.flush()
+
     # 首次申购：apply=D1、confirm=D2（T+1 自动），首窗净值 1.0000 无需行情；
     # 确认后组合转 active、started_at=D2、生成配对 CASH buy 腿
     sub = create_subscription(
@@ -269,9 +287,8 @@ def seed_e2e_active(db: Session) -> None:
         price=Decimal("4.0000"), amount=Decimal("60000"), fee=Decimal("0"),
         platform_code="HBZQ", notes="E2E 种子场内买入（已确认）",
     )
-    # 必须先 flush 让基金腿拿到 id：confirm 内 sync_transfer_group 以
-    # (transfer_group, id != 自身) 在库中定位配对 CASH 腿，id=None 时查不到，
-    # CASH 腿滞留 pending → 快照预校验 _check_pending_transactions 阻断
+    # flush 让创建期的配对 CASH 扣款腿（#493：买入创建即 confirmed）在同事务内
+    # 落库可见，confirm 的可用现金核验与后续快照预校验读到一致状态
     db.flush()
     confirm_single_trade(db, trade_confirmed, product_510300)
     db.flush()

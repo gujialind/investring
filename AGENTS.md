@@ -107,13 +107,13 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 | --- | --- | --- |
 | 申购确认 | 1 条 buy（直接 confirmed） | `sub_{subscription.id}` |
 | 赎回确认 | 1 条 sell（直接 confirmed） | `sub_{subscription.id}` |
-| 基金买入 | 基金 buy + CASH sell（同状态/日期） | `rebal_{uuid}` |
-| 基金卖出 | 基金 sell + CASH buy（同状态/日期） | `rebal_{uuid}` |
+| 基金买入 | 基金 buy（pending）+ CASH sell（创建即 confirmed，现金日 = 下单日 T） | `rebal_{uuid}` |
+| 基金卖出 | 创建仅基金 sell（pending）；**确认时**建 CASH buy（confirmed，`trade_date` = 基金确认日 C、`confirm_date` = 到账日 A） | `rebal_{uuid}` |
 | 跨平台转移 | CASH sell + CASH buy | `{uuid}` |
 
-* **可用现金必须实时计算**（快照基线 + 增量；无快照时基线为 0、退化为全量流水口径且每笔只计一次，#515。函数级表达式见 `backend/AGENTS.md` §1.3）。**时点口径**（#70/#78）：流出（sell）的资金承诺锚定**下单日 `trade_date`**，不论 pending/confirmed；流入（buy）须 confirmed 且 `confirm_date <= T` 才计入。故 **pending 卖出不增加可用现金**，买入只能用已有可用现金，不足时须先卖后买两步操作。
+* **可用现金必须实时计算**（快照基线 + 增量；无快照时基线为 0、退化为全量流水口径且每笔只计一次，#515。函数级表达式见 `backend/AGENTS.md` §1.3）。**时点口径**（#70/#78）：流出（sell）的资金承诺锚定**下单日 `trade_date`**，不论 pending/confirmed；流入（buy）须 confirmed 且 `confirm_date <= T` 才计入。故 **pending 卖出不增加可用现金**，买入只能用已有可用现金，不足时须先卖后买两步操作。**自身扣款加回**（#493）：买入验资把自身组内 CASH sell 腿（pending/confirmed）加回一次——它已在本时点口径中被扣掉（快照基线或快照后增量）；查询时点之后的扣款与 cancelled 腿不加回。
 * **CASH 腿来源受限**：仅由申赎、基金调仓配对、跨平台转移三条路径生成（均预置 `transfer_group`）；`trade.transfer_group` 为 NOT NULL，REST 禁止直接创建 CASH 交易。
-* **在途资金**（#93）：`IN_TRANSIT_BUY` = 已扣款但基金份额未确认；`IN_TRANSIT_SELL` = 已卖出但到账未确认。两者每日独立计算、不继承前日，`cash_amount` 恒正，计入市值但不计入可用现金。
+* **在途资金**（#93，#493 起为**单腿确认**口径）：`IN_TRANSIT_BUY` = 扣款腿（CASH sell）已 confirmed 且现金日 ≤ D、基金买入腿尚未在 D 日生效（pending，或 confirmed 但 C > D）；`IN_TRANSIT_SELL` = 基金卖出腿已 confirmed 且 C ≤ D、到账腿（CASH buy）尚未生效（pending，或 confirmed 但 A > D）。两腿均 confirmed 的跨期窗口与跨天现金转移规则保留，配对方向显式限定、**cancelled 腿一律排除**，金额按现金腿平台归属。两者每日独立计算、不继承前日，`cash_amount` 恒正，计入市值但不计入可用现金。
 * **现金行判定一律用 `cash_amount IS NOT NULL`**（CHECK 约束保证与 `shares` 恰有其一），不看产品类型字符串；CASH 与在途行由此自然落入现金口径。
 * **市值** = Σ(场内份额 × 收盘价) + Σ(场外份额 × 净值) + Σ(现金行 `cash_amount`)；**净值** `unit_price = total_value / total_shares`（4 位小数）；在途合计另记于 `portfolio_value_snapshot.in_transit_total`。
 
@@ -126,7 +126,7 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 * **增量累加**：当日持仓与现金 = 前日基线 + 窗口内 confirmed 交易 + 事件增量 + `manual_market_value` 绝对覆盖。
 * **净值严格匹配**（#96/#178，#228 起泛化）：取价日**只由产品 `nav_lag_days` 决定**——`0` 取 `price_date == snapshot_date` 当日价格，`N` 取交易日历上前第 N 个交易日；禁止向前回退，任一持仓缺价即拒绝生成（`MISSING_NAV`）。**trade 确认侧与此正交**：确认恒取 T 日价格，确认间隔由落库的 `confirm_days` 决定。
 * **删除必级联**：删某日快照则其后所有快照一并删除（连续原则）。级联回退以**数据依赖**为准——`apply_date` 落在被删区间的 confirmed 申赎（以该日快照净值定价）、`entitlement_date` 落在被删区间的 confirmed 事件（基数份额回写自该日快照）自动退回 pending，配对 CASH 腿删除、基金级父事件的子记录物理删除；**交易不级联**——其取价依赖产品行情而非组合快照。**级联任一笔回退失败即整体中止、不删任何快照**（#203：异常被吞曾产生孤儿记录）。
-* **重算 = 单一事务**：删任何快照前先对整区间做净值完整性预校验，失败直接拒绝、不删任何快照；随后逐交易日「删旧 → 级联回退 → 重建 → auto_confirm」全程不 commit，任一日失败即停，对外表现为「要么完整成功、要么无变化」。`auto_confirm` 每日快照后确认到期的 pending 申赎/交易/事件（重算时被级联回退的记录由此重新确认；日期键见 `backend/AGENTS.md` §1.3），单笔失败只记 `auto_confirm_failed`、不阻断当日流程。
+* **重算 = 单一事务**：删任何快照前先对整区间做净值完整性预校验，失败直接拒绝、不删任何快照；随后逐交易日「删旧 → 级联回退 → 重建 → auto_confirm」全程不 commit，任一日失败即停，对外表现为「要么完整成功、要么无变化」。`auto_confirm` 每日快照后确认到期的 pending **申赎 / 事件 / 跨天现金转移**（#493 起**不含调仓交易**，见 §2.9；重算时被级联回退的记录由此重新确认；日期键见 `backend/AGENTS.md` §1.3），单笔失败只记 `auto_confirm_failed`、不阻断当日流程。
 * **零快照 + 目标日前已有确认交易**（#180）：单日 generate 拒绝（`SNAPSHOT_REQUIRES_RECALCULATE`）——增量窗口无前序快照时会退化为仅目标日，早期到账被静默漏掉（首快照「失忆」）；须用 recalculate 从最早 `confirm_date` 逐日重建。目标日即最早到账日的真正首次生成不受影响。
 
 ### 2.7 通用生命周期（三态与配对腿）
@@ -134,9 +134,9 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 交易、申赎、事件共用 `pending / confirmed / cancelled`，均支持 confirm / unconfirm / cancel：
 
 * **confirm**：把待定的量算实（申赎算份额/金额、trade 取 T 日价格、事件回写权益登记日份额并算变动值），并生成配对记录。
-* **unconfirm**：回退至 pending。**快照保护**——若确认日（事件为 `ex_date`）及之后已有快照则拒绝（`SNAPSHOT_DEPENDENCY`），须先删快照。申赎 unconfirm 会物理删除配对 CASH 腿。
+* **unconfirm**：回退至 pending。**快照保护**——若确认日（事件为 `ex_date`）及之后已有快照则拒绝（`SNAPSHOT_DEPENDENCY`），须先删快照；**调仓为组级口径**（组内任一腿确认日及之后有快照即拒，改日期时新值一并纳入保护），cancel/delete 同此。申赎 unconfirm 会物理删除配对 CASH 腿；调仓按 §2.5/§2.9 的矩阵处理配对腿。
 * **cancel**：仅 pending 可取消。已 confirmed 的记录不可直接改删，须先 unconfirm。
-* **`transfer_group` 原子翻转**：基金腿状态/日期/金额变化时配对 CASH 腿自动同步，删除基金腿级联删除 CASH 腿。**但各腿保持创建时设定的独立 `confirm_date`**——同步不传播确认日；unconfirm 时 CASH 腿按方向回退默认值（买入扣款 T 日即 `trade_date`、卖出到账与基金确认日一致），创建时亦可显式覆盖。
+* **`transfer_group` 按操作矩阵同步**（#493 起不再「无条件同状态/同 `trade_date`」）：cancelled 整组回退（含 CASH 腿）；**买入** unconfirm 保留 CASH 扣款腿 confirmed（扣款既成事实，日期金额不动）；**卖出** unconfirm 删除 CASH 腿、回到「未创建」态（再次确认沿用原组号重建）；买入扣款腿的生效日锚定下单日 T（不传播 `confirm_date`），卖出到账腿锚定基金确认日 C。删除基金腿级联删除 CASH 腿。**备注（notes）是非会计更新**：pending/confirmed 均可改，不重算金额、不镜像配对腿、不触发快照保护。
 * **净值稳定性**：申购、赎回、现金分红、份额拆分/合并 → 净值不变；调仓 → 净值可能变化。
 * **负现金两道防线**：unconfirm 本身放行（不设前置现金守卫），负现金由消费点拦截——① 赎回确认校验平台可用现金；② 快照生成对 CASH `cash_amount < 0` 硬阻断（`NEGATIVE_CASH`）。
 
@@ -151,14 +151,15 @@ draft ──首次申购确认──▶ active ──close──▶ closed ─�
 
 ### 2.9 调仓 trade 与现金转移
 
-调仓是组合内部的资产互换，**每条基金腿必有一条等额现金腿**（同 `transfer_group`、同状态、同交易日）。
+调仓是组合内部的资产互换，**每条基金腿最终必有一条等额现金腿**（同 `transfer_group`、金额恒等基金腿 `actual_amount`）。#493 起两腿**状态与生效日可不同步**，且**卖出在确认前尚无现金腿**——这是刻意的「半成品组」（组号已分配、组内只有基金腿），不是数据缺失：买入创建即扣款（CASH sell confirmed、现金日 T；基金腿 pending 待确认），卖出确认时才建到账腿（CASH buy confirmed、`trade_date` = 基金确认日 C、`confirm_date` = 到账日 A，缺省 A=C）。**调仓 CASH 腿只能由基金腿驱动**，直接对其 confirm/unconfirm/cancel/delete 或 PUT 改财务字段一律拒绝（`CASH_TRADE_FORBIDDEN`，notes 例外）。
 
 * **金额口径**：买入 `amount = actual_amount − fee`（`actual_amount` 是含费现金支出）、`shares = amount / price`；卖出金额是**纯派生量**——有价格时 `amount = quantize(shares × price)`、`actual_amount = amount − fee`，显式传入的金额只作对账校验、落库恒用推导值。场外未传价时创建期占位，确认时按 T 日净值重算。
 * **确认取价**：`confirm_date` 创建时即按 `product.confirm_days` 设定（可传参覆盖，补录用）；场内用录入的成交价，场外严格用 T 日净值（未同步则拒绝，禁止向前查找）。
-* **可用量校验**：买入按**扣款平台**校验可用现金（创建与确认均是），卖出对称校验可用份额；pending 卖出不增加可用现金（§2.5）。基金买/卖可指定 `cash_platform_code` 让 CASH 腿落到另一平台（#91），免去前置的平台间现金转移。
+* **可用量校验**：买入按**扣款平台**校验可用现金（创建与确认均是；自身扣款腿加回口径见 §2.5），卖出对称校验可用份额；pending 卖出不增加可用现金（§2.5）。基金**买**可传 `cash_platform_code` 指定扣款平台、CASH 腿落到该平台（#91），免去前置的平台间现金转移；基金**卖**的到账平台与到账日在 **confirm/preview** 传 `cash_platform_code` / `cash_confirm_date`（创建期传入报 `CASH_PLATFORM_NOT_ALLOWED` / `CASH_CONFIRM_DATE_NOT_ALLOWED`），已确认卖出可用 PUT 只改 `cash_confirm_date`（不传保持、显式 null 拒绝、混入其他字段整体拒绝）。
 * **跨平台现金转移**是 `transfer_group` 的特例（复用 `trade` 表，一次生成 CASH sell + buy 两腿）：
   - **当天完成**：两腿立即 confirmed，`confirm_date = transfer_date`。
   - **跨天到账**：转出腿当日 confirmed、转入腿 pending 且 `confirm_date = 下一交易日`，次日确认。**非对称状态是刻意的**——保证 D 日净值不因在途转移虚跌（转出方当日扣减、转入方在途不虚增）；在途期间转入腿不计入目标平台可用现金。
+* **调仓不参与 auto_confirm**（#493 决策 6 / #471）：快照自动推进（自动任务 / 追平 / 重算）不确认调仓基金腿，跨天转移分支排除 `rebal_` 组；到期未确认调仓由 pending 预校验阻断快照，需人工确认后继续。申赎、事件与跨天现金转移的自动确认不变。
 * 防重自然键、PUT 直改的字段联动与容差见 `business-constraints.md`。
 
 ### 2.10 事件 event

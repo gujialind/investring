@@ -408,7 +408,14 @@ class TestTradeAudit:
             test_db.flush()
             row = _one(test_db, action=ACTION_CANCEL,
                        resource_type=RESOURCE_TRADE, resource_id=str(trade.id))
-        assert _payload(row) == ({"status": "pending"}, {"status": "cancelled"})
+        old, new = _payload(row)
+        assert old == {"status": "pending"}
+        assert new["status"] == "cancelled"
+        # #493：整组回退——配对买入扣款腿一并 cancelled，折进同一业务审计载荷
+        assert new["transfer_group"] == trade.transfer_group
+        assert new["cash_leg"]["action"] == "status_synced"
+        assert new["cash_leg"]["status"] == "cancelled"
+        assert new["cash_leg"]["platform_code"] == "MYCF"
 
     def test_delete_cascades_paired_cash_leg(self, client, admin_headers, test_db):
         port = "AUD_TRD_D"

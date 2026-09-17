@@ -68,7 +68,11 @@ RESPONSE_FIELDS: dict = {
     "trade": {
         "list": {
             "shape": "list",
-            "fields": "*portfolio_code:str,*product_code:str,*market:str?,*platform_code:str?,*trade_type:str,transfer_group:str?,*shares:num?,*amount:num?,*price:num?,fee:num,actual_amount:num?,*trade_date:date,*confirm_date:date?,*status:str,notes:str?,*id:int,created_at:datetime?,updated_at:datetime?,product_name:str?"
+            "fields": "*portfolio_code:str,*product_code:str,*market:str?,*platform_code:str?,*trade_type:str,transfer_group:str?,*shares:num?,*amount:num?,*price:num?,fee:num,actual_amount:num?,*trade_date:date,*confirm_date:date?,*status:str,notes:str?,*id:int,created_at:datetime?,updated_at:datetime?,product_name:str?,*cash_platform_code:str?,*cash_confirm_date:date?",
+            "notes": {
+                "cash_platform_code": "读侧派生（按配对CASH腿）：买入=扣款平台、卖出=到账平台；null=无配对现金腿（如待确认卖出，到账信息在确认时录入），CASH腿自身恒为null",
+                "cash_confirm_date": "读侧派生（按配对CASH腿）：买入=扣款日T、卖出=到账日A（缺省A=C）；null=无配对现金腿，CASH腿自身恒为null"
+            }
         }
     },
     "sub": {

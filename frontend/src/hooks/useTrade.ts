@@ -1,15 +1,44 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { tradeApi, subscriptionApi, getErrorMessage, ApiException } from "@/lib/api";
 import type { SubscriptionListParams, TradeListParams } from "@/lib/api";
-import { TradeCreate, TradeUpdate } from "@/types/trade";
+import { TradeConfirmParams, TradeCreate, TradeUpdate } from "@/types/trade";
 import { SubscriptionCreate, SubscriptionUpdate } from "@/types/subscription";
 import { queryKeys } from "@/lib/queryKeys";
+import type { TradePreviewOptions } from "@/lib/queryKeys";
 import { useUIStore } from "@/stores/uiStore";
 
 const TRADE_QUERY_KEY = "trades";
 const SUBSCRIPTION_QUERY_KEY = "subscriptions";
+
+/**
+ * 调仓写操作后的缓存失效面（#493 §3.4.7 单点持有）：
+ * 交易列表/详情、组合（含可用现金）、持仓、快照状态。
+ *
+ * 为什么必须连快照状态一起失效：调仓现在会改变在途资金与现金/份额的生效时点，
+ * 「最新快照日 → 能否推进」的判定随写操作实时变化；未确认的到期调仓会阻断
+ * 快照推进（#493 决策 6），只刷交易列表会让快照页继续显示过期结论。
+ */
+function invalidateTradeWrites(
+  queryClient: QueryClient,
+  portfolioCode: string,
+  tradeId?: number
+) {
+  queryClient.invalidateQueries({ queryKey: queryKeys.trades.list() });
+  if (tradeId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.trades.detail(tradeId) });
+  }
+  queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
+  queryClient.invalidateQueries({ queryKey: queryKeys.positions.root });
+  queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
+}
 
 // ==================== 调仓交易 Hooks ====================
 
@@ -33,11 +62,18 @@ export function useTrade(id: number) {
   });
 }
 
-// 确认前预览 Hook（#248）：确认弹窗打开时才发请求；禁用重试，错误即时展示在弹窗内
-export function useTradePreview(id: number | null, enabled: boolean) {
+// 确认前预览 Hook（#248）：确认弹窗打开时才发请求；禁用重试，错误即时展示在弹窗内。
+// #493：有效业务选项（确认日/价格/到账日/到账平台）纳入 query key → 用户在弹窗内改到账
+// 信息即换 key 重新预览，「预览值即确认值」在新增输入维度上同样成立。
+// staleTime=0 保持「重开必 refetch」，调用方须以 isLoading || isFetching 判加载态。
+export function useTradePreview(
+  id: number | null,
+  enabled: boolean,
+  options?: TradePreviewOptions
+) {
   return useQuery({
-    queryKey: queryKeys.trades.preview(id ?? 0),
-    queryFn: () => tradeApi.preview(id!),
+    queryKey: queryKeys.trades.previewWith(id ?? 0, options),
+    queryFn: () => tradeApi.preview(id!, options),
     enabled: enabled && !!id,
     retry: false,
     staleTime: 0,
@@ -52,17 +88,16 @@ export function useCreateTrade() {
   return useMutation({
     mutationFn: (data: TradeCreate) => tradeApi.create(data),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
-      queryClient.invalidateQueries({
-        queryKey: ["portfolios", data.portfolio_code],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["positions", data.portfolio_code],
-      });
+      invalidateTradeWrites(queryClient, data.portfolio_code);
       addToast({
         type: "success",
         title: "交易创建成功",
-        message: `${data.trade_type === "buy" ? "买入" : "卖出"} 申请已提交`,
+        // #493：买入创建即扣款（CASH sell 腿直接 confirmed、现金日 T），基金份额仍待确认；
+        // 卖出创建只建基金腿，到账平台/到账日在确认时录入
+        message:
+          data.trade_type === "buy"
+            ? "已记账扣款，基金份额待确认"
+            : "卖出申请已提交，确认时录入到账信息",
       });
     },
     onError: (error: unknown) => {
@@ -101,12 +136,7 @@ export function useUpdateTrade(id: number) {
   return useMutation({
     mutationFn: (data: TradeUpdate) => tradeApi.update(id, data),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, id] });
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
-      // 改金额/日期后可用现金可能变化，与 create/confirm 对齐失效持仓缓存（#174）
-      queryClient.invalidateQueries({
-        queryKey: ["positions", data.portfolio_code],
-      });
+      invalidateTradeWrites(queryClient, data.portfolio_code, id);
       addToast({
         type: "success",
         title: "更新成功",
@@ -123,27 +153,24 @@ export function useUpdateTrade(id: number) {
   });
 }
 
-// 确认交易 Hook
+// 确认交易 Hook（#493：确认输入改走 query 参数，响应外层结构见 TradeConfirmResponse）
 export function useConfirmTrade() {
   const queryClient = useQueryClient();
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data?: { confirm_date?: string; price?: number } }) =>
-      tradeApi.confirm(id, data),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, data.id] });
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
-      queryClient.invalidateQueries({
-        queryKey: ["portfolios", data.portfolio_code],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["positions", data.portfolio_code],
-      });
+    mutationFn: ({ id, params }: { id: number; params?: TradeConfirmParams }) =>
+      tradeApi.confirm(id, params),
+    onSuccess: (data, variables) => {
+      // 交易本体在响应的 trade 字段（外层另平铺 id/portfolio_code 等历史字段）
+      invalidateTradeWrites(queryClient, data.portfolio_code, variables.id);
       addToast({
         type: "success",
         title: "确认成功",
-        message: "交易已确认",
+        message:
+          data.trade.trade_type === "sell"
+            ? `卖出已确认，资金到账日 ${data.trade.cash_confirm_date ?? data.trade.confirm_date ?? "--"}`
+            : "交易已确认，基金份额已入账",
       });
     },
     onError: (error: unknown) => {
@@ -156,19 +183,17 @@ export function useConfirmTrade() {
   });
 }
 
-// 取消交易 Hook
+// 取消交易 Hook（#493：取消是**整组**回退，CASH 腿一并处理）
 export function useCancelTrade() {
   const queryClient = useQueryClient();
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: (id: number) => tradeApi.cancel(id),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, data.id] });
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
-      queryClient.invalidateQueries({
-        queryKey: ["portfolios", data.portfolio_code],
-      });
+    // 响应形状见 `TradeMessageResponse`（只回 {message}，无 id/portfolio_code）：
+    // 组合 code 由调用方经 variables 传入——不能从响应里取不存在的字段
+    mutationFn: ({ id }: { id: number; portfolioCode: string }) => tradeApi.cancel(id),
+    onSuccess: (_data, variables) => {
+      invalidateTradeWrites(queryClient, variables.portfolioCode, variables.id);
       addToast({
         type: "success",
         title: "取消成功",
@@ -185,16 +210,16 @@ export function useCancelTrade() {
   });
 }
 
-// 取消确认交易 Hook
+// 取消确认交易 Hook（#493：买入保留扣款腿、卖出删除到账腿，故失效面与写操作同宽）
 export function useUnconfirmTrade() {
   const queryClient = useQueryClient();
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: (id: number) => tradeApi.unconfirm(id),
-    onSuccess: (data, id) => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, id] });
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
+    // 响应形状见 `TradeMessageResponse`：组合 code 取自 variables
+    mutationFn: ({ id }: { id: number; portfolioCode: string }) => tradeApi.unconfirm(id),
+    onSuccess: (_data, variables) => {
+      invalidateTradeWrites(queryClient, variables.portfolioCode, variables.id);
       addToast({
         type: "success",
         title: "取消确认成功",
@@ -202,6 +227,15 @@ export function useUnconfirmTrade() {
       });
     },
     onError: (error: unknown) => {
+      // SNAPSHOT_DEPENDENCY：组内任一腿生效日及之后已有快照，须先删快照（#493 组级口径）
+      if (error instanceof ApiException && error.code === "SNAPSHOT_DEPENDENCY") {
+        addToast({
+          type: "error",
+          title: "快照依赖冲突",
+          message: error.message,
+        });
+        return;
+      }
       addToast({
         type: "error",
         title: "取消确认失败",
@@ -217,9 +251,10 @@ export function useDeleteTrade() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: (id: number) => tradeApi.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
+    // 响应形状见 `TradeMessageResponse`（只回 {message}，非无响应体）：组合 code 取自 variables
+    mutationFn: ({ id }: { id: number; portfolioCode: string }) => tradeApi.delete(id),
+    onSuccess: (_data, variables) => {
+      invalidateTradeWrites(queryClient, variables.portfolioCode, variables.id);
       addToast({
         type: "success",
         title: "删除成功",
@@ -252,13 +287,7 @@ export function useBatchRebalance() {
       idempotencyKey?: string;
     }) => tradeApi.batchRebalance(portfolioCode, trades, idempotencyKey),
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: [TRADE_QUERY_KEY, "list"] });
-      queryClient.invalidateQueries({
-        queryKey: ["portfolios", variables.portfolioCode],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["positions", variables.portfolioCode],
-      });
+      invalidateTradeWrites(queryClient, variables.portfolioCode);
       addToast({
         type: "success",
         title: "批量调仓成功",

@@ -61,7 +61,7 @@ class TestUnconfirmTradeSnapshotProtection:
         assert unconf.json()["detail"]["error"] == "SNAPSHOT_DEPENDENCY"
 
     def test_unconfirm_ok_without_snapshot(self, client, admin_headers, test_db):
-        """无快照依赖时，unconfirm 成功且配对 CASH 腿同步回 pending"""
+        """无快照依赖时 unconfirm 成功；#493：买入组 CASH 扣款腿保持 confirmed"""
         create_portfolio(test_db, code="UC_P2", status="active")
         create_product(test_db, code="ETF_UC2", market="CN_EXCHANGE",
                        product_type="ETF", asset_class_code="ASSET_STOCK",
@@ -94,14 +94,19 @@ class TestUnconfirmTradeSnapshotProtection:
 
         unconf = client.post(f"/api/trades/{trade_id}/unconfirm", headers=admin_headers)
         assert unconf.status_code == 200
-        # 验证主腿与配对 CASH 腿均回 pending（按 transfer_group 过滤，排除预置现金腿）
+        # #493：unconfirm 只回退基金腿；买入扣款腿是既成事实，保持 confirmed
+        # （日期与金额同样保持），再次确认时核验一致即可
         fund_leg = test_db.query(Trade).get(trade_id)
         tg = fund_leg.transfer_group
         paired = test_db.query(Trade).filter(
             Trade.transfer_group == tg, Trade.id != trade_id
         ).first()
         assert fund_leg.status == "pending"
-        assert paired.status == "pending"
+        assert paired.status == "confirmed"
+        assert paired.product_code == "CASH" and paired.trade_type == "sell"
+        assert paired.trade_date == date(2025, 10, 6)
+        assert paired.confirm_date == date(2025, 10, 6)
+        assert float(paired.amount) == 10000.0
 
 
 class TestUpdateDeletePairedSync:
@@ -173,9 +178,13 @@ class TestUpdateDeletePairedSync:
         assert cash_leg.confirm_date == date(2025, 10, 8)
         # CASH 腿 trade_date 随基金腿同步（组内不变量）
         assert cash_leg.trade_date == date(2025, 10, 8)
+        # #493：编辑只同步扣款日期/金额，**不得**把买入扣款腿打回 pending——
+        # 扣款是既成事实；pending 的调仓 CASH 腿会被可用现金按 trade_date 扣减
+        # 却不满足在途口径的 confirmed 前提，等于账上凭空少一笔钱（§3.1.2）
+        assert cash_leg.status == "confirmed"
 
-        # #93: confirm → unconfirm 后各腿独立回退默认确认日
-        # CASH sell 腿回退到 trade_date（T日扣款），基金腿按 confirm_days 重算
+        # #493: confirm → unconfirm 后买入扣款腿保持 confirmed，基金腿回 pending
+        # 并按 confirm_days 重算确认日；CASH sell 腿的 T 日扣款日期保持不变
         conf = client.post(f"/api/trades/{trade_id}/confirm", headers=admin_headers)
         assert conf.status_code == 200
         unconf = client.post(f"/api/trades/{trade_id}/unconfirm", headers=admin_headers)
@@ -185,10 +194,10 @@ class TestUpdateDeletePairedSync:
         cash_leg = test_db.query(Trade).filter(
             Trade.transfer_group == tg, Trade.id != trade_id
         ).first()
-        assert fund_leg.status == "pending" and cash_leg.status == "pending"
+        assert fund_leg.status == "pending" and cash_leg.status == "confirmed"
         assert cash_leg.trade_date == date(2025, 10, 8)
-        # #93: CASH sell 腿独立确认日 = trade_date，基金腿独立按 confirm_days 重算
-        # 此处 confirm_days=0 所以两值相等，但语义独立（不再互相同步）
+        # #493: 买入扣款腿的现金日恒为下单日 T（不从基金确认日推导）；
+        # 基金腿 unconfirm 后按 confirm_days 重算期望确认日
         assert cash_leg.confirm_date == date(2025, 10, 8)  # = trade_date（T日扣款）
         assert fund_leg.confirm_date == date(2025, 10, 8)  # = T+0（confirm_days=0）
 
@@ -234,9 +243,10 @@ class TestUpdateDeletePairedSync:
             Trade.transfer_group == fund_leg.transfer_group,
             Trade.id != trade_id,
         ).first()
-        # status 字段被 schema 忽略，两腿均保持 pending
+        # status 字段被 schema 忽略，基金腿保持 pending；
+        # #493：买入扣款腿创建即 confirmed（现金当日实扣），不随基金腿回退
         assert fund_leg.status == "pending"
-        assert cash_leg.status == "pending"
+        assert cash_leg.status == "confirmed"
 
     def test_delete_trade_cascades_cash_leg(self, client, admin_headers, test_db):
         """delete 主腿时级联删除配对 CASH 腿"""

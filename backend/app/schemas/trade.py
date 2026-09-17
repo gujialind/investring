@@ -51,6 +51,11 @@ class TradeUpdate(BaseModel):
     actual_amount: Optional[float] = None
     trade_date: Optional[date] = None
     notes: Optional[str] = None
+    # #493：已确认卖出的到账日修正入口（只同步配对 CASH 腿的 confirm_date，
+    # 不重算基金金额）。仅 confirmed + sell 接受该字段；pending 传它报
+    # INVALID_PARAM、显式 null 拒绝、混入其他财务字段整体拒绝——组合限制
+    # 留在 service（schemas 只做透传）。
+    cash_confirm_date: Optional[date] = None
 
 
 class TradeResponse(TradeBase):
@@ -60,6 +65,11 @@ class TradeResponse(TradeBase):
     # product_name 读侧派生（非 DB 列）：仅 list 端点批量 join 产品表填充，
     # create/get/update/preview 响应恒为 None；同 positions 模式（#175）
     product_name: Optional[str] = None
+    # #493 只读派生（非 DB 列，不落库）：仅**基金腿**从实际配对 CASH 腿读取；
+    # 无现金腿（如待确认卖出）时为 null，CASH 腿自身不回填。批量来源见
+    # trade_service.build_paired_cash_leg_map
+    cash_platform_code: Optional[str] = None
+    cash_confirm_date: Optional[date] = None
 
     class Config:
         from_attributes = True
@@ -84,6 +94,11 @@ class TradePreviewResult(BaseModel):
     confirm_date: Optional[date] = None
     nav_date: Optional[date] = None  # OTC 净值型时取净值的 T 日
     is_otc_nav_fund: bool = False
+    # #493：本次确认将使用的**有效**现金平台/日期（买 = 扣款平台与 T；
+    # 卖 = 到账平台与到账日 A，缺省 A=C）。与 `trade.cash_*`（实际已存在的
+    # 配对 CASH 腿信息）刻意区分：确认前卖出还没有现金腿。
+    cash_platform_code: Optional[str] = None
+    cash_confirm_date: Optional[date] = None
 
 
 class TradePreviewResponse(BaseModel):

@@ -56,26 +56,29 @@ def _compute_in_transit_amounts(
     db: Session, portfolio_code: str, snapshot_date: date
 ) -> Dict[Tuple[str, str], Decimal]:
     """绝对计算各平台各方向的在途资金金额。
-    
+
     Returns: dict[(platform_code, direction)] = amount（正数）
         direction: "buy" | "sell"
-    
-    规则：
-    ① 基金调仓：同 transfer_group 内一腿已确认(confirm_date<=D)
-       另一腿虽 confirmed 但 confirm_date>D
-    ② 现金转移（cross_day）：CASH sell 已确认，CASH buy 未确认
-    买入和卖出在途均为正数。
+
+    规则（#493 起为**单腿确认**口径，兼容两腿 confirmed 的历史窗口）：
+
+    ① 基金调仓（配对方向显式限定：买入组 = 基金 buy + CASH sell、
+       卖出组 = 基金 sell + CASH buy；cancelled 腿一律排除）
+       - 买入在途：CASH sell confirmed 且现金日 <= D，且基金 buy 尚未在 D 日
+         及之前生效（pending，或 confirmed 但 C > D）→ 计 CASH 腿金额；
+       - 卖出在途：基金 sell confirmed 且 C <= D，且 CASH buy 尚未生效
+         （pending，或 confirmed 但到账日 A > D）→ 计 CASH 腿金额。
+    ② 现金转移（cross_day）：CASH sell 已确认，CASH buy 仍 **pending**
+       （#493 收紧：cancelled 不算在途，避免组内一腿 cancelled 被挂在途）。
+    买入和卖出在途均为正数，金额按**现金腿平台**归属。
     """
-    from sqlalchemy.orm import aliased
-    from sqlalchemy import and_, func
-    
     result: Dict[Tuple[str, str], Decimal] = {}
     CashLeg = aliased(Trade)
     FundLeg = aliased(Trade)
-    
+
     # --- ① 基金调仓在途 ---
-    
-    # 买入在途: CASH sell confirmed (confirm_date<=D), fund buy confirmed but confirm_date>D
+
+    # 买入在途: CASH sell confirmed 且 confirm_date<=D，基金 buy 未在 D 日生效
     buy_transit_fund = db.query(
         CashLeg.platform_code,
         func.sum(CashLeg.amount)
@@ -84,7 +87,8 @@ def _compute_in_transit_amounts(
         and_(
             CashLeg.transfer_group == FundLeg.transfer_group,
             CashLeg.id != FundLeg.id,
-            FundLeg.product_code != "CASH"
+            FundLeg.product_code != "CASH",
+            FundLeg.trade_type == "buy",
         )
     ).filter(
         CashLeg.portfolio_code == portfolio_code,
@@ -92,15 +96,20 @@ def _compute_in_transit_amounts(
         CashLeg.trade_type == "sell",
         CashLeg.status == "confirmed",
         CashLeg.confirm_date <= snapshot_date,
-        FundLeg.status == "confirmed",
-        FundLeg.confirm_date > snapshot_date,
+        or_(
+            FundLeg.status == "pending",
+            and_(
+                FundLeg.status == "confirmed",
+                FundLeg.confirm_date > snapshot_date,
+            ),
+        ),
     ).group_by(CashLeg.platform_code).all()
-    
+
     for platform_code, amount in buy_transit_fund:
         if amount and amount > 0:
             result[(platform_code, "buy")] = Decimal(str(amount))
-    
-    # 卖出在途: fund sell confirmed (confirm_date<=D), CASH buy confirmed but confirm_date>D
+
+    # 卖出在途: 基金 sell confirmed 且 confirm_date<=D，CASH buy 未在 D 日生效
     sell_transit_fund = db.query(
         CashLeg.platform_code,
         func.sum(CashLeg.amount)
@@ -109,26 +118,32 @@ def _compute_in_transit_amounts(
         and_(
             CashLeg.transfer_group == FundLeg.transfer_group,
             CashLeg.id != FundLeg.id,
-            FundLeg.product_code != "CASH"
+            FundLeg.product_code != "CASH",
+            FundLeg.trade_type == "sell",
         )
     ).filter(
         CashLeg.portfolio_code == portfolio_code,
         CashLeg.product_code == "CASH",
         CashLeg.trade_type == "buy",
-        CashLeg.status == "confirmed",
-        CashLeg.confirm_date > snapshot_date,
+        # #493：卖出到账腿在确认时即 confirmed（可携带未来 confirm_date），
+        # 故不能只认 pending；cancelled 明确排除
+        CashLeg.status.in_(["pending", "confirmed"]),
+        or_(
+            CashLeg.status == "pending",
+            CashLeg.confirm_date > snapshot_date,
+        ),
         FundLeg.status == "confirmed",
         FundLeg.confirm_date <= snapshot_date,
     ).group_by(CashLeg.platform_code).all()
-    
+
     for platform_code, amount in sell_transit_fund:
         if amount and amount > 0:
             result[(platform_code, "sell")] = Decimal(str(amount))
-    
+
     # --- ② 现金转移在途（cross_day：CASH sell confirmed, CASH buy pending）---
     CashSell = aliased(Trade)
     CashBuy = aliased(Trade)
-    
+
     cash_transfer_transit = db.query(
         CashBuy.platform_code,
         func.sum(CashBuy.amount)
@@ -146,15 +161,16 @@ def _compute_in_transit_amounts(
         CashSell.trade_type == "sell",
         CashSell.status == "confirmed",
         CashSell.confirm_date <= snapshot_date,
-        CashBuy.status != "confirmed",
+        # #493：收紧为 pending（原 != confirmed 会把 cancelled 转入腿也算成在途）
+        CashBuy.status == "pending",
     ).group_by(CashBuy.platform_code).all()
-    
+
     for platform_code, amount in cash_transfer_transit:
         if amount and amount > 0:
             result[(platform_code, "buy")] = (
                 result.get((platform_code, "buy"), Decimal("0")) + Decimal(str(amount))
             )
-    
+
     return result
 
 
@@ -1799,52 +1815,14 @@ def auto_confirm_after_snapshot(
                 f"code={entry.get('code')}, error={entry.get('error')}"
             )
 
-    # #33: auto_confirm(D) 确认 confirm_date == next_trading_day(D) 的交易/事件，
-    # 配合逐日循环生成快照，使 confirm_date==C 的交易在快照 C 中体现。
-    from app.services.trade_service import confirm_single_trade
+    # #33: auto_confirm(D) 确认 confirm_date == next_trading_day(D) 的事件/跨天转移，
+    # 配合逐日循环生成快照，使 confirm_date==C 的记录在快照 C 中体现。
     next_confirm_date = get_next_trading_day(db, snapshot_date, days=1)
 
-    # Trade 自动确认（confirm_date == next_trading_day(D) 的 pending trades）
-    # 排除 transfer_group 非空的 CASH trade：
-    #   - 跨天转移两腿：由下方 cross_day_transfers 分支处理
-    #   - 基金调仓配对 CASH 腿：由原子翻转跟随基金腿
-    pending_trades = db.query(Trade).filter(
-        Trade.portfolio_code == portfolio_code,
-        Trade.status == "pending",
-        Trade.confirm_date == next_confirm_date,
-        Trade.transfer_group.is_(None) | (Trade.product_code != "CASH"),
-    ).all()
-
-    for trade in pending_trades:
-        trade_id = trade.id
-        entry: Dict[str, Any] = {"id": trade_id, "type": "trade"}
-
-        def _confirm_trade(t=trade):
-            product = db.query(Product).filter(
-                Product.code == t.product_code,
-                Product.market == t.market,
-            ).first()
-            # 走公共确认逻辑：净值型产品按 T 日净值重算 shares/amount，
-            # 并原子同步 transfer_group 配对腿（#29）；重算历史时现金/份额基线
-            # 尚未逐日重建，跳过可用量校验（#78；#182 起含卖出份额校验）
-            confirm_single_trade(db, t, product, skip_available_check=True)
-
-        if not _auto_confirm_guarded(db, entry, _confirm_trade):
-            results.append(entry)
-            logger.error(
-                f"自动确认段中断（session 失效）: portfolio={portfolio_code}, "
-                f"trade_id={trade_id}, error={entry.get('error')}"
-            )
-            return results
-        results.append(entry)
-        if entry["action"] == "auto_confirmed":
-            logger.info(f"自动确认 Trade: trade_id={trade_id}, portfolio={portfolio_code}")
-        else:
-            logger.warning(
-                f"Trade auto-confirm failed: trade_id={trade_id}, "
-                f"code={entry.get('code')}, error={entry.get('error')}"
-            )
-
+    # #493 决策 6（#471）：**调仓交易一律不参与 auto_confirm**——基金腿由用户手动
+    # 确认（确认须取 T 日净值并录入卖出到账日），配对 CASH 腿随基金腿落定。
+    # 原先的 pending_trades 分支只命中调仓基金腿，已整体删除：自动推进遇到到期
+    # 未确认调仓由 `_check_pending_transactions` 阻断（预期代价，需人工确认后继续）。
     # 跨天转移 auto_confirm（两腿均 pending，需同时确认）
     # 仅当 confirm_date == next_trading_day(D)（与其它交易同一时序）时处理
     cross_day_pending = db.query(Trade).filter(
@@ -1853,6 +1831,12 @@ def auto_confirm_after_snapshot(
         Trade.product_code == "CASH",
         Trade.transfer_group.isnot(None),
         Trade.confirm_date == next_confirm_date,
+        # #471 方案 A：排除调仓组（rebal_）——调仓 CASH 腿不再有 pending 态，
+        # 但显式排除可防历史遗留的半确认组被该分支空确认（净值/份额双绕过）。
+        # `_` 在 SQL LIKE 里是单字符通配（`rebalX…` 会被误排除），故显式转义、
+        # 让判据精确等于 Python 侧的 `startswith("rebal_")`（SQLite/MySQL 同构，
+        # escape 字符走绑定参数，不经方言字符串字面量解释）。
+        ~Trade.transfer_group.like("rebal\\_%", escape="\\"),
     ).all()
     processed_groups = set()
     for trade in cross_day_pending:
@@ -1867,12 +1851,21 @@ def auto_confirm_after_snapshot(
         entry: Dict[str, Any] = {"transfer_group": group, "type": "cross_day_transfer"}
 
         def _confirm_pair(g=group):
-            # 同时确认两腿
+            # 同时确认两腿。显式业务校验（#493）：本分支只服务跨平台现金转移，
+            # 任何非 CASH 腿都不得经此路径被「空确认」（不取价、不建腿）；
+            # 不用 assert——那会被 -O 关闭，等于静默放行。
             paired_trades = db.query(Trade).filter(
                 Trade.transfer_group == g,
                 Trade.status == "pending",
             ).all()
             for pt in paired_trades:
+                if pt.product_code != "CASH":
+                    raise BusinessError(
+                        "CASH_TRANSFER_NON_CASH_LEG",
+                        f"跨天转移分支拒绝确认非 CASH 腿（trade_id={pt.id}, "
+                        f"product={pt.product_code}）：调仓腿须人工确认",
+                        details={"trade_id": pt.id, "product_code": pt.product_code},
+                    )
                 pt.status = "confirmed"
 
         if not _auto_confirm_guarded(db, entry, _confirm_pair):

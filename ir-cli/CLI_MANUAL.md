@@ -135,7 +135,10 @@ ir schema trade              # 仅输出指定命令组
 | `INVESTOR_HAS_SHARES` | 投资人仍持有份额，不可删除 |
 | `DATA_SOURCE_NOT_CONFIGURED` | 数据源未配置（`TUSHARE_TOKEN` 缺失），返回 503 |
 | `SYNC_FAILED` | 数据源同步失败（接口报错或其他异常），返回 500 |
-| `CASH_TRADE_FORBIDDEN` | 禁止直接创建 CASH 产品交易 |
+| `CASH_TRADE_FORBIDDEN` | 禁止直接创建 CASH 产品交易；或直接对调仓配对 CASH 腿做 confirm/unconfirm/cancel/delete/改财务字段 |
+| `CASH_PLATFORM_NOT_ALLOWED` | 现金腿平台在不允许的时机传入：卖出创建期传 `cash_platform_code`（改在 `confirm` 传）、买入确认期改扣款平台 |
+| `CASH_CONFIRM_DATE_NOT_ALLOWED` | 现金日在不允许的时机传入：卖出创建期传 `cash_confirm_date`（改在 `confirm` 传）、买入传的 `cash_confirm_date` ≠ 下单日 T |
+| `CASH_LEG_MISSING` | 已确认卖出改到账日时组内无配对 CASH 到账腿（先 `unconfirm` 再重新确认并录入到账信息） |
 | `CANNOT_CANCEL_EXCHANGE` | 场内交易不可取消 |
 | `SNAPSHOT_DEPENDENCY` | 快照已依赖该记录，无法取消确认 |
 | `SNAPSHOT_NOT_CONTINUOUS` | 快照日期不连续 |
@@ -603,20 +606,22 @@ ir trade list [--portfolio-code <组合>] [--status <状态>] [--type <类型>] 
 | `--trade-date-start` / `--trade-date-end` | 交易日期区间（闭区间；`start > end` 返回 422） |
 | `--confirm-date-start` / `--confirm-date-end` | 确认日期区间（闭区间；对 pending 记录命中**预计确认日**） |
 
+> **说明**：基金腿响应带只读派生字段 `cash_platform_code` / `cash_confirm_date`（买入=扣款平台/现金日 T；卖出=CASH 到账腿的到账平台/到账日 A）。无配对现金腿时（如待确认卖出）为 `null`，CASH 腿自身不回填。
+
 #### `ir trade create`
 
-创建买入/卖出交易。
+创建买入/卖出交易（#493 起两条腿的状态与生效日**可以不同步**）。
 
 ```bash
-# 买入
+# 买入：创建即扣款（配对 CASH sell 腿直接 confirmed，现金日 = 下单日 T），基金份额待确认
 ir trade create --portfolio-code <组合> --product-code <产品> [--market <市场>] \
   --type buy --actual-amount <实际金额> --fee <手续费> --price <价格> \
-  --trade-date YYYY-MM-DD --platform-code <平台> [--cash-platform-code <现金平台>] [--shares <份额>] [--notes <备注>]
+  --trade-date YYYY-MM-DD --platform-code <平台> [--cash-platform-code <扣款平台>] [--shares <份额>] [--notes <备注>]
 
-# 卖出
+# 卖出：只建基金腿，创建期不接受到账信息
 ir trade create --portfolio-code <组合> --product-code <产品> [--market <市场>] \
   --type sell --shares <份额> --trade-date YYYY-MM-DD [--actual-amount <实际金额>] \
-  [--fee <手续费>] --platform-code <平台> [--cash-platform-code <现金平台>] [--notes <备注>]
+  [--fee <手续费>] --platform-code <平台> [--notes <备注>]
 ```
 
 | 参数 | 必填 | 说明 |
@@ -631,9 +636,15 @@ ir trade create --portfolio-code <组合> --product-code <产品> [--market <市
 | `--price` | 场内必填 | 交易价格；场内（CN_EXCHANGE）必填；任意市场显式传价均须为正数（`MISSING_OR_INVALID_PRICE`）；卖出传价将按 `shares×price` 推导金额（场内对账超差报 `AMOUNT_MISMATCH`，场外仅推导展示不强对账，确认时仅与 T 日净值做一致性校验，不覆盖净值） |
 | `--shares` | 卖出时必填 | 卖出份额（必须 > 0；先量化到 2 位小数再校验，不超过可用份额） |
 | `--platform-code` | 是 | 平台代码（必须已存在，缺失报 `PLATFORM_REQUIRED`、不存在报 `PLATFORM_NOT_FOUND`） |
-| `--cash-platform-code` | 否 | 现金腿平台（issue #91）：买=扣款平台、卖=到账平台，缺省同基金腿平台；买入可用现金按扣款平台校验，两腿同 transfer_group 原子翻转 |
+| `--cash-platform-code` | 否 | **仅买入**：扣款平台（issue #91），缺省同基金腿平台；买入可用现金按扣款平台校验。卖出创建时传它会被 CLI 前置拒绝（`CASH_PLATFORM_NOT_ALLOWED`），到账平台改在 `confirm` 传入 |
 | `--trade-date` | 是 | 交易日期（必须是交易日） |
 | `--notes` | 否 | 备注 |
+
+> **业务规则**（#493 单腿确认）：
+> - **买入创建即扣款**：配对 CASH sell 腿直接 `confirmed`、现金日 = 下单日 T；基金腿仍 `pending` 等 T+1/T+2 确认。创建当日的快照不再被 pending 交易阻断——现金已实扣，等额记在途（`IN_TRANSIT_BUY`），基金份额未入账。
+> - **卖出创建只建基金腿**：到账平台与到账日在 `confirm` 录入，创建期不保存「未来到账意图」。传入 `--cash-platform-code` / `cash_confirm_date` 分别返回 `CASH_PLATFORM_NOT_ALLOWED` / `CASH_CONFIRM_DATE_NOT_ALLOWED`。
+> - **`--confirm` 快捷链**：创建成功后立即确认。卖出不需要「C = T」，缺省 **A = C、到账平台同基金腿平台**；要自定义到账信息时走「先 `create` 再 `confirm`」两步。确认**返回业务错误**（exit 1）时，错误 JSON 携带 `error.details.created_trade_id`——买入创建即扣款，**切勿因为确认失败而重建**，用该 id 修复问题后重新 `confirm`。**该逃生口只覆盖「创建成功 + 确认被后端拒绝」**：若确认在网络上超时/断连（exit 3），CLI 拿不到任何响应、自然也没有 `created_trade_id`，此时**先 `ir trade list --portfolio-code X` 查明这笔是否已创建**再决定动作，不要直接重跑 `create`。
+> - 买入的 `cash_confirm_date` 固定为下单日 T，创建期显式传其他值返回 `CASH_CONFIRM_DATE_NOT_ALLOWED`。
 
 #### `ir trade get`
 
@@ -643,27 +654,38 @@ ir trade create --portfolio-code <组合> --product-code <产品> [--market <市
 ir trade get <ID>
 ```
 
+> 基金腿响应含只读派生 `cash_platform_code`（买入=扣款平台、卖出=到账平台）与 `cash_confirm_date`（买入=扣款日 T、卖出=到账日 A）；无配对现金腿时为 `null`。
+
 #### `ir trade preview`
 
-确认前预览：返回真实确认将写入的净值/份额/金额，不落库（与 `confirm` 共用同一计算实现，预览 == 真实确认）。
+确认前预览：返回真实确认将写入的净值/份额/金额与有效现金平台/日期，不落库（与 `confirm` 共用同一计算实现，预览 == 真实确认）。
 
 ```bash
-ir trade preview <ID> [--confirm-date YYYY-MM-DD] [--price <价格>]
+ir trade preview <ID> [--confirm-date YYYY-MM-DD] [--price <价格>] \
+  [--cash-platform-code <到账平台>] [--cash-confirm-date <到账日>]
 ```
 
 > **说明**：
 > - 仅 `pending` 状态可预览，否则返回 `INVALID_STATUS`
-> - 输出 `trade`（当前交易）+ `preview`（将写入的 price/shares/amount/actual_amount/fee/confirm_date/nav_date/is_otc_nav_fund）+ `paired_cash_amount`（配对 CASH 腿将同步的金额）
+> - 输出 `trade`（当前交易）+ `preview`（将写入的 price/shares/amount/actual_amount/fee/confirm_date/nav_date/is_otc_nav_fund/**cash_platform_code/cash_confirm_date**）+ `paired_cash_amount`（配对 CASH 腿将同步/新建的金额）
+> - `preview.cash_platform_code` / `preview.cash_confirm_date` 是**本次有效**的现金平台/现金日（买 = 扣款平台/T；卖 = 到账平台/A 缺省 C），与 `trade` 内已经存在的现金腿信息区分
+> - **零写入**：预览不构腿、不改 ORM、不写审计
 > - 场外基金 T 日净值缺失返回 `MISSING_NAV`；传入 `--price` 与净值不一致返回 `PRICE_NAV_MISMATCH`
 > - 预览为时点快照，核对无误后执行 `ir trade confirm <ID>`
 
 #### `ir trade confirm`
 
-确认交易（自动获取净值；确认间隔取产品落库的 `confirm_days`）。
+确认交易（自动获取净值；确认间隔取产品落库的 `confirm_days`）。卖出的到账平台/到账日在**此**录入。
 
 ```bash
-ir trade confirm <ID> [--confirm-date YYYY-MM-DD] [--price <价格>] [--sync-nav]
+ir trade confirm <ID> [--confirm-date YYYY-MM-DD] [--price <价格>] [--sync-nav] \
+  [--cash-platform-code <到账平台>] [--cash-confirm-date <到账日>]
 ```
+
+| 参数 | 说明 |
+|------|------|
+| `--cash-platform-code` | **仅卖出**：到账平台，缺省同基金腿平台；买入传它且与创建时扣款平台不一致返回 `CASH_PLATFORM_NOT_ALLOWED` |
+| `--cash-confirm-date` | **仅卖出**：到账日 A，缺省 = 基金确认日 C（即确认当天到账）；必须晚于最新快照日对应的校验随组级快照保护执行。买入传它且 ≠ 下单日 T 返回 `CASH_CONFIRM_DATE_NOT_ALLOWED` |
 
 > **业务规则**：
 > - 仅 `pending` 状态可确认
@@ -672,6 +694,10 @@ ir trade confirm <ID> [--confirm-date YYYY-MM-DD] [--price <价格>] [--sync-nav
 > - issue #228：快照估值侧的滞后取价（`nav_lag_days`）与确认侧正交，确认恒取 T 日净值
 > - `--price`：场外基金仅用于与 T 日净值一致性校验（不一致报 `PRICE_NAV_MISMATCH`，不覆盖净值）；场内基金作为覆盖成交价
 > - `--sync-nav`（issue #90）：命中 `MISSING_NAV` 时自动回填该标的历史净值后重试一次（会访问外部数据源），同步后仍缺失则照常报 `MISSING_NAV`
+> - **卖出确认时新建 CASH buy 到账腿**：`status=confirmed`（即使到账日在未来）、`trade_date` = 基金确认日 C、`confirm_date` = 到账日 A；C 起到账日前的快照该笔记 `IN_TRANSIT_SELL`（不计入可用现金），到账日快照起转为 CASH
+> - **买入确认**核验既有扣款腿的状态与金额：不一致且扣款日未被快照消费时才校正，已消费则阻断（提示先删快照）
+> - **confirmed ≠ 现金当天可用**：`confirmed` 只表示已记账；买入扣款当日即减少可用现金，卖出到账在 A 日（含未来日）才增加可用现金
+> - **调仓不参与快照自动确认**（#493 决策 6 / #471）：到期未确认会阻断快照推进（`PENDING_TRANSACTIONS_EXIST`），须人工 `confirm`
 
 #### `ir trade cancel`
 
@@ -681,7 +707,7 @@ ir trade confirm <ID> [--confirm-date YYYY-MM-DD] [--price <价格>] [--sync-nav
 ir trade cancel <ID>
 ```
 
-> **约束**：仅 `pending` 状态且非场内交易（`CN_EXCHANGE`）可取消。
+> **约束**：仅 `pending` 状态且非场内交易（`CN_EXCHANGE`）可取消；整组回退（含配对 CASH 腿）；组内任一腿确认日及之后已有快照返回 `SNAPSHOT_DEPENDENCY`，需先删快照。
 
 #### `ir trade unconfirm`
 
@@ -691,6 +717,9 @@ ir trade cancel <ID>
 ir trade unconfirm <ID>
 ```
 
+> **约束**：仅 `confirmed` 状态可取消确认；组内任一腿确认日及之后已有快照返回 `SNAPSHOT_DEPENDENCY`，需先删快照。
+> **分组差异（#493）**：买入组——基金腿回 `pending`，配对 CASH 扣款腿**保持 `confirmed`**（扣款既成事实，日期金额不动）；卖出组——基金腿回 `pending`，配对 CASH 到账腿**被删除**，回到「未创建」态，再次确认时按新的到账平台/到账日重建。
+
 #### `ir trade update`
 
 编辑交易（仅 `pending` 状态可改，`confirmed` 需先 `unconfirm`；`cancelled` 不可改）。
@@ -698,6 +727,9 @@ ir trade unconfirm <ID>
 ```bash
 ir trade update <ID> [--shares <份额>] [--amount <金额>] [--price <价格>] \
   [--fee <手续费>] [--actual-amount <实际金额>] [--trade-date YYYY-MM-DD] [--notes <备注>]
+
+# 已确认卖出的窄例外：只改到账日（可配合 --notes）
+ir trade update <ID> --cash-confirm-date YYYY-MM-DD [--notes <备注>]
 ```
 
 | 参数 | 说明 |
@@ -706,11 +738,13 @@ ir trade update <ID> [--shares <份额>] [--amount <金额>] [--price <价格>] 
 | `--shares` | 卖出份额（先量化到 2 位小数再校验，不超过可用份额） |
 | `--price` / `--fee` / `--notes` | 直改字段；仅改这些字段不触发可用量校验 |
 | `--trade-date` | 新交易日期（必须是交易日且晚于最新快照日，非交易日直接报错不静默滚交易日；联动重算 confirm_date 并同步 CASH 腿） |
+| `--cash-confirm-date` | **仅已确认卖出**：修正到账日（同步配对 CASH 到账腿的 `confirm_date`），可同时传 `--notes`；混入任何其他字段整体拒绝、不部分应用；显式传 null 拒绝；组内任一腿确认日及之后已有快照返回 `SNAPSHOT_DEPENDENCY`；无配对 CASH 腿返回 `CASH_LEG_MISSING`（先 `unconfirm` 再重新确认并录入到账信息）。**pending 交易传它返回 `INVALID_PARAM`**（买入扣款日固定下单日、卖出到账日在确认时录入） |
 
 > **业务规则**（issue #182，与创建同口径校验）：
-> - 改金额/份额/日期时实时校验可用量：buy 按扣款平台可用现金、sell 按可用份额（均加回自身 pending 旧值），不足返回 `INSUFFICIENT_CASH` / `INSUFFICIENT_SHARES`
+> - 改金额/份额/日期时实时校验可用量：buy 按扣款平台可用现金、sell 按可用份额（均加回自身旧值，买入扣款腿含已 confirmed 的自身扣款），不足返回 `INSUFFICIENT_CASH` / `INSUFFICIENT_SHARES`
 > - 编辑成与另一笔交易撞自然键（同组合/产品/市场/平台/方向/交易日且金额或份额相同）返回 `DUPLICATE_TRADE`，无 `allow_duplicate` 逃生口
-> - CASH 腿（配对现金腿）仅允许改 `--notes`，其余字段返回 `CASH_TRADE_FORBIDDEN`
+> - CASH 腿（配对现金腿）仅允许改 `--notes`，其余字段返回 `CASH_TRADE_FORBIDDEN`；调仓 CASH 腿的财务字段只能由基金腿驱动
+> - **组级快照保护（#493）**：组内任一腿确认日及之后已有快照时，pending 交易的财务修改、cancel/delete/unconfirm 一律拒绝（`SNAPSHOT_DEPENDENCY`），提示先删该日及之后快照；`--notes` 等非会计更新不受保护约束
 > - 校验失败零部分写入，交易保持原值
 
 ---
@@ -1509,11 +1543,11 @@ ir sub confirm 1
 # 6. 查看可用现金
 ir position available-cash --portfolio-code PORT001
 
-# 7. 创建买入交易
+# 7. 创建买入交易（#493：创建即扣款——配对 CASH sell 腿直接 confirmed、现金日 = 2025-01-07）
 ir trade create --portfolio-code PORT001 --product-code 000051.OF --market CN_OTC \
   --type buy --actual-amount 50000 --fee 0 --price 1.5 --trade-date 2025-01-07
 
-# 8. 确认交易
+# 8. 确认交易（基金份额此刻才入账；此前现金已扣、等额记 IN_TRANSIT_BUY）
 ir trade confirm 1
 
 # 9. 生成快照
@@ -1522,6 +1556,31 @@ ir snapshot generate --portfolio-code PORT001 --target-date 2025-01-07
 # 10. 查看组合净值和收益率
 ir portfolio nav-history PORT001
 ir portfolio returns PORT001
+```
+
+### 5.1b 两步卖出（#493：创建只建基金腿，到账信息在确认时录入）
+
+```bash
+# 1. 确认可用份额
+ir position available-shares --portfolio-code PORT001 --product-code 000051.OF
+
+# 2. 创建卖出（不接受到账平台/到账日）
+ir trade create --portfolio-code PORT001 --product-code 000051.OF --market CN_OTC \
+  --type sell --shares 10000 --trade-date 2025-01-07 --platform-code ALIPAY
+# 记录返回的 ID，假设为 2
+
+# 3. 预览本次确认将写入的净值/份额与有效到账平台/到账日（零写入）
+ir trade preview 2 --cash-platform-code HBZQ --cash-confirm-date 2025-01-10
+
+# 4. 确认：新建 CASH buy 到账腿（confirmed，trade_date = C、confirm_date = A）
+#    省略 --cash-confirm-date 即 A=C（确认当天到账，不产生 IN_TRANSIT_SELL）
+ir trade confirm 2 --cash-platform-code HBZQ --cash-confirm-date 2025-01-10
+
+# 5. C ~ A 之间的快照记 IN_TRANSIT_SELL；A 日快照起该笔转为 CASH
+ir snapshot generate --portfolio-code PORT001 --target-date 2025-01-10
+
+# 6. 到账日需要修正（仅已确认卖出，组内任一腿确认日及之后已有快照时先删快照）
+ir trade update 2 --cash-confirm-date 2025-01-13
 ```
 
 ### 5.2 分红处理

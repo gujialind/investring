@@ -68,6 +68,13 @@ class TestGetHint:
                      "INVALID_STATUS"):
             assert ERROR_HINTS.get(code), f"静态表缺少 {code}"
 
+    def test_static_table_cash_lifecycle_entries(self):
+        """#493 新增现金生命周期错误码的就近指引"""
+        assert "--cash-platform-code" in ERROR_HINTS["CASH_PLATFORM_NOT_ALLOWED"]
+        assert "--cash-confirm-date" in ERROR_HINTS["CASH_CONFIRM_DATE_NOT_ALLOWED"]
+        assert "unconfirm" in ERROR_HINTS["CASH_LEG_MISSING"]
+        assert get_hint("CASH_LEG_MISSING") == ERROR_HINTS["CASH_LEG_MISSING"]
+
     def test_static_entries_recommend_new_commands(self):
         assert "catch-up" in ERROR_HINTS["SNAPSHOT_NOT_CONTINUOUS"]
         assert "catch-up" in ERROR_HINTS["NAV_NOT_AVAILABLE"]

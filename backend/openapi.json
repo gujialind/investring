@@ -3688,7 +3688,7 @@
           "调仓交易"
         ],
         "summary": "Preview Trade Confirm",
-        "description": "确认前预览：返回真实确认将写入的净值/份额/金额，不落库（与 confirm 共用计算实现）",
+        "description": "确认前预览：返回真实确认将写入的净值/份额/金额与有效现金平台/日期，不落库。\n\n与 confirm 共用 `compute_confirm_plan`（同一组日期/平台/快照保护/配对金额\n校验），**只查询与计算**：不修改 ORM、不构腿、不写审计；`sync_nav` 不适用\n于预览（净值同步是确认端点的显式动作）。",
         "operationId": "preview_trade_confirm_api_trades__id__preview_get",
         "security": [
           {
@@ -3736,6 +3736,39 @@
                 }
               ],
               "title": "Price"
+            }
+          },
+          {
+            "name": "cash_confirm_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cash Confirm Date"
+            }
+          },
+          {
+            "name": "cash_platform_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cash Platform Code"
             }
           }
         ],
@@ -3971,6 +4004,39 @@
               "type": "boolean",
               "default": false,
               "title": "Sync Nav"
+            }
+          },
+          {
+            "name": "cash_confirm_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cash Confirm Date"
+            }
+          },
+          {
+            "name": "cash_platform_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cash Platform Code"
             }
           }
         ],
@@ -12221,6 +12287,29 @@
             "type": "boolean",
             "title": "Is Otc Nav Fund",
             "default": false
+          },
+          "cash_platform_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Platform Code"
+          },
+          "cash_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Confirm Date"
           }
         },
         "type": "object",
@@ -12394,6 +12483,29 @@
               }
             ],
             "title": "Product Name"
+          },
+          "cash_platform_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Platform Code"
+          },
+          "cash_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Confirm Date"
           }
         },
         "type": "object",
@@ -12485,6 +12597,18 @@
               }
             ],
             "title": "Notes"
+          },
+          "cash_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Confirm Date"
           }
         },
         "type": "object",

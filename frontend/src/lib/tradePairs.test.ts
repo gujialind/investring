@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { groupTradeRows, cashSubMeta, cashOrphanLabel } from "@/lib/tradePairs";
+import {
+  groupTradeRows,
+  cashSubMeta,
+  cashLegArrived,
+  cashOrphanLabel,
+  isCashLeg,
+  canEditArrivalDate,
+} from "@/lib/tradePairs";
+import { toDateOnly } from "@/lib/utils";
 import type { Trade } from "@/types/trade";
 
 let nextId = 1;
@@ -102,6 +110,116 @@ describe("cashSubMeta", () => {
   it("买入主行 → 现金扣款（-）；卖出主行 → 现金到账（+）", () => {
     expect(cashSubMeta(makeTrade({ trade_type: "buy" }))).toEqual({ label: "现金扣款", sign: "-" });
     expect(cashSubMeta(makeTrade({ trade_type: "sell" }))).toEqual({ label: "现金到账", sign: "+" });
+  });
+
+  // #493：卖出到账腿可携带未来 confirm_date（此时快照记 IN_TRANSIT_SELL），
+  // 主行状态讲的是基金腿，现金子行须自行区分「已到账 / 待到账」
+  it("卖出未到账 → 现金待到账；买入方向不受 arrived 影响（扣款即事实）", () => {
+    expect(cashSubMeta(makeTrade({ trade_type: "sell" }), { arrived: false })).toEqual({
+      label: "现金待到账",
+      sign: "+",
+    });
+    expect(cashSubMeta(makeTrade({ trade_type: "sell" }), { arrived: true })).toEqual({
+      label: "现金到账",
+      sign: "+",
+    });
+    expect(cashSubMeta(makeTrade({ trade_type: "buy" }), { arrived: false })).toEqual({
+      label: "现金扣款",
+      sign: "-",
+    });
+  });
+});
+
+describe("cashLegArrived（#493 评审加固：口径 = confirmed 且日期不在未来）", () => {
+  const TODAY = "2026-09-18";
+
+  it("confirmed 且生效日已到（含当天）→ 已到账", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2026-09-17" }), TODAY),
+    ).toBe(true);
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: TODAY }), TODAY),
+    ).toBe(true);
+  });
+
+  it("confirmed 但生效日在未来 → 未到账（卖出到账腿 A > C，快照记 IN_TRANSIT_SELL）", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2026-09-21" }), TODAY),
+    ).toBe(false);
+  });
+
+  // 只看日期的旧口径会把这一档错标成「现金到账」，而 pending 腿不计入可用现金（根 AGENTS.md §2.5）
+  it("pending 腿即便生效日已到（跨天现金转移的转入腿到期未确认）→ 未到账", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "pending", confirm_date: "2026-09-17" }), TODAY),
+    ).toBe(false);
+    expect(cashLegArrived(makeTrade({ status: "pending", confirm_date: TODAY }), TODAY)).toBe(
+      false,
+    );
+  });
+
+  it("cancelled 腿 → 未到账（整组回退后不得再显示现金到账）", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "cancelled", confirm_date: "2026-09-17" }), TODAY),
+    ).toBe(false);
+  });
+
+  it("无生效日（尚未生效的 pending 腿）→ 未到账", () => {
+    expect(
+      cashLegArrived(makeTrade({ status: "confirmed", confirm_date: undefined }), TODAY),
+    ).toBe(false);
+  });
+
+  // 缺省 today = 今天：买入扣款腿创建即 confirmed、现金日 = 下单日 T ⇒ 行为不变
+  it("缺省基准为当天（不传 today 时按系统日期判断）", () => {
+    expect(cashLegArrived(makeTrade({ status: "confirmed", confirm_date: toDateOnly(new Date()) }))).toBe(
+      true,
+    );
+    expect(cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2999-01-01" }))).toBe(false);
+  });
+});
+
+describe("isCashLeg", () => {
+  it("按 product_code 判定（与后端 update_trade 的 CASH 守卫同口径）", () => {
+    expect(isCashLeg(makeTrade({ product_code: "CASH" }))).toBe(true);
+    expect(isCashLeg(makeTrade({ product_code: "F1" }))).toBe(false);
+  });
+});
+
+// #525：门控漏掉产品维度时，赎回配对腿与现金转移主腿（均为 confirmed CASH sell）
+// 会拿到「修改到账日期」按钮，而点开是死路弹窗（预填恒空 + 提交必 CASH_TRADE_FORBIDDEN）
+describe("canEditArrivalDate（#525：只给基金卖出腿）", () => {
+  it("已确认基金卖出腿 → 适用（窄表单入口不受影响）", () => {
+    expect(
+      canEditArrivalDate(makeTrade({ product_code: "F1", trade_type: "sell", transfer_group: "rebal_a" })),
+    ).toBe(true);
+  });
+
+  it("赎回配对的 CASH 卖出腿（sub_ 组）→ 不适用", () => {
+    expect(
+      canEditArrivalDate(
+        makeTrade({ product_code: "CASH", trade_type: "sell", transfer_group: "sub_42" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("当天完成现金转移的 CASH 主腿（12 位 hex 组）→ 不适用", () => {
+    expect(
+      canEditArrivalDate(
+        makeTrade({
+          product_code: "CASH",
+          trade_type: "sell",
+          transfer_group: "0123456789ab",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("调仓 CASH 腿与买入方向（含 CASH 扣款腿）→ 不适用", () => {
+    expect(
+      canEditArrivalDate(makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "rebal_a" })),
+    ).toBe(false);
+    expect(canEditArrivalDate(makeTrade({ product_code: "F1", trade_type: "buy" }))).toBe(false);
   });
 });
 
