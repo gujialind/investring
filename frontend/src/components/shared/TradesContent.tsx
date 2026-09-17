@@ -53,7 +53,14 @@ import { isSameDay, subYears } from "date-fns";
 import { ApiException } from "@/lib/api";
 import type { TradeListParams } from "@/lib/api";
 import type { Trade, TradeCreate, TradeUpdate } from "@/types/trade";
-import { cashLegArrived, cashOrphanLabel, cashSubMeta, groupTradeRows } from "@/lib/tradePairs";
+import {
+  canEditArrivalDate,
+  cashLegArrived,
+  cashOrphanLabel,
+  cashSubMeta,
+  groupTradeRows,
+  isCashLeg,
+} from "@/lib/tradePairs";
 import { applyBuyAmountLinkage, netFromActual, sellDerivedAmounts } from "@/lib/tradeAmounts";
 import {
   useTradeList,
@@ -100,7 +107,7 @@ type ConfirmState =
  */
 function isRebalCashLeg(trade: Trade): boolean {
   const g = trade.transfer_group ?? "";
-  if (trade.product_code !== "CASH") return false;
+  if (!isCashLeg(trade)) return false;
   if (g.startsWith("sub_") || /^[0-9a-f]{12}$/.test(g)) return false;
   return true;
 }
@@ -637,8 +644,11 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
                 >
                   <Undo className="h-4 w-4" />
                 </Button>
-                {trade.trade_type === "sell" ? (
-                  // 已确认卖出的窄例外（#493）：只开放到账日期 + 备注，其他财务字段仍先取消确认
+                {canEditArrivalDate(trade) ? (
+                  // 已确认**基金**卖出的窄例外（#493）：只开放到账日期 + 备注，其他财务字段
+                  // 仍先取消确认。CASH 卖出腿（赎回 sub_ 腿 / 现金转移主腿）走 #525 门控排除：
+                  // 它们没有可改的到账日语义（后端 PUT 一律 CASH_TRADE_FORBIDDEN，读侧派生
+                  // 的 cash_confirm_date 恒 null），露出按钮即死路入口
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1236,6 +1246,11 @@ export default function TradesContent({ basePath, variant = "desktop" }: TradesC
                       setArrivalFormData({ ...arrivalFormData, cash_confirm_date: toDateOnly(date) })
                     }
                     showTradingDays
+                    // #525：A 早于基金确认日 C 后端必 422（INVALID_DATE_ORDER），
+                    // 与确认弹窗同口径提前到选择时硬禁用；C 缺失（异常数据）时不加下界、不臆造
+                    dayDisabled={(day) =>
+                      !!arrivalTrade.confirm_date && toDateOnly(day) < arrivalTrade.confirm_date
+                    }
                   />
                   <p className="text-xs text-muted-foreground">
                     到账日之前该笔资金计入「卖出在途」，不计入可用现金；组内确认日及之后已有快照时须先删除快照。

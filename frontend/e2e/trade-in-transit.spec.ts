@@ -57,6 +57,12 @@ const CASH_INJECT = 40000;
 const BUY_AMOUNT = 10000;
 const SELL_SHARES = 2000;
 /**
+ * 赎回份额与转移金额（#525 用例）：注入后净值恒 1.0000（首窗），故赎回 10000 份 = ¥10,000.00；
+ * 转移 5000 元 → 主/子行金额同为 ¥5,000.00，与赎回行按金额区分（10,000 不含 5,000 子串）。
+ */
+const REDEEM_SHARES = 10000;
+const TRANSFER_AMOUNT = 5000;
+/**
  * 净值口径（4 位小数）：与 `seed_e2e_active` 的 `000300.OF` 夹具**一一对应**
  * （D=1.5000、D+1=1.5500、D+2=1.6000）——D=1.5000 使买入得 6666.67 份，
  * 卖出确认取 D+2 净值 1.6000（2000 份 → 3200 元）。改这里必须同步改种子。
@@ -359,6 +365,30 @@ async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Pro
   await pickDay(page, dlg.locator('button#cash_confirm_date'), targetISO);
 }
 
+/**
+ * 断言**当前已打开**的日历里早于 lowerISO 的日期一律硬禁用（#525 附项 A/B）。
+ *
+ * 只断言「当前展示月内、早于下界且可见」的日期：翻页方向只能按 today 猜，月边界上
+ * 会翻错方向，把稳定用例变成偶发红；宁可在跨月窗口下集合为空、静默空转。
+ */
+async function expectDaysBeforeDisabled(page: Page, lowerISO: string): Promise<void> {
+  await page.locator('button.rdp-day_button').first().waitFor();
+  const days = await page.locator('button.rdp-day_button[data-day]').evaluateAll(
+    (els, lower) =>
+      els
+        .filter((el) => (el.getAttribute('data-day') ?? '') < lower)
+        .map((el) => ({
+          day: el.getAttribute('data-day') ?? '',
+          disabled: (el as HTMLButtonElement).disabled,
+        })),
+    lowerISO,
+  );
+  expect(
+    days.every((d) => d.disabled),
+    `早于 ${lowerISO} 的日期应全部硬禁用：${JSON.stringify(days)}`,
+  ).toBe(true);
+}
+
 /** 确认弹窗内改选到账平台（SearchablePlatformSelect id=cash_platform_code，与后端 query 同名） */
 async function pickArrivalPlatform(
   page: Page,
@@ -545,6 +575,17 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await expect(
       sellConfirm.getByTestId('platform-trigger').filter({ hasText: '华宝证券' }),
     ).toBeVisible();
+
+    // #525 附项 B：关闭 → 重开同一笔。preview 已缓存、C 值不变 ⇒ 回填 effect 必须靠
+    // open/trade.id 依赖重新记回，否则 C 再也回不来：A<C 又可点、「选回 C」也不再归一
+    await sellConfirm.getByRole('button', { name: '取消' }).click();
+    await expect(sellConfirm).toBeHidden({ timeout: 15_000 });
+    await fundRow(page, '卖出').locator('button[title="确认"]').click();
+    await sellConfirm.waitFor();
+    await expect(arrivalTrigger).toHaveText(d3);
+    await arrivalTrigger.click();
+    await expectDaysBeforeDisabled(page, d3);
+    await arrivalTrigger.click(); // 再点一次触发按钮收起日历（不点日期，规避「点已选日=取消选择」）
     // 改选到账日 A = D+4（> C = D+3，形成 C..A 在途窗口）与到账平台 TTJJ（≠ 基金平台）
     // → 两者都进 preview query key 重新预览（预览值即确认值），期间确认按钮禁用
     const arrival = [d4];
@@ -589,6 +630,11 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await arrivalDlg.waitFor();
     const arrivalEdit = arrivalDlg.getByLabel('到账日期', { exact: true });
     await expect(arrivalEdit).toHaveText(arrival[0]);
+    // #525 附项 A：窄表单的到账日同样不得早于 C——后端 INVALID_DATE_ORDER 不该
+    // 推迟到提交后的通用「更新失败」toast，选择时即硬禁用（与确认弹窗同口径）
+    await arrivalEdit.click();
+    await expectDaysBeforeDisabled(page, d3);
+    await arrivalEdit.click();
     await arrivalDlg.getByRole('button', { name: '保存修改' }).click();
     await expect(arrivalDlg).toBeHidden({ timeout: 15_000 });
 
@@ -683,6 +729,90 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await expect(orphan.locator('button[title="取消"]')).toHaveCount(0);
     await expect(orphan.locator('button[title="删除"]')).toHaveCount(0);
     await expect(orphan.locator('button[title="取消确认"]')).toHaveCount(0);
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  // #525：「修改到账日期」窄例外只属于**基金**卖出腿。已确认的 CASH 卖出腿
+  // （赎回 sub_ 配对腿 / 当天完成的现金转移主腿）露出该按钮即死路入口——读侧派生的
+  // cash_confirm_date 只填在基金腿上（CASH 腿自身恒 null ⇒ 预填恒空、保存恒禁用），
+  // 而手选日期提交必被后端 PUT 的 CASH 守卫以 CASH_TRADE_FORBIDDEN 拒绝。
+  test('已确认 CASH 卖出腿（赎回/转移）不露出「修改到账日期」入口', async ({
+    page,
+  }, testInfo) => {
+    const errors = collectPageErrors(page);
+    const headers = await openAppAndAuth(page);
+    const d = await nearestTradingDay(page, headers);
+    const [d1, d2] = await nextTradingDays(page, headers, d, 2);
+    const code = isolatedPortfolioCode(testInfo) + 'X';
+    await setupIsolatedPortfolio(page, headers, code, [d, d1, d2]);
+
+    // ---- 1. 赎回：D 快照（定价基准）→ 申请日 D1 → D1 快照 → 确认 ⇒ sub_ 组 CASH sell ----
+    await gotoPortfolioSubpage(page, code as PortfolioCode, 'snapshots');
+    await generateSnapshot(page, d);
+    const redeemResp = await page.request.post('/api/subscriptions', {
+      data: {
+        portfolio_code: code,
+        investor_code: 'ADMIN',
+        platform_code: FUND_PLATFORM,
+        sub_type: 'redeem',
+        shares: REDEEM_SHARES,
+        apply_date: d1,
+      },
+      headers,
+    });
+    expect(
+      redeemResp.ok(),
+      `创建赎回失败 ${redeemResp.status()} ${await redeemResp.text()}`,
+    ).toBeTruthy();
+    const redeem = (await redeemResp.json()) as { id: number; confirm_date: string };
+    expect(redeem.confirm_date, '赎回确认日 = 申请日的下一交易日').toBe(d2);
+    // 确认要求申请日已有快照（按 T 日净值计价），故先补 D1 快照
+    await generateSnapshot(page, d1);
+    const confirmResp = await page.request.post(`/api/subscriptions/${redeem.id}/confirm`, {
+      headers,
+    });
+    expect(
+      confirmResp.ok(),
+      `确认赎回失败 ${confirmResp.status()} ${await confirmResp.text()}`,
+    ).toBeTruthy();
+
+    // ---- 2. 当天完成的跨平台现金转移：主腿 = confirmed CASH sell（12 位 hex 组）----
+    // 转移日须晚于最新快照日（本例已生成到 D1），故取 D2
+    const transferResp = await page.request.post(`/api/portfolios/${code}/cash-transfer`, {
+      data: {
+        from_platform: FUND_PLATFORM,
+        to_platform: ARRIVAL_PLATFORM,
+        amount: TRANSFER_AMOUNT,
+        transfer_date: d2,
+      },
+      headers,
+    });
+    expect(
+      transferResp.ok(),
+      `现金转移失败 ${transferResp.status()} ${await transferResp.text()}`,
+    ).toBeTruthy();
+
+    // 赎回腿的生效日 D2 可能晚于 today，会被默认的「近1年」区间滤出列表
+    await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
+    await clearTradeDateRange(page, testInfo);
+
+    const redeemRow = page.getByRole('row').filter({ hasText: '现金 · 申赎确认' }).first();
+    await expect(redeemRow).toBeVisible({ timeout: 15_000 });
+    await expect(redeemRow.locator('button[title="修改到账日期"]')).toHaveCount(0);
+    // 回到 PR #518 之前的行为：普通「修改」按钮 → 点出「请先取消确认」提示
+    await expect(redeemRow.locator('button[title="修改"]')).toHaveCount(1);
+
+    // 转移主行 = pair 主行（产品列是 CASH 产品、带类型 badge）；子行是「现金到账」、
+    // 无类型 badge，故按「金额 + 卖出」双条件收窄到主行
+    const transferRow = page
+      .getByRole('row')
+      .filter({ hasText: `${TRANSFER_AMOUNT.toLocaleString('en-US')}.00` })
+      .filter({ hasText: '卖出' })
+      .first();
+    await expect(transferRow).toBeVisible({ timeout: 15_000 });
+    await expect(transferRow.locator('button[title="修改到账日期"]')).toHaveCount(0);
+    await expect(transferRow.locator('button[title="修改"]')).toHaveCount(1);
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });

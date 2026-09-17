@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { groupTradeRows, cashSubMeta, cashLegArrived, cashOrphanLabel } from "@/lib/tradePairs";
+import {
+  groupTradeRows,
+  cashSubMeta,
+  cashLegArrived,
+  cashOrphanLabel,
+  isCashLeg,
+  canEditArrivalDate,
+} from "@/lib/tradePairs";
 import { toDateOnly } from "@/lib/utils";
 import type { Trade } from "@/types/trade";
 
@@ -169,6 +176,50 @@ describe("cashLegArrived（#493 评审加固：口径 = confirmed 且日期不�
       true,
     );
     expect(cashLegArrived(makeTrade({ status: "confirmed", confirm_date: "2999-01-01" }))).toBe(false);
+  });
+});
+
+describe("isCashLeg", () => {
+  it("按 product_code 判定（与后端 update_trade 的 CASH 守卫同口径）", () => {
+    expect(isCashLeg(makeTrade({ product_code: "CASH" }))).toBe(true);
+    expect(isCashLeg(makeTrade({ product_code: "F1" }))).toBe(false);
+  });
+});
+
+// #525：门控漏掉产品维度时，赎回配对腿与现金转移主腿（均为 confirmed CASH sell）
+// 会拿到「修改到账日期」按钮，而点开是死路弹窗（预填恒空 + 提交必 CASH_TRADE_FORBIDDEN）
+describe("canEditArrivalDate（#525：只给基金卖出腿）", () => {
+  it("已确认基金卖出腿 → 适用（窄表单入口不受影响）", () => {
+    expect(
+      canEditArrivalDate(makeTrade({ product_code: "F1", trade_type: "sell", transfer_group: "rebal_a" })),
+    ).toBe(true);
+  });
+
+  it("赎回配对的 CASH 卖出腿（sub_ 组）→ 不适用", () => {
+    expect(
+      canEditArrivalDate(
+        makeTrade({ product_code: "CASH", trade_type: "sell", transfer_group: "sub_42" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("当天完成现金转移的 CASH 主腿（12 位 hex 组）→ 不适用", () => {
+    expect(
+      canEditArrivalDate(
+        makeTrade({
+          product_code: "CASH",
+          trade_type: "sell",
+          transfer_group: "0123456789ab",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("调仓 CASH 腿与买入方向（含 CASH 扣款腿）→ 不适用", () => {
+    expect(
+      canEditArrivalDate(makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "rebal_a" })),
+    ).toBe(false);
+    expect(canEditArrivalDate(makeTrade({ product_code: "F1", trade_type: "buy" }))).toBe(false);
   });
 });
 

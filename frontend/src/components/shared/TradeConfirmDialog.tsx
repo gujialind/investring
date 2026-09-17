@@ -106,9 +106,13 @@ export function TradeConfirmDialog({
   const preview = data?.preview;
   // 只在预览成功回传 C 时更新：预览失败（如用户选中非法到账日）时 preview 为 undefined，
   // 此处刻意**保留**上一次的 C——到账日下界不该随一次失败一起消失（那正是「弹窗内无路可退」）。
+  // 依赖含 `open, trade?.id`（#525）：本组件常驻挂载（Dialog 关闭不卸载 state），上方
+  // reset effect 会在重开时把 C 清成 undefined，而同一笔的 C 值未变 → 只按值比较的
+  // 依赖不会重跑，C 再也回不来（`dayDisabled` 下界与 `defaultCashDate` 归一双双失效）。
+  // 声明序在 reset 之后 ⇒ 同一次提交内先清后回填，最终值即回填值。
   useEffect(() => {
     if (preview?.confirm_date) setEffectiveConfirmDate(preview.confirm_date);
-  }, [preview?.confirm_date]);
+  }, [preview?.confirm_date]); // TEMP-REVERT-B
 
   const productName = formatProductName(trade?.product_name, trade?.product_code);
   // 有效值以预览回传为准（用户未选时即后端缺省：A = C、平台 = 基金腿平台）
@@ -177,10 +181,11 @@ export function TradeConfirmDialog({
           <InfoRow label="产品" value={productName} />
           <InfoRow label="市场" value={formatMarketName(trade.market)} />
           <InfoRow label="交易平台" value={platformName(platforms, trade.platform_code)} />
-          <InfoRow
-            label={isBuy ? "扣款平台" : "到账平台"}
-            value={platformName(platforms, shownPlatform)}
-          />
+          {/* 卖出侧不重复渲染「到账平台」：下方 arrivalInputs 的可编辑选择框取的是同一个值，
+              两处同名易被误读成两个字段；买入侧无输入块，故仍在此只读回显扣款平台 */}
+          {isBuy && (
+            <InfoRow label="扣款平台" value={platformName(platforms, shownPlatform)} />
+          )}
           <InfoRow label="金额" value={formatCurrency(preview.amount)} />
           <InfoRow label="份额" value={formatSharesUnit(preview.shares)} />
           <InfoRow label="价格" value={formatNav(preview.price)} />
