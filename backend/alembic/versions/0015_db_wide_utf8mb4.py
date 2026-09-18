@@ -114,7 +114,7 @@ def _base_tables(bind) -> List[str]:
 
     刻意按 `TABLE_SCHEMA = DATABASE()` 取全库而不是取模型清单：本迁移的目标是**库级**
     统一，任何漏掉的表都会成为下一处 errno 1366 的面；`DATABASE()` 让语句跨环境自洽
-    （CI 用 ir_migration、本地/生产用各自库名）。
+    （CI 用 ir_migration/ir_e2e、本地/生产用各自库名）。
     """
     rows = bind.execute(
         sa.text(

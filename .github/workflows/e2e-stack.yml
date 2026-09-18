@@ -120,11 +120,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）
-      - name: Create database
+      # 库级字符集对齐 backend-test-mysql（utf8mb4 / utf8mb4_general_ci，#433 起统一）。
+      #
+      # 最小权限 E2E 账号（#548，口径同 ci.yml 的 backend-test-mysql / #539）：下面三个连接串
+      # （建 schema / 种子 / Start backend）一律用**与库同名**的 ir_e2e，root 只留在本步建库
+      # 建号。口令与用户名同值——这是每次 run 新建、只对 runner 回环暴露的一次性服务容器，
+      # 不构成秘密（root 口令本就写在本 job 的 service 定义里）。权限清单以
+      # scripts/tests/test_ci_mysql_account.py 的 REQUIRED_PRIVILEGES 为准，逐条对应本 job 的
+      # 真实用法：create_all + alembic upgrade head 建删表与索引（本步之后跑一遍，Start backend
+      # 时 main.py:30 的 import 期 create_all 与 :47 的 lifespan upgrade head 再各跑一遍），
+      # ALTER 另覆盖迁移 0015 的 ALTER DATABASE，REFERENCES 是建外键时父表上的必需权限。
+      # 本 job 没有 drop_all、也没有 downgrade，那份清单对它只是上界——与 backend-test-mysql
+      # 共用一份、不分叉，是 #548 的决策（判据抄两份就必然漂移）。
+      # 刻意不给：ALL PRIVILEGES、GRANT OPTION（无从转授权）、SUPER、FILE、PROCESS。
+      - name: Create database and least-privilege E2E account
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "
-            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+            CREATE DATABASE ir_e2e CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+            CREATE USER 'ir_e2e'@'%' IDENTIFIED BY 'ir_e2e';
+            GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES
+              ON ir_e2e.* TO 'ir_e2e'@'%';"
 
       # 复刻生产启动顺序（对齐 backend-test-mysql）：create_all 先建全表，
       # alembic upgrade head 增量修补——迁移链依赖 create_all 已建表
@@ -132,7 +147,7 @@ jobs:
       - name: Create schema and run migrations
         working-directory: backend
         env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+          DATABASE_URL: mysql+pymysql://ir_e2e:ir_e2e@127.0.0.1:3306/ir_e2e?charset=utf8mb4
         run: |
           python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
@@ -143,13 +158,13 @@ jobs:
       - name: Seed E2E base data
         working-directory: backend
         env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+          DATABASE_URL: mysql+pymysql://ir_e2e:ir_e2e@127.0.0.1:3306/ir_e2e?charset=utf8mb4
         run: python scripts/seed_e2e.py
 
       - name: Start backend
         working-directory: backend
         env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_e2e?charset=utf8mb4
+          DATABASE_URL: mysql+pymysql://ir_e2e:ir_e2e@127.0.0.1:3306/ir_e2e?charset=utf8mb4
         run: |
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../${{ inputs.log_file }} 2>&1 &
           for i in $(seq 1 30); do
