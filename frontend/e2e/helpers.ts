@@ -157,6 +157,8 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 //   expectXxx                     → 断言共享组件契约（业务断言留在 spec）
 //   openXxx                       → 导航 + 开弹窗
 //   openXxxIfMobile               → 端差异适配（另一端 no-op），不含导航
+//   openPopover                   → 开浮层并确认内容可见（#524 吞点击同步，非纯工厂）
+//   settlePopovers                → 等浮层退出动画走完（#524 同步点，非断言）
 // ===========================================================================
 
 /** 首行等待 + 优雅 skip 的选项类别（决定 testid 与 skip 文案） */
@@ -195,6 +197,69 @@ async function firstOptionOrSkip(popover: Locator, kind: OptionKind): Promise<Lo
     test.skip(true, kind === 'platform' ? '环境中没有平台数据' : '环境中没有产品数据');
   }
   return firstRow;
+}
+
+/**
+ * Radix 浮层挂载容器（Popover / Select / Dropdown 的 Popper 出口）。
+ * 是库注入的公开 DOM 契约，性质同 `rdp-day_button`——非 Tailwind 工具类，#382 门禁不拦。
+ */
+const POPPER_WRAPPER = '[data-radix-popper-content-wrapper]';
+
+/**
+ * 等页面上已无挂载中的 Radix 浮层（退出动画走完）。
+ *
+ * #524：Radix DismissableLayer 在退出动画期间仍挂在 document 上，会把紧接着的下一次
+ * 点击（开另一个浮层、或点 Dialog 里的按钮）整口吞掉。浮层开合 helper 一律「开前等、
+ * 收后等」，把这一竞态从源头挡掉；等不到不在此处判红——真卡住时后面的可见性/状态断言
+ * 会以更清楚的方式失败，这里只是同步点而非断言。
+ */
+export async function settlePopovers(page: Page): Promise<void> {
+  await page
+    .waitForFunction(
+      (selector) => document.querySelectorAll(selector).length === 0,
+      POPPER_WRAPPER,
+      { timeout: 5_000 },
+    )
+    .catch(() => undefined);
+}
+
+/**
+ * 点 trigger 打开浮层，并确认 `content`（该浮层内的锚点元素）真的可见。
+ *
+ * #524：Radix DismissableLayer 在退出动画期间仍在 document 上监听 pointerdown，会把紧
+ * 跟着那次「打开」整口吞掉——点击送达 trigger，新浮层随即被 dismiss。此后调用方的
+ * `waitFor` 只能等到超时（裸 `waitFor()` 更是把整条用例的超时预算吃干）。CI 形态对比
+ * （capture `--retries=0`，无 retry 保护）连红 5 次，失败点都落在「收一个浮层 → 立刻开
+ * 下一个」的相邻链路上。
+ *
+ * 两道同步，都是「等一等、看一眼」而非放宽断言：
+ * 1. 点前先等旧浮层彻底卸载（根因）；
+ * 2. 点后再看一眼：**只有**「内容不可见 且 页面上没有任何浮层挂载」才判定被吞、重点一次
+ *    （浮层已挂载却等不到内容属定位器/业务问题，重点只会把开着的浮层关掉，故直接抛超时）。
+ * 兜底重试仍失败即按正常超时红，不掩盖真失败。
+ */
+export async function openPopover(
+  page: Page,
+  trigger: Locator,
+  content: Locator,
+): Promise<void> {
+  // click 也要有上界：Playwright 未设 use.actionTimeout，click() 的 actionability 等待
+  // 默认无上界，一次「点不动」会静默吃掉整条用例剩余的预算（#524 的 60s 就是这么耗干的）。
+  const CLICK_TIMEOUT = 10_000;
+  await settlePopovers(page);
+  await trigger.click({ timeout: CLICK_TIMEOUT });
+  const appeared = await content
+    .waitFor({ state: 'visible', timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (appeared) return;
+  if ((await page.locator(POPPER_WRAPPER).count()) > 0) {
+    await content.waitFor({ state: 'visible', timeout: 10_000 });
+    return;
+  }
+  await settlePopovers(page);
+  await trigger.click({ timeout: CLICK_TIMEOUT });
+  await content.waitFor({ state: 'visible', timeout: 10_000 });
 }
 
 /** 平台搜索弹层（SearchablePlatformSelect） */
@@ -339,6 +404,6 @@ export async function openSubmitTradeDialog(
   await gotoPortfolioSubpage(page, code, 'trades');
   await page.getByRole('button', { name: '提交交易' }).first().click();
   const dlg = dialogByTitle(page, '提交交易');
-  await dlg.waitFor();
+  await dlg.waitFor({ timeout: 10_000 });
   return { dlg, portfolioCode: code };
 }
