@@ -15,7 +15,8 @@
  *      - 已确认卖出的窄表单只提交到账日（+备注），其他财务字段仍走「先取消确认」提示。
  *
  * 数据说明（与 helpers.ts 的种子契约互补）：
- * - 本 spec **自建隔离组合**（`E2E493<当日><workerIndex>`，经 POST /api/portfolios）而不用
+ * - 本 spec **自建隔离组合**（`E2E493<yyyyMMdd><D|M><workerIndex><retry>`，见
+ *   `isolatedPortfolioCode`，经 POST /api/portfolios）而不用
  *   种子契约组合：完整买卖链需要「零快照 → 逐日生成 → 连续快照」且不得与其它 spec 共享
  *   在途/现金状态；`E2E_PORT` 是零交易契约组合（被其它 spec 依赖）、`E2E_ACTIVE` 禁止
  *   recalculate/catch-up/generate-next（#354 红线）。每 worker 独立组合亦使本 spec 天然
@@ -129,6 +130,10 @@ async function nextTradingDays(
  * - CI 主 e2e job 带 `retries: 2`：失败重试若沿用同一 code，也会撞上上次残留的组合。
  *
  * 长度：`E2E493`(6) + 日期(8) + project(1) + worker(1) + retry(1) = 17，加用例后缀 1 位 = 18。
+ * ⚠️ 这个 18 只在 workerIndex/retry **均为个位数**时成立：两者按十进制原样插值，而本地
+ * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19–20、逼近 `portfolio.code`
+ * 的 20 上限。腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），可同时解决 #551 §4
+ * 想加的 per-run nonce 没位子的问题（本轮未做）。
  */
 function isolatedPortfolioCode(testInfo: {
   project: { name: string };
@@ -317,13 +322,16 @@ async function generateSnapshot(page: Page, targetISO: string): Promise<void> {
   await dlg.getByRole('button', { name: '预检验证' }).click();
   // #524：toast 由接口返回后的 onSuccess 发出，故「15s 内没看到成功 toast」既可能是
   // 生成失败、也可能只是慢（形态对比两侧 --workers=2 抢同一个后端）。先等这条 POST 本身
-  // （25s，落在 client.ts 的 30s axios 超时之内），按状态码定性，再看 toast——断言与
+  // （15s，仍落在 client.ts 的 30s axios 超时之内），按状态码定性，再看 toast——断言与
   // 被测事实对齐，失败信息也从「没看到提示」变成明确的超时/状态码。
+  // 上界从 25s 收到 15s（#551 §5.5）：本函数在 4 个用例里被调用，其中 3 个没有
+  // `test.setTimeout`、仍在 `playwright.config.ts` 的 30s 全局预算内，25s 会让那条用例
+  // 先撞全局 timeout——承诺的「明确状态码报错」根本打不出来。正常响应是秒级。
   const [generateResp] = await Promise.all([
     page.waitForResponse(
       (res) =>
         res.request().method() === 'POST' && res.url().includes('/api/snapshots/generate'),
-      { timeout: 25_000 },
+      { timeout: 15_000 },
     ),
     dlg.getByRole('button', { name: '确认生成' }).click(),
   ]);
@@ -627,6 +635,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await openCalendar(page, arrivalTrigger);
     await expectDaysBeforeDisabled(page, d3);
     await arrivalTrigger.click({ timeout: 10_000 });
+    await settlePopovers(page); // 与上方收法对称；下游 pickArrivalDate 内部也会 settle
 
     // 改选到账日 A = D+4（> C = D+3，形成 C..A 在途窗口）与到账平台 TTJJ（≠ 基金平台）
     // → 两者都进 preview query key 重新预览（预览值即确认值），期间确认按钮禁用
@@ -697,7 +706,10 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await openCalendar(page, arrivalEdit);
     await expectDaysBeforeDisabled(page, d3);
     await arrivalEdit.click({ timeout: 10_000 });
-    await arrivalDlg.getByRole('button', { name: '保存修改' }).click();
+    // #551 §5.1：本文件唯一「收完浮层紧接着点另一个控件」且没有 settle 的站点——
+    // 「保存修改」就在弹层刚卸载的位置下方，正落在 #524 的吞点击窗口里。
+    await settlePopovers(page);
+    await arrivalDlg.getByRole('button', { name: '保存修改' }).click({ timeout: 10_000 });
     await expect(arrivalDlg).toBeHidden({ timeout: 15_000 });
 
     // ---- 7. C 之前无在途；C..A 之间记等额卖出在途、现金未增；A 日起转 CASH ----

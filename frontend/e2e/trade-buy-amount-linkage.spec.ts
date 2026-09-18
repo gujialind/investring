@@ -33,17 +33,19 @@ import {
   authHeaders,
   collectPageErrors,
   dialogByTitle,
+  openPopover,
   openSubmitTradeDialog,
   pickFirstPlatformOption,
   pickFirstProduct,
   platformPopover,
+  settlePopovers,
 } from './helpers';
 
 /** 选中首个交易平台（无平台数据优雅 skip），返回所选平台 code。
  *  注意：提交交易 Dialog 内有两个 SearchablePlatformSelect（交易平台 + 现金平台），
  *  触发按钮均挂 data-testid="platform-trigger"，须按 id 消歧 */
 async function pickFirstPlatform(page: Page, dlg: Locator): Promise<string> {
-  await dlg.locator('button#platform_code').click();
+  await openPopover(page, dlg.locator('button#platform_code'), platformPopover(page));
   return pickFirstPlatformOption(platformPopover(page));
 }
 
@@ -91,14 +93,18 @@ async function selectTradeDate(
   targetISO: string,
 ): Promise<void> {
   const trigger = dlg.locator('button#trade_date');
-  await trigger.click();
+  // 首个日期格作「弹层已开」锚点：与数据量无关，不会把 #524 的吞点击写成硬性等待失败
+  await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
+  // 浮层内的点击一律带上界：未设 `use.actionTimeout` 时裸 click() 的 actionability
+  // 等待无上界，一次「点不动」会静默吃掉整条用例剩余预算（#524）。
   if ((await day.count()) === 0) {
     const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
-    await page.locator(`button.rdp-button_${dir}`).click();
+    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
   }
-  await day.click();
+  await day.click({ timeout: 10_000 });
   await expect(trigger).toHaveText(targetISO);
+  await settlePopovers(page); // 选日即关弹层，收干净再让调用方点下一个控件
 }
 
 /**
