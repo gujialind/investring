@@ -19,7 +19,9 @@
  *   种子契约组合：完整买卖链需要「零快照 → 逐日生成 → 连续快照」且不得与其它 spec 共享
  *   在途/现金状态；`E2E_PORT` 是零交易契约组合（被其它 spec 依赖）、`E2E_ACTIVE` 禁止
  *   recalculate/catch-up/generate-next（#354 红线）。每 worker 独立组合亦使本 spec 天然
- *   并行安全、重跑幂等（首购申购金额固定、账户为新建空账本，无需清理残留）。
+ *   并行安全；但**重跑只在「每次重灌种子库」的前提下幂等**——code 里的日期只到天、无
+ *   per-run nonce，同一后端上不重启直接二次 `playwright test` 会复用同名槽位、`POST
+ *   /api/portfolios` 确定性撞 `ALREADY_EXISTS`（CI 每轮新建栈，故不受影响）。
  * - 现金注入经 API「申购 + 确认」（首窗净值 1.0000 无需行情）；确认日为申请日下一交易日，
  *   故申请日取 D 的前一工作日，使 CASH 腿 confirm_date 恰落 D 当天。
  * - 日期锚定经 `/api/trading-calendar` 取「today 起最近一个交易日」D 及其后 3 个交易日
@@ -39,10 +41,13 @@ import {
   dialogByTitle,
   gotoPortfolioSubpage,
   openFilterPanelIfMobile,
+  openPopover,
   openSubmitTradeDialog,
+  platformOption,
   platformPopover,
   productOption,
   productPopover,
+  settlePopovers,
   toastByTitle,
   type PortfolioCode,
 } from './helpers';
@@ -262,28 +267,37 @@ async function snapshotCash(
 }
 
 /**
+ * 打开 DatePicker 日历弹层，以首个日期格作为「弹层已开」锚点（#524 吞点击同步见 helper）。
+ */
+async function openCalendar(page: Page, trigger: Locator): Promise<void> {
+  await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
+}
+
+/**
  * 在 DatePicker 弹层内把触发按钮的值设为 targetISO（三个日期 helper 共用）。
  *
- * 「目标日 == 控件当前值」时**直接跳过、不点开弹层**：react-day-picker@10 单选
- * 模式（`calendar.tsx` 未传 `required`）会把「点已选日」当成取消选择
- * （`useSingle`: `!required && isSameDay → onSelect(undefined)`），而
- * `date-picker.tsx` 只在 newDate 非空时才关弹层——结果是值被清空、弹层还开着。
- * CI 2026-09-16 实踩：当天是交易日，目标 D == 表单默认值 today 两点重合才炸；
- * `trade-buy-amount-linkage.spec.ts` 早用「≠ today 才选」绕开过同一坑。
- * 目标日与 today 最多相差 4 个交易日，日历默认展示当前月（或已选日所在月），
+ * 「目标日 == 控件当前值」时直接跳过、不开弹层：少一次浮层开合即少一处 #524 竞态面。
+ * #542 之前这一跳过是**正确性前提**——react-day-picker@10 单选（`calendar.tsx` 未传
+ * `required`）把「点已选日」当成取消选择（`useSingle`: `!required && isSameDay →
+ * onSelect(undefined)`），而当时 `date-picker.tsx` 只在 newDate 非空时才关弹层，结果是
+ * 值被清空、弹层还开着（CI 2026-09-16 实踩：目标 D 恰为表单默认值 today）。#542 已改为
+ * 「点任何日都关弹层、toggle-off 不回传调用方」，清空唯一入口是 X 按钮，故这里的跳过
+ * 只剩效率意义。目标日与 today 最多相差 4 个交易日，日历默认展示当前月（或已选日所在月），
  * 故 `data-day` 不在当前月时按月翻一次。
  */
 async function pickDay(page: Page, trigger: Locator, targetISO: string): Promise<void> {
   if ((await trigger.textContent())?.trim() === targetISO) return;
-  await trigger.click();
-  await page.locator('button.rdp-day_button').first().waitFor();
+  await openCalendar(page, trigger);
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
+  // 浮层内的点击一律带上界：Playwright 未设 `use.actionTimeout`，裸 `click()` 的
+  // actionability 等待无上界，一次「点不动」会静默吃掉整条用例剩余的预算（#524）。
   if ((await day.count()) === 0) {
     const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
-    await page.locator(`button.rdp-button_${dir}`).click();
+    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
   }
-  await day.click();
+  await day.click({ timeout: 10_000 });
   await expect(trigger).toHaveText(targetISO);
+  await settlePopovers(page); // 选日即关弹层（#542），收干净再让调用方点下一个控件
 }
 
 /**
@@ -294,34 +308,48 @@ async function pickDay(page: Page, trigger: Locator, targetISO: string): Promise
 async function generateSnapshot(page: Page, targetISO: string): Promise<void> {
   await page.getByRole('button', { name: '单日生成' }).click();
   const dlg = dialogByTitle(page, '生成单日快照');
-  await dlg.waitFor();
+  await dlg.waitFor({ timeout: 10_000 });
 
   const trigger = dlg.locator('button').filter({ hasText: /选择日期|\d{4}-\d{2}-\d{2}/ }).first();
   await pickDay(page, trigger, targetISO);
 
   await dlg.getByRole('button', { name: '预检验证' }).click();
-  await dlg.getByRole('button', { name: '确认生成' }).click();
+  // #524：toast 由接口返回后的 onSuccess 发出，故「15s 内没看到成功 toast」既可能是
+  // 生成失败、也可能只是慢（形态对比两侧 --workers=2 抢同一个后端）。先等这条 POST 本身
+  // （25s，落在 client.ts 的 30s axios 超时之内），按状态码定性，再看 toast——断言与
+  // 被测事实对齐，失败信息也从「没看到提示」变成明确的超时/状态码。
+  const [generateResp] = await Promise.all([
+    page.waitForResponse(
+      (res) =>
+        res.request().method() === 'POST' && res.url().includes('/api/snapshots/generate'),
+      { timeout: 25_000 },
+    ),
+    dlg.getByRole('button', { name: '确认生成' }).click(),
+  ]);
+  expect(generateResp.ok(), `快照生成接口返回 ${generateResp.status()}`).toBeTruthy();
   await expect(toastByTitle(page, '快照生成成功')).toBeVisible({ timeout: 15_000 });
   await expect(dlg).toBeHidden({ timeout: 15_000 });
 }
 
 /** 在「提交交易」弹窗内选产品（按 code 搜索后点选目标 code|market 行） */
 async function pickProduct(page: Page, dlg: Locator): Promise<void> {
-  await dlg.locator('button#product_code').click();
+  await openPopover(page, dlg.locator('button#product_code'), productPopover(page));
   const popover = productPopover(page);
   await popover.getByPlaceholder('搜索产品代码/名称').fill(OTC_PRODUCT.code);
   const row = productOption(popover, OTC_PRODUCT.code, OTC_PRODUCT.market);
   await row.waitFor({ timeout: 10_000 });
-  await row.click();
+  await row.click({ timeout: 10_000 });
+  await settlePopovers(page);
 }
 
 /** 在「提交交易」弹窗内选交易平台（缺省扣款平台，取种子平台 HBZQ） */
 async function pickFundPlatform(page: Page, dlg: Locator): Promise<void> {
-  await dlg.locator('button#platform_code').click();
+  await openPopover(page, dlg.locator('button#platform_code'), platformPopover(page));
   const popover = platformPopover(page);
-  const option = popover.locator(`[data-testid="platform-option"][data-code="${FUND_PLATFORM}"]`);
+  const option = platformOption(popover, FUND_PLATFORM);
   await option.waitFor({ timeout: 10_000 });
-  await option.click();
+  await option.click({ timeout: 10_000 });
+  await settlePopovers(page);
 }
 
 /** 基金腿主行（按产品名收窄：现金子行首列是「现金…」标签，不含产品名） */
@@ -368,11 +396,14 @@ async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Pro
 /**
  * 断言**当前已打开**的日历里早于 lowerISO 的日期一律硬禁用（#525 附项 A/B）。
  *
+ * 前置：调用方须先用 `openCalendar` 打开日历（自带 #524 吞点击同步），本函数只等已挂载的
+ * 日期格出现，等待有上界（10s），不再用裸 `waitFor()` 把整条用例的超时预算吃干。
+ *
  * 只断言「当前展示月内、早于下界且可见」的日期：翻页方向只能按 today 猜，月边界上
  * 会翻错方向，把稳定用例变成偶发红；宁可在跨月窗口下集合为空、静默空转。
  */
 async function expectDaysBeforeDisabled(page: Page, lowerISO: string): Promise<void> {
-  await page.locator('button.rdp-day_button').first().waitFor();
+  await page.locator('button.rdp-day_button').first().waitFor({ timeout: 10_000 });
   const days = await page.locator('button.rdp-day_button[data-day]').evaluateAll(
     (els, lower) =>
       els
@@ -395,11 +426,11 @@ async function pickArrivalPlatform(
   dlg: Locator,
   platformCode: string,
 ): Promise<void> {
-  await dlg.locator('button#cash_platform_code').click();
-  const popover = platformPopover(page);
-  const option = popover.locator(`[data-testid="platform-option"][data-code="${platformCode}"]`);
+  await openPopover(page, dlg.locator('button#cash_platform_code'), platformPopover(page));
+  const option = platformOption(platformPopover(page), platformCode);
   await option.waitFor({ timeout: 10_000 });
-  await option.click();
+  await option.click({ timeout: 10_000 });
+  await settlePopovers(page);
 }
 
 /**
@@ -479,7 +510,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
     await fundRow(page, '买入').locator('button[title="确认"]').click();
     const confirmDlg = dialogByTitle(page, '确认买入');
-    await confirmDlg.waitFor();
+    await confirmDlg.waitFor({ timeout: 10_000 });
     // 扣款平台回显（基金平台与扣款平台两处均渲染同名平台，取其一即可证明回显）
     await expect(confirmDlg.getByText('华宝证券').first()).toBeVisible({ timeout: 15_000 });
     await expect(confirmDlg.locator('button#cash_confirm_date')).toHaveCount(0);
@@ -528,7 +559,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
     await fundRow(page, '买入').locator('button[title="确认"]').click();
     const buyConfirm = dialogByTitle(page, '确认买入');
-    await buyConfirm.waitFor();
+    await buyConfirm.waitFor({ timeout: 10_000 });
     await buyConfirm.getByRole('button', { name: '确认' }).click();
     await expect(buyConfirm).toBeHidden({ timeout: 15_000 });
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'snapshots');
@@ -538,7 +569,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
     await page.getByRole('button', { name: '提交交易' }).first().click();
     const sellForm = dialogByTitle(page, '提交交易');
-    await sellForm.waitFor();
+    await sellForm.waitFor({ timeout: 10_000 });
     await sellForm.getByRole('button', { name: '卖出' }).click();
     await expect(sellForm.getByTestId('sell-arrival-hint')).toContainText('确认时录入');
     await expect(sellForm.locator('button#cash_platform_code')).toHaveCount(0);
@@ -573,7 +604,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // ---- 4. 确认弹窗：到账日期/平台可录入，缺省 A = C、平台 = 基金平台 ----
     await fundRow(page, '卖出').locator('button[title="确认"]').click();
     const sellConfirm = dialogByTitle(page, '确认卖出');
-    await sellConfirm.waitFor();
+    await sellConfirm.waitFor({ timeout: 10_000 });
     const arrivalTrigger = sellConfirm.locator('button#cash_confirm_date');
     await expect(arrivalTrigger).toBeVisible({ timeout: 15_000 });
     await expect(arrivalTrigger).toHaveText(d3); // 缺省 A = C = D+3（trade_date=D+2 + confirm_days=1）
@@ -582,10 +613,11 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     ).toBeVisible();
 
     // 到账日下界 C（后端 INVALID_DATE_ORDER 在选择时即挡）：早于 C 的日期硬禁用。
-    // 收起日历用「再点一次触发按钮」而非点日期——react-day-picker 单选下「点已选日 = 取消选择」
-    await arrivalTrigger.click();
+    // 收起日历用「再点一次触发按钮」而非点日期——点日期是一次多余的写操作（#542 后
+    // 点已选日已不再清空字段，但仍会走一遍 onSelect）。
+    await openCalendar(page, arrivalTrigger);
     await expectDaysBeforeDisabled(page, d3);
-    await arrivalTrigger.click();
+    await arrivalTrigger.click({ timeout: 10_000 });
 
     // 改选到账日 A = D+4（> C = D+3，形成 C..A 在途窗口）与到账平台 TTJJ（≠ 基金平台）
     // → 两者都进 preview query key 重新预览（预览值即确认值），期间确认按钮禁用
@@ -600,7 +632,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await sellConfirm.getByRole('button', { name: '取消' }).click();
     await expect(sellConfirm).toBeHidden({ timeout: 15_000 });
     await fundRow(page, '卖出').locator('button[title="确认"]').click();
-    await sellConfirm.waitFor();
+    await sellConfirm.waitFor({ timeout: 10_000 });
     await expect(arrivalTrigger).toHaveText(d3);
     await expect(
       sellConfirm.getByTestId('platform-trigger').filter({ hasText: '华宝证券' }),
@@ -644,14 +676,14 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // ---- 6. 窄表单：只改到账日（+备注），回显当前到账日 ----
     await sellRow.locator('button[title="修改到账日期"]').click();
     const arrivalDlg = dialogByTitle(page, '修改到账日期');
-    await arrivalDlg.waitFor();
+    await arrivalDlg.waitFor({ timeout: 10_000 });
     const arrivalEdit = arrivalDlg.getByLabel('到账日期', { exact: true });
     await expect(arrivalEdit).toHaveText(arrival[0]);
     // #525 附项 A：窄表单的到账日同样不得早于 C——后端 INVALID_DATE_ORDER 不该
     // 推迟到提交后的通用「更新失败」toast，选择时即硬禁用（与确认弹窗同口径）
-    await arrivalEdit.click();
+    await openCalendar(page, arrivalEdit);
     await expectDaysBeforeDisabled(page, d3);
-    await arrivalEdit.click();
+    await arrivalEdit.click({ timeout: 10_000 });
     await arrivalDlg.getByRole('button', { name: '保存修改' }).click();
     await expect(arrivalDlg).toBeHidden({ timeout: 15_000 });
 
@@ -737,8 +769,11 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // confirmed 扣款腿单独成行 → 现金孤儿行（现金 · 调仓）。**不能按产品 = CASH
     // 筛选**：/api/products 默认排除虚拟产品（#327，CASH/IN_TRANSIT 不可交易），
     // 产品筛选弹层永远列不出 CASH——这是组件刻意行为，不是数据缺失。
-    await page.getByRole('combobox').filter({ hasText: '全部状态' }).click();
-    await page.getByRole('option', { name: '已确认' }).click();
+    const statusTrigger = page.getByRole('combobox').filter({ hasText: '全部状态' });
+    const confirmedOption = page.getByRole('option', { name: '已确认' });
+    await openPopover(page, statusTrigger, confirmedOption);
+    await confirmedOption.click({ timeout: 10_000 });
+    await settlePopovers(page);
 
     const orphan = page.getByRole('row').filter({ hasText: '现金 · 调仓' }).first();
     await expect(orphan).toBeVisible({ timeout: 15_000 });
