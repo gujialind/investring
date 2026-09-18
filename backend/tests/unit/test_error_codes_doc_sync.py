@@ -248,12 +248,16 @@ def _anchors_from_section(section: str) -> tuple[list[tuple[str, str, str]], lis
         if not raw.startswith("|"):
             continue
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", raw.strip())[1:-1]]
-        if len(cells) < 4:
+        if not cells:
             continue
         match = re.fullmatch(r"`([^`]+)`", cells[0])
         if not (match and _is_code_literal(match.group(1))):
             continue
         code = match.group(1)
+        if len(cells) < 4:
+            # 整列缺失必须判红：静默跳过等于守门自己不守门（#521 评审）
+            problems.append(f"`{code}`：总表行缺「抛出位置」列（锚点列为必填）")
+            continue
         tokens = [t.strip() for t in cells[3].split(";") if t.strip()]
         if not tokens:
             problems.append(f"`{code}`：抛出位置列为空（#521 起必须给出稳定符号锚点）")
@@ -284,21 +288,25 @@ def table_anchors() -> tuple[list[tuple[str, str, str]], list[str]]:
 
 
 def _find_symbol_span(tree: ast.Module, dotted: str):
-    """按点分路径定位符号（函数 / 类 / 嵌套方法），返回 (起行, 止行)。"""
+    """按点分路径定位符号（函数 / 类 / 嵌套方法），返回 (起行, 止行)。
+
+    逐层下钻用 `ast.walk` 而非直接子节点：符号可能定义在 `for` / `if` 等复合
+    语句体内（如 `snapshot_service.py` 的 `auto_confirm_after_snapshot._confirm_pair`），
+    只找直接子节点会漏、把合法锚点误判为「符号不存在」。同名候选取源码顺序
+    最靠前者，结果确定。
+    """
     node: ast.AST = tree
     for part in dotted.split("."):
-        target = next(
-            (
-                child
-                for child in ast.iter_child_nodes(node)
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and child.name == part
-            ),
-            None,
-        )
-        if target is None:
+        candidates = [
+            child
+            for child in ast.walk(node)
+            if child is not node
+            and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and child.name == part
+        ]
+        if not candidates:
             return None
-        node = target
+        node = min(candidates, key=lambda child: child.lineno)
     start = node.lineno
     decorators = [
         d.lineno for d in getattr(node, "decorator_list", []) if hasattr(d, "lineno")
@@ -348,10 +356,15 @@ class TestErrorCodeDocSync:
 class TestErrorCodeAnchorGuard:
     """#521：总表「抛出位置」锚点必须是稳定符号，且逐一可验证抛出处。"""
 
-    # 解析器自检样本：覆盖「首锚 / 同文件续锚 / 跨文件切换」三种书写形态
+    # 解析器自检样本：覆盖「首锚 / 同文件续锚 / 跨文件切换 / 嵌套符号」四种形态
     KNOWN_ANCHORS = {
         ("ACCOUNT_LOCKED", "dependencies.py", "get_current_user"),
         ("CASH_TRADE_FORBIDDEN", "services/trade_service.py", "create_trade"),
+        (
+            "CASH_TRANSFER_NON_CASH_LEG",
+            "services/snapshot_service.py",
+            "auto_confirm_after_snapshot._confirm_pair",
+        ),
         ("INVALID_DATE_RANGE", "routers/share_change_events.py", "get_share_change_events"),
     }
 
@@ -375,6 +388,7 @@ class TestErrorCodeAnchorGuard:
                 "| --- | --- | --- | --- |",
                 "| `LINE_ANCHOR` | 422 | x | services/a.py:12; :34 |",
                 "| `EMPTY_CELL` | 422 | x |  |",
+                "| `MISSING_COL` | 422 | x |",
                 "| `BARE_CONT` | 422 | x | ::foo |",
                 "| `GARBAGE` | 422 | x | services/a.py:: |",
                 "| `SAME_FILE_CONT` | 422 | x | services/b.py::first; ::second |",
@@ -386,8 +400,30 @@ class TestErrorCodeAnchorGuard:
         joined = "\n".join(problems)
         assert "行号锚点已禁用" in joined, problems
         assert "抛出位置列为空" in joined, problems
+        assert "缺「抛出位置」列" in joined, problems
         assert "之前没有文件锚点" in joined, problems
         assert "无法解析的锚点" in joined, problems
+
+    def test_symbol_span_locates_nested_defs(self):
+        """点分路径要下钻复合语句体：for / if 内定义的函数也是可定位符号（#521 评审）"""
+        tree = ast.parse(
+            "\n".join(
+                [
+                    "def outer():",
+                    "    for _ in []:",
+                    "        def nested():",
+                    "            raise ValueError",
+                    "        nested()",
+                ]
+            )
+        )
+        nested = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "nested"
+        )
+        assert _find_symbol_span(tree, "outer.nested") == (nested.lineno, nested.end_lineno)
+        assert _find_symbol_span(tree, "outer.missing") is None
 
     def test_anchor_symbols_exist_and_emit_code(self):
         """每个锚点符号必须存在，且其行范围内确实有该码的抛出点"""

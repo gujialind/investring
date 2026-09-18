@@ -94,7 +94,7 @@
 
 > **穷尽口径**：本表收录 `backend/app` 全部在用错误码，**无刻意省略**——它是「码名 ↔ 触发条件 ↔ HTTP 状态」的唯一事实来源（全仓无码注册表，码为抛出点的字面量）。由 `backend/tests/unit/test_error_codes_doc_sync.py` AST 扫描在用码与本表首列比对守门：**加码 / 改名 / 删码必须同一次提交更新本表**，缺项与死码名都判红。
 >
-> **HTTP 列**取抛出点实际状态码：`BusinessError` 默认 422、`NotFoundError` 固定 404，显式 `http_status=` 与 router 的 `HTTPException(status_code=...)` 优先。**抛出位置**为相对 `backend/app/` 的**稳定符号锚点**（`文件::函数/类名`；同文件续锚省略文件前缀、写 `::符号`；同码多站点只列代表性的若干处，完整集合以守门测试的 AST 结果为准）。**禁止行号锚点**（#521）——行号随代码演进静默漂移，符号存在性与「该符号行范围内确实抛出本码」由 `backend/tests/unit/test_error_codes_doc_sync.py` 的 AST 守门逐一验证。
+> **HTTP 列**取抛出点实际状态码：`BusinessError` 默认 422、`NotFoundError` 固定 404，显式 `http_status=` 与 router 的 `HTTPException(status_code=...)` 优先。**抛出位置**为相对 `backend/app/` 的**稳定符号锚点**（`文件::函数/类名`；嵌套符号用点分路径、如 `外函数.内函数`；同文件续锚省略文件前缀、写 `::符号`；同码多站点只列代表性的若干处，完整集合以守门测试的 AST 结果为准）。**禁止行号锚点**（#521）——行号随代码演进静默漂移，符号存在性与「该符号行范围内确实抛出本码」由 `backend/tests/unit/test_error_codes_doc_sync.py` 的 AST 守门逐一验证。
 >
 > 两个**非 HTTP** 形态：`SESSION_ABORTED` 与 `VALIDATION_FAILED` 的逐日条目形态，是重算 / catch-up 响应里 `results[].errors` 与 `auto_confirmed` 条目的 `code`（响应仍 200，见根 `AGENTS.md` §2.6「重算 = 单一事务」）。
 
@@ -113,7 +113,7 @@
 | `CASH_CONFIRM_DATE_NOT_ALLOWED` | 422 | 现金腿现金日的方向闸门（#493）：**卖出创建**时传 `cash_confirm_date`（到账日在确认时录入）；或**买入**（创建或确认）传入不等于下单日 T 的 `cash_confirm_date`（扣款日固定 T） | services/trade_service.py::resolve_cash_leg_plan; ::create_trade |
 | `CASH_LEG_MISSING` | 422 | 已确认卖出 PUT `cash_confirm_date` 时，组内不存在配对 CASH buy 腿（存量异常数据，无法同步到账日）；提示先 unconfirm 再重新确认以重建到账腿 | services/trade_service.py::_update_confirmed_sell_arrival_date |
 | `CASH_PLATFORM_NOT_ALLOWED` | 422 | 现金腿平台的方向闸门（#493）：**卖出创建**时传 `cash_platform_code`（到账平台在确认时录入）；或**买入确认**时传与既有扣款腿平台不同的 `cash_platform_code`（扣款平台创建时确定） | services/trade_service.py::resolve_cash_leg_plan; ::create_trade |
-| `CASH_TRANSFER_NON_CASH_LEG` | —（非 HTTP 码：auto\_confirm 的 `auto_confirm_failed` 条目） | auto\_confirm 跨天转移分支在置 confirmed 前发现组内存在**非 CASH** 腿（`_confirm_pair` 的显式业务校验，替代可被 `-O` 关闭的 assert）：该分支服务跨平台现金转移，调仓腿须人工确认，不得被空确认（不取价、不建腿） | services/snapshot_service.py::auto_confirm_after_snapshot |
+| `CASH_TRANSFER_NON_CASH_LEG` | —（非 HTTP 码：auto\_confirm 的 `auto_confirm_failed` 条目） | auto\_confirm 跨天转移分支在置 confirmed 前发现组内存在**非 CASH** 腿（`_confirm_pair` 的显式业务校验，替代可被 `-O` 关闭的 assert）：该分支服务跨平台现金转移，调仓腿须人工确认，不得被空确认（不取价、不建腿） | services/snapshot_service.py::auto_confirm_after_snapshot._confirm_pair |
 | `CONFIRM_BEFORE_STARTED` | 422 | 申购确认预览与确认路径（同一实现）中，`sub_type == "subscribe"` 且组合 `started_at` 非空、T+1 确认日 **<** `started_at`（乱序补录闸门；等于放行以支持同日多平台，`started_at` 为空豁免，赎回不校验） | services/subscription_service.py::calculate_subscription_confirm_preview |
 | `CONFIRM_REQUIRED` | 422 | 快照批量删除未显式传 `confirm=true`（破坏性操作守卫，因逐日 commit 不可中途回滚）；`dry_run=true` 在此之前直接返回预览、不触发本码 | routers/snapshots.py::delete_snapshots_bulk |
 | `DATA_SOURCE_NOT_CONFIGURED` | 503 | `POST /api/trading-calendar/sync` 捕获 `TushareNotConfiguredError`——`TUSHARE_TOKEN` 未配置（`services/tushare_client.py`） | routers/trading_calendar.py::sync_trading_calendar |
