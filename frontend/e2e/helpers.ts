@@ -159,7 +159,8 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 //   openXxxIfMobile               → 端差异适配（另一端 no-op），不含导航
 //   openPopover                   → 开浮层并确认内容可见（#524 吞点击同步，非纯工厂）
 //   settlePopovers                → 等 Radix 浮层容器全部卸载（#524 同步点，非断言）
-//   settlePreview                 → 等确认弹窗离开预览 loading 分支（#551 同步点，非断言）
+//                                  （#551 起不再有 settlePreview：预览 refetch 的重挂载缺陷
+//                                   已在 ConfirmInfoDialog 侧根治，见其 inputSlot 注释）
 // ===========================================================================
 
 /** 首行等待 + 优雅 skip 的选项类别（决定 testid 与 skip 文案） */
@@ -287,45 +288,6 @@ export async function openPopover(
   await settlePopovers(page);
   await trigger.click({ timeout: CLICK_TIMEOUT });
   await content.waitFor({ state: 'visible', timeout: 10_000 });
-}
-
-/**
- * 预览 loading 分支的文案锚点（#551）。
- *
- * 只取前半句、不含结尾省略号，且刻意不用 `animate-spin` 定位：`ConfirmInfoDialog` 里
- * loading 提示的 spinner 与页脚确认按钮 `isConfirming` 的 spinner 共用该类，不是唯一锚点；
- * 错误分支文案是「预览失败：」，不会与本串误命中。
- */
-const PREVIEW_LOADING_TEXT = '正在计算预览';
-
-/**
- * 等确认弹窗主体离开「预览 loading 分支」（#551 同步点，非断言）。
- *
- * 为什么要等：确认类弹窗的 loading 取 `isLoading || isFetching`（预览值即确认值，后台
- * refetch 也算加载中），而 `ConfirmInfoDialog` 的 loading 分支与内容分支是同一渲染位置上
- * **结构不同的两棵子树**。弹窗内的业务输入（如调仓确认的到账日/到账平台）同时挂在两处
- * （`errorSlot` 与 `children`，任一时刻只渲染一处），React 不跨分支复用子树 ⇒ 每次
- * `isFetching` 翻转这棵子树就被 unmount + remount。`SearchablePlatformSelect` 的弹层开合
- * 与搜索词是组件**本地 state**，重挂载即归零、Radix 随之卸载 popper——正开着的浮层会被一次
- * 服务端在途请求整口关掉（#551 CI 实踩：`openPopover` 已确认可见并返回，随后 `option.click`
- * 先 `element is not stable` 再 `element was detached from the DOM`，失败时刻的页面快照里
- * 弹层节点整口不存在，只剩外层 dialog）。
- *
- * #550 的 `openPopover` / `settlePopovers` 只守住「开浮层」那一段，本函数补「已开成之后被
- * preview refetch 关掉」那一段：改选任何会进 preview query key 的输入之后，先等这次子树
- * 搬运走完，才允许动下一个浮层控件。等不到不在此处判红——真卡住时后面的可见性/状态断言
- * 会以更清楚的方式失败，这里只是同步点而非断言。
- */
-export async function settlePreview(scope: Locator): Promise<void> {
-  // 谓词只能挂在 scope 元素上求值：Playwright 不把 Locator 序列化进 page.waitForFunction
-  // （实测报 `Attempting to serialize unexpected value`），故走 locator.waitForFunction。
-  await scope
-    .waitForFunction(
-      (el, text) => !(el.textContent ?? '').includes(text),
-      PREVIEW_LOADING_TEXT,
-      { timeout: 10_000 },
-    )
-    .catch(() => undefined);
 }
 
 /** 平台搜索弹层（SearchablePlatformSelect） */

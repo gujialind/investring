@@ -41,9 +41,10 @@ function platformName(platforms: Platform[], code?: string | null): string {
  * 有效值回显；用户选回与**后端本次缺省**相同的值时归一为「不传」——同一有效选项
  * 只对应一个缓存键（基准见下方 `defaultCashDate` / `defaultCashPlatform`）。
  *
- * 到账输入块同时经 `ConfirmInfoDialog::errorSlot` 渲染：用户选中非交易日或早于 C 的
- * 日期会 422，此时**输入块不随错误一起消失**，可就地改到合法值（改完即重新预览）；
- * 日历侧再把非交易日/早于 C 的日期硬禁用，把 422 提前到选择时。
+ * 到账输入块经 `ConfirmInfoDialog::inputSlot` 常驻渲染：用户选中非交易日或早于 C 的日期
+ * 会 422，此时**输入块不随错误一起消失**，可就地改到合法值（改完即重新预览）；
+ * 日历侧再把非交易日/早于 C 的日期硬禁用，把 422 提前到选择时。该槽位在 loading / error /
+ * 就绪三态下位置恒定，故后台 refetch 不会重挂载它（#551 方案 A）。
  */
 interface TradeConfirmDialogProps {
   open: boolean;
@@ -126,8 +127,10 @@ export function TradeConfirmDialog({
   const dayDisabled = (day: Date) =>
     !!effectiveConfirmDate && toDateOnly(day) < effectiveConfirmDate;
 
-  // 卖出到账输入块（到账日期 + 到账平台）：既作正常态内容，也作 error 态的输入槽位——
-  // 见 ConfirmInfoDialog::errorSlot。两处是同一个节点，任一时刻只渲染一处。
+  // 卖出到账输入块（到账日期 + 到账平台）。**只经 `inputSlot` 渲染一处**（#551 方案 A）：
+  // 它在 loading / error / 就绪三态下占同一个子索引，后台 refetch 不再把它重挂载。
+  // 曾同时挂在 `children` 末位与 `errorSlot` 两处、任一时刻只渲染一处——那正是重挂载的成因，
+  // 且两处同挂会让 id 重复、Playwright strict mode 直接炸。
   const arrivalInputs = trade && !isBuy && (
     <div className="space-y-2 py-2">
       <Label htmlFor="cash_confirm_date">到账日期</Label>
@@ -166,7 +169,7 @@ export function TradeConfirmDialog({
       description="请核对以下信息与预览值，确认后将不可直接修改"
       isLoading={isLoading || isFetching}
       error={error ? getErrorMessage(error, "预览请求失败") : null}
-      errorSlot={arrivalInputs}
+      inputSlot={arrivalInputs}
       onConfirm={() =>
         onConfirm({
           cash_confirm_date: requestedDate,
@@ -195,14 +198,13 @@ export function TradeConfirmDialog({
             label="确认日期"
             value={preview.confirm_date ? formatDate(preview.confirm_date) : "--"}
           />
-          {isBuy ? (
-            // 买入扣款日创建期即固定为下单日 T，此处只读回显、不提供修改入口
+          {/* 买入扣款日创建期即固定为下单日 T，此处只读回显、不提供修改入口；
+              卖出侧的对应字段是下方 inputSlot 里的可编辑到账日，不在这里重复 */}
+          {isBuy && (
             <InfoRow
               label="扣款日期"
               value={preview.cash_confirm_date ? formatDate(preview.cash_confirm_date) : "--"}
             />
-          ) : (
-            arrivalInputs
           )}
         </>
       )}
