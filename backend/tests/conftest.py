@@ -2,13 +2,12 @@
 # InvestRing 测试全局配置 (conftest.py)
 # ============================================================================
 # 提供所有测试共享的 fixtures：
-# - 测试数据库（SQLite 文件或 CI 中的 MySQL）
+# - 测试数据库（缺省 = 本会话临时目录里的 SQLite；CI 与本地按需指向 MySQL）
 # - FastAPI TestClient（带依赖注入覆写）
 # - 认证 Token（admin / viewer）
 # - 基础数据初始化（资产分类、平台、产品、交易日历）
 # ============================================================================
 
-import os
 import pytest
 from datetime import date
 from decimal import Decimal
@@ -16,29 +15,28 @@ from pathlib import Path
 from typing import Generator
 
 # ---------------------------------------------------------------------------
-# 关键：在所有 app 模块导入之前设置测试数据库 URL，
-# 这样 app.config.Settings 和 app.database.engine 将使用测试数据库
+# 关键：在所有 app 模块导入之前选定测试库并关闭调度副作用（#539 第二单元）。
 #
-# 优先级：环境变量 TEST_DB_URL（CI 显式指定）
-#        > backend/.env.test（gitignored，按需配置本地/远程 MySQL）
-#        > 本地 SQLite 文件（两者都不可用时的降级）
+# 顺序是硬要求：app.main 模块期执行 `Base.metadata.create_all(bind=engine)`，
+# 打的正是那一刻的 DATABASE_URL，所以「无条件覆盖环境 + 归属判定」必须早于下面
+# 的 app 导入。`tests/db_isolation.py` 持有判据——破坏性初始化（本文件
+# test_engine 的 drop_all）只允许打在 pytest 创建并持有的实例上，不看库名。
+#
+# 测试库优先级：显式测试通道 env TEST_DB_URL（CI 显式指定）
+#              > backend/.env.test（gitignored，按需配置本地/远程 MySQL）
+#              > 本次会话自建的临时目录 SQLite（缺省，并发互不污染）
+# 外部环境 DATABASE_URL 一律忽略（只 WARN），不再像旧实现那样 setdefault 继承。
 # ---------------------------------------------------------------------------
-def _load_test_db_url() -> str:
-    if os.environ.get("TEST_DB_URL"):
-        return os.environ["TEST_DB_URL"]
-    env_test = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.test")
-    if os.path.exists(env_test):
-        with open(env_test) as f:
-            for line in f:
-                if line.startswith("TEST_DB_URL="):
-                    return line.strip().split("=", 1)[1]
-    return "sqlite:///./test_investring.db"
+import sys
 
+from tests.db_isolation import prepare_test_database, write_ownership_marker
 
-os.environ.setdefault("DATABASE_URL", _load_test_db_url())
-# 确保 DEBUG 不会因 .env 文件干扰测试
-os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing")
-os.environ.setdefault("SCHEDULER_ENABLED", "false")
+_PREPARED = prepare_test_database()
+TEST_DB_URL = _PREPARED.url
+#: 缺省路径下本次会话自建的临时目录（显式声明测试库时为 None）。
+#: 模块级持有是功能性的：`TemporaryDirectory` 一旦被 GC 就会立刻删库。
+RUNNER_TMP = _PREPARED.tmp
+IS_SQLITE = TEST_DB_URL.startswith("sqlite")
 
 import io
 import json
@@ -70,20 +68,17 @@ from app.utils.security import create_access_token
 # 数据库引擎（session-scoped）
 # ============================================================================
 
-TEST_DB_URL = os.environ["DATABASE_URL"]
-IS_SQLITE = TEST_DB_URL.startswith("sqlite")
-
 
 @pytest.fixture(scope="session")
 def test_engine():
     """
     创建测试数据库引擎（整个测试会话共享）。
-    - SQLite: 使用文件数据库 + WAL 模式
-    - MySQL: 本地经 .env.test 配置（gitignored），CI 用环境变量配置
+    - 缺省 SQLite：pytest 自建的会话临时目录，所有权由构造证明
+    - 显式库（MySQL / 指定 SQLite 文件）：经 .env.test 或 TEST_DB_URL 声明，
+      本会话开头已由 db_isolation 证明为空库或带归属标记，否则根本到不了这里
 
-    清理策略：会话【开始】时 drop_all + create_all 保证干净起跑，
-    会话结束不清理——保留 _seed_base_data 的基准数据（ADMIN/产品/日历），
-    跑完测试可直接登录本地前端浏览。
+    清理策略：会话【开始】时 drop_all + create_all 保证干净起跑，并落一条归属标记
+    供下次重跑自证；会话结束只回收自己创建的临时目录，显式声明的库保留数据。
     """
     if IS_SQLITE:
         engine = create_engine(
@@ -109,13 +104,27 @@ def test_engine():
             echo=False,
         )
 
-    # 会话开始：先删后建，清掉上一轮测试/手工种子的残留数据
+    # 会话开始：先删后建，清掉上一轮测试的残留数据。
+    # 此处不重复归属判定——conftest 导入期 `prepare_test_database()` 已对同一个 URL
+    # 判过一次，且 app.main 的 import 期 create_all 也已打在它上面。
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    write_ownership_marker(engine)
     yield engine
 
-    # 会话结束：保留表与种子数据，供测试后浏览使用
     engine.dispose()
+    # 只回收本次会话自建的目录（含 WAL/SHM）；显式声明的库留给调用方自己处置。
+    # 没用到本 fixture 的会话由 TemporaryDirectory 的进程退出 finalizer 兜底。
+    if RUNNER_TMP is not None:
+        try:
+            RUNNER_TMP.cleanup()
+        except FileNotFoundError:
+            pass  # 目录已不在（外部清理），不是测试会话的账
+        except OSError as exc:
+            print(
+                f"[InvestRing][ERROR] 临时测试库目录清理失败，需手工删除 {RUNNER_TMP.name}：{exc}",
+                file=sys.stderr,
+            )
 
 
 @pytest.fixture(scope="session")

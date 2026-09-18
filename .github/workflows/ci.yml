@@ -264,16 +264,30 @@ jobs:
       # 注：`CREATE DATABASE` 的库级设置只决定**将来**建表的默认值，不会改动已存在的表；
       # 且新库路径下 `create_all`（main.py import 期）在迁移之前跑，故模型层另有
       # app/models/base.py 的钩子确保每张表自带 CHARSET，不单纯依赖这里。
-      - name: Create databases
+      #
+      # 最小权限测试账号（#539 第二单元）：pytest 会话开头就是一次 drop_all，用 root 连接
+      # 等于「URL 一旦被指错，整个实例可毁」。这里按库分设两个账号，root 只留在本步建库建号：
+      # ir_test 侧连不到 ir_migration，反之亦然——即使 `tests/db_isolation.py` 的归属闸门
+      # 被绕过，DBACL 层也不给跨库权限。权限清单以 `scripts/tests/test_ci_mysql_account.py`
+      # 的 REQUIRED_PRIVILEGES 为准（逐条对应真实用法；其中最不容易想到的是 REFERENCES：
+      # 建外键需要父表上的该权限，漏了 create_all 当场失败）。口令与用户名同值——这是每次 run
+      # 新建、只对 runner 回环暴露的一次性服务容器，不构成秘密（root 口令本就在下面两行）。
+      - name: Create databases and least-privilege test accounts
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "
             CREATE DATABASE ir_test CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-            CREATE DATABASE ir_migration CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+            CREATE DATABASE ir_migration CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+            CREATE USER 'ir_test'@'%' IDENTIFIED BY 'ir_test';
+            CREATE USER 'ir_migration'@'%' IDENTIFIED BY 'ir_migration';
+            GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES
+              ON ir_test.* TO 'ir_test'@'%';
+            GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES
+              ON ir_migration.* TO 'ir_migration'@'%';"
 
       # 复刻生产启动顺序：main.py import 期 create_all 建全表，lifespan 内 upgrade head 增量修补
       - name: Verify migration chain (create_all + alembic upgrade head)
         env:
-          DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_migration?charset=utf8mb4
+          DATABASE_URL: mysql+pymysql://ir_migration:ir_migration@127.0.0.1:3306/ir_migration?charset=utf8mb4
         run: |
           python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
           alembic upgrade head
@@ -297,7 +311,7 @@ jobs:
 
       - name: Run tests with pytest (MySQL)
         env:
-          TEST_DB_URL: mysql+pymysql://root:root@127.0.0.1:3306/ir_test?charset=utf8mb4
+          TEST_DB_URL: mysql+pymysql://ir_test:ir_test@127.0.0.1:3306/ir_test?charset=utf8mb4
         run: |
           pytest tests/ -q --tb=short --strict-markers
 
