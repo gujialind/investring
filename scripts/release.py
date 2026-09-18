@@ -6,7 +6,7 @@ InvestRing 发布脚本（issue #375）
 CI OK（直接推送会被拒绝），而 v 标签必须落在 main tip（merge-commit）上
 deploy.yml 才能给镜像追加 :vX.Y.Z 语义标签，故发布分两阶段：
 
-  阶段一（本脚本默认命令）：同步版本文件 → 用钉版 .venv-openapi 进程内重导出
+  阶段一（本脚本默认命令）：同步版本文件 → 用钉版 .venv-openapi 隔离重导出
     openapi.json → 契约验证 → 从 conventional commits 生成 CHANGELOG →
     在 release/vX.Y.Z 分支单 commit → 推送分支并创建发布 PR。
   阶段二（release.py tag vX.Y.Z）：发布 PR 合并后，校验 origin/main 的 VERSION
@@ -17,7 +17,7 @@ deploy.yml 才能给镜像追加 :vX.Y.Z 语义标签，故发布分两阶段：
 版本号规范见 docs/reference/versioning.md（Semver；0.x 初始阶段；无 pre-release）。
 
 - 纯 stdlib 实现；阶段一必须在 main 分支、工作区干净、与 origin/main 同步时运行。
-- openapi 重导出走进程内 app.openapi()（与 check_openapi.py 同源，契约门禁必过）；
+- openapi 重导出走隔离子进程（与 check_openapi.py 共用 openapi_runtime，不继承业务配置）；
   依赖钉版环境 .venv-openapi/（缺失时给出重建命令后中止）。
 - 版本文件读写保留原行尾（部分文件为 CRLF，文本模式规范化会翻转全文件行尾）。
 
@@ -32,13 +32,10 @@ deploy.yml 才能给镜像追加 :vX.Y.Z 语义标签，故发布分两阶段：
 """
 import argparse
 import json
-import os
 import re
-import secrets
 import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -186,30 +183,12 @@ def render_file_edits(target: str) -> list[tuple[Path, str, str]]:
     return edits
 
 
-def openapi_env() -> dict:
-    env = dict(os.environ)
-    env.setdefault("SECRET_KEY", secrets.token_hex(32))
-    env.setdefault(
-        "DATABASE_URL",
-        f"sqlite:///{os.path.join(tempfile.gettempdir(), 'release_openapi.db')}",
-    )
-    env.setdefault("SCHEDULER_ENABLED", "false")
-    env.setdefault("DEBUG", "false")
-    return env
-
-
 def regen_openapi(py: Path) -> None:
-    code = (
-        "import json\n"
-        "from app.main import app\n"
-        'with open("openapi.json", "w", encoding="utf-8") as f:\n'
-        "    json.dump(app.openapi(), f, ensure_ascii=False, indent=2)\n"
-    )
-    run([py, "-c", code], cwd=BACKEND_DIR, env=openapi_env())
+    run([py, BACKEND_DIR / "export_openapi.py", "--offline"], cwd=BACKEND_DIR)
 
 
 def verify_contracts(py: Path) -> None:
-    run([py, "check_openapi.py"], cwd=BACKEND_DIR, env=openapi_env())
+    run([py, "check_openapi.py"], cwd=BACKEND_DIR)
     run([py, REPO_ROOT / "ir-cli" / "scripts" / "gen_response_fields.py", "--check"])
 
 

@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `VERSION`（根） | 唯一事实来源 | release 脚本写入 |
 | `backend/app/main.py` `FastAPI(version=…)` | `openapi.json` 的 `info.version`、API 文档 | 运行时 `_resolve_version()` 读根 VERSION（`APP_VERSION` 环境变量优先；镜像内 `/app/VERSION` 由 Dockerfile COPY） |
-| `backend/openapi.json` | CI 契约门禁 `check_openapi.py`（全量比对含 `info.version`） | release 时用钉版 `.venv-openapi` 进程内重导出，**必须与版本变更同 commit** |
+| `backend/openapi.json` | CI 契约门禁 `check_openapi.py`（全量比对含 `info.version`） | release 时用钉版 `.venv-openapi` 调用 `export_openapi.py --offline` 隔离重导出，**必须与版本变更同 commit** |
 | `backend/pyproject.toml` | 无直接消费（不参与构建） | release 脚本替换 |
 | `frontend/package.json` + `package-lock.json`（两处） | 构建期注入 `NEXT_PUBLIC_APP_VERSION`（`next.config.js`）→ 设置页「系统信息」展示；lock 不同步会击穿 `npm ci` | release 脚本替换 |
 | `ir-cli/pyproject.toml` | `ir --version`（`importlib.metadata`） | release 脚本替换 |
@@ -61,7 +61,7 @@ python3 scripts/release.py tag v0.1.1          # 3. 阶段二：在 origin/main 
 ```
 
 * **前提**（阶段一）：main 分支、工作区干净、与 origin/main 同步；钉版契约环境 `.venv-openapi/` 存在（缺失时脚本给出重建命令：`python3 -m venv .venv-openapi && .venv-openapi/bin/pip install -r backend/requirements.txt`）。
-* **阶段一原子完成**：同步 5 处版本文件（含 package-lock 两处；读写保留原行尾，CRLF 文件不翻转）→ 进程内重导出 `openapi.json` → `check_openapi.py` + `gen_response_fields.py --check` 验证 → CHANGELOG 顶部插入新条目 → 在 `release/vX.Y.Z` 分支单 commit `chore(release): vX.Y.Z` → 推送分支并创建发布 PR（有 `gh` CLI 时自动建）。
+* **阶段一原子完成**：同步 5 处版本文件（含 package-lock 两处；读写保留原行尾，CRLF 文件不翻转）→ 经 `export_openapi.py --offline` 在独立临时 SQLite 子进程重导出 `openapi.json`（不继承业务环境或 `APP_VERSION`）→ `check_openapi.py` + `gen_response_fields.py --check` 验证 → CHANGELOG 顶部插入新条目 → 在 `release/vX.Y.Z` 分支单 commit `chore(release): vX.Y.Z` → 推送分支并创建发布 PR（有 `gh` CLI 时自动建）。
 * **阶段二校验后打 tag**：`origin/main` 的 VERSION 与目标一致、近 20 条历史含该 `chore(release)` 提交、标签不存在，然后在 `origin/main` tip `git tag -a` 并推送。
 * **tag 时序**：阶段二应在 PR 合并后**立即**运行——deploy 要等 CI（约 8-10 分钟）通过后才构建镜像，构建时才 `git fetch --tags` 检测语义标签，窗口充裕。若错过（镜像未带 `:vX.Y.Z`），重跑该 commit 的 CI run（`gh run rerun`）即可重新触发 deploy 补上。
 * **节奏**：手动触发；功能里程碑收口发 MINOR，一批修复后可批量发 PATCH，不要求每次合入都发版。
