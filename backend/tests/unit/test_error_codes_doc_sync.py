@@ -9,12 +9,16 @@
 # 本测试把该文档的「错误码总表」与代码在用码集合绑死（做法类比 test_audit_service.py
 # 的列宽守门、scripts/check_openapi.py 的契约守门）：
 #   A. 在用码 == 总表首列 → 缺项与死码名都红；
-#   B. 正文（总表以外）反引号引用的码必须都在用 → 防「码名写进散文里就算记过」。
+#   B. 正文（总表以外）反引号引用的码必须都在用 → 防「码名写进散文里就算记过」；
+#   C. 总表「抛出位置」锚点必须是稳定符号（`file::函数/类名`）且逐一可验证：
+#      符号存在 + 该符号行范围内确实抛出该码；行号锚点一律判红（#521——行位移
+#      会让 `file:NNN` 锚点静默失真，#493 一次重写即波及数十处）。
 #
 # 提取口径（AST 而非 grep，覆盖全部抛出形态）：
 #   1. `BusinessError` / `NotFoundError` 及其子类（按 ClassDef 基类推导）的 `code`
 #      ——位置参数与 `code=` 关键字；`BusinessError(*_TUPLE_CONST)` 的 splat 解析到
-#      模块级 tuple 常量的首元素（`routers/trading_calendar.py::_CALENDAR_NOT_SYNCED`）；
+#      模块级 tuple 常量的首元素（如 `routers/trading_calendar.py` 的
+#      `_CALENDAR_NOT_SYNCED` 常量，抛出点仍记在 `raise` 所在函数名下）；
 #      子类把码定在自己 `__init__` 的 `super().__init__("CODE", ...)` 里的形态从类体取
 #      （`NavNotAvailableError` → NAV_NOT_AVAILABLE、`InvalidStatusError` → INVALID_STATUS）；
 #   2. 任意 dict 字面量里键为 `"error"`（router inline `detail={"error": ...}`）或
@@ -40,6 +44,10 @@ CODE_LITERAL = re.compile(r"[A-Z][A-Z0-9_]*")
 # 正文引用：额外要求至少一段下划线，排除散文里反引号包裹的 `N` 这类单字母
 PROSE_CODE = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
 BASE_ERROR_CLASSES = {"BusinessError", "NotFoundError"}
+# 总表「抛出位置」锚点（#521）：只认稳定符号形态，行号形态判红
+ANCHOR_FULL = re.compile(r"^(?P<file>[\w/]+\.py)::(?P<sym>[\w.]+)$")
+ANCHOR_CONT = re.compile(r"^::(?P<sym>[\w.]+)$")
+ANCHOR_LINE = re.compile(r"^(?:[\w/]+\.py)?:\d+$")
 
 
 def _is_code_literal(value: str) -> bool:
@@ -68,31 +76,16 @@ def _error_class_names(tree: ast.AST) -> Set[str]:
     return names
 
 
-def _subclass_defined_codes(tree: ast.AST, error_classes: Set[str]) -> Set[str]:
-    """错误载体子类把码定在自己的 `__init__` 里（`super().__init__("CODE", ...)`），
-    抛出点看不到字面量，必须从类体里取。"""
-    codes: Set[str] = set()
-    for class_def in ast.walk(tree):
-        if not isinstance(class_def, ast.ClassDef) or class_def.name not in error_classes:
-            continue
-        for node in ast.walk(class_def):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            is_super_init = (
-                isinstance(func, ast.Attribute)
-                and func.attr == "__init__"
-                and isinstance(func.value, ast.Call)
-                and isinstance(func.value.func, ast.Name)
-                and func.value.func.id == "super"
-            )
-            if not is_super_init:
-                continue
-            for arg in node.args:
-                literal = _const_str(arg)
-                if literal is not None and _is_code_literal(literal):
-                    codes.add(literal)
-    return codes
+def _is_super_init_call(node: ast.Call) -> bool:
+    """`super().__init__(...)` 调用（错误载体子类把码定在其中的形态）。"""
+    func = node.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "__init__"
+        and isinstance(func.value, ast.Call)
+        and isinstance(func.value.func, ast.Name)
+        and func.value.func.id == "super"
+    )
 
 
 def _module_code_tuples(tree: ast.Module) -> Dict[str, str]:
@@ -121,11 +114,31 @@ def _const_str(node) -> str | None:
     return None
 
 
-def _collect_from_file(path: Path) -> Set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _emissions_from_tree(tree: ast.Module) -> list[tuple[str, int]]:
+    """提取本文件全部「码字面量的抛出形态」，返回 [(码, 行号)]。
+
+    提取口径与下文各部分一致，额外带行号——锚点守门（#521）要判断某码是否
+    落在锚点符号的行范围内。
+    """
     error_classes = _error_class_names(tree)
     tuples = _module_code_tuples(tree)
-    codes: Set[str] = _subclass_defined_codes(tree, error_classes)
+    emissions: list[tuple[str, int]] = []
+
+    def add(code: str, lineno: int) -> None:
+        emissions.append((code, lineno))
+
+    # 载体子类把码定在自己的 `__init__`（`super().__init__("CODE", ...)`），
+    # 抛出点看不到字面量，必须从类体里取
+    for class_def in ast.walk(tree):
+        if not isinstance(class_def, ast.ClassDef) or class_def.name not in error_classes:
+            continue
+        for node in ast.walk(class_def):
+            if not isinstance(node, ast.Call) or not _is_super_init_call(node):
+                continue
+            for arg in node.args:
+                literal = _const_str(arg)
+                if literal is not None and _is_code_literal(literal):
+                    add(literal, node.lineno)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -139,17 +152,17 @@ def _collect_from_file(path: Path) -> Set[str]:
             for arg in node.args:
                 literal = _const_str(arg)
                 if literal is not None and _is_code_literal(literal):
-                    codes.add(literal)
+                    add(literal, node.lineno)
                 elif isinstance(arg, ast.Starred) and isinstance(arg.value, ast.Name):
                     splat = tuples.get(arg.value.id)
                     if splat:
-                        codes.add(splat)
+                        add(splat, node.lineno)
             for keyword in node.keywords:
                 if keyword.arg != "code":
                     continue
                 literal = _const_str(keyword.value)
                 if literal is not None and _is_code_literal(literal):
-                    codes.add(literal)
+                    add(literal, node.lineno)
         elif isinstance(node, ast.Assign):
             # 结构化错误条目的下标赋值形态：entry["code"] = "SESSION_ABORTED"
             literal = _const_str(node.value)
@@ -157,7 +170,7 @@ def _collect_from_file(path: Path) -> Set[str]:
                 continue
             for target in node.targets:
                 if isinstance(target, ast.Subscript) and _const_str(target.slice) == "code":
-                    codes.add(literal)
+                    add(literal, node.lineno)
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
                 key_literal = _const_str(key)
@@ -165,8 +178,13 @@ def _collect_from_file(path: Path) -> Set[str]:
                     continue
                 literal = _const_str(value)
                 if literal is not None and _is_code_literal(literal):
-                    codes.add(literal)
-    return codes
+                    add(literal, node.lineno)
+    return emissions
+
+
+def _collect_from_file(path: Path) -> Set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {code for code, _ in _emissions_from_tree(tree)}
 
 
 def in_use_codes() -> Set[str]:
@@ -218,6 +236,73 @@ def prose_codes() -> Set[str]:
     }
 
 
+def table_anchors() -> tuple[list[tuple[str, str, str]], list[str]]:
+    """解析总表「抛出位置」列的稳定符号锚点 → ([(码, 文件, 符号)], [问题])。
+
+    只认两种书写：`file.py::symbol`（首个 / 跨文件）与 `::symbol`（同文件续锚）。
+    行号形态（`file.py:123`、`:123`）与其它无法解析的 token 一律记入问题列表。
+    """
+    anchors: list[tuple[str, str, str]] = []
+    problems: list[str] = []
+    section, _ = _split_doc(_doc_text())
+    for raw in section.splitlines():
+        if not raw.startswith("|"):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", raw.strip())[1:-1]]
+        if len(cells) < 4:
+            continue
+        match = re.fullmatch(r"`([^`]+)`", cells[0])
+        if not (match and _is_code_literal(match.group(1))):
+            continue
+        code = match.group(1)
+        tokens = [t.strip() for t in cells[3].split(";") if t.strip()]
+        if not tokens:
+            problems.append(f"`{code}`：抛出位置列为空（#521 起必须给出稳定符号锚点）")
+            continue
+        current_file = None
+        for token in tokens:
+            full = ANCHOR_FULL.fullmatch(token)
+            cont = ANCHOR_CONT.fullmatch(token)
+            if full:
+                current_file = full.group("file")
+                anchors.append((code, current_file, full.group("sym")))
+            elif cont:
+                if current_file is None:
+                    problems.append(f"`{code}`：续锚 `{token}` 之前没有文件锚点")
+                else:
+                    anchors.append((code, current_file, cont.group("sym")))
+            elif ANCHOR_LINE.fullmatch(token):
+                problems.append(f"`{code}`：行号锚点已禁用（#521），请改为稳定符号：{token}")
+            else:
+                problems.append(f"`{code}`：无法解析的锚点：{token!r}")
+    return anchors, problems
+
+
+def _find_symbol_span(tree: ast.Module, dotted: str):
+    """按点分路径定位符号（函数 / 类 / 嵌套方法），返回 (起行, 止行)。"""
+    node: ast.AST = tree
+    for part in dotted.split("."):
+        target = next(
+            (
+                child
+                for child in ast.iter_child_nodes(node)
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and child.name == part
+            ),
+            None,
+        )
+        if target is None:
+            return None
+        node = target
+    start = node.lineno
+    decorators = [
+        d.lineno for d in getattr(node, "decorator_list", []) if hasattr(d, "lineno")
+    ]
+    if decorators:
+        start = min(decorators)
+    return start, node.end_lineno
+
+
 class TestErrorCodeDocSync:
     def test_extractor_covers_every_emission_shape(self):
         """提取口径自检：各抛出形态取一个已知码，防提取器静默退化为空集/漏形态"""
@@ -252,4 +337,55 @@ class TestErrorCodeDocSync:
         assert not dangling, (
             f"正文引用了代码中不存在的码：{dangling}"
             "（若确为非错误码的常量名，请去掉反引号或改写表述）"
+        )
+
+
+class TestErrorCodeAnchorGuard:
+    """#521：总表「抛出位置」锚点必须是稳定符号，且逐一可验证抛出处。"""
+
+    # 解析器自检样本：覆盖「首锚 / 同文件续锚 / 跨文件切换」三种书写形态
+    KNOWN_ANCHORS = {
+        ("ACCOUNT_LOCKED", "dependencies.py", "get_current_user"),
+        ("CASH_TRADE_FORBIDDEN", "services/trade_service.py", "create_trade"),
+        ("INVALID_DATE_RANGE", "routers/share_change_events.py", "get_share_change_events"),
+    }
+
+    def test_anchor_parser_self_check(self):
+        """锚点解析器自检：token 形态全合法（行号锚点判红）、锚点数非零"""
+        anchors, problems = table_anchors()
+        assert not problems, "总表锚点解析失败：\n" + "\n".join(problems)
+        assert anchors, "未解析到任何锚点——解析器或总表格式已漂移"
+        missing = sorted(self.KNOWN_ANCHORS - set(anchors))
+        assert not missing, f"已知锚点未被解析出（解析器退化？）：{missing}"
+
+    def test_anchor_symbols_exist_and_emit_code(self):
+        """每个锚点符号必须存在，且其行范围内确实有该码的抛出点"""
+        anchors, problems = table_anchors()
+        assert not problems, "总表锚点解析失败：\n" + "\n".join(problems)
+        assert anchors, "未解析到任何锚点——解析器或总表格式已漂移"
+        parsed: Dict[str, tuple] = {}
+        for code, rel_file, symbol in anchors:
+            if rel_file not in parsed:
+                path = BACKEND_APP / rel_file
+                if path.exists():
+                    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                    parsed[rel_file] = (tree, _emissions_from_tree(tree))
+                else:
+                    parsed[rel_file] = (None, None)
+            tree, emissions = parsed[rel_file]
+            if tree is None:
+                problems.append(f"`{code}`：锚点文件不存在：{rel_file}")
+                continue
+            span = _find_symbol_span(tree, symbol)
+            if span is None:
+                problems.append(f"`{code}`：锚点符号不存在：{rel_file}::{symbol}")
+                continue
+            if not any(c == code and span[0] <= line <= span[1] for c, line in emissions):
+                problems.append(
+                    f"`{code}`：{rel_file}::{symbol}（行 {span[0]}-{span[1]}）"
+                    "行范围内没有该码的抛出点"
+                )
+        assert not problems, (
+            f"总表锚点失配 {len(problems)} 处（符号不存在或符号行范围内不含该码抛出点）：\n"
+            + "\n".join(problems)
         )
