@@ -177,10 +177,11 @@ cd backend && pytest tests -q
   | 审计/系统错误日志（`audit_service.py`、任一埋点、日志表迁移） | `pytest tests/unit/test_audit_service.py tests/integration/test_audit_log.py tests/unit/test_migration_0013.py tests/unit/test_migration_0014.py -q` |
   | 字符集 / 建表（`db_charset.py`、`models/base.py`、迁移 0015、`ci.yml` 建库语句） | `pytest tests/unit/test_db_charset.py tests/unit/test_migration_0015.py tests/unit/test_migration_0014.py -q` |
   | 外键约束 / 外键名（`models/nav_sync_detail.py` 的 `name=`、迁移 0016） | `pytest tests/unit/test_migration_0016.py tests/unit/test_migration_0015.py -q` |
+  | 测试库隔离（`tests/db_isolation.py`、`tests/conftest.py` 的库选定与归属判据） | `pytest tests/unit/test_db_isolation.py -q`（结构性守卫，改 conftest 导入顺序必跑；全量会话验证由 CI 兜底） |
 
   跨核心服务的改动（snapshot/position/trade/subscription 任一）额外连带 `-k snapshot` 兜底——快照链是所有写路径的下游。
-- **测试库优先级**（`tests/conftest.py::_load_test_db_url`）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> 降级 `sqlite:///./test_investring.db`。CI 的 SQLite job 不设 `TEST_DB_URL`（也不存在 .env.test），MySQL job 显式设置。
-- **会话开始 `drop_all + create_all`**（干净起跑）；会话结束**不清理**——跑完可直接登录本地前端浏览种子数据。
+- **测试库一律由 pytest 选定**（#539 第二单元，判据在 `tests/db_isolation.py`、由 `tests/conftest.py` 在 **`import app.main` 之前**调用）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> **缺省 = 本次会话自建的临时目录 SQLite**。外部环境 `DATABASE_URL` 一律忽略（只 WARN），不再像早期那样 `setdefault` 继承；`SCHEDULER_ENABLED` 测试期恒关（调度 job 在 lifespan 内会真写库）。次序是硬要求：`app.main` 模块期即 `create_all`，打的正是那一刻的 `DATABASE_URL`。CI 的 SQLite job 两条显式通道都不存在（走缺省临时目录），MySQL job 显式设 `TEST_DB_URL`。
+- **破坏性初始化只允许打在 pytest 创建并持有的实例上**，判据**不看库名**（名字含不含 test 都不构成许可）：目标为空、或本次会话自建、或带 pytest 写入的归属标记表 `__ir_pytest_ownership__` 且除标记表与模型表外无来源不明之表——三者皆不满足即整体拒绝，探测连不上同样拒绝（失败不等于空库）。会话开始仍 `drop_all + create_all` 保证干净起跑；会话结束**只回收本次自建的临时目录**，显式声明的库保留数据（那种情况下跑完仍可直接登录本地前端浏览种子数据）。守门反例集：`tests/unit/test_db_isolation.py`。
 - fixture 层级：session（`test_engine`、`_seed_base_data`）→ autouse（认证全局状态隔离）→ function（`test_db`/`client`/`admin_headers`/`sample_portfolio` 等），业务数据一律用 function 级 fixture/factories 造，不动 session 种子。
 - pytest 配置在 `pyproject.toml`（`--strict-markers`），新增 marker 须登记。
 - **分层 marker（#469）**：`unit` / `integration` / `e2e` 由 `tests/conftest.py::pytest_collection_modifyitems` 按目录自动打标（新增文件天然带标），可用 `pytest tests -m integration -q` 选子集；`dialect` 表达「依赖 MySQL 方言行为（SQLite 下自动 skip）」，由用例显式 `@pytest.mark.dialect` 声明（迁移 0014/0015/0016 的 MySQL 类、审计日志的列宽/4 字节用例），**守门**：`tests/unit/test_dialect_marker_guard.py` 断言「凡调用 `_mysql_only()` 或判断 `dialect.name` 含 mysql 的用例必带该标记」（漏标时 `-m` 收窄会静默丢覆盖，#382 教训）；`slow` 已登记备用、暂未使用。**CI 仍全量双跑**（`backend-test` SQLite + `backend-test-mysql` 同一批用例）：#469 原设想的「MySQL job 只跑 `-m "integration or dialect"`」经评估否决——省约 1.5 分钟，代价是 dialect 漏标即静默失去 MySQL 覆盖，收益不抵风险；marker 能力先落地，narrowing 待有实测依据再议（漏标已由上述守门测试兜住）。
@@ -258,4 +259,4 @@ python ir-cli/scripts/gen_response_fields.py --check
 - 检查与离线导出共用 `openapi_runtime.py`（#539）：父进程不导入 app；子进程使用独立临时 cwd/SQLite，不加载业务 `.env`，不继承数据库、外部服务凭证或 `APP_VERSION`，强制关闭调度和 DEBUG。超时 60 秒，子进程退出后清理整个目录（含 WAL/SHM）；失败与清理异常均报错。
 - `check_openapi.py` 始终只读当前仓库的 `backend/openapi.json`，退出码 **0 一致 / 1 漂移 / 2 执行失败**。不同 cwd 不改变检查目标。
 - `--offline` 默认原子替换当前仓库的 `backend/openapi.json`，自定义输出用 `--output 路径`；生成失败不覆盖旧契约。线上 `export_openapi.py [URL] [输出路径]` 仅保留兼容，CI/release 使用隔离离线入口。
-- 隔离反例测试：从仓库根运行 `python -m pytest scripts/tests/test_openapi_isolation.py -q`（仅 stdlib + pytest，不加载后端 conftest）。**#539 的 pytest 数据库隔离尚未完成**，本节不改变「跑测试」节中的业务测试库行为。
+- 隔离反例测试：从仓库根运行 `python -m pytest scripts/tests/test_openapi_isolation.py -q`（仅 stdlib + pytest，不加载后端 conftest）。pytest 侧的同类隔离见「跑测试」节的 `tests/db_isolation.py`（#539 第二单元），守门反例集 `tests/unit/test_db_isolation.py`。
