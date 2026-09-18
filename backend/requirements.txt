@@ -4,7 +4,7 @@
 
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
-SQLAlchemy==2.0.52
+SQLAlchemy==2.0.53
 pydantic==2.13.5
 pydantic-settings==2.15.0  # issue #252: GHSA-4xgf-cpjx-pc3j 修复版
 python-jose[cryptography]==3.5.0
