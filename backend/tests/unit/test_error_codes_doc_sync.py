@@ -236,15 +236,14 @@ def prose_codes() -> Set[str]:
     }
 
 
-def table_anchors() -> tuple[list[tuple[str, str, str]], list[str]]:
-    """解析总表「抛出位置」列的稳定符号锚点 → ([(码, 文件, 符号)], [问题])。
+def _anchors_from_section(section: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """解析总表正文里的「抛出位置」列 → ([(码, 文件, 符号)], [问题])。
 
     只认两种书写：`file.py::symbol`（首个 / 跨文件）与 `::symbol`（同文件续锚）。
     行号形态（`file.py:123`、`:123`）与其它无法解析的 token 一律记入问题列表。
     """
     anchors: list[tuple[str, str, str]] = []
     problems: list[str] = []
-    section, _ = _split_doc(_doc_text())
     for raw in section.splitlines():
         if not raw.startswith("|"):
             continue
@@ -276,6 +275,12 @@ def table_anchors() -> tuple[list[tuple[str, str, str]], list[str]]:
             else:
                 problems.append(f"`{code}`：无法解析的锚点：{token!r}")
     return anchors, problems
+
+
+def table_anchors() -> tuple[list[tuple[str, str, str]], list[str]]:
+    """`_anchors_from_section` 作用于真实总表（供守门用例消费）。"""
+    section, _ = _split_doc(_doc_text())
+    return _anchors_from_section(section)
 
 
 def _find_symbol_span(tree: ast.Module, dotted: str):
@@ -357,6 +362,32 @@ class TestErrorCodeAnchorGuard:
         assert anchors, "未解析到任何锚点——解析器或总表格式已漂移"
         missing = sorted(self.KNOWN_ANCHORS - set(anchors))
         assert not missing, f"已知锚点未被解析出（解析器退化？）：{missing}"
+
+    def test_anchor_rejection_paths(self):
+        """判红口径自检：行号锚点 / 空列 / 裸续锚 / 无法解析 token 都必须留下问题
+
+        用合成表正文而非真实总表——真实总表已无非法锚点，若只测真实文档，
+        判红分支会在「看起来是死代码」的错觉里被后续重构删掉，守门静默失效。
+        """
+        section = "\n".join(
+            [
+                "| 码 | HTTP | 触发条件 | 抛出位置（取样） |",
+                "| --- | --- | --- | --- |",
+                "| `LINE_ANCHOR` | 422 | x | services/a.py:12; :34 |",
+                "| `EMPTY_CELL` | 422 | x |  |",
+                "| `BARE_CONT` | 422 | x | ::foo |",
+                "| `GARBAGE` | 422 | x | services/a.py:: |",
+                "| `SAME_FILE_CONT` | 422 | x | services/b.py::first; ::second |",
+            ]
+        )
+        anchors, problems = _anchors_from_section(section)
+        assert ("SAME_FILE_CONT", "services/b.py", "first") in anchors
+        assert ("SAME_FILE_CONT", "services/b.py", "second") in anchors
+        joined = "\n".join(problems)
+        assert "行号锚点已禁用" in joined, problems
+        assert "抛出位置列为空" in joined, problems
+        assert "之前没有文件锚点" in joined, problems
+        assert "无法解析的锚点" in joined, problems
 
     def test_anchor_symbols_exist_and_emit_code(self):
         """每个锚点符号必须存在，且其行范围内确实有该码的抛出点"""
