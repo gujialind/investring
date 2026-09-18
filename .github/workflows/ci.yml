@@ -302,7 +302,7 @@ jobs:
           pytest tests/ -q --tb=short --strict-markers
 
   # CLI 契约防漂移校验（issue #170 扩展）、scripts 单测（#462 由独立 micro job 并入）：
-  #   1. openapi.json 漂移门禁——进程内生成 schema 与已提交契约比对
+  #   1. openapi.json 漂移门禁——隔离子进程生成 schema 与已提交契约比对
   #   2. ir-cli 响应字段契约校验
   #   3. ir-cli 单元测试
   #   4. scripts/tests 单测（scripts/ 不在 --cov=app 覆盖率口径内，故与 ir-cli 同处
@@ -335,7 +335,7 @@ jobs:
           pip install -r backend/requirements.txt
 
       # openapi.json 漂移门禁：改 router/schema 忘记重新导出时 exit 1
-      # （import app.main 会对临时 sqlite 执行 create_all + init_scheduled_tasks，无需起服务）
+      # （隔离子进程在独立临时 SQLite 内执行 create_all + init_scheduled_tasks，不继承业务配置）
       - name: Check openapi.json drift
         run: python backend/check_openapi.py
 

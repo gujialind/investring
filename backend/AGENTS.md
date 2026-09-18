@@ -243,3 +243,19 @@ cd backend && uvicorn app.main:app --reload   # 配置见 .env.example
 
 - `scripts/run_e2e_backend.py`：本地 E2E 后端（SQLite 临时库，每次启动重建 + 自动种子，空 lifespan 跳迁移）。默认 `/tmp/ir_e2e.db` + `:8000`，可用 **`E2E_DB_PATH` / `E2E_PORT`** 覆盖（并行会话/隔离栈复用）。
 - `scripts/seed_e2e.py`：CI E2E 种子入口，**未设 `DATABASE_URL` 直接拒绝**（防误连）。
+
+## 8. OpenAPI 契约检查与导出
+
+从仓库根、使用安装了 `backend/requirements.txt` 的 Python（发布使用 `.venv-openapi/bin/python`）：
+
+```bash
+python backend/check_openapi.py
+python backend/export_openapi.py --offline
+python ir-cli/scripts/gen_response_fields.py
+python ir-cli/scripts/gen_response_fields.py --check
+```
+
+- 检查与离线导出共用 `openapi_runtime.py`（#539）：父进程不导入 app；子进程使用独立临时 cwd/SQLite，不加载业务 `.env`，不继承数据库、外部服务凭证或 `APP_VERSION`，强制关闭调度和 DEBUG。超时 60 秒，子进程退出后清理整个目录（含 WAL/SHM）；失败与清理异常均报错。
+- `check_openapi.py` 始终只读当前仓库的 `backend/openapi.json`，退出码 **0 一致 / 1 漂移 / 2 执行失败**。不同 cwd 不改变检查目标。
+- `--offline` 默认原子替换当前仓库的 `backend/openapi.json`，自定义输出用 `--output 路径`；生成失败不覆盖旧契约。线上 `export_openapi.py [URL] [输出路径]` 仅保留兼容，CI/release 使用隔离离线入口。
+- 隔离反例测试：从仓库根运行 `python -m pytest scripts/tests/test_openapi_isolation.py -q`（仅 stdlib + pytest，不加载后端 conftest）。**#539 的 pytest 数据库隔离尚未完成**，本节不改变「跑测试」节中的业务测试库行为。
