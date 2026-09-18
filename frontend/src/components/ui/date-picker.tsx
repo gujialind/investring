@@ -144,10 +144,10 @@ export function DatePicker({
           modifiers={modifiers}
           modifiersClassNames={modifiersClassNames}
           onSelect={(newDate) => {
-            onSelect?.(newDate)
             if (newDate) {
-              setOpen(false)
+              onSelect?.(newDate)
             }
+            setOpen(false)
           }}
           autoFocus
         />
