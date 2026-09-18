@@ -108,7 +108,7 @@ jobs:
 
       # ---- 后端：建库 → 迁移 → seed → 启动（生产启动顺序：create_all 由 main.py import 期完成）----
       - name: Setup Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
