@@ -144,9 +144,11 @@ export function DatePicker({
           modifiers={modifiers}
           modifiersClassNames={modifiersClassNames}
           onSelect={(newDate) => {
-            onSelect?.(newDate)
+            // #542：v10 点击已选日期会 toggle-off 传 undefined——点任何日都关弹层，
+            // 且 toggle-off 不回传调用方（清空唯一入口是上方 X 按钮），否则字段被无声抹掉
+            setOpen(false)
             if (newDate) {
-              setOpen(false)
+              onSelect?.(newDate)
             }
           }}
           autoFocus

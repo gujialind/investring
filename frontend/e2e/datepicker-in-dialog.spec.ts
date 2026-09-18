@@ -17,7 +17,10 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { E2E_ACTIVE, authHeaders, dialogByTitle, gotoPortfolioSubpage } from './helpers';
 
-/** 日历中「当月 18 号」按钮（data-day=yyyy-MM-18，当月视图内唯一） */
+/** 日历中「当月 18 号」按钮（data-day=yyyy-MM-18，当月视图内唯一）。
+ *  #542：固定日曾与 D4 种子 today 锚定的 trade_date 相撞——每月 18 号点「已选日期」触发
+ *  v10 toggle-off、旧组件弹层不关。组件已修（点已选日期只关弹层、不清空），此选择器
+ *  不再日期依赖；勿再引入依赖「当天日期与种子日期关系」的新断言面。 */
 const DAY_18 = 'button.rdp-day_button[data-day$="-18"]';
 const DAY_17 = 'button.rdp-day_button[data-day$="-17"]';
 
@@ -276,6 +279,26 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     await expect(
       page.getByRole('button').filter({ hasText: /20\d{2}-\d{2}-17 ~ 20\d{2}-\d{2}-18/ }).first()
     ).toBeVisible();
+  });
+
+  // ---- 用例 11：点击已选日期——弹层必关且不回传清空（#542 回归）----
+  // 先选 18 号使其成为已选日期，再重开点同一格：旧实现下 v10 toggle-off 传 undefined →
+  // 弹层不关且字段被抹。本用例与当天日期无关，确定性构造「点已选日期」态。
+  test('点击已选日期：弹层关闭且选中值不被清空', async ({ page }) => {
+    await gotoPortfolioSubpage(page, E2E_ACTIVE, 'snapshots');
+    await page.getByRole('button', { name: '追平至日期' }).click();
+    const dlg = dialogByTitle(page, '追平快照');
+    await dlg.waitFor();
+
+    const trig = await pickDay(page, dlg, DAY_18);
+    await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
+
+    // 重开弹层，DAY_18 此时即「已选日期」，再点一次
+    await trig.click();
+    await page.locator('button.rdp-day_button').first().waitFor();
+    await page.locator(DAY_18).click();
+    await expect(page.locator('button.rdp-day_button')).toHaveCount(0);
+    await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
   });
 });
 
