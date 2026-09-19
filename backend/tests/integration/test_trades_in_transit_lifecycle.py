@@ -11,6 +11,7 @@
 # - 调仓退出 auto_confirm（#471）：pending 调仓不被扫描确认、到期仍阻断快照
 # - 自身扣款加回口径（pending/confirmed、快照基线、查询日之后）与 cancelled 排除
 # - 读侧派生现金字段（list/get/confirm/preview）与 preview 零写入
+# - #526：确认路径的验资平台与落账平台恒一致（含缺腿兜底与跨平台扣款两条路径）
 # ============================================================================
 
 from datetime import date, timedelta
@@ -109,6 +110,21 @@ def _group_legs(db, fund_leg):
     return db.query(Trade).filter(
         Trade.transfer_group == fund_leg.transfer_group
     ).all()
+
+
+def _spy_buy_cash_check(monkeypatch) -> dict:
+    """拦截确认路径的验资调用，返回记录实参的 dict（#526 平台一致性）。"""
+    from app.services import trade_service
+
+    seen: dict = {}
+    real = trade_service.validate_buy_cash_with_addback
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(trade_service, "validate_buy_cash_with_addback", spy)
+    return seen
 
 
 def _gen(client, headers, code, target):
@@ -410,6 +426,80 @@ class TestBuyConfirmCashLegGuards:
         )
         assert bad_date.status_code == 422
         assert bad_date.json()["detail"]["error"] == "CASH_CONFIRM_DATE_NOT_ALLOWED"
+
+    def test_missing_deduction_leg_confirm_rejects_other_platform(
+        self, client, admin_headers, test_db
+    ):
+        """#526：缺扣款腿时，闸门仍须成立——既不能建腿，也不能改写扣款平台"""
+        fund_leg = self._create(client, admin_headers, test_db)
+        test_db.delete(_cash_leg(test_db, fund_leg))
+        test_db.flush()
+        create_platform(test_db, code="P493_OTHER")
+
+        bad = client.post(
+            f"/api/trades/{fund_leg.id}/confirm",
+            params={"cash_platform_code": "P493_OTHER"},
+            headers=admin_headers,
+        )
+        assert bad.status_code == 422
+        assert bad.json()["detail"]["error"] == "CASH_PLATFORM_NOT_ALLOWED"
+        test_db.expire_all()
+        assert _cash_leg(test_db, _fund_leg(test_db, fund_leg.id)) is None
+        assert _fund_leg(test_db, fund_leg.id).status == "pending"
+
+    def test_missing_deduction_leg_confirm_uses_fund_leg_platform(
+        self, client, admin_headers, test_db, monkeypatch
+    ):
+        """#526：缺腿兜底建腿落基金腿平台，且验资按**同一**平台
+
+        「验资平台 == 落账平台」由确认计划单点提供：断言 `cash_platform` 实参
+        而非只断言建腿结果——旧写法靠两处独立 fallback 恰好一致，任一侧改动都
+        会让钱在 A 平台被验过、在 B 平台被扣掉。
+
+        spy 在 create 之后才装：创建路径同样调 `validate_buy_cash_with_addback`，
+        先装会让断言读到 create 那次实参而假绿。
+        """
+        fund_leg = self._create(client, admin_headers, test_db)
+        test_db.delete(_cash_leg(test_db, fund_leg))
+        test_db.flush()
+
+        seen = _spy_buy_cash_check(monkeypatch)
+        conf = client.post(f"/api/trades/{fund_leg.id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
+        assert seen.get("cash_platform") == PLAT
+        test_db.expire_all()
+        rebuilt = _cash_leg(test_db, _fund_leg(test_db, fund_leg.id))
+        assert rebuilt is not None
+        assert rebuilt.platform_code == PLAT and rebuilt.status == "confirmed"
+
+    def test_confirm_cash_check_platform_follows_existing_deduction_leg(
+        self, client, admin_headers, test_db, monkeypatch
+    ):
+        """#526：有腿路径行为不变，验资平台仍取扣款腿平台（跨平台买入）"""
+        _seed_portfolio(test_db, self.CODE, cash=50000.0)
+        create_platform(test_db, code="P493_OTHER")
+        # 扣款平台必须自己有钱：验资按平台分账，否则创建即被 INSUFFICIENT_CASH 拒
+        create_position_snapshot(
+            test_db, self.CODE, "CASH", "", D0,
+            cash_amount=50000.0, platform_code="P493_OTHER",
+        )
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": self.CODE, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "buy", "amount": 10000.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+                "cash_platform_code": "P493_OTHER",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        fund_leg = _fund_leg(test_db, resp.json()["id"])
+
+        seen = _spy_buy_cash_check(monkeypatch)
+        conf = client.post(f"/api/trades/{fund_leg.id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
+        assert seen.get("cash_platform") == "P493_OTHER"
 
     def test_reconfirm_after_unconfirm_keeps_single_cash_leg(
         self, client, admin_headers, test_db
