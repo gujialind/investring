@@ -355,3 +355,29 @@ class TestExplicitNullRejection:
         # 不传的字段不动
         assert data["asset_class_code"] == "ASSET_STOCK"
         assert data["region_code"] == "REGION_CN"
+
+    def test_update_product_type_null_keeps_dedicated_code(self, client, admin_headers, test_db):
+        """product_type 在 allow 内（null 交给 validate_product_type）——锁定专用码
+        INVALID_PRODUCT_TYPE，防止它被通用收口的 INVALID_PARAM 悄悄顶掉"""
+        create_product(test_db, code="NG005.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG005.OF/CN_OTC",
+            json={"product_type": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PRODUCT_TYPE"
+
+    def test_update_mixed_allow_and_rejected_null_is_atomic(self, client, admin_headers, test_db):
+        """allow 字段与非 allow 字段混合：整体拒绝，allow 侧的清除也不落库（零写入）"""
+        create_product(test_db, code="NG006.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG006.OF/CN_OTC",
+            json={"segment_code": None, "is_qdii": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        got = client.get("/api/products/NG006.OF/CN_OTC", headers=admin_headers)
+        assert got.status_code == 200
+        assert got.json()["segment_code"] == "SEG_COMPOSITE"

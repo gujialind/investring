@@ -23,6 +23,10 @@ def reject_explicit_nulls(updates: dict, *, allow: Collection[str] = ()) -> None
     与 #493 申赎侧先例同口径（#573 起申赎也改用本实现，全仓单一收口）：
     显式 null 会被静默忽略、静默改写或落库脏数据，故统一拒绝并提示改为不传该字段。
     """
+    if isinstance(allow, str):
+        # `f not in allow` 对 str 会退化成子串匹配（allow="notes" 时 "note"/"e"/"s"
+        # 全被放行）——正是本收口要消灭的静默放行形态，且 AST 守门只认字面量集合挡不住
+        raise TypeError("allow 必须是字段名集合；传 str 会退化为子串匹配")
     null_fields = sorted(f for f, v in updates.items() if f not in allow and v is None)
     if null_fields:
         raise BusinessError(

@@ -41,6 +41,11 @@ class TestRejectExplicitNulls:
         with pytest.raises(BusinessError):
             reject_explicit_nulls({"notes": None})
 
+    def test_allow_str_rejected(self):
+        """allow 传 str 会退化为子串匹配（"note"/"e"/"s" 全放行）——静默放行必须炸"""
+        with pytest.raises(TypeError):
+            reject_explicit_nulls({"notes": None}, allow="notes")
+
     def test_non_null_values_pass(self):
         """正常值与空字典都是 no-op（缺省不传 = 不动）"""
         reject_explicit_nulls({})

@@ -94,6 +94,20 @@ class TestInvestorCRUD:
         assert row.role == "viewer"
         assert client.get("/api/investors/UPD_NULL", headers=admin_headers).status_code == 200
 
+    def test_update_name_null_422(self, client, admin_headers, test_db):
+        """name 同 role：列可空但响应非 Optional，落 NULL 后该行 GET 恒 500（#573）"""
+        create_investor(test_db, code="UPD_NAME", name="原名称")
+        resp = client.put(
+            "/api/investors/UPD_NAME",
+            json={"name": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        test_db.expire_all()
+        row = test_db.query(Investor).filter(Investor.code == "UPD_NAME").first()
+        assert row.name == "原名称"
+
     def test_update_nullable_fields_null_clears(self, client, admin_headers, test_db):
         """phone/email 是 allow 例外：列可空且响应 Optional，显式 null = 清除（#573）"""
         create_investor(test_db, code="UPD_CLEAR", name="清除测试")

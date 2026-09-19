@@ -517,7 +517,17 @@ def update_product(
     if not product:
         raise NotFoundError("NOT_FOUND", f"产品 {code}({market}) 不存在")
 
-    # issue #573：显式 null 收口——is_qdii/name 落 NULL 会让 ProductResponse 校验 500
+    # issue #232：身份字段（product_type/market）守卫——枚举/系统产品/pending/零引用。
+    # 先于 #573 的显式 null 收口：本守卫只在值**实际变化**时进门禁，且自身会先拒非法值，
+    # 收口若排在它前面会抢占 SYSTEM_PRODUCT_PROTECTED / PENDING_TRANSACTIONS_EXIST /
+    # INVALID_PRODUCT_TYPE 等更可诊断的专用码（同体实测：系统产品 {"name": null,
+    # "product_type": "ETF"} 收口前置时返回 INVALID_PARAM，后置时回到
+    # SYSTEM_PRODUCT_PROTECTED）。两类错误都在写库前，不影响「拒绝即零写入」。
+    if "product_type" in updates or "market" in updates:
+        _validate_identity_change(db, product, updates)
+
+    # issue #573：显式 null 收口（仍在维度/取价/确认天数校验与全部写操作之前，
+    # 拒绝即零写入）——is_qdii/name 落 NULL 会让 ProductResponse 校验 500
     # 且此后该行 GET 恒 500；market 显式 null 此前是静默 no-op（调用方以为腾空/重置），
     # 一并拒绝。五个维度标签 null = 清标签（合并终态仍交 validate_dimension_tags）；
     # product_type/confirm_days/nav_lag_days 由各自专用校验器收口（保留专用错误码）。
@@ -529,10 +539,6 @@ def update_product(
             "size_code", "segment_code",
         },
     )
-
-    # issue #232：身份字段（product_type/market）守卫——枚举/系统产品/pending/零引用
-    if "product_type" in updates or "market" in updates:
-        _validate_identity_change(db, product, updates)
 
     # 维度标签按合并后结果校验适用矩阵（部分更新不允许造成非法组合）；
     # is_active 仅对实际变化的字段校验（#135：存量引用停用值不阻断其他编辑）
