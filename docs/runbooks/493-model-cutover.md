@@ -26,7 +26,7 @@
 - **旧买入组的 pending 扣款腿**：新代码读它时，`calculate_available_cash` 仍按
   `trade_date` 把它**扣掉**，但 `_compute_in_transit_amounts` 要求 CASH sell 为
   `confirmed` 才算在途 → 这笔钱从「可用现金」和「市值」里**同时消失**，组合净值
-  凭空少一笔。这正是新代码在编辑路径上专门修掉的形态（见根 `AGENTS.md` §2.5）。
+  凭空少一笔。这正是新代码在编辑路径上专门修掉的形态（见[现金账本规则](../reference/business-constraints.md#rule-cash)）。
 - **旧卖出组的 pending 到账腿**：新代码认为「pending 的调仓 CASH 腿」不该存在；
   在途口径要求到账腿 `pending`（或 confirmed 且 A > D）——旧腿恰好会被算成在途，
   但它的 `trade_date` 是**下单日 T** 而不是基金确认日 C，金额锚点也是创建期占位
@@ -246,7 +246,7 @@ ORDER BY t.confirm_date, t.id;
    这一事实判断替换成机械操作，正是本次要消除的账实不符。
 5. 每组处置完成后，用 §2.4 的在途行与平台可用现金做一次对账：
    `现金 + 在途 + 基金市值` 应与处置前一致（有手续费时差额即为该笔手续费，
-   #493 的记账守恒口径见根 `AGENTS.md` §2.5）。
+   #493 的记账守恒口径见[现金账本规则](../reference/business-constraints.md#rule-cash)）。
 6. 全程留痕：处置人、时间、组号、依据（对账单/交割单）、dry-run 预览结果、前后状态。
 
 ---

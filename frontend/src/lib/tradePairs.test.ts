@@ -148,7 +148,7 @@ describe("cashLegArrived（#493 评审加固：口径 = confirmed 且日期不�
     ).toBe(false);
   });
 
-  // 只看日期的旧口径会把这一档错标成「现金到账」，而 pending 腿不计入可用现金（根 AGENTS.md §2.5）
+  // 只看日期的旧口径会把这一档错标成「现金到账」，而 pending 腿不计入可用现金（[现金账本](../../../docs/reference/business-constraints.md#rule-cash)）
   it("pending 腿即便生效日已到（跨天现金转移的转入腿到期未确认）→ 未到账", () => {
     expect(
       cashLegArrived(makeTrade({ status: "pending", confirm_date: "2026-09-17" }), TODAY),

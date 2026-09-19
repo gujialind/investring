@@ -12,10 +12,7 @@ export type TradeRow =
 
 const CASH_CODE = "CASH";
 
-/**
- * 现金行判定（根 `AGENTS.md` §2.5：一律按 `product_code`，不看产品分类字符串）。
- * 与后端 `update_trade` 的 CASH 守卫同口径（`trade.product_code == "CASH"`）。
- */
+// 交易 CASH 腿按 product_code 判定，不套用快照现金行判据；见[现金账本](../../../docs/reference/business-constraints.md#rule-cash)。
 export function isCashLeg(trade: Trade): boolean {
   return trade.product_code === CASH_CODE;
 }
@@ -88,7 +85,7 @@ export function groupTradeRows(trades: Trade[]): TradeRow[] {
 }
 
 /**
- * 配对现金腿是否**已到账**（#493 评审加固；现金账本口径见根 `AGENTS.md` §2.5）：
+ * 配对现金腿是否**已到账**（#493 评审加固；见[现金账本](../../../docs/reference/business-constraints.md#rule-cash)）：
  * 须 **confirmed 且生效日不在未来**——只看日期会把「已到期但尚未确认」的腿
  * （跨天现金转移的转入腿、卖出到账腿）显示成已到账，而 pending 腿**不计入可用现金**。
  * 无生效日（尚未生效的 pending 腿）按未到账处理；cancelled 腿一律未到账。

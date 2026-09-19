@@ -863,7 +863,7 @@ def _is_trading_day(db: Session, target_date: date) -> bool:
 
 def _validate_snapshot_continuity(db: Session, portfolio_code: str, target_date: date):
     """
-    校验快照连续性（根 AGENTS.md「快照」节）：
+    校验快照连续性（[快照规则](../../../docs/reference/business-constraints.md#rule-snapshot)）：
     - 无快照时（首次生成）不限制；
     - target_date == 最新快照日：允许（重建最新一日，无空洞、无下游依赖）；
     - target_date == 最新快照日的下一个交易日：允许（正常顺延）；

@@ -1160,7 +1160,7 @@ def create_trade(
         )
 
     # 平台必填 + 存在性（与 share_change_event_service PLATFORM_REQUIRED 先例同口径）：
-    # 基金腿平台决定持仓平台归属，缺省时现金闸门退化为全组合聚合（根 AGENTS.md「平台与现金账本」节旁路），必须拦截
+    # 缺省平台会让现金闸门退化为全组合聚合，违反[现金账本规则](../../../docs/reference/business-constraints.md#rule-cash)。
     if not platform_code:
         raise BusinessError("PLATFORM_REQUIRED", "调仓交易必须指定交易平台 platform_code")
     if not db.query(Platform).filter(Platform.code == platform_code).first():
