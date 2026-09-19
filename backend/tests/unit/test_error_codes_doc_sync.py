@@ -1,8 +1,7 @@
 # ============================================================================
 # 单元测试：错误码 ↔ 文档一致性守门 (test_error_codes_doc_sync.py)
 # ============================================================================
-# issue #418：`docs/reference/business-constraints.md` 被根 AGENTS.md §2 与
-# backend/AGENTS.md 顶部共同指定为「错误码触发条件与字段级清单」的事实来源，但全仓
+# issue #418：[业务规则](../../../docs/reference/business-constraints.md#错误码总表) 是错误码事实来源，但全仓
 # **没有**错误码注册表（`app/services/exceptions.py` 只有载体类，`code` 是自由 str），
 # 于是漂移不会让任何测试变红——实测 81 个在用码只记了 26 个。
 #

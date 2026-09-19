@@ -10,8 +10,7 @@
  * 数据说明：全部用例经 helpers.ts 按组合 code 直达种子活跃组合 E2E_ACTIVE
  * （#354），不再依赖列表 .first() 的无序命中。E2E_ACTIVE 是种子契约：缺组合即
  * 硬失败，不再优雅 skip。编辑交易用例（用例 5/8）依赖 D4 那笔 pending 场内买入，
- * 故禁止对 E2E_ACTIVE 跑 recalculate/catch-up/generate-next——auto_confirm 会吃掉
- * 该 pending 交易、破坏「编辑按钮可见」契约。用例 4 用 dry_run 探针（零副作用）
+ * 故禁止对共享 E2E_ACTIVE 跑 recalculate/catch-up/generate-next；固定快照与编辑窗口是契约，推进/重算须自建组合（auto_confirm 不确认调仓，到期 pending 调仓会阻断推进）。用例 4 用 dry_run 探针（零副作用）
  * 取真实 count 后对 UI 做精确单分支断言，不再 OR 弱断言。
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';

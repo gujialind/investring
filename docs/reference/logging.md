@@ -1,8 +1,6 @@
 # InvestRing 日志规范
 
-> 「健全日志系统」总纲 issue #403 的规范正文。四个子项各自的实现细节在模块指南里
-> （`backend/AGENTS.md` §1.3/§1.5、`frontend/AGENTS.md`），本文只写**跨端约定与用法**，
-> 不重复实现说明。改日志相关代码前先读本文。
+> 「健全日志系统」总纲 issue #403 的规范正文：跨端用法、事务边界与必要实现约束统一在此维护，模块指南只保留摘要和入口。改日志相关代码前先读对应章节；文档维护遵循 [AI 文档规范](documentation.md)。
 
 | 子项 | 范围 | 落地位置 |
 | --- | --- | --- |
@@ -13,6 +11,7 @@
 
 ---
 
+<a id="logging-runtime"></a>
 ## 1. 后端运行日志
 
 **形态**：只写 stdout、单行 JSON；**不落文件**——轮转交给 docker `json-file` driver
@@ -50,11 +49,19 @@ JSON；异常折进 `exception` 字段（**不拼进 `message`**，否则换行�
 client_ip 由 `get_current_user` 在认证成功后写入。排查时先按 `request_id` 串同一请求的
 多条日志。**只记 path 不记 query**（查询串可能带凭据），`/health` 跳过。
 
-**程序化启动必须传 `log_config=None`**（uvicorn 会无条件重装自己的明文日志配置）；
-命令行形态（生产 Dockerfile CMD）顺序相反、无需处理。
+**程序化启动必须传 `log_config=None`**（#417，uvicorn 会无条件重装 handler 并设 propagate=False，覆盖 import 应用时的 JSON 配置）；命令行形态（生产 Dockerfile CMD）先配日志、后 import 应用，无需处理。不用 `--log-config` 收编父进程，避免应用内与命令行双源。
+
+### 初始化与上下文边界
+
+- `main.py` 中 `setup_logging()` 必须早于建表与调度初始化的 import 期副作用，但晚于 engine 创建。SQL 详略只由 `echo=settings.debug` 控制；dictConfig 不钉 `sqlalchemy.engine` / `sqlalchemy.engine.Engine` 级别，**显式清掉 echo 自挂的明文 handler**，否则 SQL 双写、多行 DDL 撕行。`uvicorn.access` 关闭（中间件单点记录），uvicorn/error 冒泡 root。
+- `extra=` 禁用 LogRecord 保留键 `message`，否则 KeyError。每条访问记录带 method/path/status_code/duration_ms；入站 request_id 先过正则白名单，防响应头注入。
+- 上下文必须是**中间件派发前创建的可变对象 + 依赖改字段**，不能在同步依赖里 `var.set()`：FastAPI 将依赖与 endpoint 分别交 threadpool，anyio 每次 copy_context，依赖那份 set 不会传到 service。
+- Starlette 的 Exception handler 在最外层 ServerErrorMiddleware；调用时中间件 finally 已解绑上下文，故 request_id/actor/client_ip 从 scope 的 `SCOPE_REQUEST_ID_KEY` / `SCOPE_ACTOR_KEY` / `SCOPE_CLIENT_IP_KEY` 取回（认证成功时暂存）。响应经原始 send，handler 自补 X-Request-ID；中间件没见 response.start，访问日志按 500 记。handler 后仍重抛，测试用 `TestClient(app, raise_server_exceptions=False)`。
+- 异常落库经 `run_in_threadpool`，不阻塞 async handler；request_params 刻意不记。stdout 与传给 record_system_error 的 path 均保持完整，只有唯一写入侧按列宽截断（#422c）。
 
 ---
 
+<a id="logging-audit"></a>
 ## 2. 审计日志（`audit_log`）与系统错误日志（`system_error_log`）
 
 两者都只经 `audit_service.record_audit` / `record_system_error` 写入——**不要直接
@@ -78,8 +85,24 @@ NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不�
 
 读侧：`GET /api/system/logs/audit`、`/error`，CLI `ir log audit` / `ir log error`。
 
+### 事务与失败隔离
+
+- 埋点在 service，REST/CLI 共用。`record_audit` 不 commit，审计随业务事务提交或回滚。写入使用 **Core INSERT + 连接级 savepoint**（`db.connection().begin_nested()`），不用 ORM add/flush：ORM flush 失败会把根因挂到 `SessionTransaction._rollback_exception`、令 session DEACTIVE，连接级回滚无法修复 ORM 状态（#419）。Core execute 失败不留该状态，连接级足够。
+- 不把审计换成 session 级 savepoint；需要 ORM 状态复位的是失败后继续循环的 auto_confirm。`sync_transfer_group` / `_confirm_fund_level_event` 失败即 rollback/raise、不承诺继续，同样保留连接级。auto_confirm 的显式 session savepoint 与禁止 with 的原因见[后端事务说明](../../backend/AGENTS.md#backend-auto-confirm)。
+- savepoint 前先 flush 调用方业务改动到外层，否则 ROLLBACK TO SAVEPOINT 会一并撤销它们而调用方收到成功；**flush 和建 savepoint 都在 try 内**，`sp = None` 哨兵（#422a），否则重算收尾埋点可能把承诺的 `200 + results[].errors` 变成 500。
+- 审计失败不外抛：回滚 savepoint、stdout ERROR，再用独立 SessionLocal 写 `error_type=AuditWriteFailure` 的 system_error_log；后者自身 best-effort，失败只记 stdout。守护覆盖 flush、建 savepoint、Core INSERT、回滚四段（#422）；回滚失败另记带 exc_info 的 ERROR，文案须按结果分支，不能宣称业务事务不受影响。
+- request_path 在唯一写入路径按 `SYSTEM_ERROR_PATH_MAX`（绑定模型列宽 200）截断，完整值保留在 stdout，避免 MySQL 严格模式超宽丢整条记录。自由文本的 4 字节字符由全库 utf8mb4 解决（#427/#433），不采用写入侧转义清单；迁移兼容约束见[后端数据模型说明](../../backend/AGENTS.md#backend-models)。
+
+### 载荷与去重边界
+
+- `snapshot_recalc_job` 跨线程只传 request_id、不传 actor（共用线程池不复制 contextvars），后台审计恒为 SYSTEM，stdout 仍能关联请求。
+- JSON 用 `default=str` 保存 Decimal/date，create 无 old_value、delete 无 new_value；副作用仅申赎确认的 cash_transfer_group 与交易创建的 transfer_group 折进 new_value，组合激活及确认配对腿镜像不另入载荷。
+- 快照 generate 数值载荷用保标度字符串（#421）：ORM 构造点保留量化后的 Decimal（估值 4 位、份额 2 位），不转 float；同函数 API 返回 dict 的 float **刻意保留**，那是 JSON 数字契约。投资人成本价构造点同样保留 Decimal。
+- 级联委派给既有 unconfirm 实现时只由被委派方留痕；事件级联就地改字段才记 cascade_unconfirm。不为 generate 前的空删除记 delete；申赎/交易/事件 update 仅 diff 非空才记审计，原样提交不产生两侧皆 NULL 的空行。
+
 ---
 
+<a id="logging-tasks"></a>
 ## 3. 任务执行记录（`task_execution_log`）
 
 **唯一编排点**是 `task_runner.run_task(db, task_code, trigger_type)`：手动触发
@@ -113,8 +136,17 @@ NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不�
 > 把 NULL 折算成 0——本表的初衷就是消灭「恒 null 的摆设列」，那要求空值能表达「不知道」、
 > 有值必须是真的。
 
+### 执行与事务边界
+
+- run_task 先建 running 行并 commit，再经 `_TASK_DISPATCH` 执行，按 `_derive_log_fields` 落终态并 commit。复用调用方 session、不 close；异常路径不 rollback（running 已落库），任务未提交业务由自身编排收口：run_nav_sync 逐产品 checkpoint、`_generate_snapshots_for_date` 逐日 rollback/commit。
+- trigger_type 使用 `TRIGGER_MANUAL` / `TRIGGER_SCHEDULED` 常量，不写字面量；跳过判定统一在 `scheduler_service._should_run_today`，两条 job 共用。
+- 归一的输入分别为 products_count/failed_products、portfolios_processed/auto_confirm_failed、synced_count、删除行数求和。#305 的 warnings / auto_confirm_failed 归并及 1000 字符摘要不改变。
+- 任务异常写 failed、str(e) 摘要与 traceback 后**原样上抛**，HTTP 映射留给 router/global handler；未知 task_code 抛 NotFoundError，不建执行行。
+- `run_nav_sync(db, log_id)` 的 log_id 必填，逐产品 NavSyncDetail 要挂父行；`run_snapshot_generate(db)` 没有逐日明细表，不添加无消费者的 log_id。
+
 ---
 
+<a id="logging-frontend"></a>
 ## 4. 前端日志
 
 **统一入口 `@/lib/logger`**，业务代码**禁止直调 `console.*`**：

@@ -1,6 +1,6 @@
 # ir-cli/AGENTS.md — CLI 模块指南
 
-> `ir` 是独立轻量 HTTP 客户端（typer + httpx），入口 `ir_cli.main:app`，经 HTTP 调用运行中的后端；完整使用手册见 `CLI_MANUAL.md`，命令清单以 `ir --help` / `ir schema` 为准。
+> `ir` 是独立轻量 HTTP 客户端（typer + httpx），入口 `ir_cli.main:app`，经 HTTP 调用运行中的后端。先用 `ir schema --index` / `ir <命令组> --help` 定位，再读[使用手册](CLI_MANUAL.md)的对应命令组；从 `ir_cli/main.py` 的注册找到实现与测试，不假设模块名等于命令名（例如 `trade` 对应 [trades.py](ir_cli/commands/trades.py) 与 [现金参数测试](tests/test_trade_cash_params.py)），不默认加载完整手册。业务语义链接[业务规则](../docs/reference/business-constraints.md)对应领域，不在 CLI 另写一份；文档维护遵循 [AI 文档规范](../docs/reference/documentation.md)。
 
 ## 1. 跑测试
 

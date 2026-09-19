@@ -789,7 +789,7 @@ class TestRecalculateAuditFlushGuard:
         assert error.error_type == "AuditWriteFailure"
         assert "portfolio_code" in error.error_message
 
-        # 整体回滚：基线快照复原、无半截快照落库（§2.6「要么完整成功、要么无变化」）
+        # 整体回滚：基线快照复原、无半截快照落库（[重算为单一事务](../../../docs/reference/business-constraints.md#rule-snapshot)）
         rows = test_db.query(PortfolioValueSnapshot).filter(
             PortfolioValueSnapshot.portfolio_code == port
         ).all()

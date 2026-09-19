@@ -2,7 +2,7 @@
 
 > 本文定义 InvestRing 的**代码审查判定标准**（看什么、怎么定级）与**流程**（谁在哪一步做什么、结论如何处置）。
 > 定位：根 `AGENTS.md` §3 定义开发流程骨架（分支/issue/PR/commit），本文只细化「审查」这一环，不重复其内容。
-> 相关：机械门禁清单见 `.github/workflows/ci.yml`；业务不变量见根 `AGENTS.md` §2 与 `docs/reference/business-constraints.md`；前端规范见 `docs/design/visual-spec.md`。
+> 相关：机械门禁清单见 `.github/workflows/ci.yml`；业务不变量见[业务规则正文](business-constraints.md)；前端规范见 `docs/design/visual-spec.md`。
 
 ***
 
@@ -78,7 +78,7 @@ L2 语义审查（专攻「绿而错」）
 ### 2.1 本项目的 🔴 判定线（照此对照，不靠感觉）
 
 * **任何「失败被吞掉 / 降级为静默」的路径**——无日志、无告警、无异常出口。
-* **数值产生点未量化，或舍入模式与根 `AGENTS.md` §2.11 不一致**（金额/份额 2 位、净值 4 位、`ROUND_HALF_UP`）；`float()` 掉 DECIMAL 标度。
+* **数值产生点未量化，或舍入模式与[数值规则](business-constraints.md#rule-precision) 不一致**（金额/份额 2 位、净值 4 位、`ROUND_HALF_UP`）；`float()` 掉 DECIMAL 标度。
 * **服务层越过事务边界**：`app/services/**` 内 `commit`，或 import / 抛 `fastapi.HTTPException`（`backend/tests/unit/test_service_no_commit.py` 是守门，但新写法可能绕开）。
 * **快照链路（snapshot / position / trade / subscription）改动缺影响面测试**——它是所有写路径的下游。
 * **迁移缺可逆 `downgrade`**，或未过双方言（SQLite + MySQL），或未按 `create_all → alembic upgrade head` 顺序验证。
@@ -120,7 +120,7 @@ L2 语义审查（专攻「绿而错」）
 #### Q3 数值口径对吗？（对应「数值口径不一致」）
 
 * 量化**只发生在产生点**（用户输入、确认计算、事件变动），读取与累加路径不量化；可用量闸门一律**先量化再精确比较**（无容差）。
-* 走 `quantize` 统一入口，舍入模式与 §2.11 一致（#428 的教训：缺省舍入模式与文档声称的不符，静默错在 7 处）。
+* 走 `quantize` 统一入口，舍入模式与[数值规则](business-constraints.md#rule-precision)一致（#428 的教训：缺省舍入模式与文档声称的不符，静默错在 7 处）。
 * 不要把 DECIMAL 经 `float()` 落库/落 JSON（#421）。
 * `amount` 与 `actual_amount` 的含费语义（调仓买入 `amount = actual_amount − fee`；卖出金额为纯派生量）。
 * **判定**：口径错误 = 🔴。
@@ -132,10 +132,10 @@ L2 语义审查（专攻「绿而错」）
 | `openapi.json` | 改 router / schema / 版本号 | ✅ `backend/check_openapi.py` |
 | `ir-cli` response_fields | 改响应字段 | ✅ `gen_response_fields.py --check` |
 | `business-constraints.md` 错误码 | 新增/删除 `BusinessError` code；改总表抛出位置锚点 | ✅ `backend/tests/unit/test_error_codes_doc_sync.py`（#418 收口时建：在用码 ↔ 总表双向比对，含「码名写进散文里就算记过」的防堵；新增码漏登记会红。#521 起总表「抛出位置」锚点必须为稳定符号 `file::函数/类名`——符号不存在、符号行范围内不含该码抛出点、出现行号锚点，三者均判红） |
-| 根 `AGENTS.md` / 模块 `AGENTS.md` / runbook | 改业务规则、流程、运维动作 | ❌ **无守门** |
+| 根/模块 AGENTS、规范与受管 runbook | 改业务规则、流程、运维动作 | `scripts/check_context_docs.py` 仅检查受管入口、链接、锚点及旧引用；**不验证业务语义或所有历史文档** |
 | `visual-spec.md` | 改视觉口径 | ❌（但部分口径已有 ESLint 护栏） |
 
-* **判定**：漏同步有守门的产物会被 CI 拦；**漏同步无守门的产物 = 🟡，且这是文档漂移的唯一防线，审查者必须主动问。**
+* **同步条件**见[AI 文档规范](documentation.md#doc-sync)：写明已同步的正文与引用位置，或无需同步的理由。机械守门只覆盖其声明范围；业务语义漏同步仍须人工审查，不能用链接通过代替。漏同步未被守门覆盖的产物仍按 Suggestion 处置。
 * ⚠️ **有守门 ≠ 不会漂**：本文件自身即是反例——初版硬编码的 job 数与覆盖率阈值，在本文件合入前就双双失实（详见 §0 末注）。**大原则：文档里避免硬编码会漂移的数值与清单，改为指向源码。**
 
 #### Q5 怎么回滚？
@@ -163,7 +163,7 @@ L2 语义审查（专攻「绿而错」）
 
 ### 3.3 涉及业务不变量的改动
 
-此类改动一律先读根 `AGENTS.md` §2 与 `docs/reference/business-constraints.md` 再审查，本文不重复规则本体。审查时的判定要点：
+此类改动一律先读[业务规则正文](business-constraints.md) 再审查，本文不重复规则本体。审查时的判定要点：
 
 * 改动是否**证伪**了某条已声明的不变量？若规则本身要变，是否同时更新了 `AGENTS.md` / `business-constraints.md`？
 * 涉及「提前一天生效」类陷阱（如 `auto_confirm_after_snapshot(D)` 会确认 `ex_date == 下一交易日(D)` 的事件）时，作者是否读过 `backend/AGENTS.md` §1.3，而不是凭根文档概述推测？
@@ -290,7 +290,7 @@ L2 语义审查（专攻「绿而错」）
 | `scripts/visual-verify.sh` | 目检脚手架（第三验证层） | §3.2 表格列结构改动必跑 |
 | `scripts/e2e_normalize.py` + CI `e2e-compare` 系 job | E2E 归一化对比（纯测试重构验证）——**#410 起已由 CI 兜底，原本地脚本 `verify-e2e-pr.sh` 及其隔离层整删**，本地手工菜谱见 `frontend/AGENTS.md` | §3.2 重构测试时的验证手段 |
 | `backend/tests/unit/test_error_codes_doc_sync.py` | 错误码 ↔ 文档一致性守门 | §3.1 Q4 引用 |
-| 根 `AGENTS.md` §2 / `docs/reference/business-constraints.md` | 业务不变量与错误码 | §3.3 引用，不重复 |
+| [business-constraints.md](business-constraints.md) | 业务不变量与错误码唯一正文 | §3.3 引用，不重复 |
 | `docs/design/visual-spec.md` | 视觉规范 | §2.1 / §3.2 引用 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | 本文的操作化载体 | §4.3 使用 |
 | 本地 AI 工具目录（`.qoder/`、`.codebuddy/`、`.trae/` 等） | 不入库（`.gitignore` 全覆盖）——#423 曾追踪 `.qoder/` 的 rules/hooks/agents/skills，该追踪已撤销 | §3.1 Q2 的本机检索范围含这些目录，但其中的定义**不属于仓库既存规范**；命中同主题时按「与本文冲突以本文为准」处置，也不要把它们与 `docs/` 正本互相同步 |

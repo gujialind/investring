@@ -203,8 +203,7 @@ def seed_e2e_active(db: Session) -> None:
     取到日历末段交易日，四种日期仍互异，守卫不会触发（#468 订正原 docstring
     「越界响亮报错」的失实描述）。
 
-    **禁止对 E2E_ACTIVE 跑 recalculate/catch-up/generate-next**：其 auto_confirm
-    会确认 D4 pending 交易，破坏「存在可编辑 pending 交易」的 E2E 契约。
+    **禁止对 E2E_ACTIVE 跑 recalculate/catch-up/generate-next**：共享组合承诺固定快照与可编辑窗口；auto_confirm 不确认调仓，到期 pending 调仓会阻断推进，推进/重算场景须自建隔离组合。
     """
     if db.query(Portfolio).filter(Portfolio.code == "E2E_ACTIVE").first():
         return
