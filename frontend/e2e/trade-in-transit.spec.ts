@@ -49,7 +49,6 @@ import {
   productOption,
   productPopover,
   settlePopovers,
-  settlePreview,
   toastByTitle,
   type PortfolioCode,
 } from './helpers';
@@ -400,9 +399,6 @@ async function selectTradeDate(page: Page, dlg: Locator, targetISO: string): Pro
 /** 确认弹窗内改选到账日期（DatePicker id=cash_confirm_date，与后端 query 同名） */
 async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Promise<void> {
   await pickDay(page, dlg.locator('button#cash_confirm_date'), targetISO);
-  // 到账日进 preview query key → 换 key 即重新预览；等这次 refetch 引起的子树搬运走完
-  // 才动下一个浮层控件，否则正开着的弹层会被响应落地那次 flip 关掉（#551）
-  await settlePreview(dlg);
 }
 
 /**
@@ -443,8 +439,6 @@ async function pickArrivalPlatform(
   await option.waitFor({ timeout: 10_000 });
   await option.click({ timeout: 10_000 });
   await settlePopovers(page);
-  // 同上：到账平台也进 preview query key，等这次重新预览的搬运结束再交回调用方（#551）
-  await settlePreview(dlg);
 }
 
 /**
@@ -616,12 +610,50 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await expect(page.getByRole('row').filter({ hasText: '现金到账' })).toHaveCount(0);
 
     // ---- 4. 确认弹窗：到账日期/平台可录入，缺省 A = C、平台 = 基金平台 ----
+    //
+    // #551 方案 A 回归（先于本用例其余步骤）：预览 refetch 落地**不得重挂载**弹窗内输入。
+    // 缺陷形状是「loading 分支与就绪分支曾分属两棵树路径不同的子树」，refetch 一落地就把
+    // 到账输入块整棵 destroy + recreate——正开着的平台弹层连带消失、搜索词归零。
+    // 这里用 route 把 preview 响应钉住 1.2s，人造一个「请求在途 + 用户已在浮层里打字」的
+    // **确定**窗口：不靠时序运气（修复前该断言必红、修复后必绿，两侧都不是概率问题）。
+    const previewRoute = /\/api\/trades\/\d+\/preview/;
+    let previewSeen = 0;
+    let markLanded: () => void = () => {};
+    const previewLanded = new Promise<void>((resolve) => {
+      markLanded = resolve;
+    });
+    await page.route(previewRoute, async (route) => {
+      if (previewSeen++ > 0) {
+        await route.continue(); // 只钉第一次，后续预览不为本次回归额外变慢
+        return;
+      }
+      const resp = await route.fetch();
+      const body = await resp.body();
+      await new Promise((r) => setTimeout(r, 1_200));
+      await route.fulfill({ response: resp, body });
+      markLanded();
+    });
+
     await fundRow(page, '卖出').locator('button[title="确认"]').click();
     const sellConfirm = dialogByTitle(page, '确认卖出');
     await sellConfirm.waitFor({ timeout: 10_000 });
-    // 弹窗一开就发首个 preview 请求（isLoading 为真、落地时翻转一次）：先等这趟子树搬运
-    // 结束，再动弹窗里的浮层控件，否则下面的 openCalendar 可能被落地那次 flip 关掉（#551）
-    await settlePreview(sellConfirm);
+
+    const arrivalPlatformTrigger = sellConfirm.locator('button#cash_platform_code');
+    await openPopover(page, arrivalPlatformTrigger, platformPopover(page));
+    const platformSearch = platformPopover(page).getByPlaceholder('搜索平台名称/代码');
+    await platformSearch.fill('华宝');
+    await previewLanded;
+    // 「落地」以就绪后的可观测事实判定（确认按钮随 isLoading 退去而解禁），不用文案谓词
+    // ——#551 §5.4：文本谓词在 loader 节点形态变化时会静默退化成 no-op。
+    await expect(sellConfirm.getByRole('button', { name: '确认' })).toBeEnabled({
+      timeout: 15_000,
+    });
+    await expect(platformPopover(page), '预览落地后到账平台弹层不应被重挂载关掉').toBeVisible();
+    await expect(platformSearch, '弹层内的搜索关键词不应随重挂载归零').toHaveValue('华宝');
+    await arrivalPlatformTrigger.click({ timeout: 10_000 }); // 收起弹层，交回原流程
+    await settlePopovers(page);
+    await page.unroute(previewRoute);
+
     const arrivalTrigger = sellConfirm.locator('button#cash_confirm_date');
     await expect(arrivalTrigger).toBeVisible({ timeout: 15_000 });
     await expect(arrivalTrigger).toHaveText(d3); // 缺省 A = C = D+3（trade_date=D+2 + confirm_days=1）
@@ -651,10 +683,10 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await expect(sellConfirm).toBeHidden({ timeout: 15_000 });
     await fundRow(page, '卖出').locator('button[title="确认"]').click();
     await sellConfirm.waitFor({ timeout: 10_000 });
-    // 重开命中缓存：query 键回到未带选项的那一个，`staleTime: 0` 仍会 refetch ⇒
-    // isFetching 为真、走 loading 分支，而 preview 缓存值还在 ⇒ 下面两条断言在 loading
-    // 分支上同样成立、挡不住落地那次搬运，故这里显式等一次（#551）
-    await settlePreview(sellConfirm);
+    // 重开命中缓存：query 键回到未带选项的那一个，`staleTime: 0` 仍会 refetch。
+    // 这里**不再需要**等这趟 refetch 结束（原 `settlePreview` 拐棍已随 #551 方案 A 退役）：
+    // loading↔就绪的翻转不再重挂载到账输入块，而下面两条回显断言本身就是自动重试的
+    // 内容等待——真正的就绪信号，不必再拿文案当同步点。
     await expect(arrivalTrigger).toHaveText(d3);
     await expect(
       sellConfirm.getByTestId('platform-trigger').filter({ hasText: '华宝证券' }),
