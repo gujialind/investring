@@ -40,6 +40,24 @@ function invalidateTradeWrites(
   queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
 }
 
+/**
+ * 申赎写操作后的缓存失效面（#519）：申赎列表/详情 + 组合。
+ *
+ * 组合代码一律由调用方经 **mutation variables** 传入，不从响应体取：`cancel` 与
+ * `unconfirm` 的后端响应只有 `{message}`（`routers/subscriptions.py`），响应里没有
+ * `portfolio_code`，从 `data` 取会退化成失效键 `["portfolios", undefined]`——看着在
+ * 失效，实际永不命中任何查询。与 #493 调仓侧 `invalidateTradeWrites` 同一口径。
+ */
+function invalidateSubscriptionWrites(
+  queryClient: QueryClient,
+  portfolioCode: string,
+  subscriptionId: number
+) {
+  queryClient.invalidateQueries({ queryKey: queryKeys.subscriptions.list() });
+  queryClient.invalidateQueries({ queryKey: queryKeys.subscriptions.detail(subscriptionId) });
+  queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
+}
+
 // ==================== 调仓交易 Hooks ====================
 
 // 交易列表 Hook（placeholderData 保留旧数据：筛选/翻页局部刷新不闪烁，规范 §14）
@@ -430,13 +448,9 @@ export function useCancelSubscription() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: (id: number) => subscriptionApi.cancel(id),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, data.id] });
-      queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, "list"] });
-      queryClient.invalidateQueries({
-        queryKey: ["portfolios", data.portfolio_code],
-      });
+    mutationFn: ({ id }: { id: number; portfolioCode: string }) => subscriptionApi.cancel(id),
+    onSuccess: (_data, variables) => {
+      invalidateSubscriptionWrites(queryClient, variables.portfolioCode, variables.id);
       addToast({
         type: "success",
         title: "取消成功",
@@ -459,10 +473,13 @@ export function useUnconfirmSubscription() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: (id: number) => subscriptionApi.unconfirm(id),
-    onSuccess: (data, id) => {
-      queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, id] });
-      queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, "list"] });
+    mutationFn: ({ id }: { id: number; portfolioCode: string }) => subscriptionApi.unconfirm(id),
+    onSuccess: (_data, variables) => {
+      invalidateSubscriptionWrites(queryClient, variables.portfolioCode, variables.id);
+      // 取消确认会物理删除配对 CASH 腿并清空 shares/amount，持仓与可用现金随之变化，
+      // 故连带失效 positions（#519）。快照刻意不失效：确认日及之后已有快照时本操作会被
+      // SNAPSHOT_DEPENDENCY 拒绝，能成功即说明没有快照被触及。
+      queryClient.invalidateQueries({ queryKey: queryKeys.positions.root });
       addToast({
         type: "success",
         title: "取消确认成功",
