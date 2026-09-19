@@ -19,7 +19,8 @@
 # job 的真实权限用法补进下面 REQUIRED_PRIVILEGES 的理由清单。
 #
 # 与 test_ci_path_mapping.py 同族的做法：不解析 YAML 语义，只按缩进切出 job 块做结构断言，
-# 结构漂移（job 改名 / GRANT 缩进变化）时响亮失败而不是静默放行。判定逻辑收在模块级函数里，
+# 结构漂移（job 改名 / GRANT 缩进变化）时响亮失败而不是静默放行。切块本身与
+# test_ci_e2e_compare.py 共用 _ci_text.job_block（#490：同一份逻辑抄两处就必然漂移）。判定逻辑收在模块级函数里，
 # 好让下面的反例用例能对「root 被塞回来」「授权被削减」的合成文本跑同一套判据——否则这些断言
 # 一旦因 workflow 重构而空跑，本身就成了一个不会红的门禁。反例对**每个目标**各跑一遍：只在
 # 一个目标上成立的解析器，等于在另一个目标上空跑。
@@ -27,10 +28,14 @@
 
 import itertools
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _ci_text import job_block  # noqa: E402  切块能力与 test_ci_e2e_compare.py 共用
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -108,27 +113,6 @@ URL_RE = re.compile(
 # test_privileges_cover_the_real_usage 是**遍历解析到的 grants**——漏一个库 = 静默不检查。
 GRANT_RE = re.compile(r"(?m)^[ \t]*GRANT\s+(.*?)\s+ON\s+(?P<db>[\w-]+)\.\*", re.S)
 MYSQL_URL_LINES = re.compile(r"(?m)^.*mysql\+\w+://.*$")
-
-
-def job_block(text: str, *, job: str, source: str) -> str:
-    """切出 `job` 的原文（到下一个同级 job 为止；**没有下一个就到文件尾**），并去掉注释行。
-
-    `source` 只服务于失败消息：真身调用传 `target.label`（含文件名），反例调用传合成标签——
-    否则「job 改名」这条消息会指着错的文件。
-
-    去注释不是美化：说明性注释里会出现 `GRANT OPTION`、`*.*` 这些**正是要禁止**的字样
-    （e2e-stack.yml 新增的那段「刻意不给什么」就是），留着它们，禁止项检查会被自己的
-    文档喂出假阳性。断言只关心真实 SQL 与配置文本。
-    """
-    lines = text.splitlines()
-    start = next((i for i, l in enumerate(lines) if l == f"  {job}:"), None)
-    if start is None:
-        pytest.fail(f"{source} 中找不到 `  {job}:`——job 改名或挪走了？请同步更新本守门")
-    end = next(
-        (j for j in range(start + 1, len(lines)) if re.match(r"^  [\w-]+:\s*$", lines[j])),
-        len(lines),
-    )
-    return "\n".join(l for l in lines[start:end] if not l.lstrip().startswith("#"))
 
 
 def connections(block: str) -> list[tuple[str, str]]:

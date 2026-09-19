@@ -27,6 +27,13 @@
 #     data-testid 的 PR 仍可比对）；
 #   - capture 的 raw JSON artifact 是 normalizer 的必需输入 → `if-no-files-found: error`；
 #   - 其余诊断品 artifact 一律 `if: always()` + `continue-on-error`（#414：上传失败不染红）。
+#
+# 上面这些不变量、以及 artifact 前缀在本文件与 ci.yml 之间的多处耦合，现由
+# scripts/tests/test_ci_e2e_compare.py 守门（#490）：capture 运行步的 --workers=2、
+# swap 步的 mode+side 双条件与 base.sha 引号（空值不引号 = baseline 静默等同
+# candidate → 恒空 diff 且全绿）、`if-no-files-found: error` 只许挂在 raw JSON 上。
+# 改这些位置会同步红，不必等一次形态 PR。仍然手动确认的只有 capture 的 runtime 面
+# （见上第 2 条与本文件头部既有登记）。
 # ============================================================================
 
 name: E2E Stack
@@ -100,11 +107,15 @@ jobs:
       # frontend/e2e/**」不变量（#401 场景：测试重构 + src 补 data-testid 依赖这一点）。
       # 先 rm -rf 再 checkout：head 独有 spec 会残留跑成并集（旧脚本 SWAP_ORPHANS
       # 同源坑）；e2e/.auth/admin.json 是 gitignore 的、由 setup project 重建，删了无妨。
+      # **引号是承重的（#490）**：base.sha 展开为空时，不引号就退化成
+      # `git checkout -- frontend/e2e`——从 index 恢复 head 版本，baseline 与 candidate
+      # 同树 ⇒ 恒空 diff ⇒ 形态门禁静默失效且全绿。带引号则 git 收到空参数当场失败，
+      # 坏法从 fail-open 翻成 fail-closed（同一位置由 test_ci_e2e_compare.py 钉住）。
       - name: Swap e2e to base (baseline only)
         if: inputs.mode == 'capture' && inputs.side == 'baseline'
         run: |
           rm -rf frontend/e2e
-          git checkout ${{ github.event.pull_request.base.sha }} -- frontend/e2e
+          git checkout "${{ github.event.pull_request.base.sha }}" -- frontend/e2e
 
       # ---- 后端：建库 → 迁移 → seed → 启动（生产启动顺序：create_all 由 main.py import 期完成）----
       - name: Setup Python 3.12
@@ -229,7 +240,9 @@ jobs:
 
       # main 模式：PLAYWRIGHT_JSON_OUTPUT_FILE 触发 playwright.config.ts 追加 json
       # reporter（#466 flaky 汇总的输入；不改 CLI reporter，避免覆盖 html 的配置）。
+      # step id 是给下面 Summarize 用的：它的两档口径以「E2E 这次成没成功」为判据。
       - name: Run Playwright tests (main)
+        id: e2e_main
         if: inputs.mode == 'main'
         working-directory: frontend
         env:
@@ -254,9 +267,23 @@ jobs:
       # flaky 显性化（#466）：retries 保留（偶发抖动不阻断 PR），但重试转绿的用例
       # 必须可见——汇总数量与清单进 Step Summary，flaky>0 时脚本经 **stderr** 发
       # ::warning::（stdout 已被重定向到 Step Summary，注解走 stderr 才不会被写进报告）。
+      #
+      # 两档口径（#491，与 ci.yml 的 Assert lcov data source 同构）：E2E 成功 ⇒ 这个
+      # 步骤**应该**有 JSON 产物，缺即 json reporter 的 wiring 断了（playwright.config.ts
+      # 的 append 分支被删 / 环境变量改名），门禁会从此静默空转 → --require-input 判红；
+      # E2E 已经红了 ⇒ 缺产物是它自己的症状，只提示 + warning，不给红 job 加噪声。
+      # 注意 outcome 经 env 传入而不是内插进 shell（GitHub 官方建议），且 bash -e 下
+      # 不能用 `[ cond ] && VAR=x`（条件为假时该步会以 rc=1 结束）。
       - name: Summarize flaky tests
         if: always() && inputs.mode == 'main'
-        run: python3 scripts/e2e_flaky_summary.py --input /tmp/e2e-flaky.json >> "$GITHUB_STEP_SUMMARY"
+        env:
+          E2E_OUTCOME: ${{ steps.e2e_main.outcome }}
+        run: |
+          ARGS=""
+          if [ "$E2E_OUTCOME" = "success" ]; then
+            ARGS="--require-input"
+          fi
+          python3 scripts/e2e_flaky_summary.py --input /tmp/e2e-flaky.json $ARGS >> "$GITHUB_STEP_SUMMARY"
 
       # 失败证据（trace/截图/视频）+ 后端启动日志（后端启动失败时的定位证据，
       # issue #172），always 上传保证失败时也能取到
