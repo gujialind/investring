@@ -476,9 +476,11 @@ export function useUnconfirmSubscription() {
     mutationFn: ({ id }: { id: number; portfolioCode: string }) => subscriptionApi.unconfirm(id),
     onSuccess: (_data, variables) => {
       invalidateSubscriptionWrites(queryClient, variables.portfolioCode, variables.id);
-      // 取消确认会物理删除配对 CASH 腿并清空 shares/amount，持仓与可用现金随之变化，
-      // 故连带失效 positions（#519）。快照刻意不失效：确认日及之后已有快照时本操作会被
-      // SNAPSHOT_DEPENDENCY 拒绝，能成功即说明没有快照被触及。
+      // 取消确认会物理删除配对 CASH 腿并清空 shares/amount，实时口径的可用份额
+      // （available-shares / investor-available-shares）随之变化，故连带失效 positions
+      // 整棵子树（#519）。持仓列表本身是快照派生、不会变，而快照刻意不失效：确认日及
+      // 之后已有快照时本操作会被 SNAPSHOT_DEPENDENCY 拒绝，能成功即说明没快照被触及。
+      // 可用现金挂在 ["portfolios", code, "available-cash"]，由上一行的前缀覆盖。
       queryClient.invalidateQueries({ queryKey: queryKeys.positions.root });
       addToast({
         type: "success",
