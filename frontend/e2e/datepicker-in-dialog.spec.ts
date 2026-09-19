@@ -15,7 +15,14 @@
  * 取真实 count 后对 UI 做精确单分支断言，不再 OR 弱断言。
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import { E2E_ACTIVE, authHeaders, dialogByTitle, gotoPortfolioSubpage } from './helpers';
+import {
+  E2E_ACTIVE,
+  authHeaders,
+  dialogByTitle,
+  gotoPortfolioSubpage,
+  openPopover,
+  settlePopovers,
+} from './helpers';
 
 /** 日历中「当月 18 号」按钮（data-day=yyyy-MM-18，当月视图内唯一）。
  *  #542：固定日曾与 D4 种子 today 锚定的 trade_date 相撞——每月 18 号点「已选日期」触发
@@ -30,13 +37,23 @@ function pickerTrigger(dlg: Locator, extra?: RegExp): Locator {
   return dlg.locator('button').filter({ hasText: pat }).first();
 }
 
+/**
+ * 打开日历弹层：以首个日期格作为「弹层已开」锚点，开合同步单点走 `openPopover`（#524）。
+ */
+async function openCalendar(page: Page, trigger: Locator): Promise<void> {
+  await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
+}
+
 /** 打开日历并点选当日视图中的某日（day 选择器见 DAY_18/DAY_17），断言日历关闭 */
 async function pickDay(page: Page, dlg: Locator, daySelector: string, trigger?: Locator): Promise<Locator> {
   const trig = trigger ?? pickerTrigger(dlg);
-  await trig.click();
-  await page.locator('button.rdp-day_button').first().waitFor();
-  await page.locator(daySelector).click();
+  await openCalendar(page, trig);
+  // 浮层内的点击一律带上界：未设 `use.actionTimeout` 时裸 click() 的 actionability
+  // 等待无上界，一次「点不动」会静默吃掉整条用例剩余预算（#524）。
+  await page.locator(daySelector).click({ timeout: 10_000 });
   await expect(page.locator('button.rdp-day_button')).toHaveCount(0);
+  // 选日即关弹层（#542）；用例 11 紧接着重开同一 trigger，这里不收干净正好落在吞点击窗口
+  await settlePopovers(page);
   return trig;
 }
 
@@ -222,8 +239,7 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     let dlg = dialogByTitle(page, '追平快照');
     await dlg.waitFor();
 
-    await pickerTrigger(dlg).click();
-    await page.locator('button.rdp-day_button').first().waitFor();
+    await openCalendar(page, pickerTrigger(dlg));
 
     // Esc 1：仅关日历弹层，Dialog 必须保留（layers 栈互通的逐层语义）
     await page.keyboard.press('Escape');
@@ -238,8 +254,7 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     await page.getByRole('button', { name: '追平至日期' }).click();
     dlg = dialogByTitle(page, '追平快照');
     await dlg.waitFor();
-    await pickerTrigger(dlg).click();
-    await page.locator('button.rdp-day_button').first().waitFor();
+    await openCalendar(page, pickerTrigger(dlg));
     for (let i = 0; i < 6; i++) {
       await page.keyboard.press('Tab');
       const inside = await page.evaluate(() => {
@@ -268,11 +283,10 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     // 完整区间再点击只移动端点，故先清空再开弹层选新区间（空草稿首击
     // 得单日区间、再击得完整区间，见 date-range-picker.tsx handleSelect 注释）
     await page.getByRole('button', { name: '清除日期区间' }).click();
-    await page.getByRole('button', { name: '交易日期', exact: true }).click();
-    await page.locator('button.rdp-day_button').first().waitFor();
-    // 桌面双月视图同日期按钮有两个（当月+下月），取当月首个
-    await page.locator(DAY_17).first().click();
-    await page.locator(DAY_18).first().click();
+    await openCalendar(page, page.getByRole('button', { name: '交易日期', exact: true }));
+    // 桌面双月视图同日期按钮有两个（当月+下月），取当月首个；浮层内点击一律带上界（#524）
+    await page.locator(DAY_17).first().click({ timeout: 10_000 });
+    await page.locator(DAY_18).first().click({ timeout: 10_000 });
     await page.getByRole('button', { name: '确定' }).click();
     // 弹层关闭、新区间写入 trigger 即不回归
     await expect(page.locator('button.rdp-day_button')).toHaveCount(0);
@@ -294,9 +308,8 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
 
     // 重开弹层，DAY_18 此时即「已选日期」，再点一次
-    await trig.click();
-    await page.locator('button.rdp-day_button').first().waitFor();
-    await page.locator(DAY_18).click();
+    await openCalendar(page, trig);
+    await page.locator(DAY_18).click({ timeout: 10_000 });
     await expect(page.locator('button.rdp-day_button')).toHaveCount(0);
     await expect(trig).toHaveText(/20\d{2}-\d{2}-18/);
   });

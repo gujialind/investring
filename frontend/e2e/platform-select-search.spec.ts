@@ -33,7 +33,7 @@
  * 断言本身双端通用。故本文件剩余端专属 skip 只有两类：功能确实缺（用例 6，移动端无
  * 现金转移）、同一控件两端各测一次且互为镜像（用例 7 / 13）。
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import {
   E2E_PORT,
   collectPageErrors,
@@ -42,6 +42,7 @@ import {
   firstPlatformOption,
   gotoPortfolioSubpage,
   openFilterPanelIfMobile,
+  openPopover,
   optionName,
   pickFirstProduct,
   pickPlatformOption,
@@ -49,12 +50,42 @@ import {
   platformPopover,
   platformTrigger,
   portfolioPath,
+  settlePopovers,
   toastByTitle,
 } from './helpers';
 
 /** 进入 E2E_PORT 调仓交易页（桌面渲染信号：提交交易按钮） */
 async function gotoTradesPage(page: Page): Promise<void> {
   await gotoPortfolioSubpage(page, E2E_PORT, 'trades');
+}
+
+/**
+ * 打开平台选择弹层，返回弹层 Locator（本文件 12 处开弹层共用）。
+ *
+ * 一律经 `openPopover`：#524 的吞点击发生在「收掉一个浮层后立刻开下一个」的相邻链路上，
+ * 而本文件的用例形状（点选 → 重开验证恢复全量）正好全是这一形状。
+ * 锚点用弹层容器而非选项行——搜索框恒在弹层内、与平台数无关，因此**零平台数据时这里
+ * 仍然「开成功」**，「无平台数据 / 平台数 < 2」的优雅 skip 继续由 `firstPlatformOption`
+ * 与 `platformOptions().length` 各自判定，不被改写成硬性等待失败。
+ */
+async function openPlatformPopover(
+  page: Page,
+  scope: Page | Locator,
+  label: string,
+): Promise<Locator> {
+  const popover = platformPopover(page);
+  await openPopover(page, platformTrigger(scope, label), popover);
+  return popover;
+}
+
+/**
+ * 事件类型 Select（Radix Select，listbox portal 到 body）：选完收起，
+ * 用例 11 紧接着开平台弹层，故这里必须把浮层收干净（#524）。
+ */
+async function pickEventType(page: Page, dlg: Locator, label: string): Promise<void> {
+  await openPopover(page, dlg.getByRole('combobox'), page.getByRole('listbox'));
+  await page.getByRole('option', { name: label }).click({ timeout: 10_000 });
+  await settlePopovers(page);
 }
 
 /** 进入 E2E_PORT 申赎页（draft 组合触发按钮文案为「首次申购激活」） */
@@ -93,8 +124,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
     // 打开筛选栏平台弹层，动态取第一个平台 code 片段作为搜索词
     await openFilterPanelIfMobile(page, testInfo);
-    await platformTrigger(page, '全部平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, page, '全部平台');
     const { keyword } = await firstPlatformOption(popover);
     const totalOptions = await popover.getByTestId('platform-option').count();
 
@@ -140,8 +170,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.waitFor();
 
     // 交易平台：搜索 → 过滤 → 点选 → 触发按钮回显 name (code)
-    await platformTrigger(dlg, '请选择平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, dlg, '请选择平台');
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
     const matched = await expectFilteredPlatformOptions(popover, keyword);
@@ -231,8 +260,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.waitFor();
 
     // 事件类型选平台级「现金分红」→ 平台选择框出现；选产品（可搜索下拉取第一项）、平台刻意不选
-    await dlg.getByRole('combobox').click();
-    await page.getByRole('option', { name: '现金分红' }).click();
+    await pickEventType(page, dlg, '现金分红');
     await expect(platformTrigger(dlg, '选择平台')).toBeVisible();
     await pickFirstProduct(page, dlg);
 
@@ -264,9 +292,8 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.waitFor();
 
     // 转出平台选第一项
-    await platformTrigger(dlg, '选择转出平台').click();
-    const popover = platformPopover(page);
-    await popover.getByTestId('platform-option').first().waitFor();
+    const popover = await openPlatformPopover(page, dlg, '选择转出平台');
+    await popover.getByTestId('platform-option').first().waitFor({ timeout: 10_000 });
     const options = await platformOptions(popover);
     test.skip(options.length < 2, '环境中平台数 < 2，无法验证互斥');
     const picked = options[0];
@@ -274,8 +301,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await expect(platformTrigger(dlg, picked.text)).toBeVisible();
 
     // 打开转入平台：已选平台行存在且 aria-disabled；点击不生效（弹层不关闭、值不变）
-    await platformTrigger(dlg, '选择转入平台').click();
-    const popover2 = platformPopover(page);
+    const popover2 = await openPlatformPopover(page, dlg, '选择转入平台');
     const disabledRow = popover2.locator(
       '[data-testid="platform-option"][aria-disabled="true"]',
       { hasText: picked.text }
@@ -302,8 +328,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await refreshTrigger.click();
     const dlg = dialogByTitle(page, '更新非净值资产');
     await dlg.waitFor();
-    await platformTrigger(dlg, '请选择平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, dlg, '请选择平台');
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
     const matched = await expectFilteredPlatformOptions(popover, keyword);
@@ -315,8 +340,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await page.goto(portfolioPath(E2E_PORT, 'trades'));
     await page.getByRole('button', { name: '提交交易' }).first().waitFor({ timeout: 15_000 });
     await openFilterPanelIfMobile(page, testInfo);
-    await platformTrigger(page, '全部平台').click();
-    const popover2 = platformPopover(page);
+    const popover2 = await openPlatformPopover(page, page, '全部平台');
     const opt2 = await firstPlatformOption(popover2);
     await popover2.getByPlaceholder('搜索平台名称/代码').fill(opt2.keyword);
     const matched2 = await expectFilteredPlatformOptions(popover2, opt2.keyword);
@@ -331,8 +355,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
     await openFilterPanelIfMobile(page, testInfo);
-    await platformTrigger(page, '全部平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, page, '全部平台');
     const { keyword } = await firstPlatformOption(popover);
 
     const optionRows = popover.getByTestId('platform-option');
@@ -360,8 +383,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     const errors = collectPageErrors(page);
     await gotoTradesPage(page);
     await openFilterPanelIfMobile(page, testInfo);
-    await platformTrigger(page, '全部平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, page, '全部平台');
     const { text, code } = await firstPlatformOption(popover);
     const name = optionName(text, code);
     test.skip(name.length === 0 || name === text, '平台名称为空或无 code 后缀，无法推导名称搜索词');
@@ -390,8 +412,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await pickFirstProduct(page, dlg);
 
     // 交易平台选第一项；现金平台刻意不碰，保持默认「同交易平台」
-    await platformTrigger(dlg, '请选择平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, dlg, '请选择平台');
     const options = await platformOptions(popover);
     test.skip(options.length === 0, '环境中没有平台数据');
     await pickPlatformOption(popover, options[0].code);
@@ -429,17 +450,14 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
     // 条件渲染接线：默认「现金分红」（平台级）平台框可见 → 切基金级「份额拆分」消失 → 切回重现
     await expect(platformTrigger(dlg, '选择平台')).toBeVisible();
-    await dlg.getByRole('combobox').click();
-    await page.getByRole('option', { name: '份额拆分' }).click();
+    await pickEventType(page, dlg, '份额拆分');
     await expect(platformTrigger(dlg, '选择平台')).toHaveCount(0);
-    await dlg.getByRole('combobox').click();
-    await page.getByRole('option', { name: '现金分红' }).click();
+    await pickEventType(page, dlg, '现金分红');
     const trigger = platformTrigger(dlg, '选择平台');
     await expect(trigger).toBeVisible();
 
     // 搜索 → 点选 → 触发按钮回显 name (code)（无平台数据时 firstPlatformOption 内优雅 skip）
-    await trigger.click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, dlg, '选择平台');
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
     const matched = await expectFilteredPlatformOptions(popover, keyword);
@@ -457,8 +475,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
     // 打开筛选栏平台弹层，动态取第一个平台 code 片段作为搜索词
     await openFilterPanelIfMobile(page, testInfo);
-    await platformTrigger(page, '全部平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, page, '全部平台');
     const { keyword } = await firstPlatformOption(popover);
 
     // 输入搜索词 → 仅剩命中项；特殊项「全部平台」不参与过滤恒显示
@@ -492,8 +509,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     await dlg.waitFor();
 
     // 平台选择框：搜索 → 过滤 → 点选 → 触发按钮回显 name (code)（不提交，取消关闭）
-    await platformTrigger(dlg, '请选择平台').click();
-    const popover = platformPopover(page);
+    const popover = await openPlatformPopover(page, dlg, '请选择平台');
     const { keyword } = await firstPlatformOption(popover);
     await popover.getByPlaceholder('搜索平台名称/代码').fill(keyword);
     const matched = await expectFilteredPlatformOptions(popover, keyword);

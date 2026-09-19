@@ -153,12 +153,12 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 //   xByTitle                      → 纯 Locator 工厂，按标题文案定位容器（dialog / toast）
 //   xOptions                      → 只读批量提取 data 属性
 //   firstXOption                  → 只读单行（含等待与优雅 skip），不点选
-//   pickXxx                       → 会点选
+//   pickXxx                       → 会点选（点选即关弹层，内部已 settlePopovers）
 //   expectXxx                     → 断言共享组件契约（业务断言留在 spec）
 //   openXxx                       → 导航 + 开弹窗
 //   openXxxIfMobile               → 端差异适配（另一端 no-op），不含导航
 //   openPopover                   → 开浮层并确认内容可见（#524 吞点击同步，非纯工厂）
-//   settlePopovers                → 等浮层退出动画走完（#524 同步点，非断言）
+//   settlePopovers                → 等 Radix 浮层容器全部卸载（#524 同步点，非断言）
 //   settlePreview                 → 等确认弹窗离开预览 loading 分支（#551 同步点，非断言）
 // ===========================================================================
 
@@ -202,17 +202,37 @@ async function firstOptionOrSkip(popover: Locator, kind: OptionKind): Promise<Lo
 
 /**
  * Radix 浮层挂载容器（Popover / Select / Dropdown 的 Popper 出口）。
- * 是库注入的公开 DOM 契约，性质同 `rdp-day_button`——非 Tailwind 工具类，#382 门禁不拦。
+ *
+ * ⚠️ 这是 Radix **实现层**注入的容器属性，不在其公开 API 清单内（与 `rdp-day_button`
+ * 那类库自己承诺的锚点不同性质，本仓能用它纯属实现细节稳定）。升级
+ * `@radix-ui/react-popover` 时须复核属性名是否仍在：一旦改名，下面的谓词会**立即满足**
+ * （页面上永远查不到该属性）、`settlePopovers` 静默退化为 no-op、#524 竞态无声回归，
+ * 而所有用例仍是绿的。非 Tailwind 工具类，#382 定位器门禁不拦。
  */
 const POPPER_WRAPPER = '[data-radix-popper-content-wrapper]';
 
 /**
- * 等页面上已无挂载中的 Radix 浮层（退出动画走完）。
+ * 交互动作的显式上界。Playwright 未设 `use.actionTimeout`，裸 `click()` 的 actionability
+ * 等待默认**无上界**，一次「点不动」会静默吃掉整条用例剩余预算（#524 的 60s 就是这么耗干
+ * 的）。根治应在全局设上界（#551 §2），但它必须排在存量迁移之后——所以先在 helper 侧逐个钉。
+ */
+const CLICK_TIMEOUT = 10_000;
+
+/**
+ * 等页面上已无挂载中的 Radix 浮层容器——同步点是**弹层整棵卸载**，不是「等动画走完」。
  *
- * #524：Radix DismissableLayer 在退出动画期间仍挂在 document 上，会把紧接着的下一次
- * 点击（开另一个浮层、或点 Dialog 里的按钮）整口吞掉。浮层开合 helper 一律「开前等、
- * 收后等」，把这一竞态从源头挡掉；等不到不在此处判红——真卡住时后面的可见性/状态断言
- * 会以更清楚的方式失败，这里只是同步点而非断言。
+ * #524：Radix `DismissableLayer` 在关闭过程中仍挂在 document 上监听 `pointerdown`，会把
+ * 紧接着的下一次点击（开另一个浮层、或点 Dialog 里的按钮）整口吞掉；层清理完成的可见
+ * 标志就是 popper 容器从 DOM 消失。浮层开合 helper 一律「开前等、收后等」，从源头挡掉
+ * 这一竞态。等不到不在此处判红——真卡住时后面的可见性/状态断言会以更清楚的方式失败，
+ * 这里只是同步点而非断言。
+ *
+ * 归因订正（#551）：本函数旧文档与调用点注释里的「退出动画」不实。本仓是
+ * `tailwindcss ^4` 且未装 `tailwindcss-animate`，`ui/popover.tsx` 上的
+ * `animate-in` / `animate-out` / `fade-*` / `zoom-*` / `slide-in-from-*` 全是**无定义的
+ * 工具类**（注意 `animate-spin` 是 v4 核心类、有定义，别把两者混为一谈），Radix Presence
+ * 在 `animationName === 'none'` 时直接卸载，**没有动画可等**。也别顺手把动画补回来——
+ * 那只会把这段竞态窗口拉长。
  */
 export async function settlePopovers(page: Page): Promise<void> {
   await page
@@ -227,26 +247,32 @@ export async function settlePopovers(page: Page): Promise<void> {
 /**
  * 点 trigger 打开浮层，并确认 `content`（该浮层内的锚点元素）真的可见。
  *
- * #524：Radix DismissableLayer 在退出动画期间仍在 document 上监听 pointerdown，会把紧
+ * #524：Radix `DismissableLayer` 在关闭过程中仍在 document 上监听 `pointerdown`，会把紧
  * 跟着那次「打开」整口吞掉——点击送达 trigger，新浮层随即被 dismiss。此后调用方的
  * `waitFor` 只能等到超时（裸 `waitFor()` 更是把整条用例的超时预算吃干）。CI 形态对比
  * （capture `--retries=0`，无 retry 保护）连红 5 次，失败点都落在「收一个浮层 → 立刻开
  * 下一个」的相邻链路上。
  *
  * 两道同步，都是「等一等、看一眼」而非放宽断言：
- * 1. 点前先等旧浮层彻底卸载（根因）；
+ * 1. 点前先等旧浮层容器彻底卸载（根因）；
  * 2. 点后再看一眼：**只有**「内容不可见 且 页面上没有任何浮层挂载」才判定被吞、重点一次
  *    （浮层已挂载却等不到内容属定位器/业务问题，重点只会把开着的浮层关掉，故直接抛超时）。
  * 兜底重试仍失败即按正常超时红，不掩盖真失败。
+ *
+ * `content` 应选**与数据量无关**的锚点（弹层自身或其中的搜索框），不要拿选项行当锚点——
+ * 否则「无数据」这一合法形态会被本函数判成「没开成」而重点一次，把 spec 里
+ * `firstOptionOrSkip` 的优雅 skip 语义改写成硬失败。
+ *
+ * ⚠️ 预算（#551 登记，暂不改行为）：三条分支的内部上界分别约 13s（首见即返）/
+ * 28s（已挂载但不可见）/ 43s（判定被吞、走了重点一次），而 `playwright.config.ts`
+ * 全局 `timeout: 30_000`。后两条在慢环境里会先撞全局 timeout，届时失败信息是裸的
+ * 用例超时而非这里的分支超时——排查时先看这一条，别怀疑竞态又回来了。
  */
 export async function openPopover(
   page: Page,
   trigger: Locator,
   content: Locator,
 ): Promise<void> {
-  // click 也要有上界：Playwright 未设 use.actionTimeout，click() 的 actionability 等待
-  // 默认无上界，一次「点不动」会静默吃掉整条用例剩余的预算（#524 的 60s 就是这么耗干的）。
-  const CLICK_TIMEOUT = 10_000;
   await settlePopovers(page);
   await trigger.click({ timeout: CLICK_TIMEOUT });
   const appeared = await content
@@ -384,32 +410,45 @@ export async function firstPlatformOption(
   return { code, text, keyword: code.slice(0, 2).toLowerCase() };
 }
 
-/** 点选弹层内指定 code 的平台选项 */
+/**
+ * 点选弹层内指定 code 的平台选项。
+ *
+ * 点选即关弹层，故收完必须 settle——否则调用方「紧接着点下一个控件」就落在 #524 的
+ * 吞点击窗口里。本文件早期版本只点不收，是该竞态在 helper 侧的残留面（#551 §1）。
+ */
 export async function pickPlatformOption(popover: Locator, code: string): Promise<void> {
-  await platformOption(popover, code).click();
+  await platformOption(popover, code).click({ timeout: CLICK_TIMEOUT });
+  await settlePopovers(popover.page());
 }
 
-/** 点选第一个平台选项（无数据优雅 skip），返回所选 code */
+/** 点选第一个平台选项（无数据优雅 skip），返回所选 code；settle 语义同 pickPlatformOption */
 export async function pickFirstPlatformOption(popover: Locator): Promise<string> {
   const firstRow = await firstOptionOrSkip(popover, 'platform');
   const code = (await firstRow.getAttribute('data-code')) ?? '';
-  await firstRow.click();
+  await firstRow.click({ timeout: CLICK_TIMEOUT });
+  await settlePopovers(popover.page());
   return code;
 }
 
 /**
  * 在 scope 内打开产品选择框并点选第一项（无数据优雅 skip），返回所选 code/market。
  * data 属性必须在 click **之前**读——点选即卸载弹层。
+ *
+ * 「弹层开没开成」（openPopover，锚点用与数据量无关的搜索框容器）与「有没有数据」
+ * （firstOptionOrSkip 的优雅 skip）是两种不同触发条件，刻意分两步、不合并——把数据
+ * 缺失判成吞点击，会把这些 spec 的优雅 skip 改写成硬失败。
  */
 export async function pickFirstProduct(
   page: Page,
   scope: Page | Locator
 ): Promise<ProductOptionRow> {
-  await productTrigger(scope, '请选择产品').click();
-  const firstRow = await firstOptionOrSkip(productPopover(page), 'product');
+  await openPopover(page, productTrigger(scope, '请选择产品'), productPopover(page));
+  const popover = productPopover(page);
+  const firstRow = await firstOptionOrSkip(popover, 'product');
   const code = (await firstRow.getAttribute('data-code')) ?? '';
   const market = (await firstRow.getAttribute('data-market')) ?? '';
-  await firstRow.click();
+  await firstRow.click({ timeout: CLICK_TIMEOUT });
+  await settlePopovers(page);
   return { code, market };
 }
 
