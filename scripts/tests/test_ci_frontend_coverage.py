@@ -1,5 +1,5 @@
 # ============================================================================
-# 前端增量覆盖率门禁守门：三处「守卫自己哑火」的结构性断言（issue #509）
+# 前端增量覆盖率门禁守门：三处「守卫自己哑火」的结构性断言 + 守卫自身的档位（issue #509）
 # ============================================================================
 # 这道门禁的全部价值都在「它会不会响」上，而它的四段判定体写在 shell 里——删掉
 # `,json:diff-cover.json`、把分母下限数字改小、把归因步骤退回 `--numstat … frontend/src/lib`
@@ -21,6 +21,9 @@
 #   拿着别的 job 的步骤当被断言的对象（比失败更坏的静默）。
 # - 反例喂的是**合成文本**，与 test_error_codes_doc_sync.py 的 anchor 反例组同形：
 #   任一反例不红 ⇒ 该断言恒真 ⇒ 本守门未完成。
+# - 能直接改真身文本的反例优先改真身（`vitest_config.replace(...)` / `ratchet_lines` 的
+#   文案替换），因为合成 blob 只证明「判据写得对」，真身变异还证明「真身此刻真被它管着」；
+#   这类用例都带 `assert mutated != original` 的自校验——真身文案一漂移，反例自己先报错。
 # ============================================================================
 
 import glob
@@ -31,7 +34,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _ci_text import code_lines, job_block, step_run_block  # noqa: E402
+from _ci_text import code_lines, job_block, step_body, step_run_block  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -125,17 +128,48 @@ def ratchet_problems(step_lines: list[str], denominator_size: int) -> list[str]:
             f"LCOV_SF_MIN={declared} 高于 coverage.include∖exclude 当前命中的 {denominator_size} 个文件"
             "——分母被收窄了但下限没改（CI 侧该步会恒红）"
         )
-    if "::error::" not in joined or not any(line == "exit 1" for line in step_lines):
-        problems.append("分母棘轮判红分支缺 `::error::` 或 `exit 1`——只会打印不会拦")
+    if not any(line == "exit 1" for line in step_lines):
+        problems.append("分母棘轮没有独立的 `exit 1`——只会打印不会拦")
+    elif joined.count("::error::") < joined.count("exit 1"):
+        problems.append(
+            f"`::error::`（{joined.count('::error::')} 处）少于 `exit 1`（{joined.count('exit 1')} 处）"
+            "——有判红分支被降级成 warning/打印：棘轮有三条退出路径，只有一条真拦"
+        )
     return problems
+
+
+def diagnostic_step_problems(step_meta: str) -> list[str]:
+    """`if: always()` 的诊断步骤必须 `continue-on-error: true`。
+
+    这类步骤跑在上游已经红了的场合，脚本自身崩（sed 读不到文件、node 解析坏 JSON）会把
+    「第二个红」挂到 job 上，而它本该只发 warning——失败原因被指到错误的步骤。#414 对
+    `Append coverage summary` 已经立了这条口径。
+    """
+    meta = step_meta.split("run:")[0]
+    problems = []
+    if "always()" not in meta:
+        problems.append("诊断步骤不再有 `if: always()`——上游先红时它根本不跑，出口文案形同虚设")
+    if "continue-on-error: true" not in meta:
+        problems.append("诊断步骤缺 `continue-on-error: true`——脚本自身崩会把 job 弄红（#414 口径）")
+    return problems
+
+
+def blocking_step_problems(step_meta: str) -> list[str]:
+    """判红步骤反过来必须**不许**被 continue-on-error 卸掉（那等于删守卫）。"""
+    meta = step_meta.split("run:")[0]
+    if "continue-on-error" in meta:
+        return [f"{RATCHET_STEP} 是唯一的分母守卫，不能被 `continue-on-error` 卸成打印"]
+    return []
 
 
 def summary_problems(step_lines: list[str]) -> list[str]:
     """摘要步骤必须有「报告不存在」的出口。
 
     旧写法 `cat diff-cover.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true` 在文件不
-    存在时静默追加 0 行——摘要里连「没有摘要」都看不出来（#509 第 3 条）。判据只认
-    「有分支 + 分支里点名了未生成」，不认具体文案。
+    存在时静默追加 0 行——摘要里连「没有摘要」都看不出来（#509 第 3 条）。
+    这里**确实钉了出口文案**（`未生成 diff-cover.md`）而不是只钉「有分支」：这一步唯一的
+    机制就是往 Step Summary 写一句话，除了那句话没有别的可钉对象；代价是改文案要连带改
+    这里，方向上是守门响亮误伤（可改）而非门禁静默失效。
     """
     joined = " ".join(step_lines)
     problems = []
@@ -165,25 +199,43 @@ def _code_only(config_text: str) -> str:
     )
 
 
-def config_problems(config_text: str) -> list[str]:
-    """vitest 配置侧：分母开关必须存在，且不得显式关掉 `all`。
+#: `all` 被显式置假的三种书写形态：裸键、双引号键、单引号键（TS 对象字面量三种都合法）。
+#: `\b` 挡住 `install: false` 这类误伤；不认 `all: someVar` 这种间接写法——它是理论形态，
+#: 真出现时先由分母棘轮与归因断言承担（该文件不进 lcov ⇒ SF 数跌破下限）。
+_ALL_FALSE_RE = re.compile(r"""\ball\s*:\s*false\b|(["'])all\1\s*:\s*false\b""")
 
-    `all`（vitest 5 默认开）才是「0% 的新 lib 文件会进 lcov」的机制本身——实测：新建
-    一个无人 import 的 src/lib 文件，SF 由 10 变 11、以 0% 在列，随即被 `--fail-under=80`
-    判红。显式写 `all: false` 等于关掉这条拦截路径，而它关掉以后**没有任何其他守卫会红**
-    （该文件同时从 C∩D 里消失，归因断言也看不见）。故宁可钉住配置文本。
+
+def config_problems(config_text: str) -> list[str]:
+    """vitest 配置侧：分母开关必须在 **coverage 段内**，且不得显式关掉 `all`。
+
+    判据必须 scoped：`include:` 在本文件出现两次（`test.include` 与 `coverage.include`），
+    全文件级的正则会被单测文件集满足——实测把 `coverage.include` 整行删掉后
+    `config_problems` 仍返回 []，这道断言恒真（正是 #509 第 2 条要拆的「守卫自己哑火」，
+    以反例形式复现于守门本身）。故先按花括号配对切出 coverage 块再判。
+
+    `all`（vitest 5 默认开）是「0% 的新 lib 文件进 lcov」的机制本身——实测：新建一个无人
+    import 的 src/lib 文件，SF 由 10 变 11、以 LF=2/LH=0 在列。注意它给的是**可见性**而非
+    必然判红：进了 lcov 之后仍按加权判定（全局侧 280 计量行 + 2 行未覆盖 = 99.29% 仍绿；
+    增量侧 `--fail-under` 比的是本 PR 全部计量行的聚合比例）。而写 `all: false` 关掉的是
+    可见性本身——该文件同时从 D 与 C∩D 消失，棘轮以外的守卫连"它存在过"都看不见，所以钉住
+    配置文本而不是钉结果。
     """
-    config_text = _code_only(config_text)
+    section = _coverage_section(config_text)
     problems = []
-    if not re.search(r"^\s*include:\s*\[", config_text, re.MULTILINE):
-        problems.append("vitest.config.ts 里没有 coverage.include——分母开关不见了")
-    if re.search(r"\ball\s*:\s*false", config_text):
+    if not re.search(r"^\s*include:\s*\[", section, re.MULTILINE):
+        problems.append("vitest.config.ts 的 coverage 段里没有 include——分母开关不见了")
+    m = _ALL_FALSE_RE.search(section)
+    if m:
         problems.append(
-            "`all: false` 会让未被测试 import 的分母文件完全不进 lcov，"
-            "0% 新文件从「门禁判红」退化为「无人计量」（#509 实测的反例形态）"
+            f"显式关掉 `all`（写法 {m.group(0)!r}）会让未被测试 import 的分母文件完全不进 lcov，"
+            "0% 新文件从「可见且按加权判定」退化为「无人计量」（#509 实测的反例形态）"
         )
-    if "projectRoot: \"..\"" not in config_text and "projectRoot: '..'" not in config_text:
-        problems.append("lcovonly 的 projectRoot 不再是 \"..\"——SF 会变仓库根相对以外的形态，diff-cover 匹配不到改动行")
+    if 'projectRoot: ".."' not in section and "projectRoot: '..'" not in section:
+        problems.append(
+            "lcovonly 的 projectRoot 不再是 \"..\"——SF 会变成非仓库根相对路径（去掉它是 "
+            "`src/lib/x.ts`，cwd 不在 frontend/ 时是含中间目录的长路径），diff-cover 按 git root "
+            "解析 SF ⇒ 匹配不到任何改动行、门禁静默空转"
+        )
     return problems
 
 
@@ -214,14 +266,29 @@ _QUOTED_RE = re.compile(r"[\"']([^\"']+)[\"']")
 
 
 def _coverage_section(config_text: str) -> str:
-    """切出 `coverage: {` 之后的文本——`include:` 在文件里出现两次（test.include 与
-    coverage.include），不 scoped 就会拿单测文件集当分母。同样先剥注释：注释里出现
-    `include: [` 会让反推的口径变成注释内容（同样是「拿别的文本当被断言的对象」）。"""
+    """按**花括号配对**切出 `coverage: { … }` 这一块。
+
+    `include:` 在文件里出现两次（test.include 与 coverage.include），不 scoped 就会拿单测
+    文件集当分母（实测踩过：整行删掉 coverage.include 后判据仍返回 []）。位置式 scoped
+    （「从 `coverage: {` 切到文件尾」）只在这个配置里恰好正确——`test:` 一旦挪到 `coverage:`
+    之后就把 test.include 也算进分母，于是同一处失效重演；按配对切则与书写顺序无关。
+    同样先剥注释：注释里出现 `include: [` 会让反推的口径变成注释内容（同样是「拿别的文本
+    当被断言的对象」）。
+    """
     stripped = _code_only(config_text)
-    idx = stripped.find("coverage: {")
-    if idx == -1:
+    m = re.search(r"^\s*coverage:\s*\{", stripped, re.MULTILINE)
+    if not m:
         pytest.fail("vitest.config.ts 里找不到 `coverage: {`——覆盖率配置改名或挪走了？请同步本守门")
-    return stripped[idx:]
+    start = stripped.index("{", m.start())
+    depth = 0
+    for i in range(start, len(stripped)):
+        if stripped[i] == "{":
+            depth += 1
+        elif stripped[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return stripped[start:i + 1]
+    pytest.fail("vitest.config.ts 的 `coverage: {` 没有配对的右花括号——请同步本守门")
 
 
 def _brace_expand(pattern: str) -> list[str]:
@@ -307,6 +374,49 @@ def summary_lines(frontend_block) -> list[str]:
 @pytest.fixture(scope="module")
 def vitest_config() -> str:
     return VITEST_CONFIG.read_text(encoding="utf-8")
+
+
+def _step_meta(frontend_block: str, step: str) -> str:
+    """步骤的**元数据**行（`- name:` 到 `run:` 之前）——`if:` / `continue-on-error:` 住在这里。"""
+    return step_body(frontend_block, step=step, source=f"ci.yml:{FRONTEND_JOB}")
+
+
+@pytest.fixture(scope="module")
+def attribution_meta(frontend_block) -> str:
+    return _step_meta(frontend_block, ATTRIBUTION_STEP)
+
+
+@pytest.fixture(scope="module")
+def summary_meta(frontend_block) -> str:
+    return _step_meta(frontend_block, SUMMARY_STEP)
+
+
+@pytest.fixture(scope="module")
+def ratchet_meta(frontend_block) -> str:
+    return _step_meta(frontend_block, RATCHET_STEP)
+
+
+def _synth_coverage_config(body: str) -> str:
+    """合成一份与真身**同形**的最小配置：coverage 嵌在 test 里、test.include 在前。
+    同形不是讲究，是因为 config_problems 的判据就依赖「按块切而不是按位置切」。"""
+    return (
+        "export default defineConfig({\n"
+        "  test: {\n"
+        '    include: ["src/**/*.test.{ts,tsx}"],\n'
+        "    coverage: {\n"
+        + body +
+        "    },\n"
+        "  },\n"
+        "});\n"
+    )
+
+
+_COMPLIANT_BODY = (
+    '      provider: "v8",\n'
+    '      include: ["src/lib/**/*.{ts,tsx}"],\n'
+    '      exclude: ["src/lib/api/**", "**/*.test.{ts,tsx}"],\n'
+    '      reporter: ["text", ["lcovonly", { projectRoot: ".." }]],\n'
+)
 
 
 class TestGateEmitsStructuredReport:
@@ -396,12 +506,25 @@ class TestDenominatorRatchet:
         problems = ratchet_problems([
             "LCOV_SF_MIN=10", "echo \"lcov 只描述了 ${sf} 个\"",
         ], denominator_size=10)
-        assert any("::error::" in p or "exit 1" in p for p in problems), problems
+        assert any("独立的 `exit 1`" in p for p in problems), problems
+
+    def test_downgraded_ratchet_message_is_caught(self, ratchet_lines):
+        """反例（真身文本变异）：把棘轮那条 `::error::` 降级成 `::warning::`——
+        退出路径还在、job 照样红，但**注解从「错误」变成「提示」**，正是评审点名的
+        「只判红不指认」的镜像形态：三处判红里有一处被偷偷卸掉。"""
+        mutated = [l.replace("::error::lcov 只描述了", "::warning::lcov 只描述了") for l in ratchet_lines]
+        assert mutated != ratchet_lines, "真身文案变了，本反例已失效——请同步判据"
+        problems = ratchet_problems(mutated, 10)
+        assert any("少于 `exit 1`" in p for p in problems), problems
 
     def test_denominator_derivation_matches_documented_size(self, vitest_config):
         """配置反推的分母集合必须真是 10 个文件——否则上面几条都在跟影子较劲。"""
         files = denominator_files(vitest_config)
-        assert len(files) == SF_MIN_HIGH_WATER, sorted(files)
+        assert len(files) == SF_MIN_HIGH_WATER, (
+            f"coverage.include∖exclude 现在命中 {len(files)} 个文件，高水位钉的是 {SF_MIN_HIGH_WATER}。"
+            "扩张分母须同批改三处：本测试的 SF_MIN_HIGH_WATER、ci.yml 的 LCOV_SF_MIN、"
+            f"以及 frontend/AGENTS.md §3 的口径说明。实际文件集：{sorted(files)}"
+        )
         assert not any(f.startswith("src/lib/api/") for f in files), sorted(files)
         assert not any(".test." in f for f in files), sorted(files)
 
@@ -427,20 +550,111 @@ class TestSummaryExit:
 
 
 class TestConfigSide:
+    def test_compliant_template_is_compliant(self):
+        assert config_problems(_synth_coverage_config(_COMPLIANT_BODY)) == []
+
     def test_real_config_is_compliant(self, vitest_config):
         problems = config_problems(vitest_config)
         assert not problems, "vitest.config.ts 不再满足：" + "；".join(problems)
 
+    def test_coverage_include_missing_is_caught(self):
+        """反例：coverage 段里没有 include（分母开关整体没了）。"""
+        problems = config_problems(_synth_coverage_config(
+            '      provider: "v8",\n'
+            '      exclude: ["src/lib/api/**"],\n'
+            '      reporter: ["lcovonly", { projectRoot: ".." }],\n'
+        ))
+        assert any("coverage 段里没有 include" in p for p in problems), problems
+
+    def test_real_config_without_coverage_include_is_caught(self, vitest_config):
+        """反例（真身文本变异）：把 `coverage.include` 那一行删掉，只留 `test.include`。
+        旧判据是全文件级正则，会被 test.include 满足而恒真——这条就是它的存在理由。"""
+        mutated = vitest_config.replace('      include: ["src/lib/**/*.{ts,tsx}"],\n', "")
+        assert mutated != vitest_config, "真身文案变了，本反例已失效——请同步判据"
+        problems = config_problems(mutated)
+        assert any("coverage 段里没有 include" in p for p in problems), problems
+
+    def test_include_after_the_coverage_block_is_not_mistaken(self):
+        """反例：`test:` 写在 `coverage:` **之后**且 coverage 段没有 include——
+        按位置 scoped（切到文件尾）会在这里重新变成假绿灯，按花括号配对切才不会。"""
+        problems = config_problems(
+            "export default defineConfig({\n"
+            "  test: {\n"
+            "    coverage: { provider: \"v8\", exclude: [], "
+            'reporter: ["lcovonly", { projectRoot: ".." }] },\n'
+            '    include: ["src/**/*.test.{ts,tsx}"],\n'
+            "  },\n"
+            "});\n"
+        )
+        assert any("coverage 段里没有 include" in p for p in problems), problems
+        assert not any("projectRoot" in p for p in problems), problems
+
     def test_explicit_all_false_is_caught(self):
         """反例：把 vitest 5 默认打开的 `all` 显式关掉 ⇒ 0% 新文件彻底隐形。"""
-        problems = config_problems(
-            'include: ["src/lib/**/*.{ts,tsx}"], all: false, reporter: ["text"]'
-        )
-        assert any("all: false" in p for p in problems), problems
+        for spelling in ('all: false,', '"all": false,', "'all': false,", "all : false ,"):
+            problems = config_problems(_synth_coverage_config(
+                '      provider: "v8",\n'
+                '      include: ["src/lib/**/*.{ts,tsx}"],\n'
+                f"      {spelling}\n"
+                '      reporter: ["text", ["lcovonly", { projectRoot: ".." }]],\n'
+            ))
+            assert any("显式关掉 `all`" in p for p in problems), (spelling, problems)
+
+    def test_all_true_is_not_caught(self):
+        """正对照：显式写 `all: true` 是本文件反对的写法的反面，不该误伤。"""
+        assert config_problems(_synth_coverage_config(_COMPLIANT_BODY + '      all: true,\n')) == []
+
+    def test_install_like_key_is_not_mistaken(self):
+        """正对照：`install: false` 这种含 `all` 的键名不能被当成禁句（否则是假阳性）。"""
+        assert config_problems(_synth_coverage_config(_COMPLIANT_BODY + '      install: false,\n')) == []
+
+    def test_missing_project_root_is_caught(self):
+        """反例：去掉 lcovonly 的 projectRoot ⇒ SF 变成 `src/lib/x.ts`，diff-cover 匹配不到。"""
+        problems = config_problems(_synth_coverage_config(
+            '      provider: "v8",\n'
+            '      include: ["src/lib/**/*.{ts,tsx}"],\n'
+            '      exclude: ["src/lib/api/**"],\n'
+            '      reporter: ["text", "lcovonly"],\n'
+        ))
+        assert any("projectRoot" in p for p in problems), problems
 
     def test_glob_expansion_covers_both_suffixes(self, vitest_config):
         includes, _ = denominator_globs(vitest_config)
         assert "src/lib/**/*.ts" in includes and "src/lib/**/*.tsx" in includes, includes
+
+
+class TestStepGrade:
+    """诊断步骤只能发 warning，判红步骤不能被卸成 warning——两头的漂移都要拦。"""
+
+    def test_real_diagnostic_steps_are_compliant(self, attribution_meta, summary_meta):
+        for meta in (attribution_meta, summary_meta):
+            problems = diagnostic_step_problems(meta)
+            assert not problems, "诊断步骤的元数据不再满足：" + "；".join(problems)
+
+    def test_ratchet_step_is_blocking(self, ratchet_meta):
+        assert blocking_step_problems(ratchet_meta) == []
+
+    def test_diagnostic_step_without_continue_on_error_is_caught(self, attribution_meta):
+        """反例（真身文本变异）：删掉那行 `continue-on-error: true`。"""
+        mutated = attribution_meta.replace("        continue-on-error: true", "")
+        assert mutated != attribution_meta, "真身文案变了，本反例已失效——请同步判据"
+        problems = diagnostic_step_problems(mutated)
+        assert any("continue-on-error" in p for p in problems), problems
+
+    def test_diagnostic_step_without_always_is_caught(self, summary_meta):
+        """反例：`if:` 去掉 always() ⇒ 上游先红时这一步不跑，出口文案形同虚设。"""
+        mutated = summary_meta.replace("if: always() &&", "if:")
+        assert mutated != summary_meta, "真身文案变了，本反例已失效——请同步判据"
+        assert any("always()" in p for p in diagnostic_step_problems(mutated)), mutated
+
+    def test_guard_unloaded_by_continue_on_error_is_caught(self, ratchet_meta):
+        """反例：给唯一的分母守卫加上 continue-on-error —— 那是把守卫卸成打印。"""
+        mutated = ratchet_meta.replace(
+            "        if: github.event_name == 'pull_request'",
+            "        if: github.event_name == 'pull_request'\n        continue-on-error: true",
+        )
+        assert mutated != ratchet_meta, "真身文案变了，本反例已失效——请同步判据"
+        assert blocking_step_problems(mutated), mutated
 
 
 class TestHousekeeping:

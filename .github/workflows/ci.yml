@@ -473,6 +473,7 @@ jobs:
 
       - name: Append diff coverage summary
         if: always() && github.event_name == 'pull_request'
+        continue-on-error: true  # 只写 Step Summary 的诊断步骤，不该成为 job 的红（#414）
         working-directory: .
         run: |
           # 报告不存在时也要留一行出口，否则摘要里连「没有摘要」都看不出来（#509）。
@@ -495,10 +496,13 @@ jobs:
       # S = diff-cover.json 的 src_stats 键集，三者同为「仓库根相对 + unix 分隔符」口径。
       # 档位仍为 warning 而非红：C ∩ D − S 有合法成因（改动行全是注释/类型/空行 ⇒
       # measured_lines 为 0，diff-cover 把该文件从 src_stats 滤掉），按「检出即红」会把
-      # 本就微弱的 warning 通道噪声化。真正该红的两档另有其人：分母变小归上面的棘轮，
-      # 报告为空归门禁本体。
+      # 本就微弱的 warning 通道噪声化。分母变小那一档由上面的棘轮判红；而**报告为空这一档
+      # 门禁本体拦不住**——`total_percent_covered`（report_generator.py:171-178）对 0 条
+      # 计量行返回 100，`--fail-under` 又只比这个聚合值（diff_cover_tool.py:357，非逐文件），
+      # 于是 exit 0、摘要里只剩表头，全套守卫里只有本步骤能点名。
       - name: Warn on attribution gap (PR)
         if: always() && github.event_name == 'pull_request'
+        continue-on-error: true  # 诊断步骤：脚本自己崩不该把 job 弄红（#414 与 `Append coverage summary` 同口径）
         working-directory: .
         run: |
           # 默认 shell 是 `bash -e {0}`（无 pipefail）：不显式开启则 git diff 失败会被
@@ -516,6 +520,12 @@ jobs:
             echo "::warning::diff-cover.json 缺失或为空，无法做归因断言（门禁步骤未产出 JSON？）——请人工确认增量门禁是否仍有约束"
             exit 0
           fi
+          # 这一步是 always()：单测/覆盖率步先红时 lcov 根本不存在，而 `set -e` + pipefail
+          # 会让 sed 的 exit 2 把纯诊断步骤变成第二个红，指向错误的失败原因。
+          if [ ! -s frontend/coverage/lcov.info ]; then
+            echo "::warning::frontend/coverage/lcov.info 缺失或为空，无法做归因断言（单测步未跑到产出覆盖率？）——请先看上游步骤的红"
+            exit 0
+          fi
           work=$(mktemp -d)
           trap 'rm -rf "${work}"' EXIT
           if ! git diff --name-only "${base}...HEAD" -- frontend/src > "${work}/changed_raw"; then
@@ -526,10 +536,15 @@ jobs:
             | grep -vE '\.test\.tsx?$' | sort -u > "${work}/changed" || true
           sed -n 's|^SF:\(frontend/.*\)$|\1|p' frontend/coverage/lcov.info \
             | sort -u > "${work}/measured"
-          node -e '
+          # 截断/半写的 JSON 会让 JSON.parse 抛错；同上，不该由诊断步骤承担红。
+          if ! node -e '
             const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
             for (const k of Object.keys(j.src_stats || {})) console.log(k);
-          ' diff-cover.json | sort -u > "${work}/reported"
+          ' diff-cover.json > "${work}/reported_raw"; then
+            echo "::warning::diff-cover.json 解析失败（非法 JSON？）——无法做归因断言，请人工确认增量门禁是否仍有约束"
+            exit 0
+          fi
+          sort -u "${work}/reported_raw" > "${work}/reported"
           comm -12 "${work}/changed" "${work}/measured" > "${work}/in_scope"
           comm -23 "${work}/in_scope" "${work}/reported" > "${work}/missing"
           while IFS= read -r f; do

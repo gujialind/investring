@@ -28,7 +28,9 @@ import { defineConfig } from "vitest/config";
 // 两条扩张方案按实测否决：① 直接并入 → 分母 1141→3513 行，现有测试一行覆盖不到
 // hooks/stores，四项上限即 1141/3513≈32%，99 的阈值须整体重定（等于用「先补 2200 行
 // 测试」换一条当下不可达的门禁；且 16/17 个 hook 依赖 @tanstack/react-query，在没有
-// DOM/Provider 的 environment: "node" 下连调用都起不来）。
+// DOM/Provider 的 environment: "node" 下连调用都起不来）。口径注：1141 / 2226 / 3513
+// 都是 `wc -l` 的物理行数，只用来比量级；覆盖率真正的分母是 lcov 的可执行行（当前
+// LF=280），所以「≈32%」是按体积比例的估计，不是能直接代进 thresholds 的百分比。
 // ② 只并入 stores → 探针实测：一个断言 login/logout 契约且通过的 node 测试下，
 // authStore.ts 仍只有 语句 36.4% / 分支 22.2% / 函数 37.5% / 行 40%，未覆盖的全是
 // `typeof window` 守卫内的浏览器持久化路径（:7/:14 是 `=== "undefined"` 早退，:38/:46
@@ -48,12 +50,15 @@ import { defineConfig } from "vitest/config";
 // 全局阈值（非 perFile）：新文件 0% 会让总量下滑，正是要拦的「靠既有高覆盖掩护新
 // 代码」。另有一条「只看本 PR 改动行」的增量门禁（#485）：CI frontend-check 在 PR
 // 事件对 coverage/lcov.info 跑 diff-cover（阈值以 ci.yml 的门禁步骤为单一来源，形态
-// 与后端同），故 reporter 里有 lcovonly——其 projectRoot 必须置 ".."：该值是相对
-// **cwd** 解析的（默认即 cwd 的 vitest 根），而 diff-cover 把 LCOV 的相对 SF 路径按
-// **git root** 解析，只有从仓库根的 frontend/ 下运行（CI 由 job 的 working-directory
-// 保证）才会得到 frontend/src/... 前缀；否则（如从仓库根跑 npx vitest --root frontend）
-// SF 会变成 src/lib/x.ts、匹配不到任何改动行、门禁静默空转（CI 侧有分母棘轮与归因守卫
-// 兜底，见 ci.yml 的 `Assert lcov data source (PR)` 与 `Warn on attribution gap (PR)`）。
+// 与后端同），故 reporter 里有 lcovonly——其 projectRoot 必须置 ".."：该值相对 **cwd**
+// 解析（不写时默认为 vitest root），而 diff-cover 把 LCOV 里的相对 SF 按 **git root**
+// 解析，所以只有 cwd == <git root>/frontend 时（CI 由 job 的 working-directory 保证、
+// 本地由 `cd frontend && npm run test` 保证）才得到 `frontend/src/...` 前缀。三种形态
+// 均实测：cwd 在 frontend/ 且 projectRoot ".." → `frontend/src/lib/x.ts`（唯一可用）；
+// 同 cwd 但删掉 projectRoot → `src/lib/x.ts`；从仓库根跑 `npx vitest --root frontend`
+// （配置不动）→ `feature+…/frontend/src/lib/x.ts`。后两种 diff-cover 都匹配不到改动行、
+// 门禁静默空转，且都不满足 ci.yml `Assert lcov data source (PR)` 的 `^SF:frontend/` 锚点
+// （那里判红，另有 `Warn on attribution gap (PR)` 兜底）。
 // CI 另产 JUnit XML 供 PR 注解（本地保持默认 reporter，不落文件）。
 export default defineConfig({
   resolve: {
@@ -74,9 +79,13 @@ export default defineConfig({
       // 下限（LCOV_SF_MIN），改这里必须同批改那里。
       // include 之外还有一个隐式前提：vitest 5 的 `coverage.all` 默认为真，故**未被任何
       // 测试 import 的分母文件也会以 0% 进入 lcov**（2026-09-19 实测：新建 src/lib 文件、
-      // 无测试引用 → SF 10→11、LF=2/LH=0，随即被 `--fail-under=80` 判红）。这正是
-      // 「0% 新文件拦得住」的全部机制，也是不该在此显式写 `all: false` 的理由——写了它
-      // 就等于关掉新文件的可见性（守门断言见 scripts/tests/test_ci_frontend_coverage.py）。
+      // 无测试引用 → SF 10→11、LF=2/LH=0）。但 all 给的是**可见性**、不是必然判红：进了
+      // lcov 之后仍按加权判定——全局侧当前 LF=280，加 2 行未覆盖仍是 99.29%（≥99 绿），
+      // 到第 3 行才落到 98.94%；增量侧 `--fail-under=80` 比的是本 PR **全部**计量行的聚合
+      // 比例（不是逐文件），小文件会被同批其它改动摊平。反过来，显式写 `all: false` 关掉
+      // 的是可见性本身：该文件同时从 D 与 C∩D 消失，除分母棘轮外没有任何守卫知道它存在过。
+      // 所以这里不写 all，而由守门断言钉住「不得显式置假」
+      // （scripts/tests/test_ci_frontend_coverage.py）。
       include: ["src/lib/**/*.{ts,tsx}"],
       exclude: ["src/lib/api/**", "**/*.test.{ts,tsx}"],
       reporter: ["text", "json-summary", ["lcovonly", { projectRoot: ".." }]],
