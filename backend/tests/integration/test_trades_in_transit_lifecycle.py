@@ -1347,10 +1347,15 @@ class TestReadSideAndPreview:
         assert single["cash_platform_code"] == PLAT
         assert single["cash_confirm_date"] == T.isoformat()
 
-    def test_derived_fields_survive_status_filter_truncation(
+    def test_derived_fields_survive_trade_type_filter_truncation(
         self, client, admin_headers, test_db
     ):
-        """现金腿被状态筛选截断时，基金腿仍能读到到账信息（批量查询不受筛选影响）"""
+        """现金腿被列表筛选**真实截断**时，基金腿仍能读到到账信息
+
+        #527：改按 `trade_type=sell` 筛。卖出组的基金腿是 sell、配对到账腿是 buy，
+        到账腿必然不在页内，断言才有拦截力。旧写法按 `status` 筛——确认后两腿同状态、
+        同在页内，即使派生逻辑退化成「只从页内行取」也照样绿，守护的目标形同虚设。
+        """
         code = "IT493_RD2"
         _seed_portfolio(test_db, code, cash=10000.0, fund_shares=1000.0)
         resp = client.post(
@@ -1368,23 +1373,21 @@ class TestReadSideAndPreview:
             params={"cash_confirm_date": T2.isoformat()},
             headers=admin_headers,
         ).status_code == 200
+        cash_leg = _cash_leg(test_db, _fund_leg(test_db, trade_id))
+        assert cash_leg is not None and cash_leg.trade_type == "buy"
 
-        # 只筛 pending：组内两腿均非 pending，本页为空
         listed = client.get(
             "/api/trades",
-            params={"portfolio_code": code, "status": "pending"},
+            params={"portfolio_code": code, "trade_type": "sell"},
             headers=admin_headers,
         ).json()["items"]
-        assert [i["id"] for i in listed] == []
-        # 筛 confirmed：基金腿仍在，且派生字段完整
-        listed = client.get(
-            "/api/trades",
-            params={"portfolio_code": code, "status": "confirmed"},
-            headers=admin_headers,
-        ).json()["items"]
+        ids = [i["id"] for i in listed]
+        # 截断成立：到账腿被筛选切掉，派生字段只能来自页外的批量查询
+        assert cash_leg.id not in ids
         fund_rows = [i for i in listed if i["id"] == trade_id]
         assert len(fund_rows) == 1
         assert fund_rows[0]["cash_confirm_date"] == T2.isoformat()
+        assert fund_rows[0]["cash_platform_code"] == PLAT
 
     def test_preview_matches_confirm_and_writes_nothing(self, client, admin_headers, test_db):
         """preview 与 confirm 的有效现金平台/日期一致，且 preview 零写入"""

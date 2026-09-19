@@ -3,6 +3,7 @@ import {
   groupTradeRows,
   cashSubMeta,
   cashLegArrived,
+  cashLegOrigin,
   cashOrphanLabel,
   isCashLeg,
   canEditArrivalDate,
@@ -223,8 +224,22 @@ describe("canEditArrivalDate（#525：只给基金卖出腿）", () => {
   });
 });
 
-describe("cashOrphanLabel", () => {
-  it("按 transfer_group 前缀推导来源", () => {
+describe("cashLegOrigin", () => {
+  it("按 transfer_group 编码分三类", () => {
+    expect(cashLegOrigin(makeTrade({ transfer_group: "sub_1" }))).toBe("subscription");
+    expect(cashLegOrigin(makeTrade({ transfer_group: "0123456789ab" }))).toBe("transfer");
+    expect(cashLegOrigin(makeTrade({ transfer_group: "rebal_x" }))).toBe("rebalance");
+  });
+
+  it("缺组号与不匹配 12 位 hex 的组号都回落调仓", () => {
+    expect(cashLegOrigin(makeTrade({ transfer_group: undefined }))).toBe("rebalance");
+    // 11/13 位、含非 hex 字符都不是现金转移组
+    expect(cashLegOrigin(makeTrade({ transfer_group: "0123456789a" }))).toBe("rebalance");
+    expect(cashLegOrigin(makeTrade({ transfer_group: "0123456789abc" }))).toBe("rebalance");
+    expect(cashLegOrigin(makeTrade({ transfer_group: "0123456789ag" }))).toBe("rebalance");
+  });
+
+  it("cashOrphanLabel 由本分类器派生，三档文案不变（#527）", () => {
     expect(cashOrphanLabel(makeTrade({ transfer_group: "sub_1" }))).toBe("现金 · 申赎确认");
     expect(cashOrphanLabel(makeTrade({ transfer_group: "0123456789ab" }))).toBe("现金 · 平台间转移");
     expect(cashOrphanLabel(makeTrade({ transfer_group: "rebal_x" }))).toBe("现金 · 调仓");

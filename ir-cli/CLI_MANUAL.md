@@ -432,8 +432,15 @@ ir position list --portfolio-code <组合代码> [--snapshot-date YYYY-MM-DD] [-
 查看组合可用现金（实时计算，非快照数据）。
 
 ```bash
-ir position available-cash --portfolio-code <组合代码>
+ir position available-cash --portfolio-code <组合代码> [--platform-code <平台代码>]
 ```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `--portfolio-code` | 是 | 组合代码 |
+| `--platform-code` | 否 | 只统计该现金平台（缺省为组合合计）。用于核对买入扣款/卖看到账平台的现金是否够（#526） |
+
+> 口径固定为**今日**（后端 `as_of_date = today`），不能查历史某日的可用现金；在途资金计市值不计可用现金，见 `docs/reference/business-constraints.md`「现金账本」。
 
 #### `ir position available-shares`
 

@@ -60,7 +60,7 @@ WORKFLOWS = {
     },
     "调仓买入": {
         "steps": [
-            "ir position available-cash --portfolio-code X（按扣款平台）",
+            "ir position available-cash --portfolio-code X [--platform-code P 只查扣款平台，缺省为组合合计]",
             "ir trade create --portfolio-code X --platform-code P --product-code F --type buy --trade-date D --actual-amount N [--cash-platform-code P 扣款平台] [--price P 场内必填]",
             "ir trade confirm <id>（到 confirm_date 当日执行，场外需 T 日净值已同步）",
             "ir snapshot generate --portfolio-code X --target-date <confirm_date>",
