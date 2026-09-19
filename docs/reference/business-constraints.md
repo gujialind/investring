@@ -127,7 +127,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * 金额：买入 `amount = actual_amount − fee`、`shares = amount/price`；卖出 `amount = actual_amount + fee`。**卖出金额为纯派生量**（#190）：有价格时 `amount = quantize(shares × price)`、`actual_amount = amount − fee`；创建时显式传入的 amount/actual\_amount（两参同义、`actual_amount` 优先）仅作一致性校验（差值超 0.01 报 `AMOUNT_MISMATCH`），落库恒用推导值——金额即 shares/price/fee 的「校验和」，用于对账；无价格（场外未传价）时创建期占位，确认按 T 日净值重算。
 
-* **PUT 直改与创建同口径**（#182）：编辑 pending 交易时 buy 的 amount/actual\_amount 视为含费现金支出（`actual_amount` 优先），service 层联动重算净额列并镜像 CASH 腿；sell 有价格时与创建同口径（#190）：按新 shares/price/fee 重推导、显式金额仅作对账（场内超差拒绝、场外静默），无价格占位单仍输入为准；改金额/份额/日期实时校验可用量（加回自身 pending 旧值）、非交易日直接拒绝不静默滚交易日、自然键防重排除自身（无 `allow_duplicate`）；CASH 腿仅 notes 放行；校验全部通过前零写入。
+* **PUT 直改与创建同口径**（#182）：编辑 pending 交易时 buy 的 amount/actual\_amount 视为含费现金支出（`actual_amount` 优先），service 层联动重算净额列并镜像 CASH 腿；buy 的 `shares` 同为纯派生量（#565）：price/amount/fee 任一变动即按**终值** `(actual\_amount − fee) / price` 重算，显式传 `shares` 时以输入为准，无价格（场外未传价）占位 0 待确认按净值自愈；sell 有价格时与创建同口径（#190）：按新 shares/price/fee 重推导、显式金额仅作对账（场内超差拒绝、场外静默），无价格占位单仍输入为准；改金额/份额/日期实时校验可用量（加回自身 pending 旧值）、非交易日直接拒绝不静默滚交易日、自然键防重排除自身（无 `allow_duplicate`）；CASH 腿仅 notes 放行；校验全部通过前零写入。
 
 * **确认的计划与写入分离**（#493）：`compute_confirm_plan`（NAV/份额/金额 + 现金腿计划）供 confirm 与 preview 共用，**纯只读**；confirm 在全部校验通过后才 setattr，配对腿校正的前置校验也在 setattr 之前（拒绝即零写入）。preview 不构腿、不改 ORM、不写审计，`sync_nav` 只属于 confirm。
 

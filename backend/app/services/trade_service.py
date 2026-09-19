@@ -1083,6 +1083,20 @@ def _derive_sell_amounts(
     return actual_amount_final + fee_d, actual_amount_final
 
 
+def _derive_buy_shares(
+    cash_out_d: Decimal,
+    fee_d: Decimal,
+    price_d: Optional[Decimal],
+) -> Decimal:
+    """买入份额纯派生量（#565）：(含费支出 − fee) / price，创建与编辑共用。
+
+    无价格（场外未传价）返回占位 0，确认时按 T 日净值重算自愈。
+    """
+    if not price_d:
+        return Decimal("0")
+    return quantize_shares((cash_out_d - fee_d) / price_d)
+
+
 def create_trade(
     db: Session,
     *,
@@ -1234,7 +1248,7 @@ def create_trade(
             as_of=trade_date, cash_platform=cash_platform_code or platform_code,
         )
         net_amount = cash_out_d - fee_d
-        shares_d = quantize_shares(net_amount / price_d) if price_d else Decimal("0")
+        shares_d = _derive_buy_shares(cash_out_d, fee_d, price_d)
         actual_amount_final = cash_out_d
         new_trade = Trade(
             portfolio_code=portfolio_code, product_code=product_code, market=market,
@@ -1684,6 +1698,32 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
         if x is not None:
             trade.actual_amount = x
             trade.amount = x - new_fee
+
+    # 买入份额纯派生（#565）：price/fee/amount 任一变动按终值重算，与创建同口径；
+    # 显式传 shares 时以显式值为准（保持 API 契约），场外无价占位 0 待确认自愈
+    if (
+        trade.trade_type == "buy"
+        and trade.product_code != "CASH"
+        and shares_input is None
+        and (
+            price_input is not None
+            or amount_input is not None
+            or fee_input is not None
+        )
+    ):
+        final_price = price_input if price_input is not None else trade.price
+        final_price = (
+            Decimal(str(final_price)) if final_price is not None else None
+        )
+        if trade.actual_amount is not None:
+            cash_out_d = Decimal(str(trade.actual_amount))
+        elif trade.amount is not None:
+            # 老数据 actual_amount 缺失时按净额+fee 反推
+            cash_out_d = Decimal(str(trade.amount)) + new_fee
+        else:
+            cash_out_d = None
+        if cash_out_d is not None:
+            trade.shares = _derive_buy_shares(cash_out_d, new_fee, final_price)
 
     # trade_date 变动：联动重算 confirm_date（输入必为交易日，不再吞非交易日）。
     # 新值在步骤 3 已算好（同一份结果也进了组级保护的新值集合），此处只回写。
