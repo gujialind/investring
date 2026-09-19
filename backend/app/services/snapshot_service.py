@@ -1779,6 +1779,13 @@ def auto_confirm_before_snapshot(
     （apply_date == 当日、confirm_date = 次日） confirm_date > target 亦不在窗口，
     仍由生成后 auto_confirm 按序消化。
 
+    可观测性取舍：结果仅落服务日志、不进生成响应（catch-up / generate-next / 调度
+    均不新增字段），与 `auto_confirm_after_snapshot` 结果透传响应/任务日志的口径
+    有意不同——本机制只服务依赖校验前置、消除死锁，其窗口在连续性约束下退化为
+    「confirm_date == target」单批次，消费方价值低；透传需动响应契约
+    （openapi / response_fields 连带），成本不匹配。若未来出现消费方，再按 after
+    的口径补透传。
+
     Args:
         db: 数据库会话
         portfolio_code: 组合代码

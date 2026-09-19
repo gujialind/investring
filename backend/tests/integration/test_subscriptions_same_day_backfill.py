@@ -17,6 +17,7 @@
 #  6. 级联：删 D 快照 → 回退 pending；删 D+1 快照 → 不回退（级联按 apply_date == 快照日）
 #  7. PUT apply_date 改到 D 放行并重算 confirm_date；改更早拒绝
 #  8. legacy pending（confirm_date <= D）仍阻断生成，不静默放行
+#  9. 补录单 × 重算：recalculate D..D+1 级联回退 → 同日重确认往返，三表数值不丢
 
 from datetime import date
 from decimal import Decimal
@@ -26,6 +27,11 @@ import pytest
 from app.models import PortfolioPosition, PortfolioValueSnapshot, Trade
 from app.models.subscription import Subscription
 from app.services import snapshot_service
+from app.services.subscription_service import (
+    confirm_single_subscription,
+    create_subscription as create_subscription_svc,
+)
+from app.services.trade_service import confirm_single_trade, create_trade
 from tests.factories import (
     create_portfolio,
     create_investor,
@@ -360,3 +366,100 @@ class TestSameDayBackfillSnapshotInclusion:
         snapshot_service._delete_existing_snapshots(test_db, "IN_P5", NEXT_DAY)
         sub = test_db.query(Subscription).filter(Subscription.id == sub_id).first()
         assert sub.status == "confirmed"
+
+
+class TestSameDayBackfillRecalculateRoundtrip:
+    """#495 评审：补录单 × 快照重算组合（最高危区域的行为锁定）"""
+
+    def test_recalculate_roundtrip_keeps_backfill_confirmed(self, test_db):
+        """D 快照 + D 日补录 + 生成 D+1 + 重算 D..D+1（验收 9）：
+        重算逐日删除重建，补录单在 D 日被级联回退 pending、D 日生成后又被
+        auto_confirm_after_snapshot 重确认；最终申赎状态与三表数值同重算前一致"""
+        port, investor = "RC_P1", "RC_I1"
+        create_portfolio(test_db, code=port, status="active")
+        product = create_product(test_db, code=FUND, market=MARKET,
+                                 product_type="OEF", asset_class_code="ASSET_STOCK",
+                                 confirm_days=0)
+        create_investor(test_db, code=investor)
+        _ensure_days(test_db)
+        create_price_record(test_db, FUND, MARKET, D0, 1.0)
+        create_price_record(test_db, FUND, MARKET, NEXT_DAY, 1.2)
+
+        # 真实业务流基线（重算从零可复现）：首笔申购 11000（nav 1.0，T+1 确认）
+        # → D0 买入 10000 → D0 快照（CASH 1000 + 基金 10000 份，nav 1.0）
+        first = create_subscription(
+            test_db, port, investor, sub_type="subscribe",
+            amount=11000.0, apply_date=PREV_DAY, status="pending",
+        )
+        test_db.flush()
+        confirm_single_subscription(test_db, first)
+        test_db.flush()
+        buy = create_trade(
+            test_db, portfolio_code=port, product_code=FUND, market=MARKET,
+            trade_type="buy", trade_date=D0,
+            actual_amount=Decimal("10000.00"), platform_code="MYCF",
+        )
+        test_db.flush()
+        confirm_single_trade(test_db, buy, product)
+        test_db.flush()
+        result = snapshot_service.generate_daily_snapshots(test_db, port, D0)
+        assert result["success"] is True, result
+
+        # D 日快照落地后补录 D 日申购 2500（nav_D=1.0 → 2500 份，confirm_date=D+1）
+        backfill = create_subscription_svc(
+            test_db, portfolio_code=port, investor_code=investor,
+            platform_code="MYCF", sub_type="subscribe",
+            apply_date=D0, amount=Decimal("2500.00"),
+        )
+        test_db.flush()
+        assert backfill.status == "pending"
+        assert backfill.confirm_date == NEXT_DAY
+
+        gen = snapshot_service.generate_daily_snapshots(test_db, port, NEXT_DAY)
+        assert gen["success"] is True, gen
+        test_db.refresh(backfill)
+        assert backfill.status == "confirmed"
+        assert Decimal(str(backfill.unit_price)) == Decimal("1.0000")
+        assert Decimal(str(backfill.shares)) == Decimal("2500.00")
+
+        # 重算前锁定预期：D0 总市值 11000/份额 11000；D+1 基金 10000×1.2=12000
+        # + CASH 3500 = 15500，份额 13500，净值 15500/13500=1.1481
+        expected = {
+            D0: (Decimal("11000.00"), Decimal("11000.00"), Decimal("1.0000")),
+            NEXT_DAY: (Decimal("15500.00"), Decimal("13500.00"), Decimal("1.1481")),
+        }
+
+        def _snapshot_values(day):
+            snap = test_db.query(PortfolioValueSnapshot).filter(
+                PortfolioValueSnapshot.portfolio_code == port,
+                PortfolioValueSnapshot.snapshot_date == day,
+            ).first()
+            return (Decimal(str(snap.total_value)),
+                    Decimal(str(snap.total_shares)),
+                    Decimal(str(snap.unit_price)))
+
+        for day, values in expected.items():
+            assert _snapshot_values(day) == values
+
+        # 重算 D..D+1：D 日删除级联回退补录单、同日重确认；D+1 级联按
+        # apply_date == 快照日匹配不到该笔（apply_date == D），不回退
+        recalc = snapshot_service.recalculate_snapshots(test_db, port, D0, NEXT_DAY)
+        entry = next(r for r in recalc["results"]
+                     if r["portfolio_code"] == port)
+        assert entry["errors"] == []
+        assert entry["cascaded_unconfirmed"], "D 日级联应回退补录单"
+        assert entry["auto_confirmed"], "D 日生成后应重确认补录单"
+        test_db.commit()  # recalculate 不 commit，事务边界归调用方
+
+        test_db.refresh(backfill)
+        assert backfill.status == "confirmed"
+        assert Decimal(str(backfill.unit_price)) == Decimal("1.0000")
+        assert Decimal(str(backfill.shares)) == Decimal("2500.00")
+        for day, values in expected.items():
+            assert _snapshot_values(day) == values
+        cash_pos = test_db.query(PortfolioPosition).filter(
+            PortfolioPosition.portfolio_code == port,
+            PortfolioPosition.snapshot_date == NEXT_DAY,
+            PortfolioPosition.product_code == "CASH",
+        ).first()
+        assert Decimal(str(cash_pos.cash_amount)) == Decimal("3500.00")
