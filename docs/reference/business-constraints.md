@@ -78,6 +78,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 三表只增不改（ORM before_update/before_delete 兜底，内部删除走 bulk delete），每日汇总、保留完整历史，生成顺序固定：`portfolio_position` → `portfolio_value_snapshot` → `investor_holding`。
 
 - **前提**：confirm_date/ex_date ≤ 快照日的申赎/交易/事件均已确认，不存在影响该日的 pending 记录。
+- **生成前到期补确认**（#495）：生成依赖校验前自动确认「最新快照日 < confirm_date ≤ 目标日」的 pending 申赎（`auto_confirm_before_snapshot`），与生成后 `auto_confirm_after_snapshot`（按 apply_date 匹配）互补——当天补录（申请日 == 最新快照日、确认日 == 目标日）由此在 pending 校验前消化，否则其 confirm_date == 目标日会被 pending 校验阻断、而生成后 auto_confirm 只在快照落地后运行，死锁。confirm_date ≤ 最新快照日的历史/异常 pending 不在窗口，仍阻断、须人工处理（防静默漏记，与零快照守卫同族）。
 - **连续原则**：严格从最新快照日的下一交易日起连续生成，失败即停，不能跳日；单日生成只接受最新日重建或下一交易日。
 - **增量累加**：当日持仓/现金 = 前日基线 + 窗口内 confirmed 交易 + 事件增量 + manual_market_value 绝对覆盖。
 - **严格取价**（#96/#178，#228 起泛化）：只由产品 nav_lag_days 决定取价日，0 取当日、N 取交易日历上前第 N 个交易日；缺指定日行情必须报 `MISSING_NAV`，不得回退。调仓确认始终取 T 日价格、按落库 confirm_days 决定间隔，与快照估值正交。
@@ -104,7 +105,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * 申购输入**金额**（份额 = 金额 / 申请日净值）；赎回输入**份额**（金额 = 份额 × 申请日净值）。
 
-* **定价时间线**：申请日 T 必须是交易日且晚于最新快照日；T 日收盘生成快照定净值，T+1 确认仍按 **T 日申请日净值**计价，不是确认日净值。创建期“晚于最新快照”和确认期“申请日已有快照”是同一时间线的两端。
+* **定价时间线**：申请日 T 必须是交易日，且其确认日（T+1）必须晚于最新快照日——T 日快照已生成后仍允许补录 `apply_date == T` 的申赎（T 日真实下单、收盘后快照才生成的场景），按 T 日净值计价、T+1 确认生效；T 日收盘生成快照定净值，T+1 确认仍按 **T 日申请日净值**计价，不是确认日净值。创建期“确认日晚于最新快照”和确认期“申请日已有快照”是同一时间线的两端。
 
 * **确认日恒为申请日的下一交易日（T+1）**，创建时即写入，与产品 `confirm_days` 无关（后者只作用于调仓）；pending 记录的 `confirm_date` 是预计确认日。确认生成一条 `sub_{id}` 配对 CASH 腿，平台决定现金归属，不改变投资人份额不分平台的口径。
 
@@ -112,7 +113,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * **乱序补录**（#180）：确认日早于组合 `started_at` → `CONFIRM_BEFORE_STARTED`（等于放行，以支持同日多平台申购）；乱序单 auto\_confirm 记 `auto_confirm_failed`，需手动按序处理。
 
-* 申请日必须晚于最新快照日（`DATE_BEFORE_SNAPSHOT`）。
+* **创建期日期闸门**（#495）：记账不变量是确认日必须晚于最新快照日（`DATE_BEFORE_SNAPSHOT`）——快照增量窗口按 `confirm_date` 过滤，申请日更早的申赎其确认日必然落入已冻结区间、会静默漏记；`apply_date` == 最新快照日当天放行（恒 T+1 下两者等价，取对准真实不变量的表述）。调仓、现金转移、份额事件的同源闸门不在本次放宽范围，见各自章节。
 
 * 申赎必填 `platform_code`（现金归属平台）；申请日快照要求按上述首窗判据处理，不以“是否第一笔申购”代替。
 
@@ -228,7 +229,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `CONFIRM_BEFORE_STARTED` | 422 | 申购确认预览与确认路径（同一实现）中，`sub_type == "subscribe"` 且组合 `started_at` 非空、T+1 确认日 **<** `started_at`（乱序补录闸门；等于放行以支持同日多平台，`started_at` 为空豁免，赎回不校验） | services/subscription_service.py::calculate_subscription_confirm_preview |
 | `CONFIRM_REQUIRED` | 422 | 快照批量删除未显式传 `confirm=true`（破坏性操作守卫，因逐日 commit 不可中途回滚）；`dry_run=true` 在此之前直接返回预览、不触发本码 | routers/snapshots.py::delete_snapshots_bulk |
 | `DATA_SOURCE_NOT_CONFIGURED` | 503 | `POST /api/trading-calendar/sync` 捕获 `TushareNotConfiguredError`——`TUSHARE_TOKEN` 未配置（`services/tushare_client.py`） | routers/trading_calendar.py::sync_trading_calendar |
-| `DATE_BEFORE_SNAPSHOT` | 422 | 存在最新快照日时，业务日期 `<=` 最新快照日（要求严格晚于）：调仓 `trade_date`（创建与 PUT 改日期共用 `validate_trade_date`）、现金转移 `transfer_date`、申赎 `apply_date`（创建与 PUT）、事件 `ex_date`（创建与 PUT 共用 `_validate_event_dates`） | services/trade_service.py::validate_trade_date; services/subscription_service.py::create_subscription |
+| `DATE_BEFORE_SNAPSHOT` | 422 | 存在最新快照日时，业务日期 `<=` 最新快照日（要求严格晚于）：调仓 `trade_date`（创建与 PUT 改日期共用 `validate_trade_date`）、现金转移 `transfer_date`、申赎按**确认日**口径（`confirm_date <=` 最新快照日即拒，创建与 PUT；`apply_date` == 最新快照日当天放行，#495）、事件 `ex_date`（创建与 PUT 共用 `_validate_event_dates`） | services/trade_service.py::validate_trade_date; services/subscription_service.py::create_subscription |
 | `DELETE_FAILED` | 500 | `DELETE /api/snapshots/{portfolio}/{date}` 删除中抛出**非** `BusinessError` 的异常；`BusinessError`（如级联回退失败整体中止）rollback 后原样透传，不降级为本码 | routers/snapshots.py::delete_snapshot |
 | `DIMENSION_RULE_CONFLICT` | 422 | 维度值 PUT 全量替换 `dimension_rules` 的收紧保护：某维度改为 `required`（原非 required）而该 asset_class 下存量产品该维度为空；或删除规则行（→ `forbidden`）而存量产品该维度非空 | services/asset_classification_service.py::_apply_rule_changes |
 | `DIMENSION_VALUE_IN_USE` | 422 | 维度值 PUT 缩减 `applicable_asset_classes`（全量替换语义）时，被移除的 asset_class 下仍有产品引用该维度值（`details` 带产品清单） | services/asset_classification_service.py::update_classification |

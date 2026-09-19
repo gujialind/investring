@@ -459,12 +459,16 @@ def create_subscription(
     if portfolio.status not in ("active", "draft"):
         raise BusinessError("PORTFOLIO_NOT_ACTIVE", "组合未激活")
 
-    # 申请日必须晚于最新快照日
+    confirm_date = get_next_trading_day(db, apply_date, days=1)
+    # 记账不变量是确认日必须晚于最新快照日（issue #495）：快照增量窗口按
+    # confirm_date 过滤，申请日 == 最新快照日当天补录（T 日下单、T 日快照已生成）
+    #  confirm_date=T+1 仍落在下一窗口，放行；申请日更早则 confirm_date <= 最新
+    # 快照日（其本身为交易日）恒被拒，确认日落在已冻结区间会静默漏记
     latest_snapshot_date = get_latest_snapshot_date(db, portfolio_code)
-    if latest_snapshot_date and apply_date <= latest_snapshot_date:
+    if latest_snapshot_date and confirm_date <= latest_snapshot_date:
         raise BusinessError(
             "DATE_BEFORE_SNAPSHOT",
-            f"申请日必须晚于最新快照日（{latest_snapshot_date}）",
+            f"确认日必须晚于最新快照日（{latest_snapshot_date}）",
         )
 
     investor = db.query(Investor).filter(Investor.code == investor_code).first()
@@ -474,8 +478,6 @@ def create_subscription(
     platform = db.query(Platform).filter(Platform.code == platform_code).first()
     if not platform:
         raise NotFoundError("PLATFORM_NOT_FOUND", f"平台 {platform_code} 不存在")
-
-    confirm_date = get_next_trading_day(db, apply_date, days=1)
 
     if sub_type == "subscribe":
         if amount is None or Decimal(str(amount)) <= 0:
@@ -551,7 +553,7 @@ def update_subscription(
       传 null 拒绝 INVALID_PARAM，防止绕过量化/可用份额闸门并落库脏数据
     - 类型拆分（与创建同口径）：subscribe 仅接受 amount、redeem 仅接受 shares，
       错位字段拒绝 INVALID_PARAM
-    - apply_date：交易日 + 晚于最新快照日，并重算预计确认日（T+1）
+    - apply_date：交易日 + 确认日晚于最新快照日（#495），并重算预计确认日（T+1）
     - amount（申购）/shares（赎回）：先量化再校验大于 0
     - 赎回份额闸门：新份额（或仅改日期时的原份额）不得超过可用份额，
       可用份额已扣本条自身 pending 旧份额，先加回再比较（与 trade PUT 同口径）
@@ -591,13 +593,15 @@ def update_subscription(
         apply_date = updates["apply_date"]
         if not is_trading_day(db, apply_date):
             raise BusinessError("NON_TRADING_DAY", "非交易日，请等待交易日再提交")
+        updates["confirm_date"] = get_next_trading_day(db, apply_date, days=1)
+        # 与创建同口径（issue #495）：记账不变量是确认日晚于最新快照日，
+        # 申请日改到最新快照日当天放行并同步重算 confirm_date，更早则恒拒
         latest_snapshot_date = get_latest_snapshot_date(db, subscription.portfolio_code)
-        if latest_snapshot_date and apply_date <= latest_snapshot_date:
+        if latest_snapshot_date and updates["confirm_date"] <= latest_snapshot_date:
             raise BusinessError(
                 "DATE_BEFORE_SNAPSHOT",
-                f"申请日必须晚于最新快照日（{latest_snapshot_date}）",
+                f"确认日必须晚于最新快照日（{latest_snapshot_date}）",
             )
-        updates["confirm_date"] = get_next_trading_day(db, apply_date, days=1)
 
     if updates.get("amount") is not None:
         amount_d = quantize_amount(Decimal(str(updates["amount"])))
