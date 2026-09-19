@@ -25,6 +25,7 @@ SOURCE_REFERENCES = (
     "backend/app/services/trade_service.py",
     "backend/tests/unit/test_error_codes_doc_sync.py",
     "backend/tests/seed_base.py",
+    "backend/tests/integration/test_audit_log.py",
     "frontend/src/lib/tradePairs.ts",
     "frontend/src/lib/tradePairs.test.ts",
     "frontend/e2e/datepicker-in-dialog.spec.ts",
