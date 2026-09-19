@@ -4,15 +4,87 @@ InvestRing CLI - HTTP Client 入口
 轻量 HTTP 客户端版 CLI，通过 REST API 与后端通信。
 仅需 typer + httpx 两个依赖，可在任意设备上安装使用。
 """
+import importlib
+import sys
 from typing import Optional
 
 import typer
+import typer.core
+
+from ir_cli.output import EXIT_USAGE, error
+
+
+def _click_exc_class(name: str) -> Optional[type]:
+    """取 Click 的异常类（UsageError / NoArgsIsHelpError）。
+
+    typer >= 0.25 把 click 复制进 `typer._click` 且不再声明 click 依赖，抛出的异常与
+    顶层 `click` 包里的同名类**不是同一个类型**（实测 `click.UsageError is
+    typer._click.exceptions.UsageError` → False），`except click.UsageError` 抓不到；
+    typer < 0.25 反过来只有 `click` 可用。按顺序探测两边，都取不到返回 None，
+    届时入口退回 Click 缺省行为（人读文本 + exit 2），不报错。
+    """
+    for module_name in ("typer._click.exceptions", "click.exceptions"):
+        try:
+            return getattr(importlib.import_module(module_name), name)
+        except (ImportError, AttributeError):
+            continue
+    return None
+
+
+# 取不到类时退化成空元组：`except ()` 合法且永不匹配，等价于不接管
+_USAGE_ERROR = _click_exc_class("UsageError") or ()
+_NO_ARGS_IS_HELP = _click_exc_class("NoArgsIsHelpError") or ()
+
+
+class IrTyperGroup(typer.core.TyperGroup):
+    """根命令组：把 Click 的用法错误收敛成机读 JSON + exit 64（#520）。
+
+    为什么要以 `standalone_mode=False` 复跑 `super().main()`：standalone 模式下 Click
+    自己吞掉 UsageError，只往 stderr 打一行人读的 `Error: No such option: ...` 再
+    exit 2，异常不会浮到我们能接手的地方。而 2 在协议里是「认证错误」，脚本/agent 会
+    去跑 `ir auth login`，永远修不好拼错的选项。接管后未知选项/缺参数与后端业务错误
+    同构：stdout 一条 JSON、退出码独立取 sysexits.h 的 64。
+
+    只挂在根组就够：19 个子命令组的解析异常都在同一次 main() 调用栈内抛出。
+    """
+
+    def main(
+        self,
+        args=None,
+        prog_name=None,
+        complete_var=None,
+        standalone_mode=True,
+        **extra,
+    ):
+        try:
+            result = super().main(
+                args=args,
+                prog_name=prog_name,
+                complete_var=complete_var,
+                standalone_mode=False,
+                **extra,
+            )
+        except _USAGE_ERROR as exc:
+            if isinstance(exc, _NO_ARGS_IS_HELP):
+                # 无参数 = 打印帮助（Click 缺省：stderr + exit 2），不是用法错误
+                exc.show()
+                sys.exit(exc.exit_code)
+            error("USAGE_ERROR", exc.format_message(), exit_code=EXIT_USAGE)
+        except typer.Abort:
+            # Ctrl-C / 交互中断：与 Click standalone 行为一致
+            typer.echo("Aborted!", err=True)
+            sys.exit(1)
+        if not standalone_mode:
+            return result
+        # standalone_mode=False 下 --help 等路径由 Click 返回退出码，而不是自行 sys.exit
+        sys.exit(result if isinstance(result, int) else 0)
+
 
 _PROTOCOL_HELP = """InvestRing CLI - HTTP Client
 
 输出协议: 成功 {"ok":true,"data":...,"meta"?,"hints"?} / 失败 {"ok":false,"error":{"code","message","hints"?}}
 
-退出码: 0=成功 1=业务错误(可换参重试) 2=认证错误(ir auth login) 3=连接/超时
+退出码: 0=成功 1=业务错误(可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在，命令未执行)
 
 诊断信息输出至 stderr，脚本/Agent 解析请只读取 stdout
 
@@ -26,6 +98,7 @@ app = typer.Typer(
     help=_PROTOCOL_HELP,
     no_args_is_help=True,
     rich_markup_mode=None,  # plain help 输出（无框线/ANSI），降低 AI agent token 消耗；子命令组继承此设置
+    cls=IrTyperGroup,
 )
 
 

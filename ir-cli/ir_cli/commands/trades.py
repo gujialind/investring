@@ -8,8 +8,12 @@ from ir_cli.utils import SUMMARY_FIELDS, build_body, project_fields, resolve_bod
 
 app = typer.Typer(no_args_is_help=True)
 
-# --quiet 时写操作仅输出的关键字段
+# --quiet 时写操作仅输出的关键字段（create/confirm：后端回完整记录）
 QUIET_FIELDS = "id,status,confirm_date"
+# cancel/unconfirm 的后端响应只有 {message}（routers/trades.py），按 QUIET_FIELDS 投影
+# 会得到三个 null——比报错更像真值，容易被下游当数据消费（#520）。这类命令单独投影
+# message，不替后端臆造它没返回的状态。
+QUIET_MESSAGE_FIELDS = "message"
 # 确认后提醒：快照未生成前不计入持仓；confirmed ≠ 现金当天可用（#493）
 SNAPSHOT_HINT = "确认后需生成确认日快照才计入持仓: ir snapshot generate --portfolio-code <code> --target-date <confirm_date>；confirmed 只表示已记账，不等于现金当天可用"
 # 买入创建即扣款、基金份额待确认（#493）：避免把 pending 基金腿误当成「钱还没划走」
@@ -243,7 +247,7 @@ def confirm(
 @app.command("cancel")
 def cancel(
     id: int = typer.Argument(..., help="交易ID"),
-    quiet: bool = typer.Option(False, "--quiet", help="仅输出 id/status/confirm_date"),
+    quiet: bool = typer.Option(False, "--quiet", help="仅输出 message（该端点只回 message）"),
 ):
     """取消交易。
 
@@ -254,13 +258,13 @@ def cancel(
     client = APIClient.from_config()
     result = client.post(f"/api/trades/{id}/cancel")
     data = result["data"]
-    success(data=project_fields(data, QUIET_FIELDS) if quiet else data)
+    success(data=project_fields(data, QUIET_MESSAGE_FIELDS) if quiet else data)
 
 
 @app.command("unconfirm")
 def unconfirm(
     id: int = typer.Argument(..., help="交易ID"),
-    quiet: bool = typer.Option(False, "--quiet", help="仅输出 id/status/confirm_date"),
+    quiet: bool = typer.Option(False, "--quiet", help="仅输出 message（该端点只回 message）"),
 ):
     """取消确认交易。
 
@@ -273,7 +277,7 @@ def unconfirm(
     client = APIClient.from_config()
     result = client.post(f"/api/trades/{id}/unconfirm")
     data = result["data"]
-    success(data=project_fields(data, QUIET_FIELDS) if quiet else data)
+    success(data=project_fields(data, QUIET_MESSAGE_FIELDS) if quiet else data)
 
 
 @app.command("update")

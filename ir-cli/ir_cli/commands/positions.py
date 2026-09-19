@@ -51,11 +51,17 @@ def get(id: int = typer.Argument(..., help="持仓ID")):
 def available_cash(
     portfolio_code_arg: Optional[str] = typer.Argument(None, metavar="[PORTFOLIO_CODE]", help="[deprecated] 请改用 --portfolio-code"),
     portfolio_code: Optional[str] = typer.Option(None, "--portfolio-code", help="组合代码"),
+    platform_code: Optional[str] = typer.Option(None, "--platform-code", help="仅统计该现金平台（缺省为组合合计）；口径为今日实时"),
 ):
     """获取组合可用现金（实时）"""
     code = _resolve_required(portfolio_code, portfolio_code_arg, "--portfolio-code")
     client = APIClient.from_config()
-    result = client.get(f"/api/positions/portfolio/{code}/available-cash")
+    params = {}
+    if platform_code is not None:
+        params["platform_code"] = platform_code
+    result = client.get(
+        f"/api/positions/portfolio/{code}/available-cash", params=params
+    )
     success(data=result["data"])
 
 

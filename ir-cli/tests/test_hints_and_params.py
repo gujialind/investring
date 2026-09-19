@@ -7,6 +7,7 @@
 - output.error 缺省 hints 时按 code+details 自动生成
 - available-cash/available-shares 双通道参数：--portfolio-code option 优先、
   位置参数弃用告警走 stderr（stdout 仍为纯 JSON）、两者皆缺报 VALIDATION_ERROR
+- available-cash --platform-code 透传为 query；缺省不传键（组合合计口径）
 
 运行方式（ir-cli/.venv 无 pytest，用仓库根 .venv）：
     PYTHONPATH=ir-cli .venv/bin/python -m pytest ir-cli/tests/ -q
@@ -174,6 +175,35 @@ class TestAvailableCashDualChannel:
         assert doc["error"]["code"] == "VALIDATION_ERROR"
         assert "--portfolio-code" in doc["error"]["message"]
         assert stub_client.calls == []
+
+
+class TestAvailableCashPlatformScope:
+    """available-cash 的 --platform-code 透传（#527-② 选定的补参数口径）"""
+
+    def test_platform_code_sent_as_query(self, stub_client):
+        result = _runner().invoke(
+            app,
+            ["position", "available-cash", "--portfolio-code", "PORT001",
+             "--platform-code", "HBZQ"],
+        )
+        assert result.exit_code == 0
+        assert stub_client.calls[0] == (
+            "/api/positions/portfolio/PORT001/available-cash",
+            {"platform_code": "HBZQ"},
+        )
+
+    def test_omitted_platform_code_sends_no_query_key(self, stub_client):
+        """缺省必须是「不传」而不是传空串：后端按 platform_code is None 判定组合合计"""
+        result = _runner().invoke(
+            app, ["position", "available-cash", "--portfolio-code", "PORT001"]
+        )
+        assert result.exit_code == 0
+        assert stub_client.calls[0][1] == {}
+
+    def test_help_exposes_platform_code(self):
+        result = _runner().invoke(app, ["position", "available-cash", "--help"])
+        assert result.exit_code == 0
+        assert "--platform-code" in result.stdout.split("Options:", 1)[1]
 
 
 class TestAvailableSharesDualChannel:

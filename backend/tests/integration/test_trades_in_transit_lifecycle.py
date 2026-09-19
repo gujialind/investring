@@ -11,6 +11,7 @@
 # - 调仓退出 auto_confirm（#471）：pending 调仓不被扫描确认、到期仍阻断快照
 # - 自身扣款加回口径（pending/confirmed、快照基线、查询日之后）与 cancelled 排除
 # - 读侧派生现金字段（list/get/confirm/preview）与 preview 零写入
+# - #526：确认路径的验资平台与落账平台恒一致（含缺腿兜底与跨平台扣款两条路径）
 # ============================================================================
 
 from datetime import date, timedelta
@@ -109,6 +110,21 @@ def _group_legs(db, fund_leg):
     return db.query(Trade).filter(
         Trade.transfer_group == fund_leg.transfer_group
     ).all()
+
+
+def _spy_buy_cash_check(monkeypatch) -> dict:
+    """拦截确认路径的验资调用，返回记录实参的 dict（#526 平台一致性）。"""
+    from app.services import trade_service
+
+    seen: dict = {}
+    real = trade_service.validate_buy_cash_with_addback
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(trade_service, "validate_buy_cash_with_addback", spy)
+    return seen
 
 
 def _gen(client, headers, code, target):
@@ -410,6 +426,80 @@ class TestBuyConfirmCashLegGuards:
         )
         assert bad_date.status_code == 422
         assert bad_date.json()["detail"]["error"] == "CASH_CONFIRM_DATE_NOT_ALLOWED"
+
+    def test_missing_deduction_leg_confirm_rejects_other_platform(
+        self, client, admin_headers, test_db
+    ):
+        """#526：缺扣款腿时，闸门仍须成立——既不能建腿，也不能改写扣款平台"""
+        fund_leg = self._create(client, admin_headers, test_db)
+        test_db.delete(_cash_leg(test_db, fund_leg))
+        test_db.flush()
+        create_platform(test_db, code="P493_OTHER")
+
+        bad = client.post(
+            f"/api/trades/{fund_leg.id}/confirm",
+            params={"cash_platform_code": "P493_OTHER"},
+            headers=admin_headers,
+        )
+        assert bad.status_code == 422
+        assert bad.json()["detail"]["error"] == "CASH_PLATFORM_NOT_ALLOWED"
+        test_db.expire_all()
+        assert _cash_leg(test_db, _fund_leg(test_db, fund_leg.id)) is None
+        assert _fund_leg(test_db, fund_leg.id).status == "pending"
+
+    def test_missing_deduction_leg_confirm_uses_fund_leg_platform(
+        self, client, admin_headers, test_db, monkeypatch
+    ):
+        """#526：缺腿兜底建腿落基金腿平台，且验资按**同一**平台
+
+        「验资平台 == 落账平台」由确认计划单点提供：断言 `cash_platform` 实参
+        而非只断言建腿结果——旧写法靠两处独立 fallback 恰好一致，任一侧改动都
+        会让钱在 A 平台被验过、在 B 平台被扣掉。
+
+        spy 在 create 之后才装：创建路径同样调 `validate_buy_cash_with_addback`，
+        先装会让断言读到 create 那次实参而假绿。
+        """
+        fund_leg = self._create(client, admin_headers, test_db)
+        test_db.delete(_cash_leg(test_db, fund_leg))
+        test_db.flush()
+
+        seen = _spy_buy_cash_check(monkeypatch)
+        conf = client.post(f"/api/trades/{fund_leg.id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
+        assert seen.get("cash_platform") == PLAT
+        test_db.expire_all()
+        rebuilt = _cash_leg(test_db, _fund_leg(test_db, fund_leg.id))
+        assert rebuilt is not None
+        assert rebuilt.platform_code == PLAT and rebuilt.status == "confirmed"
+
+    def test_confirm_cash_check_platform_follows_existing_deduction_leg(
+        self, client, admin_headers, test_db, monkeypatch
+    ):
+        """#526：有腿路径行为不变，验资平台仍取扣款腿平台（跨平台买入）"""
+        _seed_portfolio(test_db, self.CODE, cash=50000.0)
+        create_platform(test_db, code="P493_OTHER")
+        # 扣款平台必须自己有钱：验资按平台分账，否则创建即被 INSUFFICIENT_CASH 拒
+        create_position_snapshot(
+            test_db, self.CODE, "CASH", "", D0,
+            cash_amount=50000.0, platform_code="P493_OTHER",
+        )
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": self.CODE, "product_code": FUND,
+                "market": FUND_MARKET, "trade_type": "buy", "amount": 10000.0,
+                "platform_code": PLAT, "trade_date": T.isoformat(),
+                "cash_platform_code": "P493_OTHER",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        fund_leg = _fund_leg(test_db, resp.json()["id"])
+
+        seen = _spy_buy_cash_check(monkeypatch)
+        conf = client.post(f"/api/trades/{fund_leg.id}/confirm", headers=admin_headers)
+        assert conf.status_code == 200, conf.json()
+        assert seen.get("cash_platform") == "P493_OTHER"
 
     def test_reconfirm_after_unconfirm_keeps_single_cash_leg(
         self, client, admin_headers, test_db
@@ -1257,10 +1347,15 @@ class TestReadSideAndPreview:
         assert single["cash_platform_code"] == PLAT
         assert single["cash_confirm_date"] == T.isoformat()
 
-    def test_derived_fields_survive_status_filter_truncation(
+    def test_derived_fields_survive_trade_type_filter_truncation(
         self, client, admin_headers, test_db
     ):
-        """现金腿被状态筛选截断时，基金腿仍能读到到账信息（批量查询不受筛选影响）"""
+        """现金腿被列表筛选**真实截断**时，基金腿仍能读到到账信息
+
+        #527：改按 `trade_type=sell` 筛。卖出组的基金腿是 sell、配对到账腿是 buy，
+        到账腿必然不在页内，断言才有拦截力。旧写法按 `status` 筛——确认后两腿同状态、
+        同在页内，即使派生逻辑退化成「只从页内行取」也照样绿，守护的目标形同虚设。
+        """
         code = "IT493_RD2"
         _seed_portfolio(test_db, code, cash=10000.0, fund_shares=1000.0)
         resp = client.post(
@@ -1278,23 +1373,21 @@ class TestReadSideAndPreview:
             params={"cash_confirm_date": T2.isoformat()},
             headers=admin_headers,
         ).status_code == 200
+        cash_leg = _cash_leg(test_db, _fund_leg(test_db, trade_id))
+        assert cash_leg is not None and cash_leg.trade_type == "buy"
 
-        # 只筛 pending：组内两腿均非 pending，本页为空
         listed = client.get(
             "/api/trades",
-            params={"portfolio_code": code, "status": "pending"},
+            params={"portfolio_code": code, "trade_type": "sell"},
             headers=admin_headers,
         ).json()["items"]
-        assert [i["id"] for i in listed] == []
-        # 筛 confirmed：基金腿仍在，且派生字段完整
-        listed = client.get(
-            "/api/trades",
-            params={"portfolio_code": code, "status": "confirmed"},
-            headers=admin_headers,
-        ).json()["items"]
+        ids = [i["id"] for i in listed]
+        # 截断成立：到账腿被筛选切掉，派生字段只能来自页外的批量查询
+        assert cash_leg.id not in ids
         fund_rows = [i for i in listed if i["id"] == trade_id]
         assert len(fund_rows) == 1
         assert fund_rows[0]["cash_confirm_date"] == T2.isoformat()
+        assert fund_rows[0]["cash_platform_code"] == PLAT
 
     def test_preview_matches_confirm_and_writes_nothing(self, client, admin_headers, test_db):
         """preview 与 confirm 的有效现金平台/日期一致，且 preview 零写入"""

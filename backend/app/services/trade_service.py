@@ -681,7 +681,7 @@ def resolve_cash_leg_plan(
       （快照已含该基金腿则须先删快照）；
     - 卖出到账日 A 缺省 = C，须为交易日且不早于 C；
     - 买入扣款日固定 T：`cash_confirm_date` 只接受等于 T；买入也不允许借确认
-      改扣款平台（`cash_platform_code` 只接受等于既有扣款腿平台）；
+      改扣款平台（`cash_platform_code` 只接受等于既有扣款腿平台，无腿时为基金腿平台）；
     - CASH 腿自身（申赎/现金转移）不参与本计划——调仓 CASH 腿在确认入口已被
       `CASH_TRADE_FORBIDDEN` 拦截，其余现金腿保持既有生命周期。
 
@@ -736,9 +736,10 @@ def resolve_cash_leg_plan(
                 f"买入扣款日固定为下单日 {trade.trade_date}，"
                 f"cash_confirm_date 只接受等于该日",
             )
+        # #526：无腿（存量异常数据/修复路径）时按**基金腿平台**判定既定平台。
+        # 旧写法把入参本身当作既定平台，下面的不等式恒假 → 闸门被自己的 fallback 中和。
         plan_platform = (
-            existing_leg.platform_code if existing_leg
-            else (cash_platform_code or trade.platform_code)
+            existing_leg.platform_code if existing_leg else trade.platform_code
         )
         if cash_platform_code and cash_platform_code != plan_platform:
             raise BusinessError(
@@ -975,12 +976,15 @@ def confirm_single_trade(
         effective_confirm_date = preview["confirm_date"]
         if trade.trade_type == "buy":
             # 买入：按扣款平台校验可用现金（配对 CASH sell 腿平台 + 自身腿加回，
-            # 与创建/编辑共用同一实现；金额缺失的异常数据维持旧口径跳过）
+            # 与创建/编辑共用同一实现；金额缺失的异常数据维持旧口径跳过）。
+            # #526：平台显式取确认计划的 `cash_platform_code`，不再依赖本函数与
+            # `validate_buy_cash_with_addback` 各自独立的 fallback 推导恰好一致。
             if preview["paired_cash_amount"] is not None:
                 validate_buy_cash_with_addback(
                     db, trade.portfolio_code,
                     preview["paired_cash_amount"],
                     as_of=effective_confirm_date,
+                    cash_platform=preview["cash_platform_code"],
                     self_trade=trade,
                 )
         elif trade.trade_type == "sell":

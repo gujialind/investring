@@ -47,9 +47,10 @@ export const subscriptionApi = {
   confirm: (id: number) =>
     request<Subscription>({ method: "POST", url: `/subscriptions/${id}/confirm` }),
 
+  /** 后端只回 `{message}`（无 portfolio_code/status）——失效面须从调用方入参取 code（#519） */
   cancel: (id: number) =>
-    request<Subscription>({ method: "POST", url: `/subscriptions/${id}/cancel` }),
+    request<{ message: string }>({ method: "POST", url: `/subscriptions/${id}/cancel` }),
 
   unconfirm: (id: number) =>
-    request<void>({ method: "POST", url: `/subscriptions/${id}/unconfirm` }),
+    request<{ message: string }>({ method: "POST", url: `/subscriptions/${id}/unconfirm` }),
 };

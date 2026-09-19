@@ -124,12 +124,27 @@ export function cashSubMeta(
 }
 
 /**
- * CASH 孤儿单行的来源标注（§5.8 简化口径：由 transfer_group 前缀推导，不查 subscription、不新增接口）：
- * `sub_` 前缀 → 申赎确认；12 位 hex（现金转移组）被拆散的单腿 → 平台间转移；其余 → 调仓。
+ * CASH 腿的来源分类（`transfer_group` 编码法，见 trade 模型注释与 §5.8）：
+ * `sub_{id}` → 申赎确认；12 位 hex → 平台间转移组；其余（`rebal_{uuid}`）→ 调仓。
+ *
+ * 这里是该分类口径的**唯一**实现：列表的来源标注与调仓生命周期门控都从它派生，
+ * 不再各写一份前缀/正则（#527——两份拷贝曾自述「同源」却互不约束）。
+ */
+export type CashLegOrigin = "subscription" | "transfer" | "rebalance";
+
+export function cashLegOrigin(trade: Trade): CashLegOrigin {
+  const g = trade.transfer_group ?? "";
+  if (g.startsWith("sub_")) return "subscription";
+  if (/^[0-9a-f]{12}$/.test(g)) return "transfer";
+  return "rebalance";
+}
+
+/**
+ * CASH 孤儿单行的来源标注（§5.8 简化口径：由 transfer_group 前缀推导，不查 subscription、不新增接口）。
  */
 export function cashOrphanLabel(trade: Trade): string {
-  const g = trade.transfer_group ?? "";
-  if (g.startsWith("sub_")) return "现金 · 申赎确认";
-  if (/^[0-9a-f]{12}$/.test(g)) return "现金 · 平台间转移";
+  const origin = cashLegOrigin(trade);
+  if (origin === "subscription") return "现金 · 申赎确认";
+  if (origin === "transfer") return "现金 · 平台间转移";
   return "现金 · 调仓";
 }

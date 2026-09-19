@@ -56,6 +56,7 @@ import type { Trade, TradeCreate, TradeUpdate } from "@/types/trade";
 import {
   canEditArrivalDate,
   cashLegArrived,
+  cashLegOrigin,
   cashOrphanLabel,
   cashSubMeta,
   groupTradeRows,
@@ -102,14 +103,10 @@ type ConfirmState =
 /**
  * 调仓 CASH 腿判定（#493 §3.4.5）：现金孤儿行不得露出调仓 CASH 生命周期操作按钮——
  * 这类腿只能由基金腿驱动，直接 confirm/unconfirm/cancel/delete 一律 `CASH_TRADE_FORBIDDEN`。
- * 前缀口径与 `cashOrphanLabel` 同源：12 位 hex = 现金转移组（独立生命周期，仍需按钮）、
- * `sub_` = 申赎现金腿（生命周期在申赎页）、其余 = 调仓。
+ * 组号分类口径取自 `cashLegOrigin`（#527：曾与 `cashOrphanLabel` 各写一份）。
  */
 function isRebalCashLeg(trade: Trade): boolean {
-  const g = trade.transfer_group ?? "";
-  if (!isCashLeg(trade)) return false;
-  if (g.startsWith("sub_") || /^[0-9a-f]{12}$/.test(g)) return false;
-  return true;
+  return isCashLeg(trade) && cashLegOrigin(trade) === "rebalance";
 }
 
 const CONFIRM_TEXT: Record<ConfirmState extends infer S ? S extends { action: string } ? S["action"] : never : never, { title: string; desc: string }> = {

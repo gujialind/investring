@@ -8,8 +8,11 @@ from ir_cli.utils import SUMMARY_FIELDS, build_body, project_fields, resolve_bod
 
 app = typer.Typer(no_args_is_help=True)
 
-# --quiet 时写操作仅输出的关键字段
+# --quiet 时写操作仅输出的关键字段（create/confirm：后端回完整记录）
 QUIET_FIELDS = "id,status,confirm_date"
+# cancel/unconfirm 的后端响应只有 {message}（routers/subscriptions.py），按 QUIET_FIELDS
+# 投影会得到三个 null——比报错更像真值，容易被下游当数据消费（#520）
+QUIET_MESSAGE_FIELDS = "message"
 # 确认后提醒：快照未生成前不计入投资人份额
 SNAPSHOT_HINT = "确认后需生成确认日快照才计入投资人份额: ir snapshot generate --portfolio-code <code> --target-date <confirm_date>"
 
@@ -131,25 +134,25 @@ def confirm(
 @app.command("cancel")
 def cancel(
     id: int = typer.Argument(..., help="申赎ID"),
-    quiet: bool = typer.Option(False, "--quiet", help="仅输出 id/status/confirm_date"),
+    quiet: bool = typer.Option(False, "--quiet", help="仅输出 message（该端点只回 message）"),
 ):
     """取消申赎"""
     client = APIClient.from_config()
     result = client.post(f"/api/subscriptions/{id}/cancel")
     data = result["data"]
-    success(data=project_fields(data, QUIET_FIELDS) if quiet else data)
+    success(data=project_fields(data, QUIET_MESSAGE_FIELDS) if quiet else data)
 
 
 @app.command("unconfirm")
 def unconfirm(
     id: int = typer.Argument(..., help="申赎ID"),
-    quiet: bool = typer.Option(False, "--quiet", help="仅输出 id/status/confirm_date"),
+    quiet: bool = typer.Option(False, "--quiet", help="仅输出 message（该端点只回 message）"),
 ):
     """取消确认"""
     client = APIClient.from_config()
     result = client.post(f"/api/subscriptions/{id}/unconfirm")
     data = result["data"]
-    success(data=project_fields(data, QUIET_FIELDS) if quiet else data)
+    success(data=project_fields(data, QUIET_MESSAGE_FIELDS) if quiet else data)
 
 
 @app.command("update")

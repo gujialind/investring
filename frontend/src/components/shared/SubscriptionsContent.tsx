@@ -275,8 +275,8 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
   const runConfirm = () => {
     if (!confirmState) return;
     const { action, id } = confirmState;
-    if (action === "cancel") cancelSubscription.mutate(id);
-    else if (action === "unconfirm") unconfirmSubscription.mutate(id);
+    if (action === "cancel") cancelSubscription.mutate({ id, portfolioCode: code });
+    else if (action === "unconfirm") unconfirmSubscription.mutate({ id, portfolioCode: code });
     else if (action === "delete") deleteSubscriptionMutation.mutate(id);
     setConfirmState(null);
   };
