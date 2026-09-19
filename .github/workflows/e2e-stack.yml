@@ -229,7 +229,9 @@ jobs:
 
       # main 模式：PLAYWRIGHT_JSON_OUTPUT_FILE 触发 playwright.config.ts 追加 json
       # reporter（#466 flaky 汇总的输入；不改 CLI reporter，避免覆盖 html 的配置）。
+      # step id 是给下面 Summarize 用的：它的两档口径以「E2E 这次成没成功」为判据。
       - name: Run Playwright tests (main)
+        id: e2e_main
         if: inputs.mode == 'main'
         working-directory: frontend
         env:
@@ -254,9 +256,23 @@ jobs:
       # flaky 显性化（#466）：retries 保留（偶发抖动不阻断 PR），但重试转绿的用例
       # 必须可见——汇总数量与清单进 Step Summary，flaky>0 时脚本经 **stderr** 发
       # ::warning::（stdout 已被重定向到 Step Summary，注解走 stderr 才不会被写进报告）。
+      #
+      # 两档口径（#491，与 ci.yml 的 Assert lcov data source 同构）：E2E 成功 ⇒ 这个
+      # 步骤**应该**有 JSON 产物，缺即 json reporter 的 wiring 断了（playwright.config.ts
+      # 的 append 分支被删 / 环境变量改名），门禁会从此静默空转 → --require-input 判红；
+      # E2E 已经红了 ⇒ 缺产物是它自己的症状，只提示 + warning，不给红 job 加噪声。
+      # 注意 outcome 经 env 传入而不是内插进 shell（GitHub 官方建议），且 bash -e 下
+      # 不能用 `[ cond ] && VAR=x`（条件为假时该步会以 rc=1 结束）。
       - name: Summarize flaky tests
         if: always() && inputs.mode == 'main'
-        run: python3 scripts/e2e_flaky_summary.py --input /tmp/e2e-flaky.json >> "$GITHUB_STEP_SUMMARY"
+        env:
+          E2E_OUTCOME: ${{ steps.e2e_main.outcome }}
+        run: |
+          ARGS=""
+          if [ "$E2E_OUTCOME" = "success" ]; then
+            ARGS="--require-input"
+          fi
+          python3 scripts/e2e_flaky_summary.py --input /tmp/e2e-flaky.json $ARGS >> "$GITHUB_STEP_SUMMARY"
 
       # 失败证据（trace/截图/视频）+ 后端启动日志（后端启动失败时的定位证据，
       # issue #172），always 上传保证失败时也能取到

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Playwright JSON reporter 产物 → flaky 用例汇总（issue #466）。
 #
-#   e2e_flaky_summary.py --input /tmp/e2e-flaky.json >> "$GITHUB_STEP_SUMMARY"
+#   e2e_flaky_summary.py --input /tmp/e2e-flaky.json [--require-input] >> "$GITHUB_STEP_SUMMARY"
 #
 # retries>0 时「失败一次后重试通过」的用例在 HTML 报告里就是 passed——flaky 被静默
 # 洗白，与仓库「禁止静默失败」的第一号原则冲突。本脚本把它显性化：清单进 Step Summary，
@@ -17,9 +17,12 @@
 #   任一不一致说明 reporter 形态/过滤配置已变，响亮失败（假绿灯比崩掉更坏，同
 #   normalizer 的口径守卫）。
 #
-# 退出码：flaky 本身**不**影响退出码（重试通过不阻断 PR，只要求可见）；文件缺失
-# （playwright 没跑到产出阶段，E2E job 自己已经红了）也只提示不失败；只有形态守卫
-# 不一致才 exit 非 0。
+# 退出码：flaky 本身**不**影响退出码（重试通过不阻断 PR，只要求可见）；只有形态守卫
+# 不一致才 exit 非 0。产物缺失分两档（#491，口径同 ci.yml 的 Assert lcov data source）：
+# - 未给 --require-input：E2E 自己已经红了（没跑到产出阶段），提示 + ::warning:: 后返回 0，
+#   不给一个已经红的 job 再加一条噪声；
+# - 给了 --require-input：调用方确认 E2E 成功，此时缺产物只可能是 wiring 断了（json
+#   reporter 的 append 分支被删 / 环境变量改名）——门禁会静默空转成永久绿灯，必须红。
 import argparse
 import json
 import os
@@ -59,15 +62,42 @@ def collect(data):
 def main(argv=None):
     p = argparse.ArgumentParser(description="Playwright JSON reporter 产物 → flaky 汇总")
     p.add_argument("--input", required=True, help="playwright JSON reporter 原始产物")
+    p.add_argument(
+        "--require-input",
+        action="store_true",
+        help="E2E 成功时置位：产物缺失即 wiring 断裂，响亮失败（口径见文件头「退出码」段）",
+    )
     args = p.parse_args(argv)
 
     if not os.path.exists(args.input):
+        if args.require_input:
+            sys.exit(
+                f"❌ E2E 已成功却没有 {args.input}：flaky 可见性的 wiring 已断裂——"
+                "① frontend/playwright.config.ts 里按 PLAYWRIGHT_JSON_OUTPUT_FILE 追加"
+                " json reporter 的分支被删或不再命中；② 该环境变量与 --input 指的不是同一路径。"
+                "缺产物 = 汇总永远空转，本步骤不红就再没人知道 flaky 消失了（#491）"
+            )
         print("### E2E flaky 汇总")
         print(f"⚠️ 未找到 {args.input}（playwright 未跑到产出阶段），本次无 flaky 数据")
+        # 不给 --require-input 的那一档（E2E 已红）也要发注解：stdout 被调用方重定向进
+        # Step Summary，而没人会主动点开一个红 job 的 Summary（#491）。
+        print(
+            f"::warning::E2E flaky 汇总无数据（未找到 {args.input}）——"
+            "若本次 E2E 是通过的，说明 json reporter 的 wiring 断了，需修",
+            file=sys.stderr,
+        )
         return
 
-    with open(args.input) as f:
-        data = json.load(f)
+    try:
+        with open(args.input) as f:
+            data = json.load(f)
+    except Exception as e:
+        # 与 e2e_normalize.py 同口径：坏 JSON 是「这次运行本身坏了」，不是用例 fail，
+        # 裸 traceback 会把诊断方向带到脚本身上（#491）。
+        sys.exit(
+            f"❌ {args.input} 不是合法 JSON——playwright 这次运行本身坏了，不是用例 fail：{e}\n"
+            "   常见原因是 reporter 没写完就被中断，或 webServer/配置坏了"
+        )
 
     flaky, total = collect(data)
     stats = data.get("stats", {})

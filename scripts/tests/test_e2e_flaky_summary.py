@@ -1,6 +1,9 @@
 # scripts/e2e_flaky_summary.py 的单测（issue #466）。
 # 与 test_e2e_normalize.py 同构：合成 JSON fixture 是「Playwright JSON reporter 形态
 # 不变」这条外部假设的登记处，Playwright 升级后先跑这里（比人肉实跑一整轮便宜）。
+# 产物缺失分两档（#491）：E2E 已红 → 提示 + ::warning::；E2E 成功（调用方给
+# --require-input）→ 响亮失败，因为缺产物意味着 json reporter 的 wiring 断了、
+# 本步骤会永久空转成绿灯。
 import json
 import sys
 from pathlib import Path
@@ -96,11 +99,49 @@ def test_stats_mismatch_fails_loud(tmp_path, capsys):
 
 
 def test_missing_input_is_not_fatal(tmp_path, capsys):
-    # playwright 没跑到产出阶段（E2E job 自己已经红了）：提示即可，不额外染红
+    # playwright 没跑到产出阶段（E2E job 自己已经红了）：不额外染红，但必须有注解——
+    # stdout 被调用方重定向进 Step Summary，而红 job 的 Summary 没人点开（#491）。
     e2e_flaky_summary.main(["--input", str(tmp_path / "absent.json")])
     captured = capsys.readouterr()
     assert "未找到" in captured.out
-    assert captured.err == ""
+    assert "::warning::" in captured.err
+
+
+def test_missing_input_with_require_flag_fails_loud(tmp_path, capsys):
+    # 调用方确认 E2E 通过却没有产物 = json reporter 的 wiring 断了，门禁从此静默空转，
+    # 必须红（#491；fail-closed 口径同 ci.yml 的 Assert lcov data source）
+    with pytest.raises(SystemExit) as exc:
+        e2e_flaky_summary.main(
+            ["--input", str(tmp_path / "absent.json"), "--require-input"]
+        )
+    assert exc.value.code != 0
+    assert "PLAYWRIGHT_JSON_OUTPUT_FILE" in str(exc.value), (
+        "报错要点名可修的根因，否则又变成一次人肉排查"
+    )
+
+
+def test_require_flag_leaves_the_happy_path_alone(tmp_path, capsys):
+    # --require-input 只改「缺失」那一档的处置；把正常路径也一起变红的实现要让上面
+    # 那条用例通过、同时把本条打红，否则整个 E2E main 模式门禁就没法绿了。
+    data = report(
+        [file_suite([spec_node("用例 A", None, [entry("chromium", "expected", "passed")])])],
+        stats(expected=1),
+    )
+    raw = tmp_path / "raw.json"
+    raw.write_text(json.dumps(data))
+    e2e_flaky_summary.main(["--input", str(raw), "--require-input"])
+    assert "无 flaky 用例" in capsys.readouterr().out
+
+
+def test_invalid_json_is_loud(tmp_path, capsys):
+    # 坏 JSON = 这次运行本身坏了，不是用例 fail；裸 traceback 会把诊断方向带到脚本身上
+    # （对照 test_e2e_normalize.py::test_invalid_json_is_loud，#491）
+    raw = tmp_path / "raw.json"
+    raw.write_text("{不是 JSON")
+    with pytest.raises(SystemExit) as exc:
+        e2e_flaky_summary.main(["--input", str(raw)])
+    assert exc.value.code != 0
+    assert "不是合法 JSON" in str(exc.value)
 
 
 def test_total_mismatch_fails_loud(tmp_path, capsys):
