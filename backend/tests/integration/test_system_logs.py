@@ -90,6 +90,10 @@ class TestSystemLogEndpoints:
         assert body["items"][0]["resource_name"] == "申赎 1"
 
     def test_error_logs_contract(self, client, admin_headers, test_db):
+        # 清表：本表有 test_db 事务之外的写入点——全局异常 handler 经
+        # record_system_error 用独立 SessionLocal 提交（如 test_request_context.py
+        # 刻意触发的 500），残留行不随本用例回滚，会污染 total 与首位断言。
+        test_db.query(SystemErrorLog).delete()
         row = SystemErrorLog(
             error_type="unhandled_exception",
             error_message="boom",
@@ -100,22 +104,16 @@ class TestSystemLogEndpoints:
         test_db.commit()
         test_db.refresh(row)
 
-        # page_size 放大：本表有 test_db 事务之外的写入点——全局异常 handler 经
-        # record_system_error 用独立 SessionLocal 提交（如 test_request_context.py 刻意
-        # 触发的 500），残留行不随本用例回滚，故不断言 total/首位，只断言本行在集内。
-        resp = client.get(
-            "/api/system/logs/error", headers=admin_headers, params={"page_size": 100}
-        )
+        resp = client.get("/api/system/logs/error", headers=admin_headers)
 
         assert resp.status_code == 200
         body = resp.json()
         _assert_pagination_contract(
             body, PaginatedSystemErrorLogResponse, SystemErrorLogResponse
         )
-        assert any(
-            item["id"] == row.id and item["error_message"] == "boom"
-            for item in body["items"]
-        )
+        assert body["total"] == 1
+        assert body["items"][0]["id"] == row.id
+        assert body["items"][0]["error_message"] == "boom"
 
     @pytest.mark.parametrize(
         "path",

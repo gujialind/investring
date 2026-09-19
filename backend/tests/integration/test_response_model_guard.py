@@ -12,10 +12,12 @@
 #   response_class 除外（这两类没有 ORM 直吐问题）。
 # - 白名单逐条给理由，**只减不增**：删掉已声明端点的行会触发 stale 断言，
 #   新增未声明端点必须有新行，否则红。
-# - 互证：与 checked-in `backend/openapi.json` 的「200 无 JSON schema」集合
-#   对齐（漂移由 backend/check_openapi.py 单独守门，本文件只读该文件、不在
-#   测试里调 app.openapi() 生成）。`include_in_schema=False` 的端点不在
-#   openapi 里，故不参与互证（当前为 0 条）。
+# - 互证（两层，与 checked-in `backend/openapi.json` 比对）：① 扫描操作全集 ==
+#   openapi 操作全集——路由整段漏扫（#306 的「半空静默假过关」）会红；② 扫描侧
+#   「未声明 response_model 的 JSON 端点」== openapi 侧「200 带 application/json
+#   媒体类型但 schema 为空壳」集合。`include_in_schema=False` 的端点不在 openapi
+#   里，两层均两侧同时排除。漂移由 backend/check_openapi.py 单独守门，本文件只读
+#   该文件、不在测试里调 app.openapi() 生成。
 # ============================================================================
 
 import json
@@ -28,8 +30,8 @@ OPENAPI_PATH = Path(__file__).resolve().parents[2] / "openapi.json"
 
 # 白名单：(METHODS, path) -> 未声明 response_model 的理由。METHODS 为逗号连接
 # 的升序方法名（与扫描器 _key 同口径）。理由必须写清「响应体的形态为何不适合
-# 单一模型」——纯消息型、包装型、计算派生型、守卫型四类，逐条以 handler 实际
-# 返回语句为准（勿照抄分类猜）。
+# 单一模型」——应用元信息、纯消息型、删除类回执、计算派生型、包装型、守卫型
+# 六类，逐条以 handler 实际返回语句为准（勿照抄分类猜）。
 WHITELIST: dict[tuple[str, str], str] = {
     # ---- 应用元信息（非 /api，探针/欢迎语，固定键）----
     ("GET", "/"): "应用欢迎语，固定 {'message'}；非业务数据",
@@ -54,21 +56,22 @@ WHITELIST: dict[tuple[str, str], str] = {
     ("DELETE", "/api/trades/{id}"): "删除回执，仅 {'message'}",
     ("POST", "/api/trades/{id}/cancel"): "取消回执，仅 {'message'}",
     ("POST", "/api/trades/{id}/unconfirm"): "回退确认回执，仅 {'message'}",
+    # ---- 删除类回执：message + 级联/形态明细，键随分支不同 ----
     ("DELETE", "/api/snapshots/{portfolio_code}/{snapshot_date}"):
-        "删除回执，message 文本内嵌级联计数，键随级联分支可变（cascaded_subscriptions/events）",
+        "删除回执（success/deleted/message）；有级联回退时追加 cascaded_subscriptions/events",
     ("DELETE", "/api/snapshots/{portfolio_code}/bulk/{from_date}"):
-        "同路径两形态：dry_run 预览与实际删除的键不同（dry_run/snapshot_dates vs details/deleted_count）",
-    # ---- 计算/派生型：service 计算的即席 dict，键随业务分支变化 ----
+        "同路径三形态：dry_run 预览（dry_run/count/snapshot_dates）、无快照可删、实际删除（+details 明细）",
+    # ---- 计算/派生型：service 即席拼装的 dict，无对应 schema ----
     ("GET", "/api/market-data/products/{code}/{market}/nav-coverage"):
-        "覆盖率计算结果 dict，键随区间与缺失数据变化（service 拼装）",
+        "覆盖率计算结果 dict（8 个固定键，仅 coverage 可空），无对应 schema、未收口",
     ("POST", "/api/market-data/products/{code}/{market}/sync-price-data"):
-        "同步结果 dict（source/message/计数），随数据源与成功失败分支变化",
+        "同步结果 dict（success/message/synced_count/source 四键）；失败分支走 400/404/500 抛出",
     ("POST", "/api/market-data/products/{code}/{market}/sync-history"):
         "同 sync-price-data 的同步结果 dict（历史区间口径）",
     ("GET", "/api/portfolios/{code}/cash-flow"):
-        "现金流计算结果 dict，随期间与交易类型变化（service 拼装）",
+        "现金流计算结果 dict（4 个固定键：portfolio_code/total_inflow/total_outflow/net_inflow），无对应 schema",
     ("GET", "/api/portfolios/{code}/returns"):
-        "收益计算结果 dict（累计/年化），随快照区间变化（service 拼装）",
+        "收益计算结果 dict（6 个固定键，无快照时字段为 null），无对应 schema",
     ("GET", "/api/positions/portfolio/{portfolio_code}/available-cash"):
         "即席可用现金 dict；platform_code 键仅在传参时出现",
     ("GET", "/api/positions/portfolio/{portfolio_code}/product/{product_code}/available-shares"):
@@ -97,7 +100,8 @@ WHITELIST: dict[tuple[str, str], str] = {
         "#406 刻意保持 message + 任务 runner 结果的动态键（log_cleanup 与其它任务两套形态）",
     # ---- 包装型：message + 既有 Response 嵌套，非单一模型 ----
     ("POST", "/api/subscriptions/{id}/confirm"):
-        "回执 message + SubscriptionResponse 嵌在 subscription 键，另平铺 7 个标量",
+        "回执 message + SubscriptionResponse 嵌在 subscription 键，另平铺 8 个标量"
+        "（id/portfolio_code/sub_type/amount/shares/unit_price/status/confirm_date）",
     ("POST", "/api/trades/{id}/confirm"):
         "回执 message + TradeResponse 嵌在 trade 键，另平铺 id/portfolio_code/trade_type/status/confirm_date",
     ("POST", "/api/share-change-events/{id}/confirm"):
@@ -131,11 +135,30 @@ def _format(keys) -> str:
     return "\n".join(f'    ("{m}", "{p}"): "…",' for m, p in sorted(keys))
 
 
+def _spec_ops() -> set[tuple[str, str]]:
+    """checked-in openapi.json 的全部操作集合（跳过 path 级 parameters/summary 等非操作键）"""
+    spec = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    return {
+        (method.upper(), path)
+        for path, item in spec["paths"].items()
+        for method in item
+        if method in _JSON_METHODS
+    }
+
+
+def _in_schema_ops() -> set[tuple[str, str]]:
+    """app 扫描到的、应在 openapi 里的操作全集（`include_in_schema=False` 除外）"""
+    return {_key(op) for op in scan_operations(app) if op.include_in_schema}
+
+
 def _empty_200_ops_from_spec() -> set[tuple[str, str]]:
-    """checked-in openapi.json 中「200 响应无 JSON schema」的操作集合
+    """checked-in openapi.json 中「200 带 application/json 媒体类型但 schema 为空壳」的操作集合
 
     未声明 response_model 时 FastAPI 仍写 `content.application/json.schema = {}`
-    （content 存在但 schema 为空壳），故判据是 schema 为空而非 content 缺失。
+    （媒体类型在册但 schema 为空壳），故判据是「200 键存在 + application/json 在册
+    + 其 schema 为空」。非 JSON 响应（如 PlainTextResponse）无 application/json
+    媒体类型，不入集——与扫描侧 returns_json() 对称，避免假红。非 200 成功码不在本
+    子集口径内，端点缺声明仍由白名单断言与操作全集互证暴露。
     """
     spec = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
     found = set()
@@ -143,10 +166,13 @@ def _empty_200_ops_from_spec() -> set[tuple[str, str]]:
         for method, operation in item.items():
             if method not in _JSON_METHODS:
                 continue  # 跳过 path 级 parameters/summary 等非操作键
-            response_200 = (operation.get("responses") or {}).get("200") or {}
-            content = response_200.get("content") or {}
-            schema = (content.get("application/json") or {}).get("schema")
-            if not schema:
+            response_200 = (operation.get("responses") or {}).get("200")
+            if not response_200:
+                continue
+            media = (response_200.get("content") or {}).get("application/json")
+            if media is None:
+                continue
+            if not media.get("schema"):
                 found.add((method.upper(), path))
     return found
 
@@ -177,12 +203,33 @@ class TestResponseModelGuard:
         blank = [key for key, reason in WHITELIST.items() if not reason.strip()]
         assert not blank, f"白名单理由为空：{_format(blank)}"
 
+    def test_scan_covers_openapi_operation_set(self):
+        """扫描操作全集 == openapi 操作全集（路由整段漏扫也会红，防「半空」假过关）
+
+        只看「无 200 schema」子集时，已声明 response_model 的路由整段消失不改变该
+        子集（#306 的「半空静默假过关」）。这里做全量互证：扫描侧少任何一条操作
+        （如升级后某路由的懒物化代理不再产出 contexts）都会红。
+        `include_in_schema=False` 的端点不在 openapi 里，两层均两侧同时排除。
+        """
+        scan_ops = _in_schema_ops()
+        spec_ops = _spec_ops()
+        only_spec = spec_ops - scan_ops
+        only_scan = scan_ops - spec_ops
+        assert not only_spec and not only_scan, (
+            "app 扫描与 backend/openapi.json 的操作全集不一致：\n"
+            f"  仅在 openapi（扫描器漏扫该路由，或端点被设为 include_in_schema=False）：\n{_format(only_spec)}\n"
+            f"  仅在扫描（openapi.json 未重导，或扫描到非 openapi 路由）：\n{_format(only_scan)}\n"
+            "扫描器局部退化会在此整段暴露；若刚改过 router/schema，"
+            "请按 backend/check_openapi.py 头部步骤重导 openapi.json。"
+        )
+
     def test_openapi_empty_200_ops_match_whitelist(self):
         """与 checked-in openapi.json 互证：无 200 JSON schema 的操作恰为登记集合
 
         两个独立来源（app 反射扫描 vs 契约快照）必须一致：扫描器若退化扫不到
-        端点，这里会多出 openapi 侧的条目而报红。`include_in_schema=False` 的
-        端点不在 openapi 内，不参与互证（当前为 0 条）。
+        端点，这里会多出 openapi 侧的条目而报红。全量操作集的局部退化由
+        test_scan_covers_openapi_operation_set 兜底；`include_in_schema=False`
+        的端点不在 openapi 内，两侧同时排除、不参与互证。
         """
         actual_in_schema = _missing_response_model(in_schema_only=True)
         spec_ops = _empty_200_ops_from_spec()

@@ -70,7 +70,8 @@ def _funcs_from_depends(depends) -> set:
 
 def _join_prefix(prefix: str, path: str) -> str:
     """幂等拼接前缀：0.136 存的已是全路径、0.141 的 context.path 也是全路径，
-    两者都不能重复拼；出现相对路径时（未来形状）才补前缀。
+    两者都不能重复拼。补前缀分支当前不可达（0.141 实测 path 恒为全路径）；注意
+    该分支只对「以 / 开头的相对路径」拼得正确，真出现无前导斜杠的形态需先归一再拼。
     """
     if not prefix or path == prefix or path.startswith(prefix + "/"):
         return path
