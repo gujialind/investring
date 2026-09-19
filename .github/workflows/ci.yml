@@ -60,8 +60,11 @@ on:
     # labeled：e2e-compare 的 e2e-morph-expected 豁免靠打标签触发重跑
     #（手动 re-run 不刷新 event payload，看不到新标签）
     types: [opened, synchronize, reopened, labeled]
-  # 手动全量（main 上按需重跑完整 CI，或对任意 ref 触发全量验证；唯一的
+  # 手动全量（main 上按需重跑完整 CI，或对任意 ref 触发全量 job 集；唯一的
   # per-branch 全量手段）。
+  # ⚠️「全量」指 job 集，不含 PR-only 步骤：前后端两处 diff-cover 增量门禁及其配套
+  # 断言都带 `if: github.event_name == 'pull_request'`，dispatch 事件下整段 skip——
+  # 增量覆盖率只对「本 PR 改动行」有意义，没有 base.sha 就无从比对（#509 订正措辞）。
   # ⚠️ 手动触发的 run 同样被 deploy.yml 的 `workflow_run.event == 'push'` 守卫挡住，
   # 不会触发 CD——该守卫不可删，理由见 deploy.yml setup job 注释。
   workflow_dispatch:
@@ -436,14 +439,29 @@ jobs:
       # 与下方守卫的分工：守卫管「本 PR 改动行的归因」，本步管「数据源本身可用」。
       # SF 断言只按前缀（frontend/）而非具体分母路径写，避免与 coverage.include 的
       # 后续调整（如 #505）耦合。
+      #
+      # 分母棘轮（#509）：前缀断言只看「有没有 frontend/ 的 SF」，看不见「变少」。
+      # 收窄或删除 vitest.config.ts 的 coverage.include 会让文件从 lcov 里消失，而
+      # diff-cover 只忠实汇报拿到的那部分——实测把 include 收到只剩一个文件时 SF=1、
+      # 四项覆盖全 100%、门禁 exit 0，即「门禁变松 + 数字变好」，其余守卫全部无感。
+      # 只有「分母文件数」这把尺能看见，故此处按数量设下限（只增不减，与全局阈值同款
+      # 棘轮）。改 coverage.include 必须同批改 LCOV_SF_MIN（连带 frontend/AGENTS.md §3
+      # 与 scripts/tests/test_ci_frontend_coverage.py 的期望值）。
       - name: Assert lcov data source (PR)
         if: github.event_name == 'pull_request'
         working-directory: .
         run: |
+          set -o pipefail
+          LCOV_SF_MIN=10
           test -s frontend/coverage/lcov.info \
             || { echo "::error::frontend/coverage/lcov.info 缺失或为空，增量门禁会静默空转"; exit 1; }
           grep -q '^SF:frontend/' frontend/coverage/lcov.info \
             || { echo "::error::lcov 的 SF 不是仓库根相对路径（frontend/...），增量门禁会静默空转；复核 vitest.config.ts 的 lcovonly projectRoot 与运行 cwd"; exit 1; }
+          sf=$(sed -n 's/^SF:\(frontend\/.*\)$/\1/p' frontend/coverage/lcov.info | sort -u | wc -l)
+          if [ "${sf}" -lt "${LCOV_SF_MIN}" ]; then
+            echo "::error::lcov 只描述了 ${sf} 个 frontend 文件，低于分母下限 ${LCOV_SF_MIN}——coverage.include 被收窄或测试没跑全？增量门禁的分母会跟着变小且不会有任何其他守卫变红，请复核 vitest.config.ts 与本步骤下限"
+            exit 1
+          fi
 
       - name: Diff coverage gate (PR changed lines)
         if: github.event_name == 'pull_request'
@@ -451,37 +469,73 @@ jobs:
         run: |
           diff-cover frontend/coverage/lcov.info \
             --compare-branch=${{ github.event.pull_request.base.sha }} \
-            --fail-under=80 --format markdown:diff-cover.md
+            --fail-under=80 --format markdown:diff-cover.md,json:diff-cover.json
 
       - name: Append diff coverage summary
         if: always() && github.event_name == 'pull_request'
         working-directory: .
-        run: cat diff-cover.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+        run: |
+          # 报告不存在时也要留一行出口，否则摘要里连「没有摘要」都看不出来（#509）。
+          # 判断放 step 内而非给 step 加 always() 之外的分支：单测先红时宁可少一段摘要，
+          # 也不要给一个与失败原因无关的红。
+          if [ -s diff-cover.md ]; then
+            cat diff-cover.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 增量覆盖率（本 PR 改动行）" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ 未生成 diff-cover.md，无法汇总（门禁步骤未跑到产出阶段？）" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      # 门禁退化可见化（沿用 backend-test 的口径）：lcov.info↔git 的路径映射若断裂，
-      # diff-cover 会输出「No lines with coverage information」并 exit 0——门禁静默
-      # 空转（改动行一行没被约束而 CI 全绿）。
-      # scope 必须与覆盖率口径同源（frontend/vitest.config.ts 的 include∖exclude）：
-      # 排除 src/lib/api/**（有意不计分母）与 colocated 测试文件，否则「只改 api/测试」
-      # 这类常规 PR 会命中「有新增行 + 无覆盖率数据」而发假告警，把本就微弱的 warning
-      # 通道噪声化。改 include/exclude 时必须同步改这里。
-      - name: Warn on unmapped diff (PR)
+      # 归因断裂可见化（#509 替换原 `Warn on unmapped diff (PR)`）。旧判据有两处自身哑火：
+      # ① 靠 grep markdown 里的 `No lines with coverage information`——diff-cover 的自由
+      # 文案，升级改词即永久失配；② 自己 `git diff --numstat -- frontend/src/lib …` 重算
+      # 一遍分母——目录改名时 git 不报错、added=0 ⇒ 守卫静默变哑，且与 vitest.config.ts
+      # 的 include 是第二次硬编码，改分母必然漏同步（#505 正落在这条线上）。
+      # 新判据是集合比对：missing = (C ∩ D) − S，其中 C = 本 PR 改动的 frontend/src 下
+      # .ts/.tsx 源文件（排除 colocated 测试，不猜分母目录）、D = lcov 的 SF 集、
+      # S = diff-cover.json 的 src_stats 键集，三者同为「仓库根相对 + unix 分隔符」口径。
+      # 档位仍为 warning 而非红：C ∩ D − S 有合法成因（改动行全是注释/类型/空行 ⇒
+      # measured_lines 为 0，diff-cover 把该文件从 src_stats 滤掉），按「检出即红」会把
+      # 本就微弱的 warning 通道噪声化。真正该红的两档另有其人：分母变小归上面的棘轮，
+      # 报告为空归门禁本体。
+      - name: Warn on attribution gap (PR)
         if: always() && github.event_name == 'pull_request'
         working-directory: .
         run: |
-          # 默认 shell 是 `bash -e {0}`（无 pipefail），git diff 失败会被 awk 吞成 added=0
-          # 而静默跳过告警——显式开 pipefail 并单独报告该失败（仍不 fail：守卫本身是诊断品）
+          # 默认 shell 是 `bash -e {0}`（无 pipefail）：不显式开启则 git diff 失败会被
+          # 吞成空清单而静默跳过告警。各管道都得为「本 PR 没碰前端」这类空结果兜底，
+          # 否则 grep 的 exit 1 会在 -e 下把诊断步骤本身弄红。
           set -o pipefail
-          if ! added=$(git diff --numstat "${{ github.event.pull_request.base.sha }}...HEAD" \
-              -- frontend/src/lib ':(exclude)frontend/src/lib/api' \
-                 ':(exclude)frontend/src/lib/*.test.ts' ':(exclude)frontend/src/lib/*.test.tsx' \
-              | awk '{s+=$1} END {print s+0}'); then
-            echo "::warning::无法计算 frontend/src/lib 的改动行（git diff 失败，如 base.sha 不可达）——本轮空转守卫未生效，请人工确认增量门禁是否仍有约束"
+          base="${{ github.event.pull_request.base.sha }}"
+          case "${base}" in
+            '' | *[!0-9a-fA-F]*)
+              echo "::warning::base.sha 不是合法 commit SHA（事件 payload 异常？）——归因守卫本轮未生效，请人工确认增量门禁是否仍有约束"
+              exit 0
+              ;;
+          esac
+          if [ ! -s diff-cover.json ]; then
+            echo "::warning::diff-cover.json 缺失或为空，无法做归因断言（门禁步骤未产出 JSON？）——请人工确认增量门禁是否仍有约束"
             exit 0
           fi
-          if [ "${added}" -gt 0 ] && grep -q 'No lines with coverage information' diff-cover.md 2>/dev/null; then
-            echo "::warning::本次改动往 frontend/src/lib/ 新增了 ${added} 行（口径内源文件），但 diff-cover 未测到任何改动行——可能是 lcov.info↔git 路径映射断裂、增量门禁空转，请人工确认"
+          work=$(mktemp -d)
+          trap 'rm -rf "${work}"' EXIT
+          if ! git diff --name-only "${base}...HEAD" -- frontend/src > "${work}/changed_raw"; then
+            echo "::warning::无法取得 ${base}...HEAD 的改动清单（base.sha 不可达？）——归因守卫本轮未生效，请人工确认增量门禁是否仍有约束"
+            exit 0
           fi
+          grep -E '\.tsx?$' "${work}/changed_raw" \
+            | grep -vE '\.test\.tsx?$' | sort -u > "${work}/changed" || true
+          sed -n 's|^SF:\(frontend/.*\)$|\1|p' frontend/coverage/lcov.info \
+            | sort -u > "${work}/measured"
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            for (const k of Object.keys(j.src_stats || {})) console.log(k);
+          ' diff-cover.json | sort -u > "${work}/reported"
+          comm -12 "${work}/changed" "${work}/measured" > "${work}/in_scope"
+          comm -23 "${work}/in_scope" "${work}/reported" > "${work}/missing"
+          while IFS= read -r f; do
+            echo "::warning::${f} 有改动行且 lcov 里有覆盖率记录，却没进 diff-cover.json 的 src_stats——该文件的改动行未被增量门禁约束。改动行全为注释/类型/空行属合法成因，否则请复核 lcov↔git 的路径归因"
+          done < "${work}/missing"
+          exit 0
 
       # 覆盖率摘要进 PR 页（issue #465）；tests 失败时也写，便于看是阈值还是断言红
       - name: Append coverage summary
@@ -514,6 +568,7 @@ jobs:
             frontend/coverage/
             frontend/junit.xml
             diff-cover.md
+            diff-cover.json
           retention-days: 14
 
       # 失败用例以 PR 注解标到文件行（issue #465），同 backend-test 的处置

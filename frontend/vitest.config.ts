@@ -30,7 +30,7 @@ import { defineConfig } from "vitest/config";
 // **git root** 解析，只有从仓库根的 frontend/ 下运行（CI 由 job 的 working-directory
 // 保证）才会得到 frontend/src/... 前缀；否则（如从仓库根跑 npx vitest --root frontend）
 // SF 会变成 src/lib/x.ts、匹配不到任何改动行、门禁静默空转（CI 侧有 warning 守卫与
-// lcov 数据源断言兜底，见 ci.yml 的 `Warn on unmapped diff (PR)` 与 `Assert lcov data source (PR)`）。
+// lcov 数据源断言兜底，见 ci.yml 的 `Warn on attribution gap (PR)` 与 `Assert lcov data source (PR)`）。
 // CI 另产 JUnit XML 供 PR 注解（本地保持默认 reporter，不落文件）。
 export default defineConfig({
   resolve: {
@@ -44,6 +44,16 @@ export default defineConfig({
       : ["default"],
     coverage: {
       provider: "v8",
+      // ⚠️ 下面这三行是**全局阈值与 CI 增量门禁共用的分母开关**（#509）：diff-cover 只
+      // 忠实汇报 lcov 给它的那部分，所以收窄/删除 include 的失效方向是「门禁变松 + 覆盖
+      // 率数字变好」——实测收到只剩一个文件时四项全 100%、门禁 exit 0，没有任何其他守卫
+      // 会红。唯一能看见这件事的是 ci.yml `Assert lcov data source (PR)` 里的分母文件数
+      // 下限（LCOV_SF_MIN），改这里必须同批改那里。
+      // include 之外还有一个隐式前提：vitest 5 的 `coverage.all` 默认为真，故**未被任何
+      // 测试 import 的分母文件也会以 0% 进入 lcov**（2026-09-19 实测：新建 src/lib 文件、
+      // 无测试引用 → SF 10→11、LF=2/LH=0，随即被 `--fail-under=80` 判红）。这正是
+      // 「0% 新文件拦得住」的全部机制，也是不该在此显式写 `all: false` 的理由——写了它
+      // 就等于关掉新文件的可见性（守门断言见 scripts/tests/test_ci_frontend_coverage.py）。
       include: ["src/lib/**/*.{ts,tsx}"],
       exclude: ["src/lib/api/**", "**/*.test.{ts,tsx}"],
       reporter: ["text", "json-summary", ["lcovonly", { projectRoot: ".." }]],

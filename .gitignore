@@ -104,6 +104,7 @@ frontend/junit.xml
 backend/junit.xml
 diff-cover.md
 
+
 # Playwright
 frontend/playwright-report/
 frontend/test-results/
