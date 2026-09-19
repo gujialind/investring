@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 export type InputProps = React.InputHTMLAttributes<HTMLInputElement>;
 
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type, ...props }, ref) => {
+  ({ className, type, onWheel, ...props }, ref) => {
     return (
       <input
         type={type}
@@ -13,6 +13,12 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
           className
         )}
         ref={ref}
+        onWheel={(e) => {
+          // 数字框聚焦时滚轮只滚动页面、不改值（#566）：失焦即可；
+          // React 根节点 wheel 是 passive 监听，合成事件里 preventDefault 无效
+          if (type === "number") e.currentTarget.blur();
+          onWheel?.(e);
+        }}
         {...props}
       />
     )

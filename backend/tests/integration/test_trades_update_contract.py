@@ -312,6 +312,114 @@ class TestUpdateTradeValidation:
         # fee 联动重算净额列（actual_amount 不变）
         assert float(data["actual_amount"]) == 5000.0
         assert float(data["amount"]) == 4990.0
+        # #565：price/fee 变动后份额按创建同口径重算 (5000−10)/1.6
+        assert float(data["shares"]) == 3118.75
+
+    # ---- #565 买入份额纯派生（与创建同口径）----
+
+    def test_update_buy_price_only_rederives_shares(self, client, admin_headers, test_db):
+        """仅改 price：份额按 (actual_amount−fee)/新价 重算，金额列不动（#565 主场景）"""
+        self._setup(test_db, code="U182_P14", cash=5000.0)
+        trade_id = self._create_buy(client, admin_headers, code="U182_P14", amount=5000.0)
+        # 创建口径：shares = 5000/1.5 = 3333.33
+        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        assert float(got.json()["shares"]) == 3333.33
+
+        upd = client.put(
+            f"/api/trades/{trade_id}",
+            json={"price": 1.6},
+            headers=admin_headers,
+        )
+        assert upd.status_code == 200, f"Response: {upd.status_code} {upd.json()}"
+        data = upd.json()
+        assert float(data["shares"]) == 3125.0  # 5000/1.6
+        assert float(data["actual_amount"]) == 5000.0
+        assert float(data["amount"]) == 5000.0
+
+    def test_update_buy_fee_rederives_shares(self, client, admin_headers, test_db):
+        """仅改 fee：份额按新净额/旧价重算（#565）"""
+        self._setup(test_db, code="U182_P15", cash=5000.0)
+        trade_id = self._create_buy(client, admin_headers, code="U182_P15", amount=5000.0)
+
+        upd = client.put(
+            f"/api/trades/{trade_id}",
+            json={"fee": 10.0},
+            headers=admin_headers,
+        )
+        assert upd.status_code == 200, f"Response: {upd.status_code} {upd.json()}"
+        data = upd.json()
+        assert float(data["actual_amount"]) == 5000.0
+        assert float(data["amount"]) == 4990.0
+        assert float(data["shares"]) == 3326.67  # 4990/1.5
+
+    def test_update_buy_price_and_amount_together(self, client, admin_headers, test_db):
+        """price 与 amount 同改：份额按终值 (新actual−fee)/新价 重算（#565）"""
+        self._setup(test_db, code="U182_P16", cash=5000.0)
+        trade_id = self._create_buy(client, admin_headers, code="U182_P16", amount=5000.0)
+
+        upd = client.put(
+            f"/api/trades/{trade_id}",
+            json={"price": 2.0, "amount": 4000.0},
+            headers=admin_headers,
+        )
+        assert upd.status_code == 200, f"Response: {upd.status_code} {upd.json()}"
+        data = upd.json()
+        assert float(data["actual_amount"]) == 4000.0
+        assert float(data["shares"]) == 2000.0  # 4000/2.0
+
+    def test_update_buy_explicit_shares_overrides_derivation(self, client, admin_headers, test_db):
+        """price 与 shares 同传：显式 shares 优先于派生（保持 API 契约）"""
+        self._setup(test_db, code="U182_P17", cash=5000.0)
+        trade_id = self._create_buy(client, admin_headers, code="U182_P17", amount=5000.0)
+
+        upd = client.put(
+            f"/api/trades/{trade_id}",
+            json={"price": 2.0, "shares": 1234.5},
+            headers=admin_headers,
+        )
+        assert upd.status_code == 200, f"Response: {upd.status_code} {upd.json()}"
+        assert float(upd.json()["shares"]) == 1234.5
+
+    def test_update_otc_buy_no_price_keeps_shares_zero(self, client, admin_headers, test_db):
+        """场外无价买入改金额：份额保持占位 0，待确认按净值自愈（#565 不破坏 OTC 路径）"""
+        create_portfolio(test_db, code="U182_P18", status="active")
+        create_product(test_db, code="FUND_565", market="CN_OTC",
+                       product_type="OEF", asset_class_code="ASSET_STOCK",
+                       confirm_days=0)
+        create_platform(test_db, code="U182_P18_PL")
+        ensure_trading_day(test_db, date(2025, 10, 6), is_open=True)
+        create_trade(
+            test_db, "U182_P18", "CASH", "",
+            trade_type="buy", amount=50000.0, price=None,
+            platform_code="U182_P18_PL", trade_date=date(2025, 10, 3),
+            confirm_date=date(2025, 10, 3), status="confirmed",
+        )
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": "U182_P18",
+                "product_code": "FUND_565",
+                "market": "CN_OTC",
+                "trade_type": "buy",
+                "amount": 10000.0,
+                "platform_code": "U182_P18_PL",
+                "trade_date": "2025-10-06",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), f"Response: {resp.status_code} {resp.json()}"
+        trade_id = resp.json()["id"]
+
+        upd = client.put(
+            f"/api/trades/{trade_id}",
+            json={"amount": 12000.0, "fee": 200.0},
+            headers=admin_headers,
+        )
+        assert upd.status_code == 200, f"Response: {upd.status_code} {upd.json()}"
+        data = upd.json()
+        assert float(data["actual_amount"]) == 12000.0
+        assert float(data["amount"]) == 11800.0
+        assert float(data["shares"]) == 0.0
 
     # ---- 状态/CASH 腿拦截 ----
 
