@@ -12,6 +12,8 @@ JSON 输出协议
 - 1: 业务错误（可换参数重试）
 - 2: 认证错误（需 ir auth login）
 - 3: 连接/超时错误（可原样重试或检查服务）
+- 64: 用法错误（选项/参数不存在，命令本身没跑；取 sysexits.h EX_USAGE，
+  不与上面任何一档语义重叠——#520：Click 缺省也返回 2，会被误读成「未登录」）
 """
 import json
 import sys
@@ -62,6 +64,7 @@ def success(data: Any, meta: Optional[dict] = None, hints: Optional[list] = None
 EXIT_BUSINESS = 1
 EXIT_AUTH = 2
 EXIT_CONNECTION = 3
+EXIT_USAGE = 64  # sysexits.h EX_USAGE；用法错误（#520）
 
 
 def error(
@@ -78,7 +81,7 @@ def error(
         code: 错误码，如 NOT_FOUND, VALIDATION_ERROR
         message: 人类可读错误描述
         details: 额外详情
-        exit_code: 退出码（1=业务 2=认证 3=连接）
+        exit_code: 退出码（1=业务 2=认证 3=连接 64=用法，见模块 docstring）
         hints: 补救指引；缺省时按 code+details 自动生成（get_hint，issue #86）
     """
     result: dict = {

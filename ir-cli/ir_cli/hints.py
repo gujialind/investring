@@ -49,6 +49,8 @@ ERROR_HINTS: dict = {
     "INVALID_NAV_LAG_DAYS": "nav_lag_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；修正后重试: ir product update <code> <market> --nav-lag-days <N>",
     "INVALID_CONFIRM_DAYS": "confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；修正后重试: ir product update <code> <market> --confirm-days <N>",
     "CONFIRM_REQUIRED": "不可逆操作需 --yes 确认，可先加 --dry-run 预览影响范围",
+    # CLI 侧错误码（后端不产出）：#520 用法错误改由入口统一收敛为 JSON + exit 64
+    "USAGE_ERROR": "选项/参数不存在或必填缺失，命令未执行：先 ir schema --index 定位命令，再 ir <组> <子命令> --help 看该命令全部选项",
 }
 
 

@@ -82,7 +82,10 @@ ir schema trade              # 仅输出指定命令组
 - `meta`：分页元数据（仅列表命令返回），包含 `total`（总数）、`page`（当前页）、`page_size`（每页大小）
 - `hints`：可选的顶层提示数组（如 create 返回 pending 时提示 confirm）
 
-### 3.2 错误响应（exit code 1=业务错误 / 2=认证错误 / 3=连接错误）
+### 3.2 错误响应（exit code 1=业务错误 / 2=认证错误 / 3=连接错误 / 64=用法错误）
+
+未知选项、未知子命令、缺必填参数也走同一份 JSON（`code="USAGE_ERROR"`，exit 64），
+不再只往 stderr 打一行人读文本——脚本与 agent 只需读 stdout 即可判定全部失败类别。
 
 ```json
 {
@@ -112,6 +115,7 @@ ir schema trade              # 仅输出指定命令组
 | `HTTP_ERROR` | 其余非 2xx 兜底 |
 | `CONNECTION_ERROR` / `TIMEOUT_ERROR` / `NETWORK_ERROR` | 网络层失败：连接失败 / 超时 / 传输中断 |
 | `INVALID_JSON` | 本地校验：`--json` 不是合法 JSON 对象 |
+| `USAGE_ERROR` | Click 层用法错误：未知选项 / 未知子命令 / 缺必填参数。由入口统一收敛（`ir_cli/main.py::IrTyperGroup`），**exit 64**、命令未执行（#520） |
 
 **常见后端码摘选**（完整清单与触发条件见总表）：
 
@@ -164,7 +168,7 @@ ir schema trade              # 仅输出指定命令组
 - **`ir portfolio context <code>`**：操作前侦察聚合命令，一次返回组合详情/快照状态/实时可用现金/pending 申赎交易，替代 4-5 次分步查询。
 - **`hints` 字段**：错误响应按错误码自动附加 `error.hints`（下一步补救命令，如 `SNAPSHOT_DEPENDENCY` → 先 `ir snapshot delete-bulk`）；关键写操作成功后输出顶层 `hints`（如 create 返回 pending 时提示 confirm、confirm 后提示生成快照）。映射表见 `ir_cli/hints.py`。
 - **摘要字段默认输出**：`trade list` / `sub list` / `position list` / `log login|audit|error` 默认仅输出摘要字段（见 `ir_cli/utils.py::SUMMARY_FIELDS`），`--full` 输出全字段；优先级：显式 `--fields` > `--full` > 摘要预设。
-- **`--quiet`**：`trade` / `sub` 的 create/confirm/cancel/unconfirm 仅输出 `{id, status, confirm_date}`。
+- **`--quiet`**：`trade` / `sub` 的 create/confirm 仅输出 `{id, status, confirm_date}`；cancel/unconfirm 的后端响应本身只有 `{message}`，故这两类命令 `--quiet` 输出 `{message}`（不臆造后端未返回的 id/status，#520）。
 - **`--json`**：所有 create/update 命令支持 `--json` 传完整 JSON 请求体，优先于逐项参数，适合复杂请求。
 - **`--all`**：列表命令自动翻页获取全部记录。
 - **plain help**：全部 `--help` 为无框线/无 ANSI 的纯文本输出，顶层 `ir --help` 含输出协议与退出码速览。
@@ -1648,7 +1652,9 @@ if [ $exit_code -ne 0 ]; then
 fi
 ```
 
-**退出码：** 0=成功 / 1=业务错误(可换参重试) / 2=认证错误(需 `ir auth login`) / 3=连接/超时
+**退出码：** 0=成功 / 1=业务错误(可换参重试) / 2=认证错误(需 `ir auth login`) / 3=连接/超时 / 64=用法错误(选项/参数不存在，看 `ir schema --index` 与 `--help` 换参数，**不要**重跑 `ir auth login`)
+
+> 1 与 64 的处置不同：1 表示命令跑到后端并被业务规则拒绝（换参数值可能成功），64 表示命令根本没执行（参数名本身不对，重试同一串参数必然再错）。
 
 ### 6.3 链式操作
 

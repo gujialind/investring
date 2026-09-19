@@ -21,6 +21,7 @@ PROTOCOL = {
         "1": "业务错误（可换参数重试）",
         "2": "认证错误（需 ir auth login）",
         "3": "连接/超时错误（可原样重试或检查服务）",
+        "64": "用法错误（选项/参数不存在或必填缺失，命令未执行；换参数前先看 --help，勿重登录）",
     },
 }
 
@@ -29,7 +30,7 @@ CONVENTIONS = {
     "--fields": "list 类命令按逗号分隔字段名裁剪输出",
     "--all": "list 类命令自动翻页获取全部记录",
     "--full": "list 类命令输出全字段（默认仅摘要字段）",
-    "--quiet": "trade/sub 写操作仅输出 {id,status,confirm_date}",
+    "--quiet": "trade/sub 的 create/confirm 仅输出 {id,status,confirm_date}；cancel/unconfirm 后端只回 {message}，--quiet 即输出 {message}（无 id/status 可给，#520）",
     "output.fields": "命令条目 output.fields 为响应字段契约：`*`前缀=默认摘要字段，`?`后缀=可空；notes 含字段级警示（如恒为null的字段）",
     "--index": "ir schema --index 输出极简命令索引（<1KB），再按 ir schema <group> 精确加载，较全量省约59% token",
     "env": ["IR_BASE_URL", "IR_TOKEN", "IR_CONNECT_TIMEOUT", "IR_HTTP_TIMEOUT", "IR_RETRY", "IR_DEBUG"],
@@ -211,7 +212,7 @@ def build_schema(root: Any, group_name: Optional[str] = None, index_only: bool =
     if index_only:
         # 紧凑编码 "组名:子命令1 子命令2;..."：dict-of-lists 约 1.3KB，此编码 <1KB
         return {
-            "protocol": {"exit_codes": "0=成功 1=业务错误 2=认证(ir auth login) 3=连接/超时"},
+            "protocol": {"exit_codes": "0=成功 1=业务错误 2=认证(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在)"},
             "groups": ";".join(
                 f"{name}:{' '.join(grp.commands.keys())}" for name, grp in groups.items()
             ),
