@@ -1,8 +1,9 @@
 # ============================================================================
 # 申赎集成测试共享工厂（自 tests/integration/test_subscriptions.py 拆分，issue #469）
 # ============================================================================
-# _confirmed_sub_with_cash_leg（原属 #180 章节：started_at 重算不变量 + 回滚链防护）被
-# 首窗 / lifecycle / preview 三个测试文件共用，故提取到本模块；无 test_ 前缀，不被 pytest 收集。
+# 溯源：_confirmed_sub_with_cash_leg 原属 #180 章节（started_at 重算不变量 + 回滚链防护）。
+# 现状：被首窗 / lifecycle / preview 三个测试文件共用，服务 #180 / #203（负现金防护级联回退）
+#       / #248（确认弹窗预览）三个主题，故提取到本模块；无 test_ 前缀，不被 pytest 收集。
 
 from tests.factories import create_subscription, create_trade
 
