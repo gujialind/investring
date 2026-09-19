@@ -25,14 +25,24 @@ import { defineConfig } from "vitest/config";
 // 分母边界（#505 结论：维持 src/lib，hooks/stores 的缺口**成文接受**）：src/hooks/**
 // （17 文件 / 2226 行，≈2 倍分母）与 src/stores/**（2 文件 / 146 行）不在 include 内，
 // 于是一行测试都没有也不会让任何门禁变红——这是被记录下来、而不是被修掉的已知缺口。
-// 两条扩张方案按实测否决：① 直接并入 → 分母 1141→3513 行，四项在现有测试集下会掉到
-// 三成量级，99 的阈值须整体重定（等于用「先补 2200 行测试」换一条当下不可达的门禁）；
-// ② 只并入 stores → authStore 有 4 处 `typeof window === "undefined"` 早退（:7/:14/:38/:46）
-// 且用 zustand persist（默认 localStorage 存储），node 环境既跑不起 hydrate、又会把没
-// 执行的写入分支记成已覆盖，是**假覆盖**而非低覆盖。职责边界不变：hooks 与组件交互归
-// Playwright E2E（§4）。重新评估的触发条件（可判定，不是「以后再看」）：① 出现任一
-// 「根因在 hooks 内的纯计算逻辑、且 E2E 定位不到具体分支」的线上缺陷；② 决定引入
-// jsdom/RTL（届时 §3「不引 jsdom/RTL」的取舍与本段阈值口径须同批修订）。
+// 两条扩张方案按实测否决：① 直接并入 → 分母 1141→3513 行，现有测试一行覆盖不到
+// hooks/stores，四项上限即 1141/3513≈32%，99 的阈值须整体重定（等于用「先补 2200 行
+// 测试」换一条当下不可达的门禁；且 16/17 个 hook 依赖 @tanstack/react-query，在没有
+// DOM/Provider 的 environment: "node" 下连调用都起不来）。
+// ② 只并入 stores → 探针实测：一个断言 login/logout 契约且通过的 node 测试下，
+// authStore.ts 仍只有 语句 36.4% / 分支 22.2% / 函数 37.5% / 行 40%，未覆盖的全是
+// `typeof window` 守卫内的浏览器持久化路径（:7/:14 是 `=== "undefined"` 早退，:38/:46
+// 是 `!== "undefined"` 守卫，落盘与 cookie 写在守卫内）。机制在 zustand 5.0.15 的
+// persist：取不到 storage 时（node 下默认的 `window.localStorage` 抛错、被
+// createJSONStorage catch 成 undefined）整体退化为「每次 set 只 console.warn、不落盘」，
+// 所以并入换来的是**低覆盖**（会红）而非假覆盖，但真正要验的那条契约「登录态持久化」
+// 在 node 下永远测不到。要收它先得有浏览器环境，即回到「不引 jsdom/RTL」的取舍。
+// 职责边界不变：hooks 与组件交互归 Playwright E2E（§4）。重新评估的触发条件（可判定，
+// 不是「以后再看」）：① 出现任一「根因在 hooks 内的纯计算逻辑、且 E2E 定位不到具体
+// 分支」的线上缺陷——已知形态即 useDashboardStats 里 filter/reduce 出来的 totalValue
+// 与 avgReturn：算式是纯的，却包在四个 react-query hook 底下，出错只在页面上表现为
+// 「一个数看着不对」；② 决定引入 jsdom/RTL（届时 §3「不引 jsdom/RTL」的取舍与本段
+// 阈值口径须同批修订）。
 // 与 #509 的联动：include 是全局阈值与增量门禁**共用**的分母开关，改它必须同批改
 // ci.yml 的 LCOV_SF_MIN（见下方 include 上方注释与 scripts/tests/test_ci_frontend_coverage.py）。
 // 全局阈值（非 perFile）：新文件 0% 会让总量下滑，正是要拦的「靠既有高覆盖掩护新
