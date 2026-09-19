@@ -13,6 +13,7 @@ from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
 from app.utils.security import get_password_hash
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.null_guard import reject_explicit_nulls
 
 
 def create_investor(
@@ -37,12 +38,17 @@ def create_investor(
 
 
 def update_investor(db: Session, *, code: str, updates: dict) -> Investor:
-    """更新投资人信息（password 字段自动转 password_hash）。不 commit。"""
+    """更新投资人信息（password 字段自动转 password_hash）。不 commit。
+
+    显式 null 收口（issue #573）：role/name 落 NULL 会让 InvestorResponse 校验 500
+    且此后该行 GET 恒 500；phone/email 列可空且响应 Optional，null = 清除。
+    """
     investor = db.query(Investor).filter(Investor.code == code).first()
     if not investor:
         raise NotFoundError("NOT_FOUND", f"投资人 {code} 不存在")
 
     updates = dict(updates)
+    reject_explicit_nulls(updates, allow={"phone", "email"})
     if "password" in updates:
         updates["password_hash"] = get_password_hash(updates.pop("password"))
 

@@ -659,6 +659,35 @@ class TestClassificationUpdate:
             _API, headers=admin_headers).json()["items"]}
         assert items["STYLE_VALUE"]["is_active"] is False
 
+    def test_update_explicit_null_rejected(self, client, admin_headers):
+        """显式 null 收口（#573）：sort_order 列可空且无 server_default，落 NULL 后响应模型
+        500 且该行 GET 恒 500（name/is_active 列 NOT NULL，落 NULL 是 IntegrityError 500）；
+        dimension_rules 显式 null 此前静默清空全部规则、applicable_asset_classes null 走
+        「保留至少一个」分支——均与「不传 = 不动」矛盾，现统一 INVALID_PARAM"""
+        before = client.get(f"{_API}/ASSET_STOCK", headers=admin_headers).json()
+        assert before["dimension_rules"], "种子规则非空（防空转）"
+        for field in ("name", "sort_order", "is_active",
+                      "dimension_rules", "applicable_asset_classes"):
+            resp = client.put(f"{_API}/ASSET_STOCK", headers=admin_headers, json={field: None})
+            assert resp.status_code == 422, field
+            assert resp.json()["detail"]["error"] == "INVALID_PARAM", field
+        # 拒绝即零写入：规则与标量字段全部保持原值
+        after = client.get(f"{_API}/ASSET_STOCK", headers=admin_headers).json()
+        assert after["dimension_rules"] == before["dimension_rules"]
+        assert (after["name"], after["sort_order"], after["is_active"]) == (
+            before["name"], before["sort_order"], before["is_active"])
+
+    def test_update_description_null_clears(self, client, admin_headers):
+        """description 是 allow 例外（列可空 + 响应 Optional）：显式 null = 清除；未传不动"""
+        before = client.get(f"{_API}/STYLE_VALUE", headers=admin_headers).json()
+        client.put(f"{_API}/STYLE_VALUE", headers=admin_headers,
+                   json={"description": "深度价值"})
+        resp = client.put(f"{_API}/STYLE_VALUE", headers=admin_headers,
+                          json={"description": None})
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["description"] is None
+        assert resp.json()["name"] == before["name"]
+
     def test_update_not_found_404(self, client, admin_headers):
         resp = client.put(f"{_API}/NOPE_XX", headers=admin_headers,
                           json={"name": "x"})

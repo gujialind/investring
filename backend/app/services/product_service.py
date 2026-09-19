@@ -20,6 +20,7 @@ from app.models.product import Product
 from app.models.share_change_event import ShareChangeEvent
 from app.models.trade import Trade
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.null_guard import reject_explicit_nulls
 
 # issue #232：product_type 合法枚举（create/update 共用校验）；
 # market 枚举仅 update 守卫使用（create 不校验 market）
@@ -515,6 +516,19 @@ def update_product(
     ).first()
     if not product:
         raise NotFoundError("NOT_FOUND", f"产品 {code}({market}) 不存在")
+
+    # issue #573：显式 null 收口——is_qdii/name 落 NULL 会让 ProductResponse 校验 500
+    # 且此后该行 GET 恒 500；market 显式 null 此前是静默 no-op（调用方以为腾空/重置），
+    # 一并拒绝。五个维度标签 null = 清标签（合并终态仍交 validate_dimension_tags）；
+    # product_type/confirm_days/nav_lag_days 由各自专用校验器收口（保留专用错误码）。
+    reject_explicit_nulls(
+        updates,
+        allow={
+            "product_type", "confirm_days", "nav_lag_days",
+            "asset_class_code", "region_code", "style_code",
+            "size_code", "segment_code",
+        },
+    )
 
     # issue #232：身份字段（product_type/market）守卫——枚举/系统产品/pending/零引用
     if "product_type" in updates or "market" in updates:

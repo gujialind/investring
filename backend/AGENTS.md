@@ -29,7 +29,7 @@
 
 > 前缀约定：所有资源挂 `/api/<资源名>`（如 `/api/snapshots/...`）；`cash_transfers` 作为 `portfolios` 子资源挂 `/api/portfolios/{code}/cash-transfer`；日志/任务/通知/数据源在 `/api/system/*` 二级命名空间。
 
-**响应模型守门**：返回 JSON 的端点必须声明 `response_model`——ORM 行不加收窄会全列直吐（#487）。未声明者逐条登记在 `tests/integration/test_response_model_guard.py` 的白名单（附理由、只减不增），并与 `backend/openapi.json` 两层互证（扫描操作全集；「`200` 带 `application/json` 媒体类型但 schema 为空壳」集合）；「可空列 ↔ 响应字段不接受 None」的静态核对与例外台账由 `tests/unit/test_response_model_nullability.py` 守门（未修缺口以 `known_gap` 登记并挂 follow-up issue 号）。
+**响应模型守门**：返回 JSON 的端点必须声明 `response_model`——ORM 行不加收窄会全列直吐（#487）。未声明者逐条登记在 `tests/integration/test_response_model_guard.py` 的白名单（附理由、只减不增），并与 `backend/openapi.json` 两层互证（扫描操作全集；「`200` 带 `application/json` 媒体类型但 schema 为空壳」集合）；「可空列 ↔ 响应字段不接受 None」的静态核对与例外台账由 `tests/unit/test_response_model_nullability.py` 守门（`service_guard` 条目按字段登记守门模块，测试实调守门 + 更新路径调用点 AST 复核；未修缺口以 `known_gap` 登记并挂 follow-up issue 号）。更新端点的显式 null 一律拒绝（`null_guard.reject_explicit_nulls` 单一实现，#573），不要为新字段放行 null——见[易错陷阱](../docs/reference/business-constraints.md#易错陷阱)。
 
 ### 1.3 核心服务
 
