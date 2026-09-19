@@ -143,7 +143,8 @@ async function nextTradingDays(
  * ② 现在这个 `ALREADY_EXISTS` 400 是**响亮失败**：数据前提一破，第一次 `POST` 就红并指名
  *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
  * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
- *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见 `AGENTS.md` §4）。
+ *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
+ *   `frontend/AGENTS.md` §4「E2E（Playwright）」的「净值夹具」条）。
  *
  * 真要腾位，首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project 标记或 retry
  * 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
