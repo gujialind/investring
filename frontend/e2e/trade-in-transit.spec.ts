@@ -294,8 +294,7 @@ async function pickDay(page: Page, trigger: Locator, targetISO: string): Promise
   if ((await trigger.textContent())?.trim() === targetISO) return;
   await openCalendar(page, trigger);
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
-  // 浮层内的点击一律带上界：Playwright 未设 `use.actionTimeout`，裸 `click()` 的
-  // actionability 等待无上界，一次「点不动」会静默吃掉整条用例剩余的预算（#524）。
+  // 显式上界，与全局 `use.actionTimeout`（#551 §2）同值；留字面值是为了这条预算不随配置漂移。
   if ((await day.count()) === 0) {
     const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
     await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
@@ -405,7 +404,7 @@ async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Pro
  * 断言**当前已打开**的日历里早于 lowerISO 的日期一律硬禁用（#525 附项 A/B）。
  *
  * 前置：调用方须先用 `openCalendar` 打开日历（自带 #524 吞点击同步），本函数只等已挂载的
- * 日期格出现，等待有上界（10s），不再用裸 `waitFor()` 把整条用例的超时预算吃干。
+ * 日期格出现，等待显式钉在 10s（与 #551 §2 的全局 `actionTimeout` 同值），不靠全局兜。
  *
  * 只断言「当前展示月内、早于下界且可见」的日期：翻页方向只能按 today 猜，月边界上
  * 会翻错方向，把稳定用例变成偶发红；宁可在跨月窗口下集合为空、静默空转。

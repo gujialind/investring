@@ -45,6 +45,16 @@ export default defineConfig({
 
   use: {
     baseURL,
+    // 交互动作与 locator.waitFor()/page.waitForFunction() 的全局上界（#551 §2）：
+    // 此前未设，裸写法默认**无上界**，一次被吞的点击（#524）会静默吃掉整条用例剩余预算。
+    // 取 10_000 与全部显式站点同值，且在 timeout: 30_000 下仍容得下 3 次动作失败才撞全局
+    // 超时——放宽到 15_000 只留 2 次，退化成排查不出东西的裸用例超时。
+    // 覆盖面到此为止，三条都在外面：① 导航（goto/waitForURL）由 navigationTimeout 管，
+    // 其缺省 0 会在回落到本值之前短路，故导航至今无上界；② page.request.* 用独立
+    // TimeoutSettings，仍是 30s，数据准备不受影响；③ expect 断言归 expect.timeout。
+    // 另外 helpers.ts 的 3_000 分支探针必须保持显式且小于本值，否则 openPopover 的
+    // 「有没有开成」判定会被上界改写。
+    actionTimeout: 10_000,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',

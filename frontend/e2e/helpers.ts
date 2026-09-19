@@ -213,9 +213,9 @@ async function firstOptionOrSkip(popover: Locator, kind: OptionKind): Promise<Lo
 const POPPER_WRAPPER = '[data-radix-popper-content-wrapper]';
 
 /**
- * 交互动作的显式上界。Playwright 未设 `use.actionTimeout`，裸 `click()` 的 actionability
- * 等待默认**无上界**，一次「点不动」会静默吃掉整条用例剩余预算（#524 的 60s 就是这么耗干
- * 的）。根治应在全局设上界（#551 §2），但它必须排在存量迁移之后——所以先在 helper 侧逐个钉。
+ * 交互动作的显式上界。全局 `use.actionTimeout` 已设成同一个 10_000（#551 §2），这里仍逐个
+ * 显式钉：① helper 的预算不该依赖调用方是否记得配置文件里有一行；② `openPopover` 的 3_000
+ * 分支探针必须严格小于本值，这道大小关系要在代码里看得见，不能一头写死、一头靠全局。
  */
 const CLICK_TIMEOUT = 10_000;
 
@@ -250,7 +250,8 @@ export async function settlePopovers(page: Page): Promise<void> {
  *
  * #524：Radix `DismissableLayer` 在关闭过程中仍在 document 上监听 `pointerdown`，会把紧
  * 跟着那次「打开」整口吞掉——点击送达 trigger，新浮层随即被 dismiss。此后调用方的
- * `waitFor` 只能等到超时（裸 `waitFor()` 更是把整条用例的超时预算吃干）。CI 形态对比
+ * `waitFor` 只能等到超时（裸 `waitFor()` 现由全局 `actionTimeout` 兜在 10s，但被吞一次仍
+ * 白烧 10s，故浮层开合仍须走本 helper）。CI 形态对比
  * （capture `--retries=0`，无 retry 保护）连红 5 次，失败点都落在「收一个浮层 → 立刻开
  * 下一个」的相邻链路上。
  *
@@ -264,10 +265,11 @@ export async function settlePopovers(page: Page): Promise<void> {
  * 否则「无数据」这一合法形态会被本函数判成「没开成」而重点一次，把 spec 里
  * `firstOptionOrSkip` 的优雅 skip 语义改写成硬失败。
  *
- * ⚠️ 预算（#551 登记，暂不改行为）：三条分支的内部上界分别约 13s（首见即返）/
- * 28s（已挂载但不可见）/ 43s（判定被吞、走了重点一次），而 `playwright.config.ts`
- * 全局 `timeout: 30_000`。后两条在慢环境里会先撞全局 timeout，届时失败信息是裸的
- * 用例超时而非这里的分支超时——排查时先看这一条，别怀疑竞态又回来了。
+ * ⚠️ 预算（#551 登记，暂不改行为）：三条分支的内部上界分别是 18s（5 settle + 10 click +
+ * 3 探针，首见即返）/ 28s（再 +10，已挂载但不可见）/ 43s（判定被吞、走了重点一次），而
+ * `playwright.config.ts` 全局 `timeout: 30_000`。后两条在慢环境里会先撞全局 timeout，
+ * 届时失败信息是裸的用例超时而非这里的分支超时——排查时先看这一条，别怀疑竞态又回来了。
+ * （#551 §2 设的全局 `actionTimeout` 与本段无关：这里每个等待都写死了显式值。）
  */
 export async function openPopover(
   page: Page,
