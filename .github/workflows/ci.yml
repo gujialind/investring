@@ -688,6 +688,12 @@ jobs:
   # 非空 diff 拦合入，预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
   # 标签豁免。两侧构建源同为 PR head，唯一变量是 frontend/e2e/ 目录；栈步骤已抽到
   # .github/workflows/e2e-stack.yml（issue #467），baseline 换目录在 called workflow 内完成。
+  #
+  # 下面两个 job 的判定体顺序、EXEMPT 的来源、needs 接线与 artifact 命名的多处耦合，
+  # 由 scripts/tests/test_ci_e2e_compare.py 逐条守门（#490）：这些位置改错不会让任何
+  # 用例变红，只会让门禁静默失效而 CI 依旧全绿。改这里必须同步那个文件——而只改
+  # workflow 的 PR 因为 .github/workflows/** 的强制位必然跑 scripts/tests，所以漏改
+  # 会在同一个 PR 里红，不需要等一次真实 run。
   e2e-compare-capture:
     name: "E2E Capture (${{ matrix.side }})"
     needs: changes

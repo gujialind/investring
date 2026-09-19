@@ -20,11 +20,14 @@
 import os
 import re
 import subprocess
+import sys
 import tempfile
-import textwrap
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _ci_text import step_run_block  # noqa: E402  切块能力与 test_ci_e2e_compare.py 共用
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -32,50 +35,20 @@ CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 OUTPUT_KEYS = ("backend", "frontend", "cli", "scripts", "e2e_morph")
 
 
-_STEP_MARKER_RE = re.compile(r"^(\s*)-\s+id:\s*detect\s*$")
-# YAML 块标量的全部写法：|、|-、|+、>、>-、>+。detect 用哪一种只是书写细节，不该改变
-# 本测试抽到的内容——只认 `run: |` 时，改成 `|-` 会跳过 detect 去抽邻居步骤（#492）。
-_BLOCK_SCALAR_RE = re.compile(r"^(\s*)run:\s*[|>][-+]?\s*$")
+_STEP_MARKER = "detect"
 
 
 def _extract_detect_run_block(source: str | None = None) -> str:
-    """抽出 detect 步骤**自己的** run 块（dedent 后返回）。结构变化即响亮失败。
+    """抽出 detect 步骤**自己的** run 块。结构变化即响亮失败。
 
-    搜索范围限制在本步骤内：从 `- id: detect` 往后，遇到缩进不深于步骤标记的非空行
-    （即下一个步骤/job）就 fail。留注释和空行穿透，是因为它们不改变归属。
+    切块逻辑在 _ci_text.step_run_block（与 test_ci_e2e_compare.py 共用：同一份逻辑抄
+    两处就必然漂移）；本文件的两条形态用例（`run: |-` 与内联 run）因此同时在守那一道。
     """
-    lines = (
-        CI_YML.read_text(encoding="utf-8") if source is None else source
-    ).splitlines()
-    start = step_indent = None
-    for i, line in enumerate(lines):
-        m = _STEP_MARKER_RE.match(line)
-        if m:
-            start, step_indent = i, len(m.group(1))
-            break
-    if start is None:
-        pytest.fail("ci.yml 中找不到 `- id: detect` 步骤——changes job 结构变了？请同步更新本测试")
-    for j in range(start + 1, len(lines)):
-        line = lines[j]
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if len(line) - len(line.lstrip()) <= step_indent:
-            pytest.fail(
-                "detect 步骤内没找到它的 `run: <块标量>` 体（run 被改成内联、或 detect 被拆走？）"
-                "——请同步更新本测试"
-            )
-        m = _BLOCK_SCALAR_RE.match(line)
-        if not m:
-            continue
-        run_indent = len(m.group(1))
-        body: list[str] = []
-        for line in lines[j + 1:]:
-            if line.strip() and (len(line) - len(line.lstrip())) <= run_indent:
-                break
-            body.append(line)
-        return textwrap.dedent("\n".join(body))
-    pytest.fail("detect 步骤之后文件即结束，没有 run 块")
-    raise AssertionError  # pragma: no cover
+    return step_run_block(
+        CI_YML.read_text(encoding="utf-8") if source is None else source,
+        step=_STEP_MARKER,
+        source="ci.yml:changes" if source is None else "合成 workflow",
+    )
 
 
 def _detect_script(event_name: str) -> str:
