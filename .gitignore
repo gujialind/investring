@@ -103,7 +103,7 @@ frontend/coverage/
 frontend/junit.xml
 backend/junit.xml
 diff-cover.md
-
+diff-cover.json
 
 # Playwright
 frontend/playwright-report/
