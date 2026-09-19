@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 
@@ -48,3 +48,31 @@ class SystemErrorLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedLoginLogResponse(BaseModel):
+    """登录日志分页响应（issue #512 同型）：Response 早已定义并被路由导入，
+    列表端点却未声明 response_model，ORM 整行直吐。"""
+
+    items: List[LoginLogResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class PaginatedAuditLogResponse(BaseModel):
+    """审计日志分页响应（issue #512 同型）。"""
+
+    items: List[AuditLogResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class PaginatedSystemErrorLogResponse(BaseModel):
+    """系统错误日志分页响应（issue #512 同型）。"""
+
+    items: List[SystemErrorLogResponse]
+    total: int
+    page: int
+    page_size: int

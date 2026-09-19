@@ -8,6 +8,7 @@ from app.schemas.task import (
     TaskResponse,
     TaskExecutionLogResponse,
     TaskDetailResponse,
+    PaginatedTaskResponse,
     PaginatedTaskLogResponse,
 )
 from app.dependencies import get_current_admin
@@ -16,7 +17,7 @@ from app.services.exceptions import BusinessError
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedTaskResponse)
 def get_tasks(
     page: Optional[int] = 1,
     page_size: Optional[int] = 20,
@@ -26,12 +27,12 @@ def get_tasks(
     query = db.query(ScheduledTask)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    return PaginatedTaskResponse(
+        items=[TaskResponse.model_validate(i) for i in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/executions", response_model=PaginatedTaskLogResponse)

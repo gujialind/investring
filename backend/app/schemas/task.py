@@ -20,6 +20,16 @@ class TaskResponse(BaseModel):
         from_attributes = True
 
 
+class PaginatedTaskResponse(BaseModel):
+    """定时任务列表分页响应（issue #512）：此前未声明响应模型，ORM 整行直吐；
+    items 元素复用 TaskResponse 收窄口径。"""
+
+    items: List[TaskResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 class TaskExecutionLogResponse(BaseModel):
     id: int
     task_code: str

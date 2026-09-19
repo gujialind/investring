@@ -10,7 +10,13 @@ from app.models.platform import Platform
 from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.product import Product
-from app.schemas.position import PositionCreate, PositionUpdate, PositionResponse, CashPositionUpdate
+from app.schemas.position import (
+    PositionCreate,
+    PositionUpdate,
+    PositionResponse,
+    PaginatedPositionResponse,
+    CashPositionUpdate,
+)
 from app.services.position_service import (
     calculate_available_cash,
     calculate_available_shares,
@@ -22,7 +28,7 @@ from app.dependencies import get_current_user, get_current_admin
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedPositionResponse)
 def get_positions(
     portfolio_code: Optional[str] = None,
     snapshot_date: Optional[date] = None,
@@ -128,12 +134,12 @@ def get_positions(
             row["profit_loss"] = cash_profits.get(key)
         enriched.append(row)
 
-    return {
-        "items": enriched,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    return PaginatedPositionResponse(
+        items=[PositionResponse.model_validate(row) for row in enriched],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=PositionResponse)

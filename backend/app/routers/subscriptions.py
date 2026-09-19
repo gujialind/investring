@@ -22,6 +22,7 @@ from app.schemas.subscription import (
     SubscriptionCreate,
     SubscriptionUpdate,
     SubscriptionResponse,
+    PaginatedSubscriptionResponse,
     SubscriptionPreviewResult,
     SubscriptionPreviewResponse,
 )
@@ -30,7 +31,7 @@ from app.dependencies import get_current_user, get_current_admin
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedSubscriptionResponse)
 def get_subscriptions(
     portfolio_code: Optional[str] = None,
     investor_code: Optional[str] = None,
@@ -63,12 +64,12 @@ def get_subscriptions(
         page=page,
         page_size=page_size,
     )
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    return PaginatedSubscriptionResponse(
+        items=[SubscriptionResponse.model_validate(i) for i in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=SubscriptionResponse)

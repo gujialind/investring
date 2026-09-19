@@ -3,13 +3,17 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
 from app.models.notification import Notification
-from app.schemas.notification import NotificationResponse, NotificationUpdate
+from app.schemas.notification import (
+    NotificationResponse,
+    NotificationUpdate,
+    PaginatedNotificationResponse,
+)
 from app.dependencies import get_current_user
 
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedNotificationResponse)
 def get_notifications(
     status: Optional[str] = None,
     page: Optional[int] = 1,
@@ -27,12 +31,13 @@ def get_notifications(
         query = query.filter(Notification.status == status)
     total = query.count()
     items = query.order_by(Notification.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    # issue #512：必须经响应模型收窄——此前直接 return ORM 行，全列序列化
+    return PaginatedNotificationResponse(
+        items=[NotificationResponse.model_validate(i) for i in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("/{id}/read")
