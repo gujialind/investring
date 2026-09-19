@@ -22,6 +22,19 @@ import { defineConfig } from "vitest/config";
 // 后到全 100、阈值随棘轮 98→99。
 // 残余：无。⚠️ #504 落地后 tradeAmounts 的「到手无法量化」守卫将失去触发路径、产生
 // 新残余，届时同步复核本段与 frontend/AGENTS.md §3。
+// 分母边界（#505 结论：维持 src/lib，hooks/stores 的缺口**成文接受**）：src/hooks/**
+// （17 文件 / 2226 行，≈2 倍分母）与 src/stores/**（2 文件 / 146 行）不在 include 内，
+// 于是一行测试都没有也不会让任何门禁变红——这是被记录下来、而不是被修掉的已知缺口。
+// 两条扩张方案按实测否决：① 直接并入 → 分母 1141→3513 行，四项在现有测试集下会掉到
+// 三成量级，99 的阈值须整体重定（等于用「先补 2200 行测试」换一条当下不可达的门禁）；
+// ② 只并入 stores → authStore 有 4 处 `typeof window === "undefined"` 早退（:7/:14/:38/:46）
+// 且用 zustand persist（默认 localStorage 存储），node 环境既跑不起 hydrate、又会把没
+// 执行的写入分支记成已覆盖，是**假覆盖**而非低覆盖。职责边界不变：hooks 与组件交互归
+// Playwright E2E（§4）。重新评估的触发条件（可判定，不是「以后再看」）：① 出现任一
+// 「根因在 hooks 内的纯计算逻辑、且 E2E 定位不到具体分支」的线上缺陷；② 决定引入
+// jsdom/RTL（届时 §3「不引 jsdom/RTL」的取舍与本段阈值口径须同批修订）。
+// 与 #509 的联动：include 是全局阈值与增量门禁**共用**的分母开关，改它必须同批改
+// ci.yml 的 LCOV_SF_MIN（见下方 include 上方注释与 scripts/tests/test_ci_frontend_coverage.py）。
 // 全局阈值（非 perFile）：新文件 0% 会让总量下滑，正是要拦的「靠既有高覆盖掩护新
 // 代码」。另有一条「只看本 PR 改动行」的增量门禁（#485）：CI frontend-check 在 PR
 // 事件对 coverage/lcov.info 跑 diff-cover（阈值以 ci.yml 的门禁步骤为单一来源，形态
@@ -29,8 +42,8 @@ import { defineConfig } from "vitest/config";
 // **cwd** 解析的（默认即 cwd 的 vitest 根），而 diff-cover 把 LCOV 的相对 SF 路径按
 // **git root** 解析，只有从仓库根的 frontend/ 下运行（CI 由 job 的 working-directory
 // 保证）才会得到 frontend/src/... 前缀；否则（如从仓库根跑 npx vitest --root frontend）
-// SF 会变成 src/lib/x.ts、匹配不到任何改动行、门禁静默空转（CI 侧有 warning 守卫与
-// lcov 数据源断言兜底，见 ci.yml 的 `Warn on attribution gap (PR)` 与 `Assert lcov data source (PR)`）。
+// SF 会变成 src/lib/x.ts、匹配不到任何改动行、门禁静默空转（CI 侧有分母棘轮与归因守卫
+// 兜底，见 ci.yml 的 `Assert lcov data source (PR)` 与 `Warn on attribution gap (PR)`）。
 // CI 另产 JUnit XML 供 PR 注解（本地保持默认 reporter，不落文件）。
 export default defineConfig({
   resolve: {
