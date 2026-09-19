@@ -23,6 +23,8 @@
  *   并行安全；但**重跑只在「每次重灌种子库」的前提下幂等**——code 里的日期只到天、无
  *   per-run nonce，同一后端上不重启直接二次 `playwright test` 会复用同名槽位、`POST
  *   /api/portfolios` 确定性撞 `ALREADY_EXISTS`（CI 每轮新建栈，故不受影响）。
+ *   「跑 E2E 前重启后端」由此是**契约前提**而非可选项；「不加 nonce」是 #551 §4 评估后的
+ *   定案而非欠账，理由见 `isolatedPortfolioCode` 的 doc 块。
  * - 现金注入经 API「申购 + 确认」（首窗净值 1.0000 无需行情）；确认日为申请日下一交易日，
  *   故申请日取 D 的前一工作日，使 CASH 腿 confirm_date 恰落 D 当天。
  * - 日期锚定经 `/api/trading-calendar` 取「today 起最近一个交易日」D 及其后 3 个交易日
@@ -130,9 +132,22 @@ async function nextTradingDays(
  *
  * 长度：`E2E493`(6) + 日期(8) + project(1) + worker(1) + retry(1) = 17，加用例后缀 1 位 = 18。
  * ⚠️ 这个 18 只在 workerIndex/retry **均为个位数**时成立：两者按十进制原样插值，而本地
- * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19–20、逼近 `portfolio.code`
- * 的 20 上限。腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），可同时解决 #551 §4
- * 想加的 per-run nonce 没位子的问题（本轮未做）。
+ * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19（16 核本地即如此）、两位齐全
+ * 就到 20 上限。**但腾位不是 §4 的决定性理由**——见下。
+ *
+ * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。三条理由按严重度排：
+ * ① 组合**没有 DELETE 端点**（`regression.spec.ts` 的「组合详情页不应出现删除组合入口」
+ *   正是在守这条前后端契约，防 P0-5：前端曾提供后端不存在的 `DELETE /portfolios/{code}`）。
+ *   加了 nonce，同一后端上连跑 N 次就累积 8N 条无法删除的 draft 组合（4 用例 × 2 project，
+ *   `--retries=0` 口径；带 retry 更多），只在下次 `run_e2e_backend.py` 重启重灌时才清掉。
+ * ② 现在这个 `ALREADY_EXISTS` 400 是**响亮失败**：数据前提一破，第一次 `POST` 就红并指名
+ *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
+ * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
+ *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
+ *   `frontend/AGENTS.md` §4「E2E（Playwright）」的「净值夹具」条）。
+ *
+ * 若日后推翻本定案，腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project
+ * 标记或 retry 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
  */
 function isolatedPortfolioCode(testInfo: {
   project: { name: string };
@@ -294,8 +309,7 @@ async function pickDay(page: Page, trigger: Locator, targetISO: string): Promise
   if ((await trigger.textContent())?.trim() === targetISO) return;
   await openCalendar(page, trigger);
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
-  // 浮层内的点击一律带上界：Playwright 未设 `use.actionTimeout`，裸 `click()` 的
-  // actionability 等待无上界，一次「点不动」会静默吃掉整条用例剩余的预算（#524）。
+  // 显式上界，与全局 `use.actionTimeout`（#551 §2）同值；留字面值是为了这条预算不随配置漂移。
   if ((await day.count()) === 0) {
     const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
     await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
@@ -405,7 +419,7 @@ async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Pro
  * 断言**当前已打开**的日历里早于 lowerISO 的日期一律硬禁用（#525 附项 A/B）。
  *
  * 前置：调用方须先用 `openCalendar` 打开日历（自带 #524 吞点击同步），本函数只等已挂载的
- * 日期格出现，等待有上界（10s），不再用裸 `waitFor()` 把整条用例的超时预算吃干。
+ * 日期格出现，等待显式钉在 10s（与 #551 §2 的全局 `actionTimeout` 同值），不靠全局兜。
  *
  * 只断言「当前展示月内、早于下界且可见」的日期：翻页方向只能按 today 猜，月边界上
  * 会翻错方向，把稳定用例变成偶发红；宁可在跨月窗口下集合为空、静默空转。

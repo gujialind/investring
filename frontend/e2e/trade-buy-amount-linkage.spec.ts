@@ -96,8 +96,7 @@ async function selectTradeDate(
   // 首个日期格作「弹层已开」锚点：与数据量无关，不会把 #524 的吞点击写成硬性等待失败
   await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
-  // 浮层内的点击一律带上界：未设 `use.actionTimeout` 时裸 click() 的 actionability
-  // 等待无上界，一次「点不动」会静默吃掉整条用例剩余预算（#524）。
+  // 显式上界，与全局 `use.actionTimeout`（#551 §2）同值；留字面值是为了这条预算不随配置漂移。
   if ((await day.count()) === 0) {
     const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
     await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
