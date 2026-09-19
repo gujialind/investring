@@ -142,6 +142,12 @@ PROBES = [
 # near-miss 探针：路径**形似**某栈但不该命中（#492）。矩阵里其余条目全是「应命中」，
 # 只测得出正则不够宽，测不出正则被放宽——`^(backend/|docs/)` 退化成 `^(backend|docs)`
 # 正是 #462 记录的原始 bug 形态，没有这一组它仍然全绿。
+#
+# 本清单只守**前缀边界**，刻意不守尾部：`hit()` 的模式没有 `$`、也不按扩展名过滤，所以
+# `frontend/e2e/x.bak` 这类垃圾文件同样会触发 e2e_morph（实测）。多跑一轮只是浪费 CI 时间，
+# 属 fail-closed；反过来按后缀收紧，代价是漏跑一个栈——那才是假绿灯（根 AGENTS.md §3.5-1）。
+# 因此别往这里补「尾部路径 + 期望全 false」的用例：那是把刻意的宽当漏洞在填。真要补尾部
+# 探针，期望值必须是**命中**。
 NEAR_MISS_PROBES = [
     ("backend-old/app/main.py", _expect()),
     ("frontendx/src/app/page.tsx", _expect()),
