@@ -622,6 +622,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
+      - name: Check context documentation
+        run: python3 scripts/check_context_docs.py
+
       # 纯 git 检测（不引第三方 action）。
       # 非 PR 事件（push / workflow_dispatch）一律保守「全量」：main 必须完整验证；
       # 但 e2e_morph 恒 false——compare 只拦 PR 侧的「测试重构假绿灯」，

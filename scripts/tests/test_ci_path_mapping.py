@@ -111,6 +111,9 @@ PROBES = [
     ("scripts/tests/test_e2e_normalize.py", _expect(scripts="true", e2e_morph="true")),
     ("README.md", _expect()),
     ("AGENTS.md", _expect()),
+    ("CLAUDE.md", _expect()),
+    (".github/PULL_REQUEST_TEMPLATE.md", _expect()),
+    ("docs/reference/documentation.md", _expect(backend="true")),
     # `.github/workflows/**` → 四个栈全 true，但 e2e_morph 不吃该强制（#467：改 CI
     # 配置不再多跑两轮全量 E2E；正面验证由 frontend-e2e 承担）
     (".github/workflows/ci.yml",
@@ -147,3 +150,40 @@ def test_nowf_marker_is_pinned_to_e2e_morph_only():
         f"应恰好 e2e_morph 的 emit 带 nowf（实得 {calls_with_nowf}）——它决定「workflow "
         "改动是否触发两轮全量 E2E」，变更请同步本测试与 ci.yml 注释"
     )
+
+
+def _assert_context_check_unconditional(ci_text: str) -> None:
+    match = re.search(r"^  changes:\n(.*?)(?=^  [\w-]+:|\Z)", ci_text, re.MULTILINE | re.DOTALL)
+    assert match, "missing changes job"
+    header, body = match[1].split("    steps:\n", 1)
+    assert not re.search(r"^    (?:if|needs|continue-on-error):", header, re.MULTILINE)
+    steps = re.findall(r"^      - .*?(?=^      - |\Z)", body, re.MULTILINE | re.DOTALL)
+    checkout = next(i for i, step in enumerate(steps) if "uses: actions/checkout@" in step)
+    checks = [(i, step) for i, step in enumerate(steps) if "name: Check context documentation\n" in step]
+    assert len(checks) == 1, "changes must run the context check exactly once"
+    index, step = checks[0]
+    assert index == checkout + 1, "context check must run immediately after checkout"
+    assert not re.search(r"^        (?:if|continue-on-error):", step, re.MULTILINE)
+    assert re.search(r"^        run: python3 scripts/check_context_docs.py$", step, re.MULTILINE)
+
+
+@pytest.mark.parametrize("changed", ["AGENTS.md", "CLAUDE.md", ".github/PULL_REQUEST_TEMPLATE.md"])
+def test_docs_only_pr_runs_context_check_even_when_stacks_skip(changed):
+    assert _run_detect([changed]) == _expect()
+    _assert_context_check_unconditional(CI_YML.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("old,new", [
+    ("      - name: Check context documentation\n        run: python3 scripts/check_context_docs.py\n", ""),
+    ("      - name: Check context documentation\n", "      - name: Check context documentation\n        if: false\n"),
+    ("      - name: Check context documentation\n", "      - name: Check context documentation\n        continue-on-error: true\n"),
+    ("  changes:\n", "  changes:\n    if: false\n"),
+    ("  changes:\n", "  changes:\n    needs: backend-test\n"),
+    ("  changes:\n", "  changes:\n    continue-on-error: true\n"),
+    ("run: python3 scripts/check_context_docs.py", "run: python3 scripts/check_context_docs.py || true"),
+])
+def test_context_gate_rejects_bypass_mutations(old, new):
+    text = CI_YML.read_text(encoding="utf-8")
+    assert old in text
+    with pytest.raises(AssertionError):
+        _assert_context_check_unconditional(text.replace(old, new, 1))
