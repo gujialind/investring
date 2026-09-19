@@ -132,8 +132,8 @@ async function nextTradingDays(
  *
  * 长度：`E2E493`(6) + 日期(8) + project(1) + worker(1) + retry(1) = 17，加用例后缀 1 位 = 18。
  * ⚠️ 这个 18 只在 workerIndex/retry **均为个位数**时成立：两者按十进制原样插值，而本地
- * `workers` 默认取 CPU 数（CI 才钉 2）。真撑到 19–20 需要 `workers` ≥100，所以它是**记账
- * 口径**而非紧约束——别按「只剩 2 位」来推断加 nonce 必须压日期段。
+ * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19（16 核本地即如此）、两位齐全
+ * 就到 20 上限。**但腾位不是 §4 的决定性理由**——见下。
  *
  * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。三条理由按严重度排：
  * ① 组合**没有 DELETE 端点**（`regression.spec.ts` 的「组合详情页不应出现删除组合入口」
@@ -146,8 +146,8 @@ async function nextTradingDays(
  *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
  *   `frontend/AGENTS.md` §4「E2E（Playwright）」的「净值夹具」条）。
  *
- * 真要腾位，首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project 标记或 retry
- * 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
+ * 若日后推翻本定案，腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project
+ * 标记或 retry 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
  */
 function isolatedPortfolioCode(testInfo: {
   project: { name: string };
