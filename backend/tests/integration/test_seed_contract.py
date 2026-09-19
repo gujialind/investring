@@ -4,7 +4,7 @@
 # 锁死 seed_base.py 中 E2E_ACTIVE / E2E_PORT 的数据形态（issue #354）：
 # 前端 E2E spec 经 e2e/helpers.ts 按 code 直达组合并对种子契约做硬断言
 # （缺数据不再优雅 skip），种子无声退化必须先在本层红，而不是在 E2E 层
-# 表现为静默 skip 或莫名失败。纯查询断言，不写任何业务数据。
+# 表现为静默 skip 或莫名失败；自动确认回归只操作 function 级隔离夹具。
 #
 # 注意：E2E_ACTIVE 只在 E2E 消费方种子（seed_e2e_active），不进 pytest session
 # 种子（避免业务交易数据泄漏进按全局账本精确断言的存量测试）。故本文件用
@@ -19,6 +19,9 @@ from sqlalchemy import func
 from app.models import (
     InvestorHolding, Portfolio, PortfolioPosition, PortfolioValueSnapshot,
     PriceRecord, Subscription, Trade, TradingCalendar,
+)
+from app.services.snapshot_service import (
+    _check_pending_transactions, auto_confirm_after_snapshot,
 )
 from app.services.trading_utils import (
     get_next_trading_day, get_prev_trading_day, is_trading_day,
@@ -110,6 +113,60 @@ class TestE2EActiveContract:
             assert t.trade_date >= date.today() - timedelta(days=365), (
                 f"pending 交易 {t.trade_date} 已滑出前端「近1年」默认过滤窗"
             )
+
+    def test_auto_confirm_preserves_pending_rebalance_and_cash_leg(self, seeded_active_db):
+        db = seeded_active_db
+        pending = db.query(Trade).filter(
+            Trade.portfolio_code == "E2E_ACTIVE",
+            Trade.status == "pending",
+            Trade.product_code != "CASH",
+        ).one()
+        latest_date = db.query(func.max(PortfolioValueSnapshot.snapshot_date)).filter(
+            PortfolioValueSnapshot.portfolio_code == "E2E_ACTIVE",
+        ).scalar()
+        assert pending.confirm_date == get_next_trading_day(db, latest_date)
+        group = pending.transfer_group
+        cash = db.query(Trade).filter(
+            Trade.portfolio_code == "E2E_ACTIVE",
+            Trade.transfer_group == group,
+            Trade.product_code == "CASH",
+        ).one()
+        assert cash.status == "confirmed"
+        assert cash.trade_type == "sell"
+        fields = (
+            Trade.id, Trade.status, Trade.amount, Trade.actual_amount, Trade.fee,
+            Trade.shares, Trade.price, Trade.trade_date, Trade.confirm_date,
+            Trade.platform_code,
+        )
+        legs = db.query(*fields).filter(
+            Trade.portfolio_code == "E2E_ACTIVE",
+            Trade.transfer_group == group,
+        ).order_by(Trade.id)
+        before = legs.all()
+        assert len(before) == 2
+
+        auto_confirm_after_snapshot(db, "E2E_ACTIVE", latest_date)
+        db.flush()
+        db.expire_all()
+
+        assert legs.all() == before
+
+    def test_due_pending_rebalance_blocks_snapshot(self, seeded_active_db):
+        db = seeded_active_db
+        pending = db.query(Trade).filter(
+            Trade.portfolio_code == "E2E_ACTIVE",
+            Trade.status == "pending",
+            Trade.product_code != "CASH",
+        ).one()
+        latest_date = db.query(func.max(PortfolioValueSnapshot.snapshot_date)).filter(
+            PortfolioValueSnapshot.portfolio_code == "E2E_ACTIVE",
+        ).scalar()
+        assert pending.confirm_date > latest_date
+        assert _check_pending_transactions(db, "E2E_ACTIVE", latest_date)["status"] == "passed"
+        result = _check_pending_transactions(db, "E2E_ACTIVE", pending.confirm_date)
+        assert result["check_type"] == "pending_transactions"
+        assert result["status"] == "failed"
+        assert "1笔" in result["message"]
 
     def test_two_consecutive_snapshots_with_rows(self, seeded_active_db):
         snaps = seeded_active_db.query(PortfolioValueSnapshot).filter(
