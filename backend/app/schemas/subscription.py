@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import date, datetime
 
 
@@ -40,6 +40,16 @@ class SubscriptionResponse(SubscriptionBase):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedSubscriptionResponse(BaseModel):
+    """申赎列表分页响应（issue #512）：此前未声明响应模型，ORM 整行直吐；
+    items 元素复用 SubscriptionResponse 收窄口径。"""
+
+    items: List[SubscriptionResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 class SubscriptionPreviewResult(BaseModel):

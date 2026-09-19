@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import date, datetime
 
 
@@ -66,6 +66,16 @@ class PositionResponse(PositionBase):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedPositionResponse(BaseModel):
+    """持仓列表分页响应（issue #512）：此前未声明响应模型，ORM 行经 enrich 后直吐；
+    items 元素复用 PositionResponse（读侧派生字段已在该模型内）。"""
+
+    items: List[PositionResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 class CashPositionUpdate(BaseModel):

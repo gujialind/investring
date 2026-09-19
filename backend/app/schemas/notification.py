@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 
@@ -29,3 +29,13 @@ class NotificationResponse(NotificationBase):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedNotificationResponse(BaseModel):
+    """通知列表分页响应（issue #512）：此前未声明响应模型，ORM 整行直吐；
+    items 元素复用 NotificationResponse 收窄口径。"""
+
+    items: List[NotificationResponse]
+    total: int
+    page: int
+    page_size: int

@@ -3,13 +3,18 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
 from app.models.platform import Platform
-from app.schemas.platform import PlatformCreate, PlatformUpdate, PlatformResponse
+from app.schemas.platform import (
+    PlatformCreate,
+    PlatformUpdate,
+    PlatformResponse,
+    PaginatedPlatformResponse,
+)
 from app.dependencies import get_current_user, get_current_admin
 
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=PaginatedPlatformResponse)
 def get_platforms(
     page: Optional[int] = 1,
     page_size: Optional[int] = 20,
@@ -19,12 +24,13 @@ def get_platforms(
     query = db.query(Platform)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+    # issue #512：必须经响应模型收窄——此前直接 return ORM 行，全列序列化
+    return PaginatedPlatformResponse(
+        items=[PlatformResponse.model_validate(i) for i in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=PlatformResponse)
