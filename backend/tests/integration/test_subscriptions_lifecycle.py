@@ -283,7 +283,7 @@ class TestSubscriptionUpdate:
         assert resp.json()["detail"]["error"] == "NON_TRADING_DAY"
 
     def test_update_apply_date_before_snapshot_rejected(self, client, admin_headers, test_db):
-        """改到最新快照日及之前拒绝 DATE_BEFORE_SNAPSHOT"""
+        """改申请日到确认日不晚于最新快照日（#495 口径）拒绝 DATE_BEFORE_SNAPSHOT"""
         create_portfolio(test_db, code="UPD_P4", status="active")
         create_investor(test_db, code="UPD_I4")
         for d in (1, 2, 3):
@@ -294,8 +294,9 @@ class TestSubscriptionUpdate:
             amount=10000.0, apply_date=date(2025, 9, 3),
         )
 
+        # apply_date=09-01 → confirm_date=09-02 <= 最新快照日 09-02，恒拒
         resp = client.put(
-            f"/api/subscriptions/{sub.id}", json={"apply_date": "2025-09-02"},
+            f"/api/subscriptions/{sub.id}", json={"apply_date": "2025-09-01"},
             headers=admin_headers,
         )
         assert resp.status_code == 422

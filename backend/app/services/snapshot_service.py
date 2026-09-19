@@ -271,7 +271,13 @@ def generate_daily_snapshots(
         _validate_snapshot_continuity(db, portfolio_code, target_date)
         # 零快照 + 目标日前有已确认交易 → 拒绝单日生成（issue #180，防首快照失忆）
         _validate_no_silent_history_gap(db, portfolio_code, target_date)
-    
+
+    # issue #495：生成前自动确认到期 pending 申赎（auto_confirm_before_snapshot）。
+    # 闸门放宽后允许补录「申请日 == 最新快照日」的申赎（confirm_date == target），
+    # 须在下方 pending 校验前消化，否则被 _check_pending_transactions 阻断，
+    # 而生成后 auto_confirm 只在快照落地后运行，无任何流程先确认它（死锁）。
+    auto_confirm_before_snapshot(db, portfolio_code, target_date)
+
     if failed_checks := [
         v for v in validate_snapshot_dependencies(db, portfolio_code, target_date)
         if v["status"] == "failed"
@@ -1735,6 +1741,104 @@ def _auto_confirm_guarded(
     entry["action"] = "auto_confirmed"
     entry["status"] = "success"
     return True
+
+
+def auto_confirm_before_snapshot(
+    db: Session,
+    portfolio_code: str,
+    target_date: date,
+) -> List[Dict[str, Any]]:
+    """
+    快照生成前自动确认「到期」的 pending 申购/赎回（issue #495 配套机制）。
+
+    背景：申赎创建闸门由「申请日晚于最新快照日」放宽为「确认日晚于最新快照日」后，
+    允许在 D 日快照已生成后补录 apply_date == D 的申赎（confirm_date = D+1 = 生成
+    target）。该笔在生成 D+1 快照时会被 `_check_pending_transactions` 按
+    `confirm_date <= target` 阻断，而 `auto_confirm_after_snapshot` 只在快照落地后
+    运行、按 apply_date 匹配，没有任何流程会先确认它 → 死锁。故在依赖校验前先
+    确认本窗口内到期的 pending。
+
+    确认窗口：`latest_snapshot_date < confirm_date <= target_date`，须已有快照基线
+    （无基线组合不在此消化，维持「先手动确认首笔申购」的原语义，#179/#180 首窗
+    判定路径不变）。新闸门下窗口内即「confirm_date == target」批次，其净值取自
+    apply_date 已存在的快照（apply_date == latest），确认后正好落入快照增量
+    窗口 [latest+1, target]，不漏记不重记。
+
+    `confirm_date <= latest_snapshot_date` 的历史/异常 pending 不在窗口内，仍由
+    `_check_pending_transactions` 阻断、须人工处理（防静默漏记，#180 家族）。
+
+    按 apply_date 升序确认（对齐 `auto_confirm_after_snapshot`，保证 is_first 判定
+    正确）；单笔 savepoint 隔离、失败记 auto_confirm_failed 后继续（#305 口径），
+    未确认成功的仍 pending、照旧被 pending 校验阻断，不静默放行。
+
+    skip_cash_check 对齐生成后 auto_confirm 口径：批量自动确认不做消费点校验，
+    负现金仍由生成期 `NEGATIVE_CASH` 阻断（#203 两道防线不破）。
+
+    重算路径（recalculate_snapshots）安全性：重算逐日重放时 `get_latest_snapshot_date`
+    为区间最新日（>= target），窗口为空，本函数天然 no-op；级联回退单
+    （apply_date == 当日、confirm_date = 次日） confirm_date > target 亦不在窗口，
+    仍由生成后 auto_confirm 按序消化。
+
+    Args:
+        db: 数据库会话
+        portfolio_code: 组合代码
+        target_date: 目标快照日期
+
+    Returns:
+        确认结果列表（auto_confirmed / auto_confirm_failed 条目）
+    """
+    from app.services.subscription_service import confirm_single_subscription
+
+    latest = get_latest_snapshot_date(db, portfolio_code)
+    if latest is None:
+        return []
+
+    pending_subs = (
+        db.query(Subscription)
+        .filter(
+            Subscription.portfolio_code == portfolio_code,
+            Subscription.status == "pending",
+            Subscription.confirm_date.isnot(None),
+            Subscription.confirm_date > latest,
+            Subscription.confirm_date <= target_date,
+        )
+        .order_by(Subscription.apply_date.asc())
+        .all()
+    )
+
+    results = []
+    for sub in pending_subs:
+        sub_id = sub.id
+        entry: Dict[str, Any] = {
+            "id": sub_id,
+            "sub_type": sub.sub_type,
+            "apply_date": sub.apply_date.isoformat() if sub.apply_date else None,
+        }
+        if not _auto_confirm_guarded(
+            db, entry, lambda s=sub: confirm_single_subscription(
+                db, s, auto_flush=True, skip_cash_check=True
+            )
+        ):
+            results.append(entry)
+            logger.error(
+                f"生成前自动确认段中断（session 失效）: portfolio={portfolio_code}, "
+                f"subscription_id={sub_id}, error={entry.get('error')}"
+            )
+            return results
+        results.append(entry)
+        if entry["action"] == "auto_confirmed":
+            logger.info(
+                f"生成前自动确认: subscription_id={sub_id}, "
+                f"apply_date={sub.apply_date}, confirm_date={sub.confirm_date}, "
+                f"target={target_date}"
+            )
+        else:
+            logger.warning(
+                f"生成前自动确认失败: subscription_id={sub_id}, "
+                f"code={entry.get('code')}, error={entry.get('error')}"
+            )
+
+    return results
 
 
 def auto_confirm_after_snapshot(

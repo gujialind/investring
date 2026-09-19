@@ -588,7 +588,7 @@ ir sub update <ID> [--amount <金额>] [--shares <份额>] [--unit-price <净值
   [--platform-code <平台>] [--apply-date YYYY-MM-DD] [--notes <备注>]
 ```
 
-> - 改 `--apply-date` 时后端校验交易日 + 晚于最新快照日，并自动重算预计确认日（T+1，issue #202）
+> - 改 `--apply-date` 时后端校验交易日 + 确认日晚于最新快照日（#495 起申请日 == 最新快照日当天放行），并自动重算预计确认日（T+1，issue #202）
 > - 字段按类型收口（与创建同口径）：申购仅可改 `--amount`、赎回仅可改 `--shares`，错位报 `INVALID_PARAM`（PR #204 评审）
 > - 赎回改份额与创建同口径：先量化 2 位再与可用份额精确比较（加回本条自身 pending 旧份额）
 
