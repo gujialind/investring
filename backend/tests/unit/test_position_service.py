@@ -271,7 +271,12 @@ class TestNoSnapshotCashCountedOnce:
         ) == Decimal("30")
 
     def test_confirmed_sell_anchored_on_trade_date(self, test_db):
-        """as_of=T：confirmed sell 按 trade_date 扣减（trade_date <= T < confirm_date 仍扣）"""
+        """as_of=T：confirmed sell 按 trade_date 扣减（trade_date <= T < confirm_date 仍扣）
+
+        正常顺序（`trade_date < confirm_date`）方向，当前主要来源是赎回配对 CASH 腿；
+        与本类的 `test_confirmed_sell_trade_date_after_as_of_excluded`（反转方向）成对。
+        注意 `TestAvailableCashTradeDateAnchor` 里还有一个同名用例，用的是**正常顺序**。
+        """
         self._seed(test_db, "NS_P6")
         self._cash_buy(test_db, "NS_P6", 100,
                        trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
@@ -285,13 +290,16 @@ class TestNoSnapshotCashCountedOnce:
         """as_of=T：confirmed sell 的 trade_date > T 时不计提
 
         出账锚定 trade_date（#70/#78）。这同时是无快照路径「只计一次」相对旧值
-        去重的唯一刻意差异点：旧基线按 confirm_date 收口，会在 T 日就扣掉这笔
-        trade_date 尚未到来的卖单；新口径不扣，到 trade_date 才扣。
+        去重在**反转方向**上的差异点：旧基线按 confirm_date 收口，会在 T 日就扣掉
+        这笔 trade_date 尚未到来的卖单；新口径不扣，到 trade_date 才扣。正常方向的
+        差异相反（新口径按下单日先扣），见 `test_confirmed_sell_anchored_on_trade_date`。
         """
         self._seed(test_db, "NS_P7")
         self._cash_buy(test_db, "NS_P7", 100,
                        trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
-        # 排序反转：confirm_date(1-7) < trade_date(1-15)，可经 cash_confirm_date 构造
+        # 排序反转：confirm_date(1-7) < trade_date(1-15)——存量旧模型数据形态，
+        # 构造入口已在 #493 封死；本用例经 ORM 夹具直接造行，守的是读侧对脏历史的
+        # 确定性行为。生产存量盘点与处置结论见 issue #581
         self._cash_sell(test_db, "NS_P7", 40,
                         trade_date=date(2025, 1, 15), confirm_date=date(2025, 1, 7))
         # as_of 早于 trade_date：承诺尚未发生，不扣
