@@ -28,6 +28,7 @@ from app.services.position_service import (
     calculate_investor_available_shares,
 )
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.null_guard import reject_explicit_nulls
 from app.services.audit_service import record_audit, _diff_fields
 from app.constants.audit_actions import (
     ACTION_CREATE, ACTION_UPDATE, ACTION_CONFIRM, ACTION_UNCONFIRM,
@@ -567,14 +568,10 @@ def update_subscription(
     if subscription.status == "cancelled":
         raise InvalidStatusError("已取消的申赎不可修改")
 
-    # 显式 null 收口：exclude_unset 不含 exclude_none，null 会穿透量化/闸门
-    # 校验经 setattr 落库脏数据；notes 例外（null 用于清除备注）
-    null_fields = [f for f, v in updates.items() if f != "notes" and v is None]
-    if null_fields:
-        raise BusinessError(
-            "INVALID_PARAM",
-            f"字段不可为空: {', '.join(sorted(null_fields))}",
-        )
+    # 显式 null 收口（#493 先例，#573 起共用 null_guard 单一实现）：exclude_unset
+    # 不含 exclude_none，null 会穿透量化/闸门校验经 setattr 落库脏数据；
+    # notes 例外（null = 清除备注）
+    reject_explicit_nulls(updates, allow={"notes"})
 
     # 与创建同口径：字段按申赎类型收口，防止语义不一致记录
     if subscription.sub_type == "subscribe" and "shares" in updates:

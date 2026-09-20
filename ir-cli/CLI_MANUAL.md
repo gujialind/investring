@@ -124,7 +124,7 @@ ir schema trade              # 仅输出指定命令组
 | `NOT_FOUND` | 资源不存在 |
 | `ALREADY_EXISTS` | 资源已存在（唯一约束冲突） |
 | `INVALID_STATUS` | 状态不允许当前操作 |
-| `INVALID_PARAM` | 字段与记录类型/语义不匹配（如申购传份额、字段显式传 null） |
+| `INVALID_PARAM` | 字段与记录类型/语义不匹配（如申购传份额、字段显式传 null）；#573 起投资人/产品/资产分类的 PUT 同口径：除清除型字段（申赎 notes、投资人 phone/email、分类 description、产品维度标签）外显式传 null 一律拒绝 |
 | `INVALID_AMOUNT` / `INVALID_SHARES` | 金额/份额不合法 |
 | `INSUFFICIENT_CASH` | 买入金额超过可用现金 |
 | `INSUFFICIENT_SHARES` | 卖出/赎回份额超过可用份额 |

@@ -77,6 +77,55 @@ class TestInvestorCRUD:
         assert resp.status_code == 200
         assert resp.json()["name"] == "新名称"
 
+    def test_update_explicit_null_rejected(self, client, admin_headers, test_db):
+        """显式 null 收口（#573）：role 落 NULL 会让 InvestorResponse 校验 500 且此后
+        该行 GET 恒 500（computed 先于响应序列化 commit，NULL 持久化不可自愈）"""
+        create_investor(test_db, code="UPD_NULL", name="原名称", role="viewer")
+        resp = client.put(
+            "/api/investors/UPD_NULL",
+            json={"role": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        # 拒绝即零写入：role 保持原值，且该行仍可读（修复前一次 PUT 即持久 500）
+        test_db.expire_all()
+        row = test_db.query(Investor).filter(Investor.code == "UPD_NULL").first()
+        assert row.role == "viewer"
+        assert client.get("/api/investors/UPD_NULL", headers=admin_headers).status_code == 200
+
+    def test_update_name_null_422(self, client, admin_headers, test_db):
+        """name 同 role：列可空但响应非 Optional，落 NULL 后该行 GET 恒 500（#573）"""
+        create_investor(test_db, code="UPD_NAME", name="原名称")
+        resp = client.put(
+            "/api/investors/UPD_NAME",
+            json={"name": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        test_db.expire_all()
+        row = test_db.query(Investor).filter(Investor.code == "UPD_NAME").first()
+        assert row.name == "原名称"
+
+    def test_update_nullable_fields_null_clears(self, client, admin_headers, test_db):
+        """phone/email 是 allow 例外：列可空且响应 Optional，显式 null = 清除（#573）"""
+        create_investor(test_db, code="UPD_CLEAR", name="清除测试")
+        investor = test_db.query(Investor).filter(Investor.code == "UPD_CLEAR").first()
+        investor.phone, investor.email = "13800000000", "old@example.com"
+        test_db.commit()
+
+        resp = client.put(
+            "/api/investors/UPD_CLEAR",
+            json={"phone": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.json()
+        # null 的字段清除，未传的字段不动（不传 = 不动）
+        assert resp.json()["phone"] is None
+        assert resp.json()["email"] == "old@example.com"
+        assert resp.json()["name"] == "清除测试"
+
     def test_viewer_cannot_create_investor(self, client, viewer_headers):
         """viewer 不能创建投资人"""
         resp = client.post(

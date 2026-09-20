@@ -5,6 +5,8 @@
 #   - TestNavLagDaysValidation（#235/#240）：nav_lag_days >= 0、场内必须 0、显式 null 拒绝
 #   - TestConfirmDaysValidation（#240）：confirm_days >= 0、场内必须 0、显式 null 拒绝，
 #     创建路径显式优先、未传按 market+is_qdii 推导（#231/#236/#241）
+#   - TestExplicitNullRejection（#573）：PUT 更新路径显式 null 收口（INVALID_PARAM），
+#     与 allow 例外（维度标签 null = 清标签）的三态行为
 
 from tests.factories import create_product
 
@@ -291,3 +293,91 @@ class TestConfirmDaysValidation:
         )
         assert resp.status_code in (200, 201), resp.json()
         assert resp.json()["confirm_days"] == 1
+
+
+class TestExplicitNullRejection:
+    """#573：PUT /api/products/{code}/{market} 显式 null 收口（统一 INVALID_PARAM）。
+
+    is_qdii/name 落 NULL 会让 ProductResponse 校验 500，且 commit 先于响应序列化 →
+    该行此后 GET 恒 500（不可自愈）；market 显式 null 此前是静默 no-op（调用方以为已腾空）。
+    allow 例外：五个维度标签 null = 清标签（合并终态仍交 validate_dimension_tags），
+    confirm_days/nav_lag_days 由各自专用校验器收口（错误码不并轨，单字段 null 的
+    专用码断言见上方 TestNavLagDaysValidation / TestConfirmDaysValidation 两处 null 用例）。
+    """
+
+    def test_update_is_qdii_null_422(self, client, admin_headers, test_db):
+        """显式 null → 422 INVALID_PARAM，且该行仍可读、值未变（拒绝即零写入）"""
+        create_product(test_db, code="NG001.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG001.OF/CN_OTC",
+            json={"is_qdii": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        got = client.get("/api/products/NG001.OF/CN_OTC", headers=admin_headers)
+        assert got.status_code == 200
+        assert got.json()["is_qdii"] is False
+
+    def test_update_name_null_422(self, client, admin_headers, test_db):
+        """name 列 NOT NULL：显式 null 此前直达 setattr → IntegrityError 500"""
+        create_product(test_db, code="NG002.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG002.OF/CN_OTC",
+            json={"name": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+
+    def test_update_market_null_422(self, client, admin_headers, test_db):
+        """market 显式 null 此前静默 no-op（不为 None 就不迁移）——调用方意图不明，拒绝"""
+        create_product(test_db, code="NG003.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG003.OF/CN_OTC",
+            json={"market": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+
+    def test_update_dimension_tag_null_clears(self, client, admin_headers, test_db):
+        """维度标签是 allow 例外：segment 对股票为 optional，显式 null = 清标签"""
+        create_product(test_db, code="NG004.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG004.OF/CN_OTC",
+            json={"segment_code": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["segment_code"] is None
+        # 不传的字段不动
+        assert data["asset_class_code"] == "ASSET_STOCK"
+        assert data["region_code"] == "REGION_CN"
+
+    def test_update_product_type_null_keeps_dedicated_code(self, client, admin_headers, test_db):
+        """product_type 在 allow 内（null 交给 validate_product_type）——锁定专用码
+        INVALID_PRODUCT_TYPE，防止它被通用收口的 INVALID_PARAM 悄悄顶掉"""
+        create_product(test_db, code="NG005.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG005.OF/CN_OTC",
+            json={"product_type": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PRODUCT_TYPE"
+
+    def test_update_mixed_allow_and_rejected_null_is_atomic(self, client, admin_headers, test_db):
+        """allow 字段与非 allow 字段混合：整体拒绝，allow 侧的清除也不落库（零写入）"""
+        create_product(test_db, code="NG006.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/NG006.OF/CN_OTC",
+            json={"segment_code": None, "is_qdii": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        got = client.get("/api/products/NG006.OF/CN_OTC", headers=admin_headers)
+        assert got.status_code == 200
+        assert got.json()["segment_code"] == "SEG_COMPOSITE"

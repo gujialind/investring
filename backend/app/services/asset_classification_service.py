@@ -24,6 +24,7 @@ from app.models.asset_classification import (
 )
 from app.models.product import Product
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.null_guard import reject_explicit_nulls
 
 DIMENSIONS = ("asset_class", "region", "style", "size", "segment")
 _CODE_PREFIX_OF_DIMENSION = {
@@ -241,10 +242,14 @@ def update_classification(
     """更新维度值（name/sort_order/description/is_active/适用关联/维度规则）。不 commit。
 
     updates 为 exclude_unset 后的字典；applicable_asset_classes / dimension_rules
-    为全量替换语义。
+    为全量替换语义。不传 = 不动；显式 null 一律拒绝（issue #573：sort_order/name/
+    is_active 落 NULL 会让响应模型 500 且该行 GET 恒 500；dimension_rules 显式 null
+    此前静默清空全部规则，与「不传 = 不动」矛盾）。description 列可空且响应
+    Optional，null = 清除描述。
     """
     ac = get_classification(db, code)
     updates = dict(updates)
+    reject_explicit_nulls(updates, allow={"description"})
 
     if "applicable_asset_classes" in updates:
         if ac.dimension == "asset_class":
