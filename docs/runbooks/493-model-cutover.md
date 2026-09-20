@@ -113,10 +113,38 @@ WHERE c.transfer_group LIKE 'rebal\_%'
   AND (c.trade_date <> f.confirm_date
        OR c.amount   <> COALESCE(f.actual_amount, f.amount))
 ORDER BY c.trade_date;
+
+-- ④ 形态面（#581 补）：买入扣款腿的日期偏离新模型口径
+--    新模型要求 CASH sell 腿 trade_date = confirm_date = T（#493 决策 5）
+--    （pending 腿本由 ① 覆盖，故本查询实际捞的是已确认却日期偏离的残留）
+SELECT c.id, c.transfer_group, c.portfolio_code, c.platform_code, c.status,
+       c.trade_date AS cash_trade_date, c.confirm_date AS cash_confirm_date, c.amount,
+       f.id AS fund_leg_id, f.confirm_date AS fund_confirm_date
+FROM trade c
+JOIN trade f
+  ON f.transfer_group = c.transfer_group
+ AND f.product_code  <> 'CASH'
+WHERE c.transfer_group LIKE 'rebal\_%'
+  AND c.product_code = 'CASH'
+  AND c.trade_type   = 'sell'
+  AND c.confirm_date <> c.trade_date
+ORDER BY c.trade_date, c.id;
+
+-- ④b 通用面（#581 补）：任何来源的 CASH 腿日期反转，含 sub_ 与转移组，一次看全
+SELECT id, transfer_group, portfolio_code, platform_code, trade_type,
+       status, trade_date, confirm_date, amount
+FROM trade
+WHERE product_code = 'CASH' AND confirm_date < trade_date
+ORDER BY confirm_date, id;
 ```
 
 > ③ 与 ② 有重叠是**预期**的：旧卖出组的到账腿既 `pending`、锚点也在下单日，
 > 两条查询都会命中。按组去重后统一处置即可。
+>
+> **④/④b 与 ①②③ 正交，是本次补上的盘点盲区**（#581）：①② 只筛 `status='pending'`、
+> ③ 只看卖出组的 `buy` 腿，**confirmed 的 CASH sell 腿的自有日期关系此前没有任何一条
+> 查询覆盖**。`rebal\_%` 里的反斜杠是 MySQL 下 `_` 通配符的转义，不可去掉。
+> 补盘结论见 §6.3。
 
 ### 2.3 结构性异常组
 
@@ -211,9 +239,10 @@ ORDER BY t.confirm_date, t.id;
 
 | 盘点结果 | 处置 |
 | --- | --- |
-| §2.2 ① 旧买入组（扣款腿 pending） | 按**实际交割事实**处理：扣款确实已发生 → 走新模型确认基金腿（代码会把扣款腿校正为 confirmed）；未发生 → 取消该组。**不得**只把 CASH 腿批量置 confirmed（见 §5 第 4 条） |
+| §2.2 ① 旧买入组（扣款腿 pending） | 按**实际交割事实**处理：扣款确实已发生 → 走新模型确认基金腿（`_apply_confirm_cash_leg` 会把扣款腿**状态与金额**校正为一致——判据 `_cash_leg_needs_fix` 只比 `status` 与 `actual_amount`，`corrected` 分支也只写 `status`/`amount`/`actual_amount`，**不写日期**；只有卖出到账腿的 `synced` 分支才重写 `trade_date`/`confirm_date`）；未发生 → 取消该组。**不得**只把 CASH 腿批量置 confirmed（见 §5 第 4 条），也不得指望确认路径把扣款腿日期带回 T |
 | §2.2 ② 旧卖出组（到账腿 pending） | 取消确认基金腿后按新模型重新确认并录入真实到账日；或按实际事实确认为已到账 |
 | §2.2 ③ 到账腿锚点/金额不符 | 同上：先满足快照保护，再由新规则重建到账腿 |
+| §2.2 ④/④b confirmed 扣款腿日期偏离或反转 | 逐组人工判定（以对账单/交割单为据），**不得**机械批量改日期；受影响快照按组级保护先删后重算。补盘结论见 §6.3 |
 | §2.3 畸形/孤儿组 | 逐组人工判定；缺扣款腿的买入组不得直接确认 |
 | §2.5 #471 污染 | 按账核对 → 删受影响快照 → unconfirm 并**重新正确确认** → 重建快照并对账（仅重算快照无效） |
 | 已完成的合法 confirmed 组 | **不动**：历史 `trade_date`/金额原样保留，读侧照实返回（不重写合法历史） |
@@ -312,6 +341,45 @@ ORDER BY t.confirm_date, t.id;
 
 **结论：按 §3 末行「已完成的合法 confirmed 组」不动。** 依据：现有读路径对 CASH 流入一律按 `confirm_date` 收口——可用现金流入（`Trade.confirm_date <= as_of`）、快照持仓增量（`confirm_date` 窗口）、卖出在途（到账腿 `confirm_date > D`）均**不读** CASH buy 的 `trade_date`；故只要 `confirm_date` 即真实到账日就不产生错账。强行校正 `trade_date` 需从组内最早生效日删快照，PORT001 那组将级联 55 张（06-30 起），代价远大于收益。
 **待办**：人工核对这 8 组 `confirm_date` 是否与银行/基金对账单的到账日一致，一致则维持本结论。
+
+### 6.3 §2.2 ④/④b 补盘结论（#581 盲区，1 组，不在 §6 闸门列表内，未处置）
+
+①② 只筛 `status='pending'`、③ 只看卖出组的 `buy` 腿，**confirmed 的 CASH sell 腿（买入扣款腿）的自有日期关系此前无任何查询覆盖**。#493 前的 `attach_paired_cash_leg` 把基金腿 `confirm_date` 原样传播给扣款腿，而新模型要求 `trade_date = confirm_date = T`（决策 5）；若旧组只经 §3 首行的 `corrected` 分支处理（只写 `status`/`amount`/`actual_amount`，不写日期），该偏离会留在库里且 ①②③ 都看不见。
+
+**取证方式（严格只读）**：不发 DB 连接、不调用任何 create/confirm/update/delete/unconfirm 端点。`ir trade list --product-code CASH --all --full` 逐组合取回后本地按 ④/④b 谓词比对；同命令连跑两次输出**逐字节一致**（各 87,465 bytes），作为「未夹带写操作」的反证。对照面取 09-18 切换备份 `~/ir-backup-20260918/trade.json`（271 行 / 166 条 CASH 腿）以同一逻辑复算。取证执行日：**2026-09-20**。
+
+| 查询 | 生产（09-20，171 条 CASH 腿） | 备份（09-18，166 条） |
+| --- | --- | --- |
+| ④b 通用面：任意 `product_code='CASH' AND confirm_date < trade_date` | **0 行** | **0 行** |
+| ④ 形态面：`rebal_%` + CASH + sell + `confirm_date <> trade_date` | **1 行** | **1 行**（同一行） |
+
+④b 为 0 意味着 #517 断言 5 的「存量日期反转行」确为空集，读侧不必为反转形态设计兜底。
+
+**唯一命中**：
+
+| id | 组 | 组合 / 平台 | 方向 / 状态 | `trade_date` | `confirm_date` | 金额 | 同组基金腿 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 98 | `rebal_ef1e41850b04` | PORT001 / HXJJ | sell / confirmed | 2026-06-04 | **2026-06-05** | 4000.00 | 97（`022959.OF` buy / confirmed，`trade_date=06-04`、`confirm_date=06-05`、`actual_amount=4000.00`） |
+
+**判定：真旧模型残留，非脏数据误报。** 扣款腿 `confirm_date` 恰等于同组基金腿的确认日 C，两腿金额一致——即「把基金 `confirm_date` 传播进 CASH 腿」这一 #493 明令禁止的形态，只有日期偏离，金额与交割事实无误。
+
+**处置：不动**（§3 末行「已完成的合法 confirmed 组」同口径，理由与 §6.2 同构）。影响面按备份的 `portfolio_position`（3,180 行）实测如下：
+
+- PORT001/HXJJ 的 CASH 行：06-03 `0.00` → **06-04 `4000.00`** → 06-05 `0.00`；且 06-04 当日 PORT001 **无 `IN_TRANSIT_BUY` 行**。该组合在 06-30 / 07-01 / 07-02 / 07-20 都产生过在途行，故 06-04 缺行不是「该组合不产生在途」。
+- 4000 在两种模型下都只被计入一次，**组合总市值同值**；差异是 06-04 快照的**构成**——这笔钱记为现金而非记为在途，且该笔买入在下单日从未以在途形式留痕。
+- 唯一可见的不一致在**历史时点查询**：`as_of = 2026-06-04` 时快照 CASH 行显示 4000.00，而可用现金按下单日锚定（`trade_date <= as_of`）已扣为 0。06-05 起两口径合流，**当期数值与后续所有快照日均不受影响**。
+- 若校正该腿 `confirm_date` → 06-04，须从 2026-06-04 起删 PORT001 快照重算：备份中该日起共 **72 个快照日**（06-04 ~ 09-14），此后每新增一个快照日再加一张——代价高于 §6.2 那 8 组（55 张），且换来的只是单日历史构成的一致。
+
+> **若未来重算 PORT001 2026-06-04 及之后的快照**，该行的两口径差异（现金 vs 在途、06-04 的可用现金与现金持仓不一致）会随重算重新显现，届时按本节判定依据决定是否一并校正。重算路径按 `confirm_date` 窗口捕获现金增量，单独重算**不会**自动修正它。
+
+**窗口覆盖**：备份 `manifest.created_at = 2026-09-18T01:43:37`，早于 #518 合并（`8dfdd7e`，2026-09-18T02:03:58+08:00）与随后的部署生效，中间这段是本节此前唯一的未取证区间。生产侧备份之后的 CASH 腿写入分两段：
+
+- **窗口内（01:43:37 → 02:03:58）**：只有 §6.1 处置触到的 5 行（id 428 / 434 / 436 / 448 / 450，`updated_at` 01:44:56 ~ 01:45:27）。与备份逐字段比对，`trade_date` / `confirm_date` / `status` / `trade_type` / 金额 / `platform_code` **全部一致**（仅 `updated_at` 变动），且 5 行本已 `trade_date == confirm_date` → 未引入反转，也未留下旧模型日期。
+- **窗口后**：新增 5 条腿（id 452 / 454 / 456 / 458 / 460，`created_at` 09-18 22:42:35 ~ 23:09:08）全部 `trade_date == confirm_date`，即新模型形态。
+
+09-19 与 09-20 两天无任何 CASH 腿写入（`updated_at` 最大值仍为 09-18T23:09:08）→ 盲区关闭。
+
+**防复发**：④/④b 已并入 §2.2 作为常规盘点项；「配对 CASH 腿恒有 `trade_date <= confirm_date`」作为读侧可依赖的不变量已写入[调仓规则](../reference/business-constraints.md#rule-trade)；结构性守卫（同一形态的自动检测）属 #538 范围，不在本 runbook。
 
 ---
 
