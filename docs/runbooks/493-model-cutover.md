@@ -116,7 +116,7 @@ ORDER BY c.trade_date;
 
 -- ④ 形态面（#581 补）：买入扣款腿的日期偏离新模型口径
 --    新模型要求 CASH sell 腿 trade_date = confirm_date = T（#493 决策 5）
---    （pending 腿本由 ① 覆盖，故本查询实际捞的是已确认却日期偏离的残留）
+--    （`status='confirmed'` 使本查询与 ① 严格不相交；pending 腿由 ① 覆盖）
 SELECT c.id, c.transfer_group, c.portfolio_code, c.platform_code, c.status,
        c.trade_date AS cash_trade_date, c.confirm_date AS cash_confirm_date, c.amount,
        f.id AS fund_leg_id, f.confirm_date AS fund_confirm_date
@@ -124,13 +124,17 @@ FROM trade c
 JOIN trade f
   ON f.transfer_group = c.transfer_group
  AND f.product_code  <> 'CASH'
+ AND f.trade_type     = 'buy'
 WHERE c.transfer_group LIKE 'rebal\_%'
   AND c.product_code = 'CASH'
   AND c.trade_type   = 'sell'
+  AND c.status       = 'confirmed'
   AND c.confirm_date <> c.trade_date
 ORDER BY c.trade_date, c.id;
 
 -- ④b 通用面（#581 补）：任何来源的 CASH 腿日期反转，含 sub_ 与转移组，一次看全
+--    注意：`confirm_date` 可空且 `NULL < x` 在 MySQL 非 TRUE——NULL 行会静默逃过
+--    本谓词；增量盘点如需覆盖 NULL 到账日，另加 OR confirm_date IS NULL
 SELECT id, transfer_group, portfolio_code, platform_code, trade_type,
        status, trade_date, confirm_date, amount
 FROM trade
@@ -346,14 +350,14 @@ ORDER BY t.confirm_date, t.id;
 
 ①② 只筛 `status='pending'`、③ 只看卖出组的 `buy` 腿，**confirmed 的 CASH sell 腿（买入扣款腿）的自有日期关系此前无任何查询覆盖**。#493 前的 `attach_paired_cash_leg` 把基金腿 `confirm_date` 原样传播给扣款腿，而新模型要求 `trade_date = confirm_date = T`（决策 5）；若旧组只经 §3 首行的 `corrected` 分支处理（只写 `status`/`amount`/`actual_amount`，不写日期），该偏离会留在库里且 ①②③ 都看不见。
 
-**取证方式（严格只读）**：不发 DB 连接、不调用任何 create/confirm/update/delete/unconfirm 端点。`ir trade list --product-code CASH --all --full` 逐组合取回后本地按 ④/④b 谓词比对；同命令连跑两次输出**逐字节一致**（各 87,465 bytes），作为「未夹带写操作」的反证。对照面取 09-18 切换备份 `~/ir-backup-20260918/trade.json`（271 行 / 166 条 CASH 腿）以同一逻辑复算。取证执行日：**2026-09-20**。
+**取证方式（严格只读）**：不发 DB 连接、不调用任何 create/confirm/update/delete/unconfirm 端点。只读的**结构性保证**在前：`ir trade list` 经 `run_list`（纯 GET 分页）只到 `GET /api/trades`，命令链上无任何写路径（`ir-cli/ir_cli/commands/trades.py`、`utils.py`）。`ir trade list --product-code CASH --all --full` 逐组合取回后本地按 ④/④b 谓词比对；同命令连跑两次输出**逐字节一致**（各 87,465 bytes），作为两次读之间无第三方写入的自洽校验。对照面取 09-18 切换备份 `~/ir-backup-20260918/trade.json`（271 行 / 166 条 CASH 腿）以同一逻辑复算。取证执行日：**2026-09-20**。
 
 | 查询 | 生产（09-20，171 条 CASH 腿） | 备份（09-18，166 条） |
 | --- | --- | --- |
 | ④b 通用面：任意 `product_code='CASH' AND confirm_date < trade_date` | **0 行** | **0 行** |
 | ④ 形态面：`rebal_%` + CASH + sell + `confirm_date <> trade_date` | **1 行** | **1 行**（同一行） |
 
-④b 为 0 意味着 #517 断言 5 的「存量日期反转行」确为空集，读侧不必为反转形态设计兜底。
+④b 为 0 意味着 #517 断言 5 的「存量日期反转行」确为空集，读侧不必为反转形态设计兜底。**严格前提**：`confirm_date` 可空且 MySQL 中 `NULL < x` / `NULL <> x` 均非 TRUE，④/④b 谓词会静默跳过 NULL 到账日的行——本次取证 171 条 CASH 腿的 `confirm_date` 均非空，故不存在 NULL 逃逸；日后增量盘点如需覆盖 NULL 到账日，另加 `OR confirm_date IS NULL`。另注：④ 此后已在 §2.2 收紧 `AND c.status = 'confirmed'`（与 ① 严格不相交）；本次取证执行时尚未加该过滤，唯一命中 id=98 为 confirmed，收紧不改变上表结果。
 
 **唯一命中**：
 
@@ -368,7 +372,7 @@ ORDER BY t.confirm_date, t.id;
 - PORT001/HXJJ 的 CASH 行：06-03 `0.00` → **06-04 `4000.00`** → 06-05 `0.00`；且 06-04 当日 PORT001 **无 `IN_TRANSIT_BUY` 行**。该组合在 06-30 / 07-01 / 07-02 / 07-20 都产生过在途行，故 06-04 缺行不是「该组合不产生在途」。
 - 4000 在两种模型下都只被计入一次，**组合总市值同值**；差异是 06-04 快照的**构成**——这笔钱记为现金而非记为在途，且该笔买入在下单日从未以在途形式留痕。
 - 唯一可见的不一致在**历史时点查询**：`as_of = 2026-06-04` 时快照 CASH 行显示 4000.00，而可用现金按下单日锚定（`trade_date <= as_of`）已扣为 0。06-05 起两口径合流，**当期数值与后续所有快照日均不受影响**。
-- 若校正该腿 `confirm_date` → 06-04，须从 2026-06-04 起删 PORT001 快照重算：备份中该日起共 **72 个快照日**（06-04 ~ 09-14），此后每新增一个快照日再加一张——代价高于 §6.2 那 8 组（55 张），且换来的只是单日历史构成的一致。
+- 若校正该腿 `confirm_date` → 06-04，须从 2026-06-04 起删 PORT001 快照重算：备份中该日起共 **72 个快照日**（06-04 ~ 09-14），此后每新增一个快照日再加一张——代价高于 §6.2 中**最贵的单组**（PORT001，55 张，06-30 起），且换来的只是单日历史构成的一致。
 
 > **若未来重算 PORT001 2026-06-04 及之后的快照**，该行的两口径差异（现金 vs 在途、06-04 的可用现金与现金持仓不一致）会随重算重新显现，届时按本节判定依据决定是否一并校正。重算路径按 `confirm_date` 窗口捕获现金增量，单独重算**不会**自动修正它。
 
@@ -379,7 +383,7 @@ ORDER BY t.confirm_date, t.id;
 
 09-19 与 09-20 两天无任何 CASH 腿写入（`updated_at` 最大值仍为 09-18T23:09:08）→ 盲区关闭。
 
-**防复发**：④/④b 已并入 §2.2 作为常规盘点项；「配对 CASH 腿恒有 `trade_date <= confirm_date`」作为读侧可依赖的不变量已写入[调仓规则](../reference/business-constraints.md#rule-trade)；结构性守卫（同一形态的自动检测）属 #538 范围，不在本 runbook。
+**防复发**：④/④b 已并入 §2.2 作为常规盘点项；「任一 CASH 腿恒有 `trade_date <= confirm_date`」作为读侧可依赖的**数据不变量**已写入[现金账本](../reference/business-constraints.md#rule-cash)（调仓侧日期闸门的两处实现见[调仓规则](../reference/business-constraints.md#rule-trade)）；结构性守卫（同一形态的自动检测）属 #538 范围，不在本 runbook。
 
 ---
 
