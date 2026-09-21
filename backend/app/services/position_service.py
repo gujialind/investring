@@ -492,7 +492,8 @@ def calculate_available_cash(
     **按下单日先扣**，即 #70/#78「流出锚定下单日」的预期行为，见
     `TestNoSnapshotCashCountedOnce::test_confirmed_sell_anchored_on_trade_date`；
     `confirm_date < trade_date` 的反转形态方向相反（新口径到 trade_date 才扣），
-    构造入口已在 #493 封死、唯一来源是存量旧数据（盘点见 #581），见成对的
+    构造入口已在 #493 封死、#581 存量盘点实测 0 行——本形态是对历史/外部写入
+    的防守而非当前可达状态，读侧对其保留确定性行为，见成对的
     `TestNoSnapshotCashCountedOnce::test_confirmed_sell_trade_date_after_as_of_excluded`。
 
     时点口径（#70/#78）：CASH 流出（sell）的资金承诺锚定**下单日 trade_date**，

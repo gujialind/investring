@@ -297,9 +297,9 @@ class TestNoSnapshotCashCountedOnce:
         self._seed(test_db, "NS_P7")
         self._cash_buy(test_db, "NS_P7", 100,
                        trade_date=date(2025, 1, 6), confirm_date=date(2025, 1, 6))
-        # 排序反转：confirm_date(1-7) < trade_date(1-15)——存量旧模型数据形态，
-        # 构造入口已在 #493 封死；本用例经 ORM 夹具直接造行，守的是读侧对脏历史的
-        # 确定性行为。生产存量盘点与处置结论见 issue #581
+        # 排序反转：confirm_date(1-7) < trade_date(1-15)——旧模型曾可造出该形态
+        # （构造入口 #493 封死；#581 盘点存量 0 行）；本用例经 ORM 夹具直接造行，
+        # 守的是读侧对脏历史的确定性行为。
         self._cash_sell(test_db, "NS_P7", 40,
                         trade_date=date(2025, 1, 15), confirm_date=date(2025, 1, 7))
         # as_of 早于 trade_date：承诺尚未发生，不扣
