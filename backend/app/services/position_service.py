@@ -484,12 +484,17 @@ def calculate_available_cash(
     − pending CASH sells（已承诺未执行）
     + 快照后 confirmed event cash_change
 
-    ⚠️ 无快照时「只计一次」不等于「旧值去重」，两者有一处刻意差异：被删掉的
-    旧基线对 confirmed sells 按 confirm_date 收口，增量段按 trade_date 收口，
-    仅在恒有 trade_date <= confirm_date 时取行相同。排序反转的 confirmed CASH
-    sell（cash_confirm_date 缺顺序校验时可构造）在 as_of=T 落在两者之间时，
-    由旧行为的「已扣一次」变为新行为的「到 trade_date 才扣」——与下面 §时点口径
-    的 trade_date 锚定一致，是有意行为，见 test_confirmed_sell_trade_date_after_as_of_excluded。
+    ⚠️ 无快照时「只计一次」不等于「旧值去重」：被删掉的旧基线对 confirmed sells 按
+    confirm_date 收口，增量段按 trade_date 收口，两集合**仅当 trade_date ==
+    confirm_date 时恒等**（#493 后买入扣款腿即此形态）。`trade_date < confirm_date`
+    的正常顺序同样有差异，且才是当前的主要来源——赎回配对 CASH 腿
+    （`trade_date = apply_date`、`confirm_date = T+1`）在 as_of 落在两日之间时新口径
+    **按下单日先扣**，即 #70/#78「流出锚定下单日」的预期行为，见
+    `TestNoSnapshotCashCountedOnce::test_confirmed_sell_anchored_on_trade_date`；
+    `confirm_date < trade_date` 的反转形态方向相反（新口径到 trade_date 才扣），
+    构造入口已在 #493 封死、#581 存量盘点实测 0 行——本形态是对历史/外部写入
+    的防守而非当前可达状态，读侧对其保留确定性行为，见成对的
+    `TestNoSnapshotCashCountedOnce::test_confirmed_sell_trade_date_after_as_of_excluded`。
 
     时点口径（#70/#78）：CASH 流出（sell）的资金承诺锚定**下单日 trade_date**，
     不论 pending/confirmed——confirmed sell 的 as_of 上限按 trade_date（而非

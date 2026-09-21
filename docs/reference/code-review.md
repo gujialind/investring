@@ -131,7 +131,7 @@ L2 语义审查（专攻「绿而错」）
 | --- | --- | --- |
 | `openapi.json` | 改 router / schema / 版本号 | ✅ `backend/check_openapi.py` |
 | `ir-cli` response_fields | 改响应字段 | ✅ `gen_response_fields.py --check` |
-| `business-constraints.md` 错误码 | 新增/删除 `BusinessError` code；改总表抛出位置锚点 | ✅ `backend/tests/unit/test_error_codes_doc_sync.py`（#418 收口时建：在用码 ↔ 总表双向比对，含「码名写进散文里就算记过」的防堵；新增码漏登记会红。#521 起总表「抛出位置」锚点必须为稳定符号 `file::函数/类名`——符号不存在、符号行范围内不含该码抛出点、出现行号锚点，三者均判红） |
+| `business-constraints.md` 错误码 | 新增/删除 `BusinessError` code；改总表抛出位置锚点 | ✅ `backend/tests/unit/test_error_codes_doc_sync.py`（#418 收口时建：在用码 ↔ 总表双向比对，**双向限于码集合**，含「码名写进散文里就算记过」的防堵；新增码漏登记会红。**抛出点粒度不校验**：「已有码的抛出点是否全量进锚点列」无反向断言，该类漂移由 L2 审查兜底（见该测试头 `known_gap`，#583 决策记录）。#521 起总表「抛出位置」锚点必须为稳定符号 `file::函数/类名`——符号不存在、符号行范围内不含该码抛出点、出现行号锚点，三者均判红） |
 | 根/模块 AGENTS、规范与受管 runbook | 改业务规则、流程、运维动作 | `scripts/check_context_docs.py` 仅检查受管入口、链接、锚点及旧引用；**不验证业务语义或所有历史文档** |
 | `visual-spec.md` | 改视觉口径 | ❌（但部分口径已有 ESLint 护栏） |
 
