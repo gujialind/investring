@@ -11,15 +11,15 @@
 #
 # 路径感知裁剪（issue #462）：PR 侧只跑改动触达的 job（`changes` job 输出
 # backend / frontend / cli / scripts / e2e_morph，各 job 以 `needs.changes.outputs.*`
-# 为 if 条件）；push / workflow_dispatch 侧一律保守全量（main 必须完整验证）。裁剪
-# 安全性依赖 `CI OK` 把 skipped 视为通过（本文件 ci-ok job 的判据），不会重现
-# #377/#456 的 required check 死锁。
+# 为 if 条件）；push / workflow_dispatch 侧一律保守全量（main 必须完整验证）。
+# CI OK 独立重算应跑清单：必需 job 只能 success，仅不适用项允许 skipped（#587）。
+# 路径与 job 策略见 scripts/ci_policy.json；未知路径和门禁变化保守验证。
 # 组合破坏盲区（A 只改后端、B 只改前端，各自绿但组合坏）与纯时间型失效（#468 型：
 # 夹具日历/过滤窗跟着真实时间走）由 push 侧保守全量与下一个触碰该栈的 PR 兜底——
 # 刻意不引入 nightly 定时体检（#472 declined）。裁剪取舍的完整论证见 #482。
 # 注：`label-hygiene.yml` 是另一个独立的定时 workflow，只查 e2e-morph-expected 标签
 #     残留、不跑任何 CI job，与「不做 nightly 定时体检」无关（#483）。
-# 路径映射见 `changes` job 的注释；改映射必须同步考虑 `test_error_codes_doc_sync.py`
+# 路径映射见 scripts/ci_policy.json；改映射必须同步考虑 test_error_codes_doc_sync.py
 # 对 docs/ 的断言依赖与 E2E 种子文件对 frontend 的依赖。
 #
 # 注：文档并非与 CI 完全无关——`backend/tests/unit/test_error_codes_doc_sync.py`（#418）
@@ -695,63 +695,11 @@ jobs:
       - name: Check context documentation
         run: python3 scripts/check_context_docs.py
 
-      # 纯 git 检测（不引第三方 action）。
-      # 非 PR 事件（push / workflow_dispatch）一律保守「全量」：main 必须完整验证；
-      # 但 e2e_morph 恒 false——compare 只拦 PR 侧的「测试重构假绿灯」，
-      # 置 true 会让每次合入 main 多跑两轮全量 E2E。
-      # 裁剪取舍与「为何不做 nightly 定时体检」的完整论证见 #482（决策记录）。
-      # PR 侧路径映射（改映射必须重新审视下方注释里的既有依赖）：
-      #   backend   ← backend/ 或 docs/（test_error_codes_doc_sync.py 以
-      #               docs/reference/business-constraints.md 为断言输入）
-      #   frontend  ← frontend/ 或 E2E 种子文件（种子破坏必须让 frontend-e2e 真红：
-      #               compare 对两侧同形失败会判空 diff，兜不住）
-      #   cli       ← ir-cli/（openapi 漂移门禁另依赖 backend，条件里已 OR）
-      #   scripts   ← scripts/
-      #   .github/workflows/ 命中则**四个栈全 true**：CI 配置改动无法预判影响面，
-      #               而改配置的 PR 正是最需要完整验证的场合（代价 = 回到裁剪前的全量）。
-      #               四个栈不含 e2e_morph——形态强制位对它无效（emit 传 nowf，见下条）。
-      #   e2e_morph ← 形态输入清单：e2e 目录、playwright 配置、种子与 normalizer
-      #               （它们同样改变 pass/skip 形态）。
-      #               **刻意不含 .github/workflows/**（#467）**：原先把 ci.yml 自身列入
-      #               是 dogfood，代价是任何 ci.yml 改动（哪怕只改注释）都触发
-      #               baseline+candidate 两轮全量 E2E；CI 配置改动已由上面的
-      #               「四栈全 true」覆盖，形态对比不必再跑一遍。e2e-stack.yml 同理
-      #               不入列——把同一问题搬到新文件没有收益；栈的 main 模式由
-      #               frontend-e2e 正面验证，但 **capture 分支不因只改 workflow 而实跑**
-      #               （缺口与手动确认口径见 e2e-stack.yml 头部）。
+      # docs/ 是错误码契约输入，种子同时影响后端与 E2E；映射见 ci_policy.json。
+      # #467：workflow 变化只强制四栈，不额外触发两轮形态对比。
       - id: detect
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "backend=true" >> "$GITHUB_OUTPUT"
-            echo "frontend=true" >> "$GITHUB_OUTPUT"
-            echo "cli=true" >> "$GITHUB_OUTPUT"
-            echo "scripts=true" >> "$GITHUB_OUTPUT"
-            echo "e2e_morph=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" > /tmp/changed.txt
-          hit() { grep -qE "$1" /tmp/changed.txt && echo true || echo false; }
-          wf=$(hit '^\.github/workflows/')
-          emit() {  # $1=输出名 $2=该栈是否命中 $3=nowf（不吃 workflow 全局强制，仅 e2e_morph）
-            if [ "$2" = "true" ] || { [ "${3:-}" != "nowf" ] && [ "$wf" = "true" ]; }; then
-              echo "$1=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$1=false" >> "$GITHUB_OUTPUT"
-            fi
-          }
-          emit backend "$(hit '^(backend/|docs/)')"
-          emit frontend "$(hit '^(frontend/|backend/tests/seed_base\.py$|backend/scripts/seed_e2e\.py$)')"
-          emit cli "$(hit '^ir-cli/')"
-          emit scripts "$(hit '^scripts/')"
-          emit e2e_morph "$(hit '^(frontend/e2e/|frontend/playwright\.config\.ts|backend/tests/seed_base\.py|backend/scripts/seed_e2e\.py|scripts/e2e_normalize\.py|scripts/tests/)')" nowf
-          # 输出缺失/写错会让所有 job 静默 skip 而 `CI OK` 仍绿（= 假绿），显式校验
-          for k in backend frontend cli scripts e2e_morph; do
-            n=$(grep -cE "^$k=(true|false)$" "$GITHUB_OUTPUT" || true)
-            if [ "$n" != "1" ]; then
-              echo "::error::changes 输出 $k 异常（期望 1 条 true/false，实得 $n 条）"
-              exit 1
-            fi
-          done
+          python3 scripts/ci_gate.py detect
 
   # E2E 形态对比（issue #410）：纯测试重构 PR 的「假绿灯」防线——base 与 PR 两侧
   # 各跑一遍全量 E2E，归一化（scripts/e2e_normalize.py）成 TSV 后 diff，期望空 diff；
@@ -827,10 +775,7 @@ jobs:
           echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
           exit 1
 
-  # 汇总门禁（issue #211）：作为 main 分支唯一的 required status check。
-  # 不直接把 matrix 展开的 Docker Build Smoke / 偏发的 Frontend E2E 设为 required，
-  # 而是用本 job needs 全部实质 job 后统一判定——任一 failure/cancelled 即失败，
-  # skipped 视为通过（路径裁剪后未触达的 job 与 compare 系在非 e2e PR 下跳过，issue #410/#462）。
+  # 汇总门禁（#211/#587）：缺席的必需检查不能等同于通过。
   ci-ok:
     name: "CI OK"
     if: always()
@@ -845,15 +790,16 @@ jobs:
       - e2e-compare-capture
       - e2e-compare
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
       - name: Aggregate result
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
         run: |
-          results="${{ join(needs.*.result, ',') }}"
-          echo "needs results: $results"
-          case "$results" in
-            *failure*|*cancelled*)
-              echo "❌ CI 未全绿（存在 failure/cancelled）"
-              exit 1
-              ;;
-          esac
-          echo "✅ 全部必需 job 成功"
+          python3 scripts/ci_gate.py aggregate
