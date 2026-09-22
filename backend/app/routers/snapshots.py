@@ -104,6 +104,15 @@ def recalculate(
         else:
             db.commit()
         return RecalculationResult(**result)
+    except BusinessError:
+        # 预校验（validate_snapshot_dependencies → _prev_trading_day）在删除任何快照前
+        # 即可能抛领域异常（如日历不足 CALENDAR_NOT_SYNCED，#591）。必须在下方 catch-all
+        # 之前 rollback 并原样上抛，交全局 handler 映射为 422 + 稳定错误码；否则落到
+        # except Exception → 500 RECALCULATION_FAILED，违反「200+errors / 422、绝不 500」。
+        # 预校验早于任何删除/写操作，整体回滚后对外仍是「无变化」。
+        # （routers/snapshots.py 其余端点的 catch-all→500 通病属 open issue #553，不在本次范围。）
+        db.rollback()
+        raise
     except ValueError as e:
         db.rollback()
         raise HTTPException(

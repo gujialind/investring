@@ -141,7 +141,7 @@ cd backend && pytest tests -q
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/integration/test_shares_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py -q` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
-  | 交易日 / 严格取价 | `pytest tests/integration/test_trading_day.py tests/integration/test_snapshot_nav_strict.py -q` |
+  | 交易日 / 严格取价（`trading_utils.py` 的 get_*/try_get_* 与快照取价 `_prev_trading_day`） | `pytest tests/unit/test_trading_utils.py tests/integration/test_trading_day.py tests/integration/test_snapshot_nav_strict.py tests/integration/test_snapshot_calendar_exhaustion.py -q` |
   | 原子性 / 双层账本测试及共享状态 helper | `pytest tests/integration/test_snapshots.py tests/integration/test_snapshot_observability.py tests/integration/test_trades_in_transit_lifecycle.py tests/integration/test_subscriptions_create.py -q` |
   | 任务执行记录（`task_runner.run_task` / `scheduler_service` / `routers/tasks.py`） | `pytest tests/unit/test_task_log_orchestration.py tests/unit/test_scheduler_service.py tests/unit/test_run_nav_sync.py tests/integration/test_task_execution_log.py tests/integration/test_tasks.py tests/integration/test_log_cleanup.py -q` |
   | 审计/系统错误日志（`audit_service.py`、任一埋点、日志表迁移） | `pytest tests/unit/test_audit_service.py tests/integration/test_audit_log.py tests/unit/test_migration_0013.py tests/unit/test_migration_0014.py -q` |
@@ -186,7 +186,7 @@ cd backend && pytest tests -q
 * `E2E_PORT`：draft、零交易/申赎/快照——platform-select-search、trade-buy-amount-linkage（用例 7 依赖零快照的 1.0000 首购窗口）等 spec 的目标。
 * `E2E_ACTIVE`：动态日期编排——锚定 `date.today()` 回溯 4 个交易日 D1<D2<D3<D4：D1 申购（ADMIN/HBZQ，10 万）→ D2 确认（首窗净值 1.0000、组合转 active）+ 场内买入 510300.SH 并确认（成交价 4.0000，不依赖行情同步）+ 首快照（首快照日 == 最早 confirm_date，#180）→ D3 第二快照（价 4.2000，连续原则）→ D4 pending 场内买入（8,200 元，供编辑类用例；trade_date > 最新快照日且落在前端「近1年」默认过滤窗内，故必须动态日期）。业务数据走 service 层造（复用 CASH 配对腿/激活状态机/快照三表全部不变量），仅 Portfolio/PriceRecord 直接 ORM；整段单事务末尾一次 commit，幂等守卫 =「组合已存在则跳过」。**create_trade 后先 `db.flush()` 再 confirm**——买入的配对 CASH 扣款腿在创建期即落库（#493），flush 让金额/状态在同事务内可见，避免后续读取到未落库的中间态。**禁止对共享 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**：它承诺固定快照与可编辑窗口，不用于推进或重算测试；auto_confirm 不确认调仓，到期 pending 调仓会阻断推进，相关场景须自建隔离组合。
 
-日历终点随 today 滚动（#468，原固定 2026-12-31 会形成日期时间炸弹：2027-01-04 起 `frontend-e2e` 红、2028 起 `test_seed_contract` 红）。「日历未同步」哨兵测试（`test_trading_day`/`test_snapshot_service`）取 today + 400 天动态日期，语义不随终点滚动漂移；`seed_e2e_active` 的 RuntimeError 守卫是防御性校验（终点越界时 `get_prev_trading_day` 向过去回退、不会报错）。E2E spec 的日期锚定一律经 `/api/trading-calendar` 取「today 起最近一个交易日」，禁止以 `new Date()` 直接当交易日或写死年份。
+日历终点随 today 滚动（#468，原固定 2026-12-31 会形成日期时间炸弹：2027-01-04 起 `frontend-e2e` 红、2028 起 `test_seed_contract` 红）。「日历未同步」哨兵测试（`test_trading_day`/`test_snapshot_service`）取 today + 400 天动态日期，语义不随终点滚动漂移；today+400 哨兵**必须保留**（`test_seed_contract` 仍断言该形态），它测的是**未来侧**耗尽。`seed_e2e_active` 的 RuntimeError 守卫同为防御性校验：它经 `/api/trading-calendar` 回溯取日期，方向是**向过去**（`get_prev_trading_day`），耗尽只可能发生在贴近日历**起点** 2025-01-01 时，与滚动终点无关；#591 起 helper 在覆盖不足时抛 `CALENDAR_NOT_SYNCED`（不再回退），该守卫保留以在种子日期真的越界时响亮失败。E2E spec 的日期锚定一律经 `/api/trading-calendar` 取「today 起最近一个交易日」，禁止以 `new Date()` 直接当交易日或写死年份。
 
 契约由 `tests/integration/test_seed_contract.py` 锁死（形态查询与 auto_confirm 不确认调仓的回归断言；E2E_ACTIVE 在 function 级 fixture 现造，不操作共享 E2E 库），改种子形态先改契约测试。
 

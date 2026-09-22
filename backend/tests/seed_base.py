@@ -198,10 +198,12 @@ def seed_e2e_active(db: Session) -> None:
     日期锚定 date.today() 动态回溯 4 个交易日 D1<D2<D3<D4：pending 交易须落在
     前端交易列表默认「近1年」过滤窗内（#126），固定日期会随时间失效。依赖
     seed_base_data 的日历（2025-01-01 起、终点滚动到 today+1 年，issue #468）
-    覆盖 today 及前 4 个交易日。下方 RuntimeError 守卫是防御性校验（防未来
-    回溯逻辑改动引入真实越界）：终点越界时 get_prev_trading_day 向过去回退、
-    取到日历末段交易日，四种日期仍互异，守卫不会触发（#468 订正原 docstring
-    「越界响亮报错」的失实描述）。
+    覆盖 today 及前 4 个交易日。下方 RuntimeError 守卫是防御性校验（防未来回溯
+    逻辑改动引入真实越界）。方向须看清：回溯用的是 get_prev_trading_day，它向
+    **过去**走，耗尽只可能发生在贴近日历**起点** 2025-01-01 时（与滚动终点无关，
+    故 today+365 的终点滚动不会触发它）；#591 起该 helper 覆盖不足即抛
+    CALENDAR_NOT_SYNCED（不再回退、也不再返回 None），本守卫退化为「日期集合
+    重合」的兜底校验而保留。
 
     **禁止对 E2E_ACTIVE 跑 recalculate/catch-up/generate-next**：共享组合承诺固定快照与可编辑窗口；auto_confirm 不确认调仓，到期 pending 调仓会阻断推进，推进/重算场景须自建隔离组合。
     """

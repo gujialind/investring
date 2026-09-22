@@ -25,7 +25,7 @@ from app.models import (
 )
 from app.services.trading_utils import (
     is_trading_day as _trading_utils_is_trading_day,
-    get_next_trading_day,
+    try_get_next_trading_day,
     get_latest_snapshot_date,
 )
 from app.services.exceptions import BusinessError, NotFoundError
@@ -633,14 +633,15 @@ def catch_up_snapshots(
         "auto_confirmed": [],
     }
 
-    current = get_next_trading_day(db, latest, days=1)
-    # get_next_trading_day 日历耗尽时回退返回 from_date 本身
-    if not current or current <= latest:
+    current = try_get_next_trading_day(db, latest, days=1)
+    # 入口即日历到头：无基线可推进，属参数级拒绝（保留定制消息，与 helper 抛错文案区分）
+    if current is None:
         raise BusinessError(
             code="CALENDAR_NOT_SYNCED",
             message=f"交易日历中找不到 {latest} 之后的交易日，请先同步交易日历",
         )
 
+    calendar_exhausted = False
     while current and current <= to_date:
         try:
             gen_result = generate_daily_snapshots(db, portfolio_code, current)
@@ -666,9 +667,14 @@ def catch_up_snapshots(
                 f"code={err['code']}, error={err['message']}"
             )
             break
-        # 防死循环：日历耗尽时 get_next_trading_day 返回 None 或 current 本身
-        nxt = get_next_trading_day(db, current, days=1)
-        if not nxt or nxt == current:
+        # 日历到头是合法终止条件（to_date 越过最后开市日时按部分成功交付，#591）
+        nxt = try_get_next_trading_day(db, current, days=1)
+        if nxt is None:
+            calendar_exhausted = True
+            logger.warning(
+                f"追平提前终止（日历耗尽）: portfolio={portfolio_code}, "
+                f"最后生成日={current}"
+            )
             break
         current = nxt
 
@@ -680,6 +686,16 @@ def catch_up_snapshots(
         result["message"] = (
             f"追平中断于 {result['failed_date']}，已生成 {result['generated_count']} 日快照"
         )
+    elif calendar_exhausted:
+        # 不得宣称「追平完成」——to_date 并未达成，是日历覆盖到头
+        result["message"] = (
+            f"交易日历已到头，追平提前终止：已生成 {result['generated_count']} 日快照"
+        )
+        result["warnings"] = (result["warnings"] or []) + [{
+            "type": "calendar_exhausted",
+            "last_generated_date": result["generated_dates"][-1]
+            if result["generated_dates"] else None,
+        }]
     else:
         result["message"] = f"追平完成，共生成 {result['generated_count']} 日快照"
     return result
@@ -712,8 +728,8 @@ def generate_next_snapshot(
             message="组合尚无快照基线，请用 recalculate 从最早交易日逐日重建",
         )
 
-    next_day = get_next_trading_day(db, latest, days=1)
-    if not next_day or next_day <= latest:
+    next_day = try_get_next_trading_day(db, latest, days=1)
+    if next_day is None:
         raise BusinessError(
             code="CALENDAR_NOT_SYNCED",
             message=f"交易日历中找不到 {latest} 之后的交易日，请先同步交易日历",
@@ -880,7 +896,14 @@ def _validate_snapshot_continuity(db: Session, portfolio_code: str, target_date:
     ).scalar()
     if latest is None or target_date == latest:
         return
-    expected = get_next_trading_day(db, latest, days=1)
+    expected = try_get_next_trading_day(db, latest, days=1)
+    if expected is None:
+        # 日历耗尽不是「不连续」：报 SNAPSHOT_NOT_CONTINUOUS 会指名一个并不存在的
+        # 期望日（旧回退返回 latest 本身）。如实归因到日历缺失。
+        raise BusinessError(
+            code="CALENDAR_NOT_SYNCED",
+            message=f"交易日历中找不到最新快照日 {latest} 之后的交易日，请先同步交易日历",
+        )
     if target_date == expected:
         return
     if target_date < latest:
@@ -1928,7 +1951,16 @@ def auto_confirm_after_snapshot(
 
     # #33: auto_confirm(D) 确认 confirm_date == next_trading_day(D) 的事件/跨天转移，
     # 配合逐日循环生成快照，使 confirm_date==C 的记录在快照 C 中体现。
-    next_confirm_date = get_next_trading_day(db, snapshot_date, days=1)
+    next_confirm_date = try_get_next_trading_day(db, snapshot_date, days=1)
+    # 日历到头（D 之后无交易日）：跳过下面的跨天/事件两段。这是**演绎**不是降级——
+    # Trade.confirm_date 与 ShareChangeEvent.ex_date 创建期均被校验为日历交易日
+    # （NON_TRADING_DAY / INVALID_EX_DATE，is_trading_day 对覆盖外日期返回 False），
+    # 故「D 之后无交易日」⟹ 不存在 confirm_date/ex_date 等于该日的记录。
+    # 旧回退把 next_confirm_date 设成 snapshot_date 本身，会造成**错日匹配**（不是 no-op）。
+    # 残留风险（须记）：若日后日历行被删/is_open 被翻，曾经合法的 ex_date 会被静默跳过——
+    # 仍比按伪造日期确认安全。申赎段（apply_date <= D）不依赖本值，照常执行。
+    if next_confirm_date is None:
+        return results
 
     # #493 决策 6（#471）：**调仓交易一律不参与 auto_confirm**——基金腿由用户手动
     # 确认（确认须取 T 日净值并录入卖出到账日），配对 CASH 腿随基金腿落定。
@@ -2264,16 +2296,35 @@ def _calculate_frozen_amount(
 # ==================== 工具函数 ====================
 
 def _prev_trading_day(db: Session, target_date: date, offset: int = 1) -> date:
-    """获取目标日期之前第offset个交易日"""
+    """获取目标日期之前第 offset 个交易日。
+
+    日历覆盖不足（前序开市日少于 offset，即 target_date 贴近日历**起点**）时抛
+    `CALENDAR_NOT_SYNCED`——**绝不回退为 `target_date - offset 自然日`**（#591）：
+    那会把编造的取价日写进快照估值，且 `_snapshot_nav_date_and_rule` 的 docstring
+    早已写明「禁止向前回退，取不到即由调用方报 MISSING_NAV」，本函数是让实现对齐该意图。
+    offset<=0（T+0 产品）不经日历，直接返回 target_date。
+    """
+    if offset <= 0:
+        return target_date
     trading_days = db.query(TradingCalendar.calendar_date).filter(
         TradingCalendar.calendar_date < target_date,
         TradingCalendar.is_open == True
     ).order_by(TradingCalendar.calendar_date.desc()).limit(offset).all()
-    
+
     if len(trading_days) < offset:
-        # 如果找不到足够的交易日，返回target_date - offset天
-        return target_date - timedelta(days=offset)
-    
+        raise BusinessError(
+            code="CALENDAR_NOT_SYNCED",
+            message=(
+                f"交易日历缺少 {target_date} 之前第 {offset} 个交易日"
+                f"（仅 {len(trading_days)} 个），请先补全交易日历"
+            ),
+            details={
+                "target_date": target_date.isoformat(),
+                "requested_offset": offset,
+                "resolved_offset": len(trading_days),
+            },
+        )
+
     return trading_days[-1][0]
 
 

@@ -221,7 +221,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `ALREADY_EXISTS` | 400 | 创建时自然键已存在（均显式 `http_status=400`）：投资人 `code`、组合 `code`、产品 `(code, market)` 复合键、维度值 `code`；另在产品 PUT 改 `market` 时目标 `(code, new_market)` 已被另一条产品占用 | services/product_service.py::create_product; services/portfolio_service.py::create_portfolio |
 | `AMOUNT_MISMATCH` | 422 | 卖出调仓且已传价格时，显式输入的到账金额与推导值 `quantize(shares×price) − fee` 相差 > 0.01；仅场内 `CN_EXCHANGE` 做此对账，场外传价不对账（确认时按 T 日净值重算覆盖） | services/trade_service.py::_derive_sell_amounts |
 | `BULK_DELETE_FAILED` | 500 | `DELETE /api/snapshots/{portfolio}/bulk/{from_date}` 的逐日删除循环中，某日抛出**非** `BusinessError` 的异常（`BusinessError` 如级联回退失败原样透传）；逐日 commit 语义下已成功的日期保留 | routers/snapshots.py::delete_snapshots_bulk |
-| `CALENDAR_NOT_SYNCED` | 422 | 交易日历覆盖不到所需日期：`/next`、`/prev` 查询返回 None 或回退等于 `from_date`（日历耗尽时 `get_next_trading_day` 返回入参本身）；`/is-open` 无该日 calendar 行；快照 catch-up / generate-next 时最新快照日的下一交易日为空或不晚于最新快照日 | routers/trading_calendar.py::get_next_trading_day; services/snapshot_service.py::catch_up_snapshots |
+| `CALENDAR_NOT_SYNCED` | 422 | 日历覆盖不足以解析所需的**前/后第 N 个交易日**：`get_next_trading_day`/`get_prev_trading_day` 走步时步数耗尽（含**部分耗尽**——`days=3` 只剩 1 个交易日也抛，不再回退返回入参或伪造自然日，#591）；快照估值取价日 `_prev_trading_day` 的前序开市日不足（`target_date` 贴近日历**起点**）；连续性校验发现最新快照日之后已无交易日；`/is-open` 无该日 calendar 行。**`days=0` 豁免**：场内 T+0 的合法零查询路径，直接返回入参、不抛。编排「到头即停」用 `try_get_*` 探测（返回 None），不用本码 | services/trading_utils.py::get_next_trading_day; ::get_prev_trading_day; services/snapshot_service.py::_prev_trading_day; ::_validate_snapshot_continuity; ::catch_up_snapshots; ::generate_next_snapshot; routers/trading_calendar.py::get_is_trading_day |
 | `CANNOT_CANCEL_EXCHANGE` | 422 | cancel 调仓交易时 `trade.market == "CN_EXCHANGE"`（场内不可取消，须 PUT 改字段或 DELETE 重建）；状态门先于此判（非 pending → `INVALID_STATUS`） | services/trade_service.py::cancel_trade |
 | `CANNOT_DELETE_CONFIRMED` | 422 | 删除申赎或调仓交易时 `status == "confirmed"`（须先 unconfirm 回 pending）；pending/cancelled 放行 | services/subscription_service.py::delete_subscription; services/trade_service.py::delete_trade |
 | `CANNOT_MODIFY_CONFIRMED` | 422 | PUT 直改申赎 / 调仓交易 / 份额变动事件时 `status == "confirmed"`（含基金级子记录，其恒为 confirmed）；同函数内 `cancelled` 另抛 `INVALID_STATUS`（事件 PUT 例外，见该码）。#493 两个窄例外**不**落本码：调仓 notes-only 对 confirmed 放行；confirmed **卖出**且字段子集 ⊆ `{notes, cash_confirm_date}` 且真的传了 `cash_confirm_date` 时走「到账日修正」分支（混入其他字段则整体拒绝回落到本码） | services/trade_service.py::update_trade; services/subscription_service.py::update_subscription |
@@ -322,6 +322,26 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 ## 交易日
 
 所有交易操作（申购、赎回、调仓、现金进出、事件日期）仅允许在交易日进行，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`；[test_trading_day.py](../../backend/tests/integration/test_trading_day.py) 的 `TestClosedWeekCalendar` / `TestClosedWeekWrites` 显式构造工作日闭市、连续长假和缺失记录，并验证写入口拒绝时无业务字段残留。
+
+**日历不足一律抛错，禁止回退（#591）**：需要第 N 个前/后交易日而日历覆盖不够（**含部分耗尽**——`days=3` 只剩 1 个可解析也抛）时，抛错版 `get_next_trading_day` / `get_prev_trading_day` 抛 `CALENDAR_NOT_SYNCED`（422，`details` 带 `requested_days` / `resolved_days`），**绝不**回退返回入参本身、也**绝不**用自然日加减伪造日期。快照取价日 `_prev_trading_day` 同口径：前序开市日不足即抛 `CALENDAR_NOT_SYNCED`，**不**改成 `target_date - lag 自然日`——那会把编造的取价日写进估值（静默错价），与「取不到即由调用方报 `MISSING_NAV`」的既定意图冲突。两码边界不得互串：**日历解析不出取价日 → `CALENDAR_NOT_SYNCED`；解析得出但该日无 `PriceRecord` → `MISSING_NAV`**。
+
+`days=0` 是场内 / 虚拟产品 T+0 的合法路径：零次日历查询、直接返回入参、永不抛错。
+
+编排若要「到日历头就停」（循环推进、逐组合跳过、无下一交易日则跳过确认），显式改用探测版 `try_get_next_trading_day` / `try_get_prev_trading_day`（返回 `Optional[date]`），把「日历到头」表达成调用点可见的合法控制流——而不是依赖抛错版曾经提供的隐藏回退。
+
+**日历不足兼容矩阵**（各入口的失败出口与回滚范围）：
+
+| 入口 | 日历不足时的出口 | 回滚范围 |
+| --- | --- | --- |
+| REST 申赎 / 调仓 / 现金转移（创建、改期、回退、`sync_transfer_group`） | service 抛 `CALENDAR_NOT_SYNCED` → 全局 handler 422 | router 回滚整个请求事务，零业务残留 |
+| 同步重算 `POST /snapshots/recalculate` | 预校验阶段抛出 → router `except BusinessError` 回滚后原样上抛 → 422 | 预校验早于任何删除，对外「无变化」 |
+| 异步重算 `POST /snapshots/recalculate-async` | 执行体捕获 → job 终态 `failed`、`error_message` 记日历错误 | 业务事务整体回滚，job 行落终态 |
+| catch-up（追平） | 入口即无下一交易日 → 422；中途到头 → 干净 `break` | 逐日 checkpoint：已生成日保留，响应 200 + `warnings`（`calendar_exhausted`），消息不得称「追平完成」 |
+| generate-next（单日顺延） | 422 冒泡（该端点无 errors 契约） | 未生成任何快照 |
+| 调度回补 `daily_snapshot_generate` | 单组合到头 → 记 `outcome.warnings` 跳过该组合、继续其余组合；全任务无可补日 → warnings 后返回 | 执行记录 `success`（warnings 计入 error_message），不因单组合到头判 failed |
+| auto_confirm（跨天转移 / 份额事件两段） | D 之后无交易日 → 跳过这两段 | 申赎段（按 `apply_date <= D`）不受影响；抛错属可证明的 no-op（`confirm_date` / `ex_date` 创建期已校验为日历交易日） |
+| `/api/trading-calendar/next`、`/prev` | 422 + `details`（由 helper 给出，取代旧 router 的 `result == from_date` 哨兵） | 只读，无写入 |
+| `/api/trading-calendar/is-open` | 无该日 calendar 行 → 422（区别于「非交易日」的 200） | 只读 |
 
 ## 易错陷阱
 

@@ -205,6 +205,84 @@ class TestBackfillLoop:
         assert result["generated"] == 0
         assert mock_gen.call_count == 1
 
+    @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
+    @patch("app.services.snapshot_service.generate_daily_snapshots")
+    def test_calendar_end_skips_portfolio_without_failing_task(
+        self, mock_gen, mock_auto, test_db
+    ):
+        """#591：某组合贴着日历末尾 → 记 warning 跳过，**其余组合照常处理**。
+
+        旧回退把 next 设成入参本身、靠 `nxt == current` 哨兵 break；抛错版若在循环
+        外传播，run_task 会把整个任务判 failed、跳过所有后续组合（逐日 checkpoint
+        退化成全有全无）。这里钉住「单组合日历到头 ≠ 整任务失败」。
+        """
+        from app.models import TradingCalendar
+        from tests.factories import (
+            create_portfolio, create_value_snapshot, ensure_trading_day,
+        )
+
+        # A 已追到日历末尾（END_DAY 之后无任何开市日）
+        create_portfolio(test_db, code="EXH_LAST", status="active",
+                         auto_snapshot_enabled=True)
+        for d in (date(2025, 9, 1), date(2025, 9, 2)):
+            ensure_trading_day(test_db, d, is_open=True)
+        create_value_snapshot(
+            test_db, portfolio_code="EXH_LAST", snapshot_date=date(2025, 9, 2),
+            total_value=1.0, total_shares=1.0, unit_price=1.0,
+        )
+        # B 在 A 之前、尚有 09-02 未补（target=09-02）
+        create_portfolio(test_db, code="EXH_OK", status="active",
+                         auto_snapshot_enabled=True)
+        create_value_snapshot(
+            test_db, portfolio_code="EXH_OK", snapshot_date=date(2025, 9, 1),
+            total_value=1.0, total_shares=1.0, unit_price=1.0,
+        )
+        # target 是交易日 → end_date 直接取入参；随后裁掉 09-02 之后的一切开市日，
+        # 使 A（latest=09-02）的 next 探测返回 None → 跳过该组合
+        test_db.query(TradingCalendar).filter(
+            TradingCalendar.calendar_date > date(2025, 9, 2)
+        ).delete(synchronize_session=False)
+        test_db.flush()
+
+        result = _generate_snapshots_for_date(test_db, date(2025, 9, 2))
+
+        warn_codes = [w.get("type") for w in result["warnings"]]
+        assert "calendar_exhausted" in warn_codes, result["warnings"]
+        skipped = [w for w in result["warnings"]
+                   if w.get("type") == "calendar_exhausted"]
+        assert any(w.get("portfolio_code") == "EXH_LAST" for w in skipped)
+        # B 仍被处理（保住多组合循环）：其唯一一天 09-02 应被生成尝试
+        assert any(
+            c.kwargs.get("target_date") == date(2025, 9, 2)
+            and c.kwargs.get("portfolio_code") == "EXH_OK"
+            for c in mock_gen.call_args_list
+        ), mock_gen.call_args_list
+
+    @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
+    @patch("app.services.snapshot_service.generate_daily_snapshots")
+    def test_no_prior_trading_day_returns_warning_without_generating(
+        self, mock_gen, mock_auto, test_db
+    ):
+        """target 非交易日且日历里已无更早开市日 → 记 warning 直接返回，0 生成、不抛错。
+
+        #591 让这段从死代码变活：旧 helper 永不返回 None，`if not end_date` 形同虚设。
+        """
+        from app.models import TradingCalendar
+        from tests.factories import create_portfolio
+
+        create_portfolio(test_db, code="EXH_NONE", status="active",
+                         auto_snapshot_enabled=True)
+        test_db.query(TradingCalendar).delete(synchronize_session=False)
+        test_db.flush()
+
+        result = _generate_snapshots_for_date(test_db, date(2025, 9, 3))
+
+        assert result["generated"] == 0
+        assert result["portfolios_processed"] == 0
+        assert [w.get("type") for w in result["warnings"]] == ["calendar_exhausted"]
+        assert result["warnings"][0]["date"] == date(2025, 9, 3).isoformat()
+        mock_gen.assert_not_called()
+
 
 class TestRunSnapshotGenerate:
     """#156：独立快照生成任务（run_snapshot_generate）与组合开关过滤"""
