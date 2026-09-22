@@ -344,18 +344,17 @@ def _get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def submit_price_sync_job(
-    params: dict,
-    triggered_by: str = "manual",
-    db: Optional[Session] = None,
-) -> int:
-    """提交价格同步后台任务，立即返回 job_id。单 active 锁：已有 pending/running job 则抛 ConflictError。"""
+def submit_price_sync_job(params: dict, triggered_by: str = "manual") -> int:
+    """提交价格同步后台任务，立即返回 job_id。单 active 锁：已有 pending/running job 则抛 ConflictError。
+
+    自持 SessionLocal（#592 方案 A）：后台线程另开会话按 job_id 查任务，故任务必须先
+    commit 才对工作线程可见——只 flush 会丢任务。**不接受注入会话**：注入形态下这里的
+    commit 会连带提交调用方未提交的其他修改，且调用方随后的 rollback 撤不回。
+    """
     from app.database import SessionLocal
     from app.models.sync_job import SyncJob
 
-    own_db = db is None
-    if own_db:
-        db = SessionLocal()
+    db = SessionLocal()
     try:
         # 仅锁价格同步类型（#89：sync_job 表现已承载 snapshot_recalc，两类互不阻塞）
         active = db.query(SyncJob).filter(
@@ -375,12 +374,21 @@ def submit_price_sync_job(
         db.commit()
         db.refresh(job)
         job_id = job.id
-    finally:
-        if own_db:
-            db.close()
 
-    _get_executor().submit(_run_price_sync_job_impl, job_id)
-    return job_id
+        # 投递失败不得留下 pending 孤儿：单 active 锁计 pending+running，一行永不执行的
+        # pending 会此后 409 掉所有同类提交，且启动期孤儿恢复之外无人清理（#592 实证）。
+        # submit 抛出即任务从未入队，不会有 worker 抢先改状态，此处改写终态无竞态。
+        try:
+            _get_executor().submit(_run_price_sync_job_impl, job_id)
+        except Exception as e:
+            job.status = "failed"
+            job.error_message = f"任务投递失败: {e}"[:1000]
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            raise
+        return job_id
+    finally:
+        db.close()
 
 
 def _run_price_sync_job_impl(job_id: int):
@@ -498,16 +506,24 @@ def _run_price_sync_job_impl(job_id: int):
 
 
 def recover_orphan_jobs():
-    """启动时扫描 status='running' 的 sync_job，标记为 interrupted。"""
+    """启动时扫描遗留的 sync_job（running 与 pending），标记为 interrupted。
+
+    pending 同样纳入（#592）：本函数只在启动期调用（main.py lifespan、init_scheduler），
+    此时线程池是全新的进程内单例，**任何 pending 行都不可能被执行**——提交落库后进程崩溃
+    留下的 pending 孤儿会永久占住单 active 锁。故无需时间阈值判断。
+    """
     from app.database import SessionLocal
     from app.models.sync_job import SyncJob
 
     db = SessionLocal()
     try:
-        orphans = db.query(SyncJob).filter(SyncJob.status == "running").all()
+        orphans = db.query(SyncJob).filter(SyncJob.status.in_(["running", "pending"])).all()
         for job in orphans:
+            reason = (
+                "提交后未被执行体接管" if job.status == "pending" else "可能上次崩溃遗留"
+            )
             job.status = "interrupted"
-            job.error_message = (job.error_message or "") + " [启动时标记为 interrupted：可能上次崩溃遗留]"
+            job.error_message = (job.error_message or "") + f" [启动时标记为 interrupted：{reason}]"
             job.finished_at = datetime.utcnow()
         db.commit()
         return len(orphans)
