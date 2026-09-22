@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "rules": [
+    {"kind": "prefix", "paths": ["backend/", "docs/"], "scopes": ["backend"], "reason": "backend or documentation contract"},
+    {"kind": "prefix", "paths": ["frontend/"], "scopes": ["frontend"], "reason": "frontend"},
+    {"kind": "prefix", "paths": ["ir-cli/"], "scopes": ["cli"], "reason": "CLI"},
+    {"kind": "prefix", "paths": ["scripts/"], "scopes": ["scripts"], "reason": "scripts"},
+    {"kind": "prefix", "paths": ["backend/app/routers/", "backend/app/schemas/"], "scopes": ["backend", "frontend"], "reason": "public API contract"},
+    {"kind": "exact", "paths": ["backend/app/main.py", "backend/openapi.json"], "scopes": ["backend", "frontend"], "reason": "public API entry or schema"},
+    {"kind": "exact", "paths": ["backend/tests/seed_base.py", "backend/scripts/seed_e2e.py"], "scopes": ["frontend"], "reason": "E2E seed"},
+    {"kind": "prefix", "paths": ["frontend/e2e/", "frontend/playwright.config.ts", "backend/tests/seed_base.py", "backend/scripts/seed_e2e.py", "scripts/e2e_normalize.py", "scripts/tests/"], "scopes": ["e2e_morph"], "reason": "E2E morphology input"},
+    {"kind": "prefix", "paths": [".github/workflows/"], "scopes": ["backend", "frontend", "cli", "scripts"], "reason": "workflow"},
+    {"kind": "suffix", "paths": [".md"], "scopes": [], "reason": "Markdown outside affected stacks"}
+  ],
+  "jobs": {
+    "changes": [],
+    "docker-build-smoke": [],
+    "backend-test": ["backend"],
+    "backend-test-mysql": ["backend"],
+    "cli-contract-check": ["cli", "backend", "scripts"],
+    "frontend-check": ["frontend"],
+    "frontend-e2e": ["frontend"],
+    "e2e-compare-capture": ["e2e_morph"],
+    "e2e-compare": ["e2e_morph"]
+  }
+}

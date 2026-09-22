@@ -8,7 +8,7 @@
 
 ## 0. 为什么需要这份标准
 
-本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 侧全量，job 清单与路径映射以 `.github/workflows/ci.yml` 为准）、覆盖率 `fail_under` 棘轮 **+ 增量覆盖率门禁**（前后端各一条，均复用 diff-cover 且只约束 PR 改动行，堵「新代码靠既有覆盖掩护」：后端见 `backend/AGENTS.md`「跑测试」、前端见 `frontend/AGENTS.md` §3）、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）；失败用例经 JUnit 注解直接标到 PR 文件行、覆盖率摘要进 PR 页（同一批 CI 步骤内产出，无需人工翻 artifact）。**逃生阀回收也有门禁兜底**：`SKIP_DOWNGRADE` 由 main 侧守卫拦残留，`e2e-morph-expected` 标签挂载过久由独立定时巡检**检出即红**（`.github/workflows/label-hygiene.yml`：warning 注解与绿 run 的通知都不带信号，失败态才天然表示「需要人看一眼」，在「仅失败」通知偏好下也是唯一有效档位；决策见 #483）。
+本仓库的机械门禁已经很厚：CI 全部 job 加 `CI OK` 汇总门禁（后端 SQLite/MySQL 双跑、CLI 契约漂移 + scripts 单测、前端 lint+tsc+单测+build、E2E、E2E 形态对比、Docker 构建冒烟；PR 侧按路径裁剪、main 侧全量，job 清单见 `.github/workflows/ci.yml`，路径映射见 `scripts/ci_policy.json`）、覆盖率 `fail_under` 棘轮 **+ 增量覆盖率门禁**（前后端各一条，均复用 diff-cover 且只约束 PR 改动行，堵「新代码靠既有覆盖掩护」：后端见 `backend/AGENTS.md`「跑测试」、前端见 `frontend/AGENTS.md` §3）、`openapi.json` 与 `ir-cli` 响应字段契约防漂移、错误码↔文档一致性守门、ESLint AST 护栏（色板/任意值/数值展示/e2e 定位器）；失败用例经 JUnit 注解直接标到 PR 文件行、覆盖率摘要进 PR 页（同一批 CI 步骤内产出，无需人工翻 artifact）。**逃生阀回收也有门禁兜底**：`SKIP_DOWNGRADE` 由 main 侧守卫拦残留，`e2e-morph-expected` 标签挂载过久由独立定时巡检**检出即红**（`.github/workflows/label-hygiene.yml`：warning 注解与绿 run 的通知都不带信号，失败态才天然表示「需要人看一眼」，在「仅失败」通知偏好下也是唯一有效档位；决策见 #483）。
 
 > ⚠️ **本文刻意不写 job 数量、覆盖率阈值等易漂移的具体数值**——第一版曾写「六个 job」「`fail_under=80`」，三天内即双双失实（#410 扩容 CI、#405 把阈值棘轮到 82）。数值一律指向源码，本文只陈述**判定口径**。
 
@@ -219,9 +219,9 @@ L2 语义审查（专攻「绿而错」）
 ### 4.6 合入
 
 * **合入是人工关卡**：`CI OK` 与 L2 审查均通过后，仍**须用户明确确认才可执行合入**——合入即触发 CD、直接动生产（**纯文档改动除外**，见下条），AI 不得自行合入。
-* `CI OK` 必须绿（`skipped` 视为通过——路径裁剪后未触达的 job 与 `e2e-compare` 系在非 e2e PR 下跳过；`paths-ignore` 已按 #456 落地，见 `ci.yml` 汇总 job 与 `on.push` 注释）。
+* `CI OK` 必须绿（#587）：[ci_gate.py](../../scripts/ci_gate.py) 按事件与 Git 变更独立重算应跑清单，核对 `changes` 输出和完整 job 结果；**必需项只能 success，明确不适用项才允许 skipped**，任何 failure/cancelled、缺结果、解析或所需基线错误均失败。此门禁核验 job 级结果，不证明内部每个步骤都执行，也不防同时恶意修改策略、脚本与测试。
 * **`pull_request` 触发器不得加 `paths-ignore`**（#456 硬约束）：ruleset `protect main` 的 required status check 是 `CI OK`，一旦 PR 侧被路径过滤，docs-only PR 上该检查永不产出 → 合入按钮永久灰掉，与 #377（改 PR base 不触发 CI → required check 无法满足）同型死锁。
-* **PR 侧不设路径过滤器，但 #462 起 job 级按路径裁剪**：PR 只跑改动触达的栈（backend / frontend / cli / scripts，映射见 `ci.yml` 的 `changes` job），未触达栈显示 skipped。触碰的栈仍是**全量**（改 backend 即 SQLite + MySQL 全部套件、改 frontend 即 lint/tsc/单测/build/全量 E2E）。跨栈组合破坏（A 只改后端、B 只改前端，各自绿但组合坏）与纯时间流逝型失效（#468 型）由合入 main 后的 push 侧保守全量与下一个触碰该栈的 PR 兜底（刻意不引入 nightly 定时体检，取舍论证见 #482）。
+* **PR 侧不设路径过滤器，但 #462 起 job 级按路径裁剪**：映射见 [ci_policy.json](../../scripts/ci_policy.json)，触碰的栈仍是**全量**。#587 起公开 API 契约路径同时触发前端完整检查与 E2E；未知路径、门禁变更或 base/head 门禁版本不同均保守验证四栈，形态对比仍按其独立输入范围判断。文档路径沿用既有映射，`docs/` 仍触发后端契约测试，不能将 docs-only 等同于全部 job 跳过。跨栈组合破坏与纯时间流逝型失效仍由 main push 保守全量与下一个触栈 PR 兜底（取舍见 #482）。
 * 合入 `main` 的 push 侧**不做任何裁剪**（保守全量，另有 `e2e_morph` 恒 false 以免每次合入都跑两轮 compare），仍**即触发 CD 自动部署**（**纯文档改动除外**：#456 起仅含 `.md` 的改动合入不产生 CI run ⇒ 不重部署、不推进 `deploy/*` 标签，见 `AGENTS.md` §3.1），因此「部署影响」节与上线冒烟不是形式主义。
 * 上线冒烟按 PR 模板清单执行（health check + `ir portfolio list` + 关键数据抽查），**在合入之后**。
 
