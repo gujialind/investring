@@ -139,7 +139,7 @@ cd backend && pytest tests -q
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
-  | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py -q` |
+  | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/integration/test_shares_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py -q` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
   | 交易日 / 严格取价 | `pytest tests/integration/test_trading_day.py tests/integration/test_snapshot_nav_strict.py -q` |
   | 原子性 / 双层账本测试及共享状态 helper | `pytest tests/integration/test_snapshots.py tests/integration/test_snapshot_observability.py tests/integration/test_trades_in_transit_lifecycle.py tests/integration/test_subscriptions_create.py -q` |
