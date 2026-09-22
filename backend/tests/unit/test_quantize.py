@@ -252,89 +252,98 @@ class TestAmountToSharesTwoStepQuantization:
         )
 
 
-_FINANCIAL_ROUND_SCOPE = {
-    "app/services/subscription_service.py": {
-        "calculate_subscription_confirm_preview", "confirm_single_subscription",
-        "create_subscription", "update_subscription",
-    },
-    "app/services/trade_service.py": {
-        "validate_buy_cash_with_addback", "validate_sell_shares_with_addback",
-        "attach_paired_cash_leg", "sync_transfer_group", "calculate_confirm_preview",
-        "resolve_cash_leg_plan", "compute_confirm_plan", "validate_confirm_cash_leg",
-        "_apply_confirm_cash_leg", "confirm_single_trade", "_derive_sell_amounts",
-        "_derive_buy_shares", "create_trade", "update_trade",
-    },
-    "app/services/share_change_event_service.py": {
-        "compute_event_fields", "apply_event_fields", "compute_share_change_event_preview",
-        "_confirm_fund_level_event", "create_share_change_event",
-        "update_share_change_event", "confirm_share_change_event",
-    },
-    "app/services/cash_transfer_service.py": {
-        "create_cash_transfer", "confirm_cash_transfer",
-    },
-    "app/services/position_service.py": {"update_cash_position"},
-    "app/services/snapshot_service.py": {
-        "_compute_in_transit_amounts", "_generate_portfolio_position",
-        "_generate_portfolio_value_snapshot", "_generate_investor_holding",
+# 六个核心财务模块全域禁止直接 .quantize()；round() 默认禁止（#590：收紧 PR #589
+# 守卫——新增未登记函数直接 round() 即失败，不再依赖「登记产生点」圈定禁止范围）。
+_FINANCIAL_GUARD_MODULES = (
+    "app/services/subscription_service.py",
+    "app/services/trade_service.py",
+    "app/services/share_change_event_service.py",
+    "app/services/cash_transfer_service.py",
+    "app/services/position_service.py",
+    "app/services/snapshot_service.py",
+)
+
+# round() 读侧例外：统计/展示用途（float 序列化与对账容差），非财务量化产生点。
+# 只按「文件 + 限定函数」登记，豁免登记函数及其嵌套函数，不扩大为整文件豁免；
+# .quantize() 全域禁令不受例外影响。例外函数更名/迁移，或其最后一个直接 round()
+# 调用被移除时，守卫失败（过期例外）。
+_FINANCIAL_ROUND_EXCEPTIONS = {
+    "app/services/position_service.py": {
+        "compute_daily_profits",            # 每日收益统计（float，读侧展示）
+        "compute_cash_cumulative_profits",  # 现金累计收益统计（float，读侧展示）
+        "compute_event_cash_addbacks",      # 事件现金加回统计（float，对账容差）
     },
 }
 
 
-def _collect_quantization_violations(sources, round_scope):
-    """六模块禁直接 quantize；round 仅限登记产生点及其嵌套函数。"""
+def _collect_quantization_violations(sources, round_exceptions):
+    """扫描文件全域禁直接 .quantize() 与 round()；round 例外限登记函数及其嵌套函数。"""
     assert sources, "empty source scan"
-    assert round_scope, "empty financial scope"
-    missing_files = set(round_scope) - set(sources)
-    assert not missing_files, f"missing financial files: {sorted(missing_files)}"
+    unscanned = set(round_exceptions) - set(sources)
+    assert not unscanned, f"exception files not scanned: {sorted(unscanned)}"
     violations = []
-    for filename, producers in sorted(round_scope.items()):
-        assert producers, f"empty function scope: {filename}"
+    for filename, source in sorted(sources.items()):
+        exceptions = round_exceptions.get(filename, set())
         functions = set()
+        used_exceptions = set()
 
-        def visit(node, path=(), in_producer=False):
+        def visit(node, path=(), exception_origin=None):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 path = (*path, node.name)
                 if not isinstance(node, ast.ClassDef):
                     qualified_name = ".".join(path)
                     functions.add(qualified_name)
-                    in_producer = in_producer or qualified_name in producers
+                    if exception_origin is None and qualified_name in exceptions:
+                        exception_origin = qualified_name
             if isinstance(node, ast.Call):
                 func = node.func
                 operation = None
                 if isinstance(func, ast.Attribute) and func.attr == "quantize":
                     operation = "quantize"
-                elif in_producer and (
-                    isinstance(func, ast.Name) and func.id == "round"
-                    or isinstance(func, ast.Attribute) and func.attr == "round"
+                elif (isinstance(func, ast.Name) and func.id == "round") or (
+                    isinstance(func, ast.Attribute) and func.attr == "round"
                     and isinstance(func.value, ast.Name) and func.value.id == "builtins"
                 ):
                     operation = "round"
-                if operation:
+                if operation == "round" and exception_origin is not None:
+                    used_exceptions.add(exception_origin)
+                elif operation:
                     violations.append((filename, ".".join(path), node.lineno, operation))
             for child in ast.iter_child_nodes(node):
-                visit(child, path, in_producer)
+                visit(child, path, exception_origin)
 
-        visit(ast.parse(sources[filename], filename=filename))
-        missing_functions = producers - functions
-        assert not missing_functions, (
-            f"missing financial functions: {filename}: {sorted(missing_functions)}"
+        visit(ast.parse(source, filename=filename))
+        missing_exceptions = exceptions - functions
+        assert not missing_exceptions, (
+            f"missing round-exception functions: {filename}: {sorted(missing_exceptions)}"
+        )
+        stale_exceptions = exceptions - used_exceptions
+        assert not stale_exceptions, (
+            f"stale round exceptions without direct round(): {filename}: {sorted(stale_exceptions)}"
         )
     return sorted(violations)
 
 
 class TestFinancialQuantizationGuard:
     def test_financial_services_use_quantization_helpers(self):
-        assert set(_FINANCIAL_ROUND_SCOPE) == {
+        assert set(_FINANCIAL_GUARD_MODULES) == {
             "app/services/subscription_service.py", "app/services/trade_service.py",
             "app/services/share_change_event_service.py", "app/services/cash_transfer_service.py",
             "app/services/position_service.py", "app/services/snapshot_service.py",
         }
+        # 例外台账钉死：扩大/迁移豁免必须是评审可见的显式改动（#590）
+        assert _FINANCIAL_ROUND_EXCEPTIONS == {
+            "app/services/position_service.py": {
+                "compute_daily_profits", "compute_cash_cumulative_profits",
+                "compute_event_cash_addbacks",
+            },
+        }
         backend = Path(__file__).resolve().parents[2]
         sources = {
             filename: (backend / filename).read_text(encoding="utf-8")
-            for filename in _FINANCIAL_ROUND_SCOPE
+            for filename in _FINANCIAL_GUARD_MODULES
         }
-        assert _collect_quantization_violations(sources, _FINANCIAL_ROUND_SCOPE) == []
+        assert _collect_quantization_violations(sources, _FINANCIAL_ROUND_EXCEPTIONS) == []
 
     @pytest.mark.parametrize("expression, operation", [
         ('value.quantize(Decimal("0.01"))', "quantize"),
@@ -342,48 +351,80 @@ class TestFinancialQuantizationGuard:
         ("round(value, 2)", "round"),
         ("builtins.round(value, 4)", "round"),
     ])
-    def test_rejects_direct_rounding(self, expression, operation):
+    def test_rejects_direct_rounding_in_unregistered_functions_by_default(
+        self, expression, operation
+    ):
+        """#590：未登记的新函数直接量化/舍入默认失败，报告文件、函数与行号"""
         source = f"def produce(value):\n    return {expression}\n"
         assert _collect_quantization_violations(
-            {"service.py": source}, {"service.py": {"produce"}},
+            {"service.py": source}, {},
         ) == [("service.py", "produce", 2, operation)]
 
-    def test_nested_and_async_producers_keep_qualified_names(self):
+    def test_new_unregistered_function_beside_exception_is_rejected(self):
+        """例外函数旁新增的未登记函数不豁免——例外按函数登记，不扩大为整文件"""
+        source = dedent('''\
+            def compute_daily_profits(value):
+                return round(float(value), 4)
+            def newly_added_producer(value):
+                return round(value, 2)
+        ''')
+        assert _collect_quantization_violations(
+            {"service.py": source}, {"service.py": {"compute_daily_profits"}},
+        ) == [("service.py", "newly_added_producer", 4, "round")]
+
+    def test_module_level_calls_are_rejected(self):
+        """模块级（函数外）直接 round/quantize 同样默认失败"""
+        source = dedent('''\
+            LIMIT = round(THRESHOLD, 2)
+            STEP_LIMIT = VALUE.quantize(STEP)
+            def compute_daily_profits(value):
+                return round(float(value), 4)
+        ''')
+        assert _collect_quantization_violations(
+            {"service.py": source}, {"service.py": {"compute_daily_profits"}},
+        ) == [
+            ("service.py", "", 1, "round"),
+            ("service.py", "", 2, "quantize"),
+        ]
+
+    def test_nested_and_async_functions_follow_default_deny(self):
+        """例外传播到嵌套函数；quantize 在例外内不豁免；未登记 async/嵌套默认拒绝"""
         source = dedent('''\
             class Writer:
-                async def produce(self, value):
+                def compute_stats(self, value):
                     def inner():
                         return round(value, 2)
                     async def nested():
                         return value.quantize(STEP, rounding=ROUND_HALF_UP)
                     return round(value, 4)
-                def statistics(self, value):
+                async def produce(self, value):
                     return round(value, 4)
-            def produce(value):
-                return round(value, 4)
+            def helper(value):
+                async def inner_async():
+                    return round(value, 4)
+                return inner_async
         ''')
         assert _collect_quantization_violations(
-            {"service.py": source}, {"service.py": {"Writer.produce"}},
+            {"service.py": source}, {"service.py": {"Writer.compute_stats"}},
         ) == [
-            ("service.py", "Writer.produce", 7, "round"),
-            ("service.py", "Writer.produce.inner", 4, "round"),
-            ("service.py", "Writer.produce.nested", 6, "quantize"),
+            ("service.py", "Writer.compute_stats.nested", 6, "quantize"),
+            ("service.py", "Writer.produce", 9, "round"),
+            ("service.py", "helper.inner_async", 12, "round"),
         ]
 
-    def test_quantize_is_forbidden_outside_producers_too(self):
-        source = dedent('''\
-            value.quantize(STEP)
-            def produce(value):
-                return quantize_amount(value)
-            async def statistics(value):
-                return value.quantize(STEP, rounding=ROUND_HALF_UP)
-        ''')
-        assert _collect_quantization_violations(
-            {"service.py": source}, {"service.py": {"produce"}},
-        ) == [
-            ("service.py", "", 1, "quantize"),
-            ("service.py", "statistics", 5, "quantize"),
-        ]
+    def test_round_exceptions_are_file_specific(self):
+        """同名函数在其他文件不豁免（例外按「文件 + 函数」登记）"""
+        sources = {
+            "app/services/position_service.py": (
+                "def compute_daily_profits(value):\n    return round(float(value), 4)\n"
+            ),
+            "app/services/trade_service.py": (
+                "def compute_daily_profits(value):\n    return round(float(value), 4)\n"
+            ),
+        }
+        assert _collect_quantization_violations(sources, {
+            "app/services/position_service.py": {"compute_daily_profits"},
+        }) == [("app/services/trade_service.py", "compute_daily_profits", 2, "round")]
 
     def test_helpers_float_tolerance_comments_and_strings_are_allowed(self):
         source = dedent('''\
@@ -395,45 +436,28 @@ class TestFinancialQuantizationGuard:
                 return (quantize_amount(value), quantize_nav(value),
                         quantize_shares(value), float(value), abs(value) <= tolerance)
         ''')
-        assert _collect_quantization_violations({
-            "app/services/trade_service.py": source,
-            "app/utils/quantize.py": (
-                "def quantize_amount(value):\n"
-                "    return value.quantize(STEP, rounding=ROUND_HALF_UP)\n"
-            ),
-        }, {"app/services/trade_service.py": {"produce"}}) == []
+        assert _collect_quantization_violations(
+            {"app/services/trade_service.py": source}, {},
+        ) == []
 
-    def test_round_scope_is_file_specific_and_preserves_read_statistics(self):
-        position_source = dedent('''\
-            def update_cash_position(value):
-                return quantize_amount(value)
-            def compute_daily_profits(value):
-                return round(float(value), 4)
-            def compute_cash_cumulative_profits(value):
-                return round(float(value), 4)
-            def compute_event_cash_addbacks(value):
-                return round(float(value), 4)
-            def create_trade(value):
-                return round(value, 2)
-        ''')
-        assert _collect_quantization_violations({
-            "app/services/position_service.py": position_source,
-            "app/services/trade_service.py": "def create_trade(value):\n    return round(value, 2)\n",
-            "app/services/performance_service.py": "def stats(value):\n    return round(value, 4)\n",
-        }, {
-            "app/services/position_service.py": {"update_cash_position"},
-            "app/services/trade_service.py": {"create_trade"},
-        }) == [("app/services/trade_service.py", "create_trade", 2, "round")]
-
-    @pytest.mark.parametrize("sources, scope, message", [
-        ({}, {"service.py": {"produce"}}, "empty source scan"),
-        ({"service.py": "def produce(): pass"}, {}, "empty financial scope"),
-        ({"other.py": "def produce(): pass"}, {"service.py": {"produce"}}, "missing financial files"),
-        ({"service.py": "def produce(): pass"}, {"service.py": set()}, "empty function scope"),
-        ({"service.py": ""}, {"service.py": {"produce"}}, "missing financial functions"),
-        ({"service.py": "def renamed(): pass"}, {"service.py": {"produce"}}, "missing financial functions"),
-        ({"service.py": "def produce(): pass"}, {"service.py": {"Writer.produce"}}, "missing financial functions"),
-    ], ids=["no-sources", "no-scope", "missing-file", "no-functions", "empty-file", "renamed", "wrong-qualname"])
-    def test_empty_or_stale_scope_fails(self, sources, scope, message):
+    @pytest.mark.parametrize("sources, exceptions, message", [
+        ({}, {}, "empty source scan"),
+        ({"service.py": "def produce(): pass"},
+         {"other.py": {"produce"}}, "exception files not scanned"),
+        # 例外函数删除/更名/限定名不符 → missing（例外失效反例）
+        ({"service.py": "def renamed(value):\n    return round(value, 4)\n"},
+         {"service.py": {"compute_daily_profits"}}, "missing round-exception functions"),
+        ({"service.py": "def produce(value):\n    return round(value, 4)\n"},
+         {"service.py": {"Writer.produce"}}, "missing round-exception functions"),
+        ({"service.py": ""},
+         {"service.py": {"compute_daily_profits"}}, "missing round-exception functions"),
+        # 例外函数尚存、但最后一个需豁免的直接 round() 已移除 → stale（过期例外）
+        ({"service.py": "def compute_daily_profits(value):\n    return quantize_amount(value)\n"},
+         {"service.py": {"compute_daily_profits"}}, "stale round exceptions"),
+    ], ids=[
+        "no-sources", "exception-file-not-scanned", "renamed-exception",
+        "wrong-qualname-exception", "empty-file", "last-exempt-call-removed",
+    ])
+    def test_empty_or_stale_exceptions_fail(self, sources, exceptions, message):
         with pytest.raises(AssertionError, match=message):
-            _collect_quantization_violations(sources, scope)
+            _collect_quantization_violations(sources, exceptions)
