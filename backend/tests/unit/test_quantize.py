@@ -263,21 +263,21 @@ _FINANCIAL_GUARD_MODULES = (
     "app/services/snapshot_service.py",
 )
 
-# round() 读侧例外：统计/展示用途（float 序列化与对账容差），非财务量化产生点。
-# 只按「文件 + 限定函数」登记，豁免登记函数及其嵌套函数，不扩大为整文件豁免；
-# .quantize() 全域禁令不受例外影响。例外函数更名/迁移，或其最后一个直接 round()
-# 调用被移除时，守卫失败（过期例外）。
+# round() 读侧例外：统计/展示用途（float 序列化），非财务量化产生点。
+# 只按「文件 + 限定函数」登记，豁免登记函数的函数体及其嵌套函数（装饰器与默认值在外层
+# 作用求值，不在豁免内），不扩大为整文件豁免；.quantize() 全域禁令不受例外影响。
+# 例外函数更名/迁移，或其子树内不再有任何直接 round() 调用时，守卫失败（过期例外）。
 _FINANCIAL_ROUND_EXCEPTIONS = {
     "app/services/position_service.py": {
         "compute_daily_profits",            # 每日收益统计（float，读侧展示）
         "compute_cash_cumulative_profits",  # 现金累计收益统计（float，读侧展示）
-        "compute_event_cash_addbacks",      # 事件现金加回统计（float，对账容差）
+        "compute_event_cash_addbacks",      # 事件现金加回统计（float，读侧展示）
     },
 }
 
 
 def _collect_quantization_violations(sources, round_exceptions):
-    """扫描文件全域禁直接 .quantize() 与 round()；round 例外限登记函数及其嵌套函数。"""
+    """扫描文件全域禁直接 .quantize() 与 round()；round 例外限登记函数的函数体及其嵌套函数。"""
     assert sources, "empty source scan"
     unscanned = set(round_exceptions) - set(sources)
     assert not unscanned, f"exception files not scanned: {sorted(unscanned)}"
@@ -290,19 +290,39 @@ def _collect_quantization_violations(sources, round_exceptions):
         def visit(node, path=(), exception_origin=None):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 path = (*path, node.name)
-                if not isinstance(node, ast.ClassDef):
-                    qualified_name = ".".join(path)
-                    functions.add(qualified_name)
-                    if exception_origin is None and qualified_name in exceptions:
-                        exception_origin = qualified_name
+                if isinstance(node, ast.ClassDef):
+                    for child in ast.iter_child_nodes(node):
+                        visit(child, path, exception_origin)
+                    return
+                qualified_name = ".".join(path)
+                functions.add(qualified_name)
+                body_origin = exception_origin
+                if body_origin is None and qualified_name in exceptions:
+                    body_origin = qualified_name
+                # 装饰器、默认值、注解与形参在**定义处的外层作用**求值，不属于函数体，
+                # 故按外层例外状态扫描——否则例外函数上的 `@deco(round(X, 2))` /
+                # `def f(v=round(1.5, 2))` 既被豁免、又能喂饱 used_exceptions
+                # 使过期例外检查失效。
+                outer_scope = (
+                    *node.decorator_list,
+                    node.args,
+                    *getattr(node, "type_params", ()),
+                    *((node.returns,) if node.returns is not None else ()),
+                )
+                for child in outer_scope:
+                    visit(child, path, exception_origin)
+                for child in node.body:
+                    visit(child, path, body_origin)
+                return
             if isinstance(node, ast.Call):
                 func = node.func
                 operation = None
                 if isinstance(func, ast.Attribute) and func.attr == "quantize":
                     operation = "quantize"
                 elif (isinstance(func, ast.Name) and func.id == "round") or (
+                    # 属性形式一律拦截，不白名单接收者：builtins.round()、别名
+                    # `import builtins as b; b.round()`、np.round()、Series.round()
                     isinstance(func, ast.Attribute) and func.attr == "round"
-                    and isinstance(func.value, ast.Name) and func.value.id == "builtins"
                 ):
                     operation = "round"
                 if operation == "round" and exception_origin is not None:
@@ -350,6 +370,10 @@ class TestFinancialQuantizationGuard:
         ('value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)', "quantize"),
         ("round(value, 2)", "round"),
         ("builtins.round(value, 4)", "round"),
+        # 属性形式不白名单接收者：别名、numpy、pandas 同属误舍入路径
+        ("aliased_builtins.round(value, 4)", "round"),
+        ("np.round(value, 4)", "round"),
+        ("series.round(4)", "round"),
     ])
     def test_rejects_direct_rounding_in_unregistered_functions_by_default(
         self, expression, operation
@@ -371,6 +395,34 @@ class TestFinancialQuantizationGuard:
         assert _collect_quantization_violations(
             {"service.py": source}, {"service.py": {"compute_daily_profits"}},
         ) == [("service.py", "newly_added_producer", 4, "round")]
+
+    def test_exception_does_not_leak_to_decorators_and_defaults(self):
+        """装饰器/默认值在定义处的外层作用求值：例外函数不豁免它们"""
+        source = dedent('''\
+            def deco(x): return x
+            @deco(round(1.5, 2))
+            def compute_daily_profits(value=round(0.5, 2)):
+                return round(float(value), 4)
+        ''')
+        assert _collect_quantization_violations(
+            {"service.py": source}, {"service.py": {"compute_daily_profits"}},
+        ) == [
+            ("service.py", "compute_daily_profits", 2, "round"),
+            ("service.py", "compute_daily_profits", 3, "round"),
+        ]
+
+    def test_decorator_round_does_not_satisfy_exception_ledger(self):
+        """体内已无直接 round()、只剩装饰器/默认值里的 round() → 仍按过期例外失败"""
+        source = dedent('''\
+            def deco(x): return x
+            @deco(round(1.5, 2))
+            def compute_daily_profits(value):
+                return quantize_amount(value)
+        ''')
+        with pytest.raises(AssertionError, match="stale round exceptions"):
+            _collect_quantization_violations(
+                {"service.py": source}, {"service.py": {"compute_daily_profits"}},
+            )
 
     def test_module_level_calls_are_rejected(self):
         """模块级（函数外）直接 round/quantize 同样默认失败"""
