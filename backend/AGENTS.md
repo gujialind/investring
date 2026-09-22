@@ -138,6 +138,7 @@ cd backend && pytest tests -q
   | `position_service.py`（可用现金/份额） | `pytest tests/unit/test_position_service.py tests/integration -q -k "position or in_transit or cash"` |
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
+  | `cash_transfer_service.py`（跨天现金转移，两腿 Trade） | `pytest tests/integration/test_trades*.py tests/integration/test_cash_transfers*.py tests/integration/test_trade_cash_check.py -q` |
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/integration/test_shares_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py -q` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
@@ -149,7 +150,7 @@ cd backend && pytest tests -q
   | 外键约束 / 外键名（`models/nav_sync_detail.py` 的 `name=`、迁移 0016） | `pytest tests/unit/test_migration_0016.py tests/unit/test_migration_0015.py -q` |
   | 测试库隔离（`tests/db_isolation.py`、`tests/conftest.py` 的库选定与归属判据） | `pytest tests/unit/test_db_isolation.py -q`（结构性守卫，改 conftest 导入顺序必跑；全量会话验证由 CI 兜底） |
 
-  表中的通配项（`test_trades*.py` / `test_subscriptions*.py`）只匹配该前缀开头的文件：新增这两个领域的集成测试必须以**复数前缀**命名（`test_trades_*` / `test_subscriptions_*`），否则静默落在影响面外；不便改名的单数文件（如 `test_trade_cash_check.py`）在表中显式列出，后续同类文件照此登记。
+  表中的通配项（`test_trades*.py` / `test_subscriptions*.py` / `test_cash_transfers*.py`）只匹配该前缀开头的文件：新增这些领域的集成测试必须以**复数前缀**命名（`test_trades_*` / `test_subscriptions_*` / `test_cash_transfers_*`），否则静默落在影响面外；不便改名的单数文件（如 `test_trade_cash_check.py`）在表中显式列出，后续同类文件照此登记。
 
   跨核心服务的改动（snapshot/position/trade/subscription 任一）额外连带 `-k snapshot` 兜底——快照链是所有写路径的下游。
 - **测试库一律由 pytest 选定**（#539 第二单元，判据在 `tests/db_isolation.py`、由 `tests/conftest.py` 在 **`import app.main` 之前**调用）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> **缺省 = 本次会话自建的临时目录 SQLite**。外部环境 `DATABASE_URL` 一律忽略（只 WARN），不再像早期那样 `setdefault` 继承；`SCHEDULER_ENABLED` 测试期恒关（调度 job 在 lifespan 内会真写库）。次序是硬要求：`app.main` 模块期即 `create_all`，打的正是那一刻的 `DATABASE_URL`。CI 的 SQLite job 两条显式通道都不存在（走缺省临时目录），MySQL job 显式设 `TEST_DB_URL`，且连接账号是**与库同名的最小权限账号**（`ci.yml` 的 `ir_test`/`ir_migration` 各一、`e2e-stack.yml` 的 `ir_e2e` 一个（#548），root 只留在建库建号那一步；权限清单以该守门的 `REQUIRED_PRIVILEGES` 为单一事实来源，两个 job 共用一份、不分叉）——归属闸门判的是「这个库归不归 pytest」，不给小权限，指错 URL 照样能毁整库；**E2E 侧连这道闸门都没有**（它走 `app/database.py` 直吃 `DATABASE_URL`），DBACL 是那条路径上唯一的结构防线。该约束钉在 `scripts/tests/test_ci_mysql_account.py`（`TARGETS` 覆盖两个 workflow，含逐目标的反例用例与「连接串条数」断言）。

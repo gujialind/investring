@@ -333,7 +333,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 | 入口 | 日历不足时的出口 | 回滚范围 |
 | --- | --- | --- |
-| REST 申赎 / 调仓 / 现金转移（创建、改期、回退、`sync_transfer_group`） | service 抛 `CALENDAR_NOT_SYNCED` → 全局 handler 422 | router 回滚整个请求事务，零业务残留 |
+| REST 申赎 / 调仓 / 现金转移（创建、改期、确认、回退、`sync_transfer_group`） | service 抛 `CALENDAR_NOT_SYNCED` → 全局 handler 422 | 请求事务不提交即结束（`get_db` 关会话时回滚），零业务残留；跨天转移创建的抛出点在两腿 `flush()` **之后**，半笔转移全靠这道回滚清掉 |
 | 同步重算 `POST /snapshots/recalculate` | 预校验阶段抛出 → router `except BusinessError` 回滚后原样上抛 → 422 | 预校验早于任何删除，对外「无变化」 |
 | 异步重算 `POST /snapshots/recalculate-async` | 执行体捕获 → job 终态 `failed`、`error_message` 记日历错误 | 业务事务整体回滚，job 行落终态 |
 | catch-up（追平） | 入口即无下一交易日 → 422；中途到头 → 干净 `break` | 逐日 checkpoint：已生成日保留，响应 200 + `warnings`（`calendar_exhausted`），消息不得称「追平完成」 |

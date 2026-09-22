@@ -11,6 +11,10 @@
 # 超出该范围的日期视为"日历数据缺失"，应返回 CALENDAR_NOT_SYNCED 的 422。
 # 终点侧哨兵取 today+400 天（恒在滚动终点之外，语义不随时间漂移）；起点固定
 # 2025-01-01，故早于起点的哨兵可用固定日期。
+#
+# 另含两类拒绝的归因对照（issue #591）：TestClosedWeekWrites 证明"这天不开放"
+# 走 NON_TRADING_DAY，TestExhaustedCalendarWrites 证明"日历没覆盖到这天之后"走
+# CALENDAR_NOT_SYNCED——同一入口、同一断言形状，只有错误码与原因不同。
 # ============================================================================
 
 from datetime import date, timedelta
@@ -25,6 +29,7 @@ from tests.factories import (
     create_product,
     create_value_snapshot,
 )
+from tests.integration.calendar_exhaustion_helpers import make_last_open_day
 
 # 终点侧「日历未同步」哨兵：seed_base 段 4 的日历终点 = today + 365 天，
 # today + 400 天恒在日历外。
@@ -80,17 +85,22 @@ def _business_rows(db, portfolio_code):
 
 def _assert_closed_date_rejected(
     client, headers, db, portfolio_code, endpoint, payload, date_field, operation,
-    error_code="NON_TRADING_DAY",
+    error_code="NON_TRADING_DAY", invalid_date="2025-06-09",
 ):
+    """拒绝 + 零业务残留 + （create 时）正向对照。
+
+    error_code / invalid_date 可换，使「这天不开放」与「日历没覆盖到这天之后」
+    两种拒绝走同一形状断言（#591），不因形状不同而互相掩盖。
+    """
     if operation == "update":
         created = client.post(endpoint, json=payload, headers=headers)
         assert created.status_code == 200, created.text
         assert created.json()["status"] == "pending"
         endpoint = f"{endpoint}/{created.json()['id']}"
-        invalid_payload = {date_field: "2025-06-09", "notes": "must not persist"}
+        invalid_payload = {date_field: invalid_date, "notes": "must not persist"}
         request = client.put
     else:
-        invalid_payload = {**payload, date_field: "2025-06-09"}
+        invalid_payload = {**payload, date_field: invalid_date}
         request = client.post
 
     before = _business_rows(db, portfolio_code)
@@ -103,6 +113,8 @@ def _assert_closed_date_rejected(
     if operation == "create":
         control = client.post(endpoint, json=payload, headers=headers)
         assert control.status_code == 200, control.text
+
+    return resp
 
 
 class TestNextTradingDay:
@@ -438,3 +450,44 @@ class TestClosedWeekWrites:
             client, admin_headers, test_db, port.code, "/api/share-change-events",
             payload, date_field, operation, error_code,
         )
+
+
+class TestExhaustedCalendarWrites:
+    """#591-B：日期本身是开市日，但日历在其后到头——与 TestClosedWeekWrites 同形状、不同归因。
+
+    同一条申购入口在同一次用例里先后给出两种拒绝码，证明「这天不开放」
+    （NON_TRADING_DAY）与「日历没覆盖到这天之后」（CALENDAR_NOT_SYNCED）没有被互相掩盖：
+    前者由 is_trading_day 挡在入口，后者由确认日推导抛出。
+    """
+
+    LAST_OPEN = date(2025, 6, 6)
+
+    @pytest.mark.parametrize("operation", ["create", "update"])
+    @pytest.mark.parametrize("sub_type", ["subscribe", "redeem"])
+    def test_subscription_distinguishes_closed_from_exhausted(
+        self, client, admin_headers, test_db, calendar_write_portfolio,
+        operation, sub_type,
+    ):
+        port = calendar_write_portfolio
+        # 基准日保持在截断后的日历内可用（06-05 的确认日 = 06-06），
+        # 否则正向对照会先被耗尽挡下，测的就不是「两种归因」而是「全都失败」。
+        payload = {
+            "portfolio_code": port.code,
+            "investor_code": "VIEWER",
+            "platform_code": "MYCF",
+            "sub_type": sub_type,
+            "apply_date": "2025-06-05",
+            "amount" if sub_type == "subscribe" else "shares": 100.0,
+        }
+        _assert_closed_date_rejected(
+            client, admin_headers, test_db, port.code, "/api/subscriptions",
+            payload, "apply_date", operation,
+        )
+
+        make_last_open_day(test_db, self.LAST_OPEN)
+        resp = _assert_closed_date_rejected(
+            client, admin_headers, test_db, port.code, "/api/subscriptions",
+            payload, "apply_date", operation,
+            error_code="CALENDAR_NOT_SYNCED", invalid_date=self.LAST_OPEN.isoformat(),
+        )
+        assert resp.json()["detail"]["details"]["direction"] == "next"
