@@ -10,6 +10,7 @@
 # ============================================================================
 
 import ast
+import re
 from decimal import Decimal
 from pathlib import Path
 from textwrap import dedent
@@ -252,8 +253,8 @@ class TestAmountToSharesTwoStepQuantization:
         )
 
 
-# 六个核心财务模块全域禁止直接 .quantize()；round() 默认禁止（#590：收紧 PR #589
-# 守卫——新增未登记函数直接 round() 即失败，不再依赖「登记产生点」圈定禁止范围）。
+# 六个核心财务模块全域禁止直接 .quantize()、round() 默认禁止。守门范围、豁免边界与
+# 不覆盖形态的唯一正文见 backend/AGENTS.md「精度入口」节，此处只留扫描输入。
 _FINANCIAL_GUARD_MODULES = (
     "app/services/subscription_service.py",
     "app/services/trade_service.py",
@@ -263,10 +264,8 @@ _FINANCIAL_GUARD_MODULES = (
     "app/services/snapshot_service.py",
 )
 
-# round() 读侧例外：统计/展示用途（float 序列化），非财务量化产生点。
-# 只按「文件 + 限定函数」登记，豁免登记函数的函数体及其嵌套函数（装饰器与默认值在外层
-# 作用求值，不在豁免内），不扩大为整文件豁免；.quantize() 全域禁令不受例外影响。
-# 例外函数更名/迁移，或其子树内不再有任何直接 round() 调用时，守卫失败（过期例外）。
+# round() 读侧例外：统计/展示用途（float 序列化），非财务量化产生点。登记规则、豁免边界
+# 与不覆盖形态以 backend/AGENTS.md「精度入口」节为准，本处只持有「文件 + 限定函数」台账本身。
 _FINANCIAL_ROUND_EXCEPTIONS = {
     "app/services/position_service.py": {
         "compute_daily_profits",            # 每日收益统计（float，读侧展示）
@@ -282,8 +281,22 @@ def _collect_quantization_violations(sources, round_exceptions):
     unscanned = set(round_exceptions) - set(sources)
     assert not unscanned, f"exception files not scanned: {sorted(unscanned)}"
     violations = []
+    ledger_problems = []
     for filename, source in sorted(sources.items()):
         exceptions = round_exceptions.get(filename, set())
+        # #4：显式拒绝「父 + 嵌套子同时登记」。visitor 首次命中外层即把 body_origin
+        # 定死为外层，内层 round() 全归外层 → 内层永不进 used_exceptions，会被误报
+        # 过期例外、且删其台账条目无行为变化。现台账三函数皆顶层，此项堵潜在误导面。
+        nested = sorted(
+            f"{outer} 嵌套 {inner}"
+            for outer in exceptions
+            for inner in exceptions
+            if inner != outer and inner.startswith(outer + ".")
+        )
+        assert not nested, (
+            f"nested round-exception registrations (inner is always shadowed by "
+            f"outer, so it reads as a stale exception): {filename}: {nested}"
+        )
         functions = set()
         used_exceptions = set()
 
@@ -333,14 +346,26 @@ def _collect_quantization_violations(sources, round_exceptions):
                 visit(child, path, exception_origin)
 
         visit(ast.parse(source, filename=filename))
+        # #5：台账问题先收集、循环后统一断言——旧写法在循环内即时抛出，会丢弃此前
+        # 已收集的行号级 violations（探针实证：a.py 的 missing 会掩掉 b.py 的真实违规）。
         missing_exceptions = exceptions - functions
-        assert not missing_exceptions, (
-            f"missing round-exception functions: {filename}: {sorted(missing_exceptions)}"
-        )
-        stale_exceptions = exceptions - used_exceptions
-        assert not stale_exceptions, (
-            f"stale round exceptions without direct round(): {filename}: {sorted(stale_exceptions)}"
-        )
+        if missing_exceptions:
+            ledger_problems.append(
+                f"missing round-exception functions: {filename}: {sorted(missing_exceptions)}"
+            )
+        # 过期例外只在「函数尚存」中判定，与上面的 missing 互斥，避免同一函数双重报告。
+        stale_exceptions = (exceptions & functions) - used_exceptions
+        if stale_exceptions:
+            ledger_problems.append(
+                f"stale round exceptions without direct round(): {filename}: {sorted(stale_exceptions)}"
+            )
+    if ledger_problems:
+        # 台账问题优先成文（断言消息以 missing/stale 前缀开头，被 ^ 锚定的反例依赖），
+        # 再附上全部 violations——两条独立失败面一次看全，不必修一个跑一次。
+        report = "\n".join(ledger_problems)
+        if violations:
+            report += f"\n同时存在直接舍入违规: {sorted(violations)}"
+        raise AssertionError(report)
     return sorted(violations)
 
 
@@ -419,7 +444,7 @@ class TestFinancialQuantizationGuard:
             def compute_daily_profits(value):
                 return quantize_amount(value)
         ''')
-        with pytest.raises(AssertionError, match="stale round exceptions"):
+        with pytest.raises(AssertionError, match=r"^stale round exceptions"):
             _collect_quantization_violations(
                 {"service.py": source}, {"service.py": {"compute_daily_profits"}},
             )
@@ -506,10 +531,43 @@ class TestFinancialQuantizationGuard:
         # 例外函数尚存、但最后一个需豁免的直接 round() 已移除 → stale（过期例外）
         ({"service.py": "def compute_daily_profits(value):\n    return quantize_amount(value)\n"},
          {"service.py": {"compute_daily_profits"}}, "stale round exceptions"),
+        # #4：父与嵌套子同时登记 → 内层恒被外层遮蔽，显式拒绝而非误报过期例外
+        ({"service.py":
+         "class Writer:\n    def produce(self, value):\n        return round(value, 4)\n"},
+         {"service.py": {"Writer", "Writer.produce"}},
+         "nested round-exception registrations"),
     ], ids=[
         "no-sources", "exception-file-not-scanned", "renamed-exception",
         "wrong-qualname-exception", "empty-file", "last-exempt-call-removed",
+        "nested-registration-shadowed",
     ])
     def test_empty_or_stale_exceptions_fail(self, sources, exceptions, message):
-        with pytest.raises(AssertionError, match=message):
+        # ^ 锚定：断言消息确实以该前缀开头，防止将来重排消息文案后 match 退化成
+        # 命中正文任意位置、把「换了报告结构」也判成通过（re.search 无锚即如此）。
+        with pytest.raises(AssertionError, match=f"^{re.escape(message)}"):
             _collect_quantization_violations(sources, exceptions)
+
+    def test_ledger_problem_and_real_violations_reported_together(self):
+        """#5：台账缺失不得掩掉另一文件的真实直接舍入违规——两条一次看全。"""
+        sources = {
+            "a.py": "def renamed(value):\n    return round(value, 4)\n",
+            "b.py": "def produce(value):\n    return value.quantize(STEP)\n",
+        }
+        with pytest.raises(AssertionError) as excinfo:
+            _collect_quantization_violations(sources, {"a.py": {"compute_daily_profits"}})
+        message = str(excinfo.value)
+        assert message.startswith("missing round-exception functions: a.py")
+        assert "b.py" in message and "quantize" in message, (
+            f"台账问题掩掉了 b.py 的直接舍入违规: {message}"
+        )
+
+    @pytest.mark.parametrize("source", [
+        "from functools import partial\nproduce = partial(round, 2)\n",
+        "def produce(values):\n    return list(map(round, values))\n",
+        'def produce(value):\n    return f"{value:.2f}"\n',
+    ], ids=["functools-partial", "map-round", "fstring-format"])
+    def test_known_escape_forms_are_not_covered(self, source):
+        """把 AST Call 匹配的固有逃逸面钉成**可见契约**：这些形态今天返回 []（逃逸）。
+        日后有人扩展守卫覆盖它们时，本用例翻红、迫使其有意识地更新台账与文案，
+        而不是让覆盖面在无人察觉时被静默改变（与 .quantize/属性 round 的拦截面相对照）。"""
+        assert _collect_quantization_violations({"service.py": source}, {}) == []
