@@ -8,12 +8,18 @@
 #   - TestListSubscriptionFilters（#125）：状态/类型/平台/日期区间筛选与排序
 
 from datetime import date
+from decimal import Decimal
+
+import pytest
 
 from tests.factories import (
     create_portfolio, create_investor, create_subscription,
     create_investor_holding, create_value_snapshot, ensure_trading_day,
-    create_trade, create_platform,
+    create_position_snapshot, create_platform,
 )
+from app.models.investor_holding import InvestorHolding
+from app.models.portfolio_position import PortfolioPosition
+from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.subscription import Subscription
 from app.models.trade import Trade
 
@@ -279,42 +285,143 @@ class TestUnconfirmSubscriptionSnapshotProtection:
         still = test_db.query(Subscription).filter(Subscription.id == sub.id).first()
         assert still.status == "confirmed"
 
-    def test_unconfirm_ok_without_snapshot(self, client, admin_headers, test_db):
-        """无快照依赖时 unconfirm 成功回退 pending 并级联删除配对 CASH trade"""
-        create_portfolio(test_db, code="SUB_UC2", status="active")
-        create_investor(test_db, code="SUB_UCI2")
-        ensure_trading_day(test_db, date(2025, 9, 1), is_open=True)
-        ensure_trading_day(test_db, date(2025, 9, 2), is_open=True)
-        sub = create_subscription(
-            test_db, "SUB_UC2", "SUB_UCI2",
-            sub_type="subscribe", amount=10000.0, shares=10000.0,
-            unit_price=1.0, apply_date=date(2025, 9, 1),
-            confirm_date=date(2025, 9, 2), status="confirmed",
+    @pytest.mark.parametrize("sub_type, cash_direction, expected_shares", [
+        ("subscribe", "buy", Decimal("12000")),
+        ("redeem", "sell", Decimal("8000")),
+    ])
+    def test_unconfirm_ok_without_snapshot(
+        self, client, admin_headers, test_db, sub_type, cash_direction, expected_shares
+    ):
+        """真实申赎确认/回退/再确认：CASH 腿唯一，双层份额仅在确认日快照生效（#538）。"""
+        code, investor, platform = "SUB_UC2", "SUB_UCI2", "SUB_UCP2"
+        previous_date = date(2025, 8, 29)
+        apply_date, confirm_date = date(2025, 9, 1), date(2025, 9, 2)
+        next_date = date(2025, 9, 3)
+        create_portfolio(test_db, code=code, status="active")
+        create_investor(test_db, code=investor)
+        create_platform(test_db, code=platform)
+        for day in (previous_date, apply_date, confirm_date, next_date):
+            ensure_trading_day(test_db, day, is_open=True)
+
+        # 工厂只造历史到账及三表基线；本次待验证申赎全程走真实 HTTP。
+        create_subscription(
+            test_db, code, investor, amount=10000, shares=10000, unit_price=1.0,
+            apply_date=date(2025, 8, 28), confirm_date=previous_date,
+            platform_code=platform, status="confirmed",
         )
-        # 配对 CASH trade（transfer_group=sub_{id}），unconfirm 应级联物理删除
-        create_trade(
-            test_db, "SUB_UC2", "CASH", "",
-            trade_type="buy", amount=10000.0, price=1.0,
-            trade_date=date(2025, 9, 1), confirm_date=date(2025, 9, 2),
-            actual_amount=10000.0, status="confirmed",
-            transfer_group=f"sub_{sub.id}",
+        create_position_snapshot(
+            test_db, code, "CASH", "", previous_date,
+            cash_amount=12500, platform_code=platform,
         )
+        create_value_snapshot(
+            test_db, code, previous_date,
+            total_value=12500, total_shares=10000, unit_price=1.25,
+        )
+        create_investor_holding(test_db, code, investor, previous_date, shares=10000)
 
         resp = client.post(
-            f"/api/subscriptions/{sub.id}/unconfirm",
+            "/api/subscriptions",
+            json={
+                "portfolio_code": code, "investor_code": investor,
+                "platform_code": platform, "sub_type": sub_type,
+                "apply_date": apply_date.isoformat(),
+                **({"amount": 2500} if sub_type == "subscribe" else {"shares": 2000}),
+            },
             headers=admin_headers,
         )
-        assert resp.status_code == 200
+        assert resp.status_code in (200, 201), resp.json()
+        sub_id = resp.json()["id"]
+        assert resp.json()["status"] == "pending"
+        assert resp.json()["confirm_date"] == confirm_date.isoformat()
+        cash_legs = test_db.query(Trade).filter(Trade.transfer_group == f"sub_{sub_id}")
+        assert cash_legs.count() == 0
 
-        updated = test_db.query(Subscription).filter(Subscription.id == sub.id).first()
-        assert updated.status == "pending"
-        # confirm_date 不置 None，重算为 T+1，避免快照校验 NULL 漏检
-        assert updated.confirm_date == date(2025, 9, 2)
-        # 配对 CASH trade 已物理删除
-        remaining = test_db.query(Trade).filter(
-            Trade.transfer_group == f"sub_{sub.id}"
-        ).count()
-        assert remaining == 0
+        # 申请日生成快照时仍是 pending；不能提前增减组合/投资人份额。
+        gen = client.post(
+            "/api/snapshots/generate",
+            json={"portfolio_code": code, "target_date": apply_date.isoformat()},
+            headers=admin_headers,
+        )
+        assert gen.status_code == 200, gen.json()
+        assert gen.json()["success"] is True
+        test_db.expire_all()
+        sub = test_db.query(Subscription).filter(Subscription.id == sub_id).one()
+        assert sub.status == "pending"
+        portfolio_shares = test_db.query(
+            PortfolioValueSnapshot.snapshot_date, PortfolioValueSnapshot.total_shares,
+        ).filter(PortfolioValueSnapshot.portfolio_code == code).order_by(
+            PortfolioValueSnapshot.snapshot_date,
+        )
+        investor_shares = test_db.query(
+            InvestorHolding.snapshot_date, InvestorHolding.investor_code, InvestorHolding.shares,
+        ).filter(InvestorHolding.portfolio_code == code).order_by(
+            InvestorHolding.snapshot_date, InvestorHolding.investor_code,
+        )
+        before_shares = [(day, Decimal("10000")) for day in (previous_date, apply_date)]
+        before_holdings = [(day, investor, shares) for day, shares in before_shares]
+        assert portfolio_shares.all() == before_shares
+        assert investor_shares.all() == before_holdings
+
+        for action in ("confirm", "unconfirm", "confirm"):
+            resp = client.post(f"/api/subscriptions/{sub_id}/{action}", headers=admin_headers)
+            assert resp.status_code == 200, resp.json()
+            test_db.expire_all()
+            sub = test_db.query(Subscription).filter(Subscription.id == sub_id).one()
+            # 回退也保留 T+1，不能以 NULL 漏过快照依赖检查。
+            assert sub.confirm_date == confirm_date
+            if action == "unconfirm":
+                assert sub.status == "pending"
+                assert sub.unit_price is None
+                assert cash_legs.count() == 0
+                if sub_type == "subscribe":
+                    assert sub.shares is None and sub.amount == Decimal("2500")
+                else:
+                    assert sub.amount is None and sub.shares == Decimal("2000")
+            else:
+                assert sub.status == "confirmed"
+                assert sub.unit_price == Decimal("1.25")
+                assert sub.shares == Decimal("2000")
+                assert sub.amount == Decimal("2500")
+                # one() 同时守住首次确认和再确认的唯一性，不依赖物理 ID 是否变化。
+                cash = cash_legs.one()
+                assert cash.product_code == "CASH" and cash.market == ""
+                assert cash.portfolio_code == code and cash.platform_code == platform
+                assert cash.trade_type == cash_direction and cash.status == "confirmed"
+                assert cash.amount == cash.actual_amount == Decimal("2500")
+                assert cash.price == Decimal("1") and cash.fee == Decimal("0")
+                assert cash.trade_date == apply_date and cash.confirm_date == confirm_date
+            # 流水状态变化不能改写历史快照，也不能提前创建确认日的份额快照。
+            assert portfolio_shares.all() == before_shares
+            assert investor_shares.all() == before_holdings
+
+        # 确认日才应用一次申赎增量；下一日不重复记份额或现金。
+        for day in (confirm_date, next_date):
+            gen = client.post(
+                "/api/snapshots/generate",
+                json={"portfolio_code": code, "target_date": day.isoformat()},
+                headers=admin_headers,
+            )
+            assert gen.status_code == 200, gen.json()
+            assert gen.json()["success"] is True
+            test_db.expire_all()
+            snap = test_db.query(PortfolioValueSnapshot).filter(
+                PortfolioValueSnapshot.portfolio_code == code,
+                PortfolioValueSnapshot.snapshot_date == day,
+            ).one()
+            assert snap.total_shares == expected_shares
+            assert snap.unit_price == Decimal("1.25")
+            assert snap.total_value == expected_shares * Decimal("1.25")
+            cash = test_db.query(PortfolioPosition).filter(
+                PortfolioPosition.portfolio_code == code,
+                PortfolioPosition.snapshot_date == day,
+            ).one()
+            assert cash.product_code == "CASH" and cash.platform_code == platform
+            assert cash.cash_amount == snap.total_value
+            before_shares.append((day, expected_shares))
+            before_holdings.append((day, investor, expected_shares))
+            assert portfolio_shares.all() == before_shares
+            assert investor_shares.all() == before_holdings
+            assert cash_legs.count() == 1
 
 
 class TestListSubscriptionFilters:

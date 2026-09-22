@@ -9,8 +9,12 @@
 # - Decimal / float / int / str 输入兼容
 # ============================================================================
 
-import pytest
+import ast
 from decimal import Decimal
+from pathlib import Path
+from textwrap import dedent
+
+import pytest
 
 from app.utils.quantize import (
     AMOUNT_QUANT,
@@ -246,3 +250,190 @@ class TestAmountToSharesTwoStepQuantization:
         assert one_step != quantize_shares(
             quantize_amount(self.ES * self.DIV_CASH) / self.REINVEST_NAV
         )
+
+
+_FINANCIAL_ROUND_SCOPE = {
+    "app/services/subscription_service.py": {
+        "calculate_subscription_confirm_preview", "confirm_single_subscription",
+        "create_subscription", "update_subscription",
+    },
+    "app/services/trade_service.py": {
+        "validate_buy_cash_with_addback", "validate_sell_shares_with_addback",
+        "attach_paired_cash_leg", "sync_transfer_group", "calculate_confirm_preview",
+        "resolve_cash_leg_plan", "compute_confirm_plan", "validate_confirm_cash_leg",
+        "_apply_confirm_cash_leg", "confirm_single_trade", "_derive_sell_amounts",
+        "_derive_buy_shares", "create_trade", "update_trade",
+    },
+    "app/services/share_change_event_service.py": {
+        "compute_event_fields", "apply_event_fields", "compute_share_change_event_preview",
+        "_confirm_fund_level_event", "create_share_change_event",
+        "update_share_change_event", "confirm_share_change_event",
+    },
+    "app/services/cash_transfer_service.py": {
+        "create_cash_transfer", "confirm_cash_transfer",
+    },
+    "app/services/position_service.py": {"update_cash_position"},
+    "app/services/snapshot_service.py": {
+        "_compute_in_transit_amounts", "_generate_portfolio_position",
+        "_generate_portfolio_value_snapshot", "_generate_investor_holding",
+    },
+}
+
+
+def _collect_quantization_violations(sources, round_scope):
+    """六模块禁直接 quantize；round 仅限登记产生点及其嵌套函数。"""
+    assert sources, "empty source scan"
+    assert round_scope, "empty financial scope"
+    missing_files = set(round_scope) - set(sources)
+    assert not missing_files, f"missing financial files: {sorted(missing_files)}"
+    violations = []
+    for filename, producers in sorted(round_scope.items()):
+        assert producers, f"empty function scope: {filename}"
+        functions = set()
+
+        def visit(node, path=(), in_producer=False):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                path = (*path, node.name)
+                if not isinstance(node, ast.ClassDef):
+                    qualified_name = ".".join(path)
+                    functions.add(qualified_name)
+                    in_producer = in_producer or qualified_name in producers
+            if isinstance(node, ast.Call):
+                func = node.func
+                operation = None
+                if isinstance(func, ast.Attribute) and func.attr == "quantize":
+                    operation = "quantize"
+                elif in_producer and (
+                    isinstance(func, ast.Name) and func.id == "round"
+                    or isinstance(func, ast.Attribute) and func.attr == "round"
+                    and isinstance(func.value, ast.Name) and func.value.id == "builtins"
+                ):
+                    operation = "round"
+                if operation:
+                    violations.append((filename, ".".join(path), node.lineno, operation))
+            for child in ast.iter_child_nodes(node):
+                visit(child, path, in_producer)
+
+        visit(ast.parse(sources[filename], filename=filename))
+        missing_functions = producers - functions
+        assert not missing_functions, (
+            f"missing financial functions: {filename}: {sorted(missing_functions)}"
+        )
+    return sorted(violations)
+
+
+class TestFinancialQuantizationGuard:
+    def test_financial_services_use_quantization_helpers(self):
+        assert set(_FINANCIAL_ROUND_SCOPE) == {
+            "app/services/subscription_service.py", "app/services/trade_service.py",
+            "app/services/share_change_event_service.py", "app/services/cash_transfer_service.py",
+            "app/services/position_service.py", "app/services/snapshot_service.py",
+        }
+        backend = Path(__file__).resolve().parents[2]
+        sources = {
+            filename: (backend / filename).read_text(encoding="utf-8")
+            for filename in _FINANCIAL_ROUND_SCOPE
+        }
+        assert _collect_quantization_violations(sources, _FINANCIAL_ROUND_SCOPE) == []
+
+    @pytest.mark.parametrize("expression, operation", [
+        ('value.quantize(Decimal("0.01"))', "quantize"),
+        ('value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)', "quantize"),
+        ("round(value, 2)", "round"),
+        ("builtins.round(value, 4)", "round"),
+    ])
+    def test_rejects_direct_rounding(self, expression, operation):
+        source = f"def produce(value):\n    return {expression}\n"
+        assert _collect_quantization_violations(
+            {"service.py": source}, {"service.py": {"produce"}},
+        ) == [("service.py", "produce", 2, operation)]
+
+    def test_nested_and_async_producers_keep_qualified_names(self):
+        source = dedent('''\
+            class Writer:
+                async def produce(self, value):
+                    def inner():
+                        return round(value, 2)
+                    async def nested():
+                        return value.quantize(STEP, rounding=ROUND_HALF_UP)
+                    return round(value, 4)
+                def statistics(self, value):
+                    return round(value, 4)
+            def produce(value):
+                return round(value, 4)
+        ''')
+        assert _collect_quantization_violations(
+            {"service.py": source}, {"service.py": {"Writer.produce"}},
+        ) == [
+            ("service.py", "Writer.produce", 7, "round"),
+            ("service.py", "Writer.produce.inner", 4, "round"),
+            ("service.py", "Writer.produce.nested", 6, "quantize"),
+        ]
+
+    def test_quantize_is_forbidden_outside_producers_too(self):
+        source = dedent('''\
+            value.quantize(STEP)
+            def produce(value):
+                return quantize_amount(value)
+            async def statistics(value):
+                return value.quantize(STEP, rounding=ROUND_HALF_UP)
+        ''')
+        assert _collect_quantization_violations(
+            {"service.py": source}, {"service.py": {"produce"}},
+        ) == [
+            ("service.py", "", 1, "quantize"),
+            ("service.py", "statistics", 5, "quantize"),
+        ]
+
+    def test_helpers_float_tolerance_comments_and_strings_are_allowed(self):
+        source = dedent('''\
+            from app.utils.quantize import quantize_amount, quantize_nav, quantize_shares
+            def produce(value):
+                # value.quantize(STEP); round(value, 2)
+                note = "value.quantize(STEP); round(value, 2)"
+                tolerance = Decimal("0.01")
+                return (quantize_amount(value), quantize_nav(value),
+                        quantize_shares(value), float(value), abs(value) <= tolerance)
+        ''')
+        assert _collect_quantization_violations({
+            "app/services/trade_service.py": source,
+            "app/utils/quantize.py": (
+                "def quantize_amount(value):\n"
+                "    return value.quantize(STEP, rounding=ROUND_HALF_UP)\n"
+            ),
+        }, {"app/services/trade_service.py": {"produce"}}) == []
+
+    def test_round_scope_is_file_specific_and_preserves_read_statistics(self):
+        position_source = dedent('''\
+            def update_cash_position(value):
+                return quantize_amount(value)
+            def compute_daily_profits(value):
+                return round(float(value), 4)
+            def compute_cash_cumulative_profits(value):
+                return round(float(value), 4)
+            def compute_event_cash_addbacks(value):
+                return round(float(value), 4)
+            def create_trade(value):
+                return round(value, 2)
+        ''')
+        assert _collect_quantization_violations({
+            "app/services/position_service.py": position_source,
+            "app/services/trade_service.py": "def create_trade(value):\n    return round(value, 2)\n",
+            "app/services/performance_service.py": "def stats(value):\n    return round(value, 4)\n",
+        }, {
+            "app/services/position_service.py": {"update_cash_position"},
+            "app/services/trade_service.py": {"create_trade"},
+        }) == [("app/services/trade_service.py", "create_trade", 2, "round")]
+
+    @pytest.mark.parametrize("sources, scope, message", [
+        ({}, {"service.py": {"produce"}}, "empty source scan"),
+        ({"service.py": "def produce(): pass"}, {}, "empty financial scope"),
+        ({"other.py": "def produce(): pass"}, {"service.py": {"produce"}}, "missing financial files"),
+        ({"service.py": "def produce(): pass"}, {"service.py": set()}, "empty function scope"),
+        ({"service.py": ""}, {"service.py": {"produce"}}, "missing financial functions"),
+        ({"service.py": "def renamed(): pass"}, {"service.py": {"produce"}}, "missing financial functions"),
+        ({"service.py": "def produce(): pass"}, {"service.py": {"Writer.produce"}}, "missing financial functions"),
+    ], ids=["no-sources", "no-scope", "missing-file", "no-functions", "empty-file", "renamed", "wrong-qualname"])
+    def test_empty_or_stale_scope_fails(self, sources, scope, message):
+        with pytest.raises(AssertionError, match=message):
+            _collect_quantization_violations(sources, scope)

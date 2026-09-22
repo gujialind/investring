@@ -8,6 +8,8 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from tests.factories import (
     create_portfolio, create_product, create_platform, create_trade,
     create_position_snapshot, create_value_snapshot, ensure_trading_day,
@@ -352,10 +354,11 @@ class TestTradePreview:
     # #428：对账比较改为 quantize_nav（两侧归一到 4 位 HALF_UP）后的边界契约。
     # nav 是 Numeric(10,4)，本来恰为 4 位；传入价是用户输入、标度不限——
     # 「先量化到 4 位再精确比较（无容差）」这条口径由下面两例锁死。
+    @pytest.mark.parametrize("price", ["1.2345", "1.23450", "1.23445"])
     def test_preview_price_matching_four_decimal_nav_passes(
-        self, client, admin_headers, test_db
+        self, client, admin_headers, test_db, price
     ):
-        """净值 1.2345（4 位）：传入同值放行，多写尾随零（1.23450）同样放行——标度无关"""
+        """同值、尾随零及 HALF_UP 边界价均放行，预览与确认使用固定四位净值。"""
         self._setup_base(test_db, portfolio="PRV_Q4", product="FUND_PRVQ4",
                          platform="PRV_PLATQ4", nav=Decimal("1.2345"))
         trade_id = self._create_otc_buy(
@@ -363,15 +366,29 @@ class TestTradePreview:
             portfolio="PRV_Q4", product="FUND_PRVQ4", platform="PRV_PLATQ4",
         )
 
-        for price in ("1.2345", "1.23450"):
-            prev = client.get(
-                f"/api/trades/{trade_id}/preview", params={"price": price},
-                headers=admin_headers,
-            )
-            assert prev.status_code == 200, (
-                f"price={price} 应放行，实际 {prev.status_code} {prev.json()}"
-            )
-            assert prev.json()["preview"]["price"] is not None
+        prev = client.get(
+            f"/api/trades/{trade_id}/preview", params={"price": price},
+            headers=admin_headers,
+        )
+        assert prev.status_code == 200, (
+            f"price={price} 应放行，实际 {prev.status_code} {prev.json()}"
+        )
+        conf = client.post(
+            f"/api/trades/{trade_id}/confirm", params={"price": price},
+            headers=admin_headers,
+        )
+        assert conf.status_code == 200, f"Response: {conf.status_code} {conf.json()}"
+        preview = prev.json()["preview"]
+        confirmed = conf.json()["trade"]
+        assert confirmed["status"] == "confirmed"
+        for field, expected in {
+            "price": Decimal("1.2345"),
+            "shares": Decimal("8100.45"),
+            "amount": Decimal("10000.00"),
+            "actual_amount": Decimal("10000.00"),
+        }.items():
+            assert Decimal(str(preview[field])) == expected
+            assert Decimal(str(confirmed[field])) == expected
 
     def test_preview_price_differing_in_fourth_decimal_rejected(
         self, client, admin_headers, test_db
