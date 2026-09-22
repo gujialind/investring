@@ -268,7 +268,7 @@ class TestDurationWallClockTolerance:
 
     纯算术、不依赖 DB 方言，两个 job 都跑——issue #458 的验收断言「构造跨秒边界场景必须
     通过」与「构造真实缺陷场景必须报红」在此固化为常驻用例，避免演示一次就蒸发
-    （code-review.md §0 第 5 类「覆盖无声蒸发」）。
+    （见[验证证据](../../../docs/reference/code-review.md#review-evidence)）。
     """
 
     def test_straddling_second_boundary_passes(self):

@@ -1,51 +1,53 @@
 ## 改动内容
 
-<!-- 本次改动做了什么，涉及哪些模块。 -->
+<!-- 说明目标、涉及模块及关键取舍；超出审查规模建议时说明理由。 -->
 
 ## 关联 issue
 
-<!-- 格式：fixes #N（合并后自动关闭对应 issue）。 -->
-
-- fixes #
+<!-- 有关联时填写 fixes #N；无关联时说明理由。 -->
 
 ## 自审清单
 
-<!-- 标准见 docs/reference/code-review.md。此处只列 CI（L1 机械门禁）结构上查不到的项——
-     lint / tsc / build / 测试 / 契约漂移已由 CI 强制，勿在 PR 里复述。 -->
+<!-- 按[通用五问](../docs/reference/code-review.md#review-questions)给短结论或证据位置；不适用写理由，不以勾选代替证据。 -->
+<!-- [审查输入](../docs/reference/code-review.md#review-inputs)须完整；本地验证与 CI 结果记在下节，不重复机械诊断。 -->
 
-- [ ] 我读过自己的**完整 diff 原文**（不是只看 AI 生成的改动摘要）
-- [ ] **失败路径**：新增/修改的每个失败分支都有可感知出口（抛领域异常 / 记日志 / 告警），无静默吞掉、静默降级、静默截断、静默覆盖入参
-- [ ] **同类排查**：改动的同构位置（同模板的其它组件、同服务的其它分支、同一页面的另一端）已 grep/AST 确认，无漏网
-- [ ] **数值口径**：涉及金额/份额/净值时，量化只在产生点、走统一入口、符合[数值规则](../docs/reference/business-constraints.md#rule-precision)，无 `float()` 掉标度
-- [ ] **文档同步**：按[文档规范](../docs/reference/documentation.md#doc-sync)注明已同步的正文与引用位置，或无需同步的理由；链接/错误码守门不能代替业务语义核对
-- [ ] **测试覆盖未蒸发**：新增的 `skip` 属真条件性并注明条件，未为变绿而放宽或删除断言
+- [ ] 我读过自己的**完整 diff 原文**（含删除、测试、生成产物及文档，不是只看 AI 摘要）
+- [ ] **Q1 行为与不变量**：满足验收条件且保留应有行为；涉及财务时显式核对[数值口径](../docs/reference/business-constraints.md#rule-precision)、双层账本、日期键和状态机
+- [ ] **Q2 失败与状态安全**：业务拒绝、异常、部分成功和重复/并发操作不误报成功、不遗留非预期写入，失败有可感知出口
+- [ ] **Q3 影响面同步**：记录同类入口 grep/AST 的范围、模式、命中及结论；说明消费者、生成契约和[文档同步](../docs/reference/documentation.md#doc-sync)情况，任务外既存问题单列
+- [ ] **Q4 验证证据**：关键断言能拦住目标错误，影响面回归有证据；旧断言有去向，skip/mock/豁免及覆盖范围变化有依据，未运行或无法验证如实注明
+- [ ] **Q5 上线与恢复**：部署影响、存量数据安全与恢复前提已在下节说明；无影响或不适用写理由
 
 ## 测试验证
 
-<!-- 勾选已执行的验证项，并附关键结果。合入 main 前 CI 必须全绿。 -->
+<!-- 仅勾选已执行且通过的项，附命令/结果或 CI 证据来源；不适用、未运行、无法验证分别说明。 -->
+<!-- 改动后的本地影响面验证不可由 CI 替代；合入前目标版本的 CI OK 必须绿。 -->
 
-- [ ] 本地 pytest（backend，影响面圈定见 `backend/AGENTS.md` §2）
-- [ ] MySQL 迁移链检查（CI backend-test-mysql）
-- [ ] ir-cli 契约检查（CI cli-contract-check）
-- [ ] 前端 lint / build（`scripts/verify-frontend.sh`，CI frontend-check）
-- [ ] 前端 E2E（CI frontend-e2e）
-- [ ] **改动表格/图表列结构时**：已跑 `scripts/visual-verify.sh` 目检并附截图（CI 拦不住列宽挤压与 CJK 竖排，见 #355；不适用请注明）
+- [ ] 本地后端影响面测试（范围见 `backend/AGENTS.md`，核心服务改动连带 snapshot 兜底）
+- [ ] 迁移针对性验证（新旧库起始态、双方言适用性及恢复；CI MySQL 仅往返最新一条迁移）
+- [ ] CLI / 生成契约验证（注明本地或 CI 证据）
+- [ ] 前端本地质量门禁（`scripts/verify-frontend.sh`：lint / tsc / 单测 / build）
+- [ ] 前端影响面 E2E（注明 spec、双端与关键结果）
+- [ ] 表格/图表列结构改动已跑 `scripts/visual-verify.sh` 双端目检并附代表性数据截图（#355）
 
 ## 部署影响
 
-<!-- 有无 DB 迁移 / 新依赖 / 配置变更；如有，写明回滚要点。 -->
+<!-- DB 迁移 / 新依赖 / 配置 / 存量数据影响及恢复前提；无影响也写明理由（Q5）。 -->
 
 ## 合入后冒烟
 
-<!-- 合入并 CD 部署完成后执行，勿在合入前勾选（见 docs/reference/code-review.md §4.6）。 -->
+<!-- 仅在合入且实际部署完成后执行；无部署注明不适用，生产操作仍需授权，见[合入条件](../docs/reference/code-review.md#review-merge)。 -->
 
 - [ ] health check + `ir portfolio list` + 关键数据抽查
 
 ## 审查记录
 
-<!-- 审查者填写。结论格式见 docs/reference/code-review.md §6。 -->
+<!-- 审查者填写或链接已授权发布的完整结论；格式见[输出与复核](../docs/reference/code-review.md#review-output)。 -->
 
-- 结论：
-- 🔴 Blocker / 🟡 Suggestion / 💭 Nit：
-- follow-up issue（标题带「PR #X 评审 follow-up」）：
-- 做得好的地方：
+- 审查对象与覆盖范围（base/head SHA；未审部分及原因）：
+- 结论与状态（打回修改 / 审查未完成 / 待 follow-up 处置 / 通过，可进入合入确认）：
+- Blocker / Suggestion / Nit：
+- 验证证据、未验证项与关键待确认：
+- follow-up 处置（经授权创建，标题带「PR #X 评审 follow-up」；未授权注明待处置）：
+- 修复后的复核版本与结果：
+- 做得好的地方及证据：
