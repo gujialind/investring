@@ -54,6 +54,7 @@ from app.models.subscription import Subscription
 from app.models.sync_job import SyncJob
 from app.models.system_error_log import SystemErrorLog
 from app.models.task_execution_log import TaskExecutionLog
+from app.models.trading_calendar import TradingCalendar
 from app.models.trade import Trade
 from app.schemas.asset_classification import AssetClassificationDetail
 from app.schemas.investor import InvestorResponse
@@ -67,6 +68,7 @@ from app.schemas.share_change_event import ShareChangeEventResponse
 from app.schemas.subscription import SubscriptionResponse
 from app.schemas.sync_job import NavSyncDetailResponse, SyncJobResponse
 from app.schemas.task import TaskExecutionLogResponse, TaskResponse
+from app.schemas.trading_calendar import TradingCalendarResponse
 from app.schemas.trade import TradeResponse
 
 # ORM 模型 ↔ 响应 schema 直配对（同一实体在 REST 出口的收窄口径）
@@ -91,6 +93,12 @@ ORM_SCHEMA_PAIRS: list[tuple[type, type]] = [
     (ShareChangeEvent, ShareChangeEventResponse),
     (SyncJob, SyncJobResponse),
     (NavSyncDetail, NavSyncDetailResponse),
+    # #580 纳入：GET /api/trading-calendar 有 REST 出口（response_model=
+    # List[TradingCalendarResponse]）却此前未配对——与 #573 漏报 AssetClassification
+    # 同属「清单漏项」盲区。响应不暴露可空列 exchange，参与核对的同名字段为
+    # calendar_date / is_open / created_at（3 个，均无违规：前两列 NOT NULL、
+    # created_at 有 server_default），收录无害且把该出口纳入棘轮保护
+    (TradingCalendar, TradingCalendarResponse),
 ]
 
 # (模型名, 字段名) -> (kind, 理由)。kind 的机制必须能被 MECHANISM_CHECKERS 机器复核。
@@ -171,22 +179,30 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
 # 静默删行（曾实测：下限留 54 字段松弛时，删掉 4 对、17 对里 7 对可静默消失而
 # 断言全绿）；正常增删模型时按实测值同步上调/下调，并在 PR 里说明。
 # 204 → 210（#573 纳入 AssetClassification ↔ AssetClassificationDetail 配对，6 个同名字段）。
-MIN_CHECKED_FIELDS = 210
+# 210 → 213（#580 纳入 TradingCalendar ↔ TradingCalendarResponse 配对，3 个同名字段：
+# calendar_date / is_open / created_at；exchange 未在响应暴露、不参与核对）。
+MIN_CHECKED_FIELDS = 213
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
-# kind=service_guard 的字段级登记（#573 起按字段核对，不再写死单一校验器）：
-# (模型, 字段) -> (守门模块点分路径, 形态)。两种形态都**机器可复核**：
-#   - "reject"：模块内 null_guard.reject_explicit_nulls 调用的 allow 字面量必须不含
-#     该字段——AST 核对真实调用点：一旦把字段加进 allow（显式 null 放行），台账即失实；
-#   - "validator"：字段由同名专用校验器 validate_<字段> 收口（保留专用错误码），
-#     校验器缺失即失败。
-# 两种形态都实调守门并断言 BusinessError——「拒绝 null」是实测结果，不是注释承诺。
-SERVICE_GUARD_SITES: dict[tuple[str, str], tuple[str, str]] = {
-    ("AssetClassification", "sort_order"): ("app.services.asset_classification_service", "reject"),
-    ("Investor", "role"): ("app.services.investor_service", "reject"),
-    ("Product", "is_qdii"): ("app.services.product_service", "reject"),
-    ("Product", "confirm_days"): ("app.services.product_service", "validator"),
+# kind=service_guard 的字段级登记（#573 起按字段核对，不再写死单一校验器；
+# #580 起增列**函数名**——模块级并集可被「诱饵调用」空转：把更新函数里的调用
+# 删掉、在同模块别处放一个同名调用，旧实现照样全绿，台账结论静默失实）：
+# (模型, 字段) -> (守门模块点分路径, 函数名, 形态)。两种形态都**机器可复核**：
+#   - "reject"：登记的更新函数体内 null_guard.reject_explicit_nulls 调用的 allow
+#     字面量必须不含该字段——AST 定位到 FunctionDef 内核对，且首个位置实参必须是
+#     `updates`（守门对象是 exclude_unset 后的更新字典，异对象同名调用不算证据）：
+#     一旦把字段加进 allow（显式 null 放行）或调用点被挪走/诱饵化，台账即失实；
+#   - "validator"：字段由专用校验器 validate_<字段> 收口（保留专用错误码），
+#     登记函数名必须与命名约定一致且存在，缺失即失败。
+# 两种形态都实调守门并断言 BusinessError（reject 形态带 AST 解析出的真实 allow 集，
+# 不带 allow 的实调恒抛、与 test_null_guard.py 等价，不构成路径证据）——
+# 「拒绝 null」是实测结果，不是注释承诺。
+SERVICE_GUARD_SITES: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("AssetClassification", "sort_order"): ("app.services.asset_classification_service", "update_classification", "reject"),
+    ("Investor", "role"): ("app.services.investor_service", "update_investor", "reject"),
+    ("Product", "is_qdii"): ("app.services.product_service", "update_product", "reject"),
+    ("Product", "confirm_days"): ("app.services.product_service", "validate_confirm_days", "validator"),
 }
 
 
@@ -301,16 +317,16 @@ class TestNullabilityLedger:
         )
 
     def test_allow_literal_parser_does_not_degrade(self):
-        """allow 字面量解析必须真取到例外字段（#573）
+        """allow 字面量解析必须真取到例外字段（#573；#580 起按登记函数解析）
 
         解析退化为空集会静默放过「字段被加进 allow（显式 null 放行）」——即守门
         最该抓的形态。故对 reject 形态设下限：当前三处均非空例外集。
         """
-        for key, (module_name, mechanism) in SERVICE_GUARD_SITES.items():
+        for key, (module_name, function_name, mechanism) in SERVICE_GUARD_SITES.items():
             if mechanism != "reject":
                 continue
-            assert _explicit_null_allow_literals(module_name), (
-                f"{key}：{module_name} 的 allow 字面量解析为空——若该模块确实没有例外字段，"
+            assert _explicit_null_allow_literals(module_name, function_name), (
+                f"{key}：{module_name}::{function_name} 的 allow 字面量解析为空——若该函数确实没有例外字段，"
                 "需先把「解析失败」与「确为空集」区分开（当前解析器两者同形，会静默失效）"
             )
 
@@ -328,21 +344,43 @@ def _check_orm_default(column, key, _reason) -> None:
     )
 
 
-def _explicit_null_allow_literals(module_name: str) -> set[str] | None:
-    """AST 取模块内 reject_explicit_nulls 调用 allow= 字面量集的并集；无调用点返回 None。
+def _explicit_null_allow_literals(module_name: str, function_name: str) -> set[str] | None:
+    """AST 取登记函数体内 reject_explicit_nulls 调用 allow= 字面量集的并集；函数内无调用点返回 None。
 
+    函数级定位（#580，PR #576 评审 🟡5）：旧实现是模块级并集——把更新函数里的
+    调用删掉、在同模块别处放一个同名诱饵调用，照样返回非空 allow 集而全绿，台账
+    「更新路径挂了守门」的结论静默失效。现只认登记 FunctionDef 内的调用点，并校验
+    首个位置实参是 `updates`（守门对象是 exclude_unset 后的更新字典，异对象的同名
+    调用不构成证据）。函数不存在 = 登记过期，直接判红（与「函数内无调用」区分）。
     只认字面量集合：`allow=SOME_CONST` 这类间接形态会让核对退化为空话，直接判红。
     """
     path = BACKEND_ROOT / (module_name.replace(".", "/") + ".py")
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    func_def = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == function_name
+        ),
+        None,
+    )
+    assert func_def is not None, (
+        f"{module_name} 内不存在函数 {function_name}——SERVICE_GUARD_SITES 登记过期"
+        "（函数更名/迁移未同步登记）"
+    )
     allowed: set[str] = set()
     found = False
-    for node in ast.walk(tree):
+    for node in ast.walk(func_def):
         if not isinstance(node, ast.Call):
             continue
         func_name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
         if func_name != "reject_explicit_nulls":
             continue
+        assert node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "updates", (
+            f"{module_name}.{function_name} 的 reject_explicit_nulls 调用首参不是 `updates`——"
+            "守门对象不是更新字典（或为诱饵调用），不能作为台账证据"
+        )
         found = True
         for keyword in node.keywords:
             if keyword.arg != "allow":
@@ -356,12 +394,14 @@ def _explicit_null_allow_literals(module_name: str) -> set[str] | None:
 
 
 def _check_service_guard(_column, key, _reason) -> None:
-    """kind=service_guard 的字段级机制复核（#573）。
+    """kind=service_guard 的字段级机制复核（#573；#580 起函数级定位）。
 
-    两半证据缺一不可：① 更新路径确实挂了守门（reject 形态核对调用点 allow 字面量、
-    validator 形态核对校验器存在）；② 该字段传 None 必备拒（实调守门，断言
-    BusinessError）。只做①会放过「挂了锁但字段被 allow」的形态，只做②会放过
-    「守门存在但更新路径没调用」的形态。
+    两半证据缺一不可：① 更新路径确实挂了守门（reject 形态 AST 定位到登记函数体内
+    核对首参 `updates` + allow 字面量、validator 形态核对校验器存在且合命名约定）；
+    ② 该字段传 None 必备拒（实调守门，断言 BusinessError；reject 形态带 AST 解析
+    出的真实 allow 集——不带 allow 的旧形态恒抛、与 test_null_guard.py 完全重复，
+    不构成「路径上真实守门」的证据）。只做①会放过「挂了锁但字段被 allow」的形态，
+    只做②会放过「守门存在但更新路径没调用」的形态。
     """
     from app.services.exceptions import BusinessError
 
@@ -370,26 +410,31 @@ def _check_service_guard(_column, key, _reason) -> None:
         f"{key} 声明 kind=service_guard，但未登记 SERVICE_GUARD_SITES——"
         "守门依据必须机器可复核，不接受「仅在理由里说明」"
     )
-    module_name, mechanism = site
+    module_name, function_name, mechanism = site
     field = key[1]
 
     if mechanism == "reject":
         from app.services.null_guard import reject_explicit_nulls
 
-        allowed = _explicit_null_allow_literals(module_name)
+        allowed = _explicit_null_allow_literals(module_name, function_name)
         assert allowed is not None, (
-            f"{key}：{module_name} 内找不到 reject_explicit_nulls 调用点——更新路径未挂共享收口"
+            f"{key}：{module_name}::{function_name} 内找不到 reject_explicit_nulls 调用点——"
+            "更新路径未挂共享收口"
         )
         assert field not in allowed, (
-            f"{key}：{module_name} 的 reject_explicit_nulls allow 集合含该字段，"
+            f"{key}：{module_name}::{function_name} 的 reject_explicit_nulls allow 集合含该字段，"
             "显式 null 实际被放行——台账理由（显式拒绝 null）不成立"
         )
         with pytest.raises(BusinessError):
-            reject_explicit_nulls({field: None})
+            reject_explicit_nulls({field: None}, allow=allowed)
     elif mechanism == "validator":
+        assert function_name == f"validate_{field}", (
+            f"{key}：登记的校验器 {function_name} 偏离 validate_{field} 同名约定——"
+            "刻意改名时须同步更新约定与本断言"
+        )
         module = importlib.import_module(module_name)
-        validator = getattr(module, f"validate_{field}", None)
-        assert validator is not None, f"{key}：{module_name} 缺专用校验器 validate_{field}"
+        validator = getattr(module, function_name, None)
+        assert validator is not None, f"{key}：{module_name} 缺专用校验器 {function_name}"
         parameters = {name: None for name in inspect.signature(validator).parameters}
         with pytest.raises(BusinessError):
             validator(**parameters)
