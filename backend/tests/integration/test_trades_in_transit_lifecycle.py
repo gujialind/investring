@@ -21,6 +21,7 @@ import json
 import pytest
 
 from app.models.audit_log import AuditLog
+from app.models.investor_holding import InvestorHolding
 from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.trade import Trade
@@ -680,6 +681,21 @@ class TestSellConfirmCreatesArrivalLeg:
         assert Decimal(str(snap_t2.total_value)) == Decimal("11250")
         assert Decimal(str(snap_t2.in_transit_total)) == Decimal("0")
 
+        # 卖出及到账只改变资产层，投资人和组合份额在整个窗口内不变（#538）。
+        for snapshot_date in (D0, T, T1, T2):
+            snap = test_db.query(PortfolioValueSnapshot).filter(
+                PortfolioValueSnapshot.portfolio_code == self.CODE,
+                PortfolioValueSnapshot.snapshot_date == snapshot_date,
+            ).one()
+            assert snap.total_shares == Decimal("11250")
+            holdings = test_db.query(InvestorHolding).filter(
+                InvestorHolding.portfolio_code == self.CODE,
+                InvestorHolding.snapshot_date == snapshot_date,
+            ).all()
+            assert [(h.investor_code, h.shares) for h in holdings] == [
+                ("VIEWER", Decimal("11250")),
+            ]
+
     def test_default_arrival_equals_confirm_date_no_in_transit(
         self, client, admin_headers, test_db
     ):
@@ -943,6 +959,21 @@ class TestGroupLifecycle:
         positions = _positions(test_db, code, T)
         assert Decimal(str(_by_product(positions, "CASH")[0].cash_amount)) == Decimal("50000")
         assert _by_product(positions, "IN_TRANSIT_BUY") == []
+        assert _by_product(positions, "IN_TRANSIT_SELL") == []
+        assert _by_product(positions, FUND) == []
+        snap = test_db.query(PortfolioValueSnapshot).filter(
+            PortfolioValueSnapshot.portfolio_code == code,
+            PortfolioValueSnapshot.snapshot_date == T,
+        ).one()
+        assert snap.in_transit_total == Decimal("0")
+        assert snap.total_shares == Decimal("50000")
+        holdings = test_db.query(InvestorHolding).filter(
+            InvestorHolding.portfolio_code == code,
+            InvestorHolding.snapshot_date == T,
+        ).all()
+        assert [(h.investor_code, h.shares) for h in holdings] == [
+            ("VIEWER", Decimal("50000")),
+        ]
 
         dele = client.delete(f"/api/trades/{trade_id}", headers=admin_headers)
         assert dele.status_code == 200, dele.json()
@@ -1595,3 +1626,18 @@ class TestConservationWithFee:
         assert Decimal(str(snap_t1.in_transit_total)) == Decimal("0")
         # 差额恰为手续费，不把「无常量」错当成「必须与 T 日相等」
         assert Decimal(str(snap_t.total_value)) - Decimal(str(snap_t1.total_value)) == Decimal("5")
+
+        # 双层账本不变量是份额不变，而不是含费调仓前后总市值恒定（#538）。
+        for snapshot_date in (D0, T, T1):
+            snap = test_db.query(PortfolioValueSnapshot).filter(
+                PortfolioValueSnapshot.portfolio_code == code,
+                PortfolioValueSnapshot.snapshot_date == snapshot_date,
+            ).one()
+            assert snap.total_shares == Decimal("50000")
+            holdings = test_db.query(InvestorHolding).filter(
+                InvestorHolding.portfolio_code == code,
+                InvestorHolding.snapshot_date == snapshot_date,
+            ).all()
+            assert [(h.investor_code, h.shares) for h in holdings] == [
+                ("VIEWER", Decimal("50000")),
+            ]

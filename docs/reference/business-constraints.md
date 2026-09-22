@@ -19,6 +19,8 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 核心实体：组合是每日净值化记账主体（初始净值 1.0000、初始份额 0）；投资人持有组合份额，申赎是资金进出组合的唯一通道；产品是组合内部资产，价格来自外部数据源或显式流水；平台是券商/基金销售渠道，持仓与现金按平台分账而组合净值不分平台；快照将每日持仓、市值净值和投资人份额定格，作为估值与可用量基线。
 
+行为守门见 [test_trades_in_transit_lifecycle.py](../../backend/tests/integration/test_trades_in_transit_lifecycle.py) 的 `TestConservationWithFee`（含费调仓保持组合与投资人份额不变）及 [test_subscriptions_create.py](../../backend/tests/integration/test_subscriptions_create.py) 的 `TestUnconfirmSubscriptionSnapshotProtection`（申赎确认、回退、再确认与确认日单次入账）。
+
 <a id="rule-investor"></a>
 ## 投资人与份额
 
@@ -83,11 +85,11 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **连续原则**：严格从最新快照日的下一交易日起连续生成，失败即停，不能跳日；单日生成只接受最新日重建或下一交易日。
 - **增量累加**：当日持仓/现金 = 前日基线 + 窗口内 confirmed 交易 + 事件增量 + manual_market_value 绝对覆盖。
 - **严格取价**（#96/#178，#228 起泛化）：只由产品 nav_lag_days 决定取价日，0 取当日、N 取交易日历上前第 N 个交易日；缺指定日行情必须报 `MISSING_NAV`，不得回退。调仓确认始终取 T 日价格、按落库 confirm_days 决定间隔，与快照估值正交。
-- **删除必级联**：删某日及以后全部快照。按数据依赖回退：apply_date 落在区间的 confirmed 申赎、entitlement_date 落在区间的 confirmed 事件退回 pending；配对 CASH 腿删除，基金级父事件的子记录物理删除。交易依赖产品行情而非组合快照，**不级联**。任一笔回退失败整体中止、不删任何快照（#203）。
+- **删除必级联**：删某日及以后全部快照。按数据依赖回退：apply_date 落在区间的 confirmed 申赎、entitlement_date 落在区间的 confirmed 事件退回 pending；配对 CASH 腿删除，基金级父事件的子记录物理删除。交易依赖产品行情而非组合快照，**不级联**。单日删除任一笔回退失败，该次调用整体回滚（#203）；批量删除从最新日倒序、逐日提交，失败日回滚，但此前已成功删除的日期保留，不要求整个批次无变化。
 - **重算为单一事务**：先对整区间做行情完整性预校验，再逐交易日删旧、级联回退、重建、auto_confirm，全程不 commit；任一天重建失败即停，对外完整成功或无变化。每日 auto_confirm 处理到期 pending 申赎、事件、跨天现金转移，**不含调仓**（#493/#471）；被级联回退的记录由此重确认，日期键见后端指南的 `auto_confirm_after_snapshot` 说明。允许的单笔失败记 auto_confirm_failed 并继续，不能与需要整体回滚的失败混同。
 - **零快照但目标日前已有确认交易**（#180）：单日 generate 报 `SNAPSHOT_REQUIRES_RECALCULATE`，须从最早 confirm_date 逐日重建，避免首快照漏早期到账；目标日即最早到账日的真正首次生成不受影响。
 
-实现入口见 [snapshot_service.py](../../backend/app/services/snapshot_service.py)；代表测试见 [test_snapshot_service.py](../../backend/tests/unit/test_snapshot_service.py)。
+实现入口见 [snapshot_service.py](../../backend/app/services/snapshot_service.py)；代表测试见 [test_snapshot_service.py](../../backend/tests/unit/test_snapshot_service.py)。严格取价反例见 [test_snapshot_nav_strict.py](../../backend/tests/integration/test_snapshot_nav_strict.py) 的 `TestNavLagDaysPricing`（含跨闭市区间 lag=2）及 `TestSnapshotNavStrict`（新持仓生成侧兜底）。完整业务状态回滚见 [test_snapshots.py](../../backend/tests/integration/test_snapshots.py) 的 `TestCompleteBusinessAtomicity`；允许单笔失败后继续确认与不可恢复会话整体回滚见 [test_snapshot_observability.py](../../backend/tests/integration/test_snapshot_observability.py) 的 `TestRecalculateObservability`。
 
 ## 可用量口径
 
@@ -306,7 +308,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-precision"></a>
 ## 量化产生点清单
 
-份额与金额统一 2 位小数、净值/市值/成本价 4 位小数、**三者均 ROUND\_HALF\_UP**、负数按绝对值对称（远离零进位，符合场外基金惯例），量化误差计入基金财产。**量化只发生在下列产生点**，读取/累加路径不量化；可用量闸门先量化再精确比较、无容差。每个精度各有唯一 helper，调用点不得写 `Decimal("0.01"/"0.0001")` 字面量——`quantize` 不传 `rounding=` 会走 Decimal 缺省的 HALF\_EVEN（#428 的教训：4 位口径曾静默漂移 7 处）。实现见 [quantize.py](../../backend/app/utils/quantize.py)，代表测试见 [test_quantize.py](../../backend/tests/unit/test_quantize.py)。
+份额与金额统一 2 位小数、净值/市值/成本价 4 位小数、**三者均 ROUND\_HALF\_UP**、负数按绝对值对称（远离零进位，符合场外基金惯例），量化误差计入基金财产。**量化只发生在下列产生点**，读取/累加路径不量化；可用量闸门先量化再精确比较、无容差。每个精度各有唯一 helper，调用点不得写 `Decimal("0.01"/"0.0001")` 字面量——`quantize` 不传 `rounding=` 会走 Decimal 缺省的 HALF\_EVEN（#428 的教训：4 位口径曾静默漂移 7 处）。实现见 [quantize.py](../../backend/app/utils/quantize.py)，代表测试见 [test_quantize.py](../../backend/tests/unit/test_quantize.py)，其中 `TestFinancialQuantizationGuard` 检查财务范围内绕过统一 helper 的直接量化，边界数值测试另行验证舍入结果；范围与例外见[后端精度入口](../../backend/AGENTS.md#13-核心服务)。
 
 * **份额产生点**（`quantize_shares`）：申购确认 `amount/nav`、调仓买入 `amount/price`、卖出与赎回的用户输入、份额事件的变动计算。
 
@@ -319,7 +321,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-trading-day"></a>
 ## 交易日
 
-所有交易操作（申购、赎回、调仓、现金进出、事件日期）仅允许在交易日进行，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`，代表测试见 [test_trading_day.py](../../backend/tests/integration/test_trading_day.py)。
+所有交易操作（申购、赎回、调仓、现金进出、事件日期）仅允许在交易日进行，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`；[test_trading_day.py](../../backend/tests/integration/test_trading_day.py) 的 `TestClosedWeekCalendar` / `TestClosedWeekWrites` 显式构造工作日闭市、连续长假和缺失记录，并验证写入口拒绝时无业务字段残留。
 
 ## 易错陷阱
 

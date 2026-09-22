@@ -23,6 +23,8 @@
 
 * **领域异常统一**：service 抛 `app/services/exceptions.py::BusinessError`（携 `code`/`message`/`http_status`/`details`）；`main.py` 全局 handler 映射为 `JSONResponse{"detail": {"error": code, "message": message}}`（保持前端契约；默认 422、重复创建类 400、NOT\_FOUND 404）。service 内**禁止** import/抛 `HTTPException`。
 
+守门见 [test_service_no_commit.py](tests/unit/test_service_no_commit.py)：递归 AST 检查服务的 HTTPException 依赖（含别名、模块限定和嵌套导入）；既有普通 service 动态用例同时禁止注入会话 commit/rollback，保留 savepoint。后者不是全服务 Session 所有权分析，不覆盖任务投递入口。
+
 ### 1.2 路由与 API 前缀
 
 端点以 `app/main.py` 注册为准；CLI 机读契约见 `ir schema`。
@@ -58,7 +60,7 @@
 
 其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现。其他服务职责读各文件 docstring。
 
-* **精度入口 [quantize.py](app/utils/quantize.py)**：规则与产生点统一见[数值口径](../docs/reference/business-constraints.md#rule-precision)。守门为 `test_quantize.py::TestQuantizeNav` / `TestAmountToSharesTwoStepQuantization`、`test_snapshot_service.py::TestValueSnapshotFourDecimalRounding` 与 `test_trades_validation_preview.py::TestTradePreview` 的四位边界用例；它们区分 HALF_UP 与缺省 HALF_EVEN，不能换成非边界数字。ORM 成本价保持 Decimal，理由见[审计载荷](../docs/reference/logging.md#logging-audit)。
+* **精度入口 [quantize.py](app/utils/quantize.py)**：规则与产生点统一见[数值口径](../docs/reference/business-constraints.md#rule-precision)。守门为 `test_quantize.py::TestQuantizeNav` / `TestAmountToSharesTwoStepQuantization`、`test_snapshot_service.py::TestValueSnapshotFourDecimalRounding` 与 `test_trades_validation_preview.py::TestTradePreview` 的四位边界用例；它们区分 HALF_UP 与缺省 HALF_EVEN，不能换成非边界数字。`TestFinancialQuantizationGuard` 在六个核心财务模块禁止直接 `.quantize()`，只对登记产生点禁止 `round()`，保留读侧统计、float 序列化与对账容差；产生点更名/迁移须同步范围，空扫描不得通过。ORM 成本价保持 Decimal，理由见[审计载荷](../docs/reference/logging.md#logging-audit)。
 
 * **份额变动事件：计算单点、预览复用**（#424/#425）：变动量计算是纯函数 `share_change_event_service.compute_event_fields(event_type, entitlement_shares, *, …)`（返回 `EventFieldResult`，**不碰 ORM 对象**），确认与确认预览共用——「预览 == 确认」由此保证。
   - **写回刻意分离**：`apply_event_fields(event)` 是唯一写回点、**只由确认路径调用**。预览不得复用它：`record_audit` 的 `_diff_fields` 读事件当前字段，对象被预览改过后列表行会显示未落库的值；pending 对象若被 flush 还会把「预览」写进库。
@@ -137,8 +139,10 @@ cd backend && pytest tests -q
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
-  | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration -q -k precision` |
+  | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py -q` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
+  | 交易日 / 严格取价 | `pytest tests/integration/test_trading_day.py tests/integration/test_snapshot_nav_strict.py -q` |
+  | 原子性 / 双层账本测试及共享状态 helper | `pytest tests/integration/test_snapshots.py tests/integration/test_snapshot_observability.py tests/integration/test_trades_in_transit_lifecycle.py tests/integration/test_subscriptions_create.py -q` |
   | 任务执行记录（`task_runner.run_task` / `scheduler_service` / `routers/tasks.py`） | `pytest tests/unit/test_task_log_orchestration.py tests/unit/test_scheduler_service.py tests/unit/test_run_nav_sync.py tests/integration/test_task_execution_log.py tests/integration/test_tasks.py tests/integration/test_log_cleanup.py -q` |
   | 审计/系统错误日志（`audit_service.py`、任一埋点、日志表迁移） | `pytest tests/unit/test_audit_service.py tests/integration/test_audit_log.py tests/unit/test_migration_0013.py tests/unit/test_migration_0014.py -q` |
   | 字符集 / 建表（`db_charset.py`、`models/base.py`、迁移 0015、`ci.yml` 建库语句） | `pytest tests/unit/test_db_charset.py tests/unit/test_migration_0015.py tests/unit/test_migration_0014.py -q` |

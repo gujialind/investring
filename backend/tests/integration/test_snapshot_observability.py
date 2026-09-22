@@ -44,6 +44,7 @@ from tests.factories import (
     create_value_snapshot,
     create_investor_holding,
 )
+from tests.integration.snapshot_helpers import capture_portfolio_state
 from tests.integration.test_snapshot_forced_adjustment import (
     D0,
     EX_DAY,
@@ -133,64 +134,93 @@ class TestRecalculateObservability:
         assert failed[0]["error"]
 
     def test_recalculate_survives_real_flush_failure(self, client, admin_headers, test_db, monkeypatch):
-        """自动确认中真撞唯一约束（#419 验收 5）：重算仍 200、errors 为空、
-        根因 code 落在 auto_confirmed，全响应无 PendingRollbackError——
-        连接级 savepoint 时代这里会冒泡成 500 RECALCULATION_FAILED"""
-        _setup_real_history(test_db, "OBS_RC5", "OBS_RC5_INV")
-        # 撞约束的预置行挂在另一个组合上，不干扰被测组合的快照数据
+        """已写入的失败笔回到 savepoint，后一笔真实确认且重建快照保留。"""
+        code = "OBS_RC5"
+        _setup_real_history(test_db, code, "OBS_RC5_INV")
         create_portfolio(test_db, code="OBS_RC5_HOLDER", status="active")
         create_trade(
             test_db, portfolio_code="OBS_RC5_HOLDER", product_code=FUND,
             market="CN_OTC", trade_type="buy", transfer_group="sub_conflict",
             trade_date=D0,
         )
-        # 级联回退只命中 apply_date == 快照日 的申赎，补一笔 apply_date=D0 的申购
-        sub2 = create_subscription(
-            test_db, portfolio_code="OBS_RC5", investor_code="OBS_RC5_INV",
-            platform_code="MYCF", sub_type="subscribe",
-            amount=Decimal("200.00"), apply_date=D0,
-        )
-        test_db.flush()
-        subscription_service.confirm_single_subscription(test_db, sub2)
+        subs = []
+        for amount in (Decimal("200.00"), Decimal("300.00")):
+            sub = create_subscription(
+                test_db, portfolio_code=code, investor_code="OBS_RC5_INV",
+                platform_code="MYCF", sub_type="subscribe", amount=amount, apply_date=D0,
+            )
+            test_db.flush()
+            subscription_service.confirm_single_subscription(test_db, sub)
+            subs.append(sub.id)
         test_db.commit()
-
+        monkeypatch.setattr(test_db, "autoflush", False)
+        original = subscription_service.confirm_single_subscription
         calls = []
+        pending_states = []
+        partial_states = []
 
-        def fake_confirm(db_, sub, *, auto_flush=False, skip_cash_check=False):
+        def fail_first_after_confirm(db_, sub, *, auto_flush=False, skip_cash_check=False):
             calls.append(sub.id)
-            db_.add(Trade(
-                portfolio_code="OBS_RC5", platform_code="MYCF",
-                product_code=FUND, market="CN_OTC", trade_type="buy",
-                transfer_group="sub_conflict", amount=Decimal("1.00"),
-                trade_date=D0, status="pending",
-            ))
-            db_.flush()  # 真 flush 失败：撞 uq_trade_transfer_group
-            sub.status = "confirmed"
+            if len(calls) == 1:
+                pending_states.append(capture_portfolio_state(db_, code))
+            result = original(
+                db_, sub, auto_flush=auto_flush, skip_cash_check=skip_cash_check,
+            )
+            if len(calls) == 1:
+                db_.flush()
+                partial_states.append(capture_portfolio_state(db_, code))
+                db_.add(Trade(
+                    portfolio_code=code, platform_code="MYCF",
+                    product_code=FUND, market="CN_OTC", trade_type="buy",
+                    transfer_group="sub_conflict", amount=Decimal("1.00"),
+                    trade_date=D0, status="pending",
+                ))
+                db_.flush()
+            return result
 
         monkeypatch.setattr(
-            subscription_service, "confirm_single_subscription", fake_confirm
+            subscription_service, "confirm_single_subscription", fail_first_after_confirm,
         )
-
         resp = client.post(
             "/api/snapshots/recalculate",
-            json={
-                "portfolio_code": "OBS_RC5",
-                "start_date": D0.isoformat(),
-                "end_date": D0.isoformat(),
-            },
+            json={"portfolio_code": code, "start_date": D0.isoformat(), "end_date": D0.isoformat()},
             headers=admin_headers,
         )
         assert resp.status_code == 200, resp.text
         assert "PendingRollbackError" not in resp.text
-        assert calls == [sub2.id], "守护确实被走到"
+        assert len(calls) == 2 and set(calls) == set(subs)
+        failed_id, confirmed_id = calls
         entry = resp.json()["results"][0]
-        assert entry["errors"] == [], "单条 DB 级失败不该中止重算"
-        failed = [
-            r for r in entry["auto_confirmed"]
-            if r.get("action") == "auto_confirm_failed"
+        assert entry["errors"] == []
+        assert entry["processed_dates"] == [D0.isoformat()]
+        assert [(r["id"], r["action"]) for r in entry["auto_confirmed"]] == [
+            (failed_id, "auto_confirm_failed"), (confirmed_id, "auto_confirmed"),
         ]
-        assert len(failed) == 1
-        assert failed[0]["code"] == "IntegrityError"
+        assert entry["auto_confirmed"][0]["code"] == "IntegrityError"
+        state = capture_portfolio_state(test_db, code)
+        failed_before = next(row for row in pending_states[0]["subscription"] if row["id"] == failed_id)
+        failed_after = next(row for row in state["subscription"] if row["id"] == failed_id)
+        assert failed_after == failed_before
+        assert failed_after["status"] == "pending" and failed_after["unit_price"] is None
+        assert any(row["transfer_group"] == f"sub_{failed_id}" for row in partial_states[0]["trade"])
+        assert not any(row["transfer_group"] == f"sub_{failed_id}" for row in state["trade"])
+        assert not any(row["transfer_group"] == "sub_conflict" for row in state["trade"])
+        confirmed = next(row for row in state["subscription"] if row["id"] == confirmed_id)
+        assert confirmed["status"] == "confirmed"
+        assert confirmed["unit_price"] == Decimal("1.0000")
+        assert confirmed["shares"] == confirmed["amount"]
+        legs = [row for row in state["trade"] if row["transfer_group"] == f"sub_{confirmed_id}"]
+        assert len(legs) == 1
+        assert (legs[0]["product_code"], legs[0]["trade_type"], legs[0]["platform_code"]) == (
+            "CASH", "buy", "MYCF",
+        )
+        assert legs[0]["status"] == "confirmed"
+        assert legs[0]["amount"] == legs[0]["actual_amount"] == confirmed["amount"]
+        assert legs[0]["confirm_date"] == confirmed["confirm_date"] == EX_DAY
+        for table in ("portfolio_position", "portfolio_value_snapshot", "investor_holding"):
+            assert state[table] and state[table] == pending_states[0][table]
+        assert test_db.is_active
+        test_db.flush()
 
     def test_recalculate_aborts_with_root_cause_when_session_dies(
         self, client, admin_headers, test_db, monkeypatch
@@ -207,11 +237,7 @@ class TestRecalculateObservability:
         test_db.flush()
         subscription_service.confirm_single_subscription(test_db, sub2)
         test_db.commit()
-        dates_before = [
-            r.snapshot_date for r in test_db.query(PortfolioValueSnapshot).filter(
-                PortfolioValueSnapshot.portfolio_code == "OBS_RC6"
-            ).order_by(PortfolioValueSnapshot.snapshot_date).all()
-        ]
+        state_before = capture_portfolio_state(test_db, "OBS_RC6")
 
         monkeypatch.setattr(snapshot_service, "_session_aborted", lambda db_: True)
 
@@ -236,13 +262,7 @@ class TestRecalculateObservability:
         ]
         assert len(aborted) == 1
         assert len(entry["auto_confirmed"]) == 1
-        # 整体 rollback：快照与重算前一致（「要么完整成功、要么无变化」）
-        dates_after = [
-            r.snapshot_date for r in test_db.query(PortfolioValueSnapshot).filter(
-                PortfolioValueSnapshot.portfolio_code == "OBS_RC6"
-            ).order_by(PortfolioValueSnapshot.snapshot_date).all()
-        ]
-        assert dates_after == dates_before == [D0]
+        assert capture_portfolio_state(test_db, "OBS_RC6") == state_before
 
     def test_error_entries_carry_code_and_details(self, client, admin_headers, test_db):
         """幽灵持仓事件致逐日失败：错误条目携带 code=POSITION_NOT_FOUND 与 details

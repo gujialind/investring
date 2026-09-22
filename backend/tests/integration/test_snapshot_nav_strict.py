@@ -25,9 +25,9 @@ from decimal import Decimal
 
 import pytest
 
-from app.models import PortfolioPosition, PortfolioValueSnapshot
+from app.models import PortfolioPosition, PortfolioValueSnapshot, TradingCalendar
 from app.services.exceptions import BusinessError
-from app.services.snapshot_service import generate_daily_snapshots
+from app.services.snapshot_service import generate_daily_snapshots, validate_snapshot_dependencies
 from tests.factories import (
     create_portfolio,
     create_position_snapshot,
@@ -42,6 +42,41 @@ from tests.factories import (
 D0 = date(2025, 6, 6)         # 周五（最新快照日）
 NEXT_DAY = date(2025, 6, 9)   # 周一（下一交易日 = 生成目标日）
 T_MINUS_2 = date(2025, 6, 5)  # 周四（相对 NEXT_DAY 的 T-2）
+LAG2_TARGET = date(2025, 6, 16)
+LAG2_NAV_DATE = date(2025, 6, 5)
+
+
+@pytest.fixture
+def closed_week_calendar(test_db):
+    """模拟 6/9–6/13 连续闭市，不修改 session 种子。"""
+    closed_dates = tuple(date(2025, 6, day) for day in range(9, 14))
+    for day in closed_dates:
+        row = test_db.query(TradingCalendar).filter_by(calendar_date=day).one()
+        row.is_open = False
+    test_db.flush()
+    assert dict(test_db.query(
+        TradingCalendar.calendar_date, TradingCalendar.is_open,
+    ).filter(TradingCalendar.calendar_date.in_(closed_dates)).all()) == {
+        day: False for day in closed_dates
+    }
+
+
+@pytest.fixture
+def lag2_snapshot(test_db, closed_week_calendar):
+    port = create_portfolio(test_db, code="NAV_LAG2", status="active")
+    product = create_product(
+        test_db, code="LAG2.OF", market="CN_OTC", nav_lag_days=2,
+    )
+    _setup_fund_snapshot(test_db, port.code, product.code, product.market, D0)
+    for price_date, price in (
+        (date(2025, 6, 4), 1.1),
+        (D0, 1.6),
+        (date(2025, 6, 12), 1.8),
+        (date(2025, 6, 14), 1.9),
+        (LAG2_TARGET, 3.0),
+    ):
+        create_price_record(test_db, product.code, product.market, price_date, price)
+    return port, product
 
 
 def _setup_fund_snapshot(db, portfolio_code: str, product_code: str, market: str,
@@ -221,25 +256,44 @@ class TestSnapshotNavStrict:
         # 未删除任何快照（原行 id 不变）
         assert _snapshot_ids(test_db, port.code) == ids_before
 
-    def test_new_position_missing_nav_rejected_at_generation(self, test_db):
-        """生成点硬性兜底：窗口内新确认买入的基金（不在前日快照、闸门覆盖不到）
-        缺 target_date 净值时，_generate_portfolio_position 直接抛 MISSING_NAV"""
+    @pytest.mark.parametrize("nav_lag_days, required_date", [
+        (0, LAG2_TARGET),
+        (2, LAG2_NAV_DATE),
+    ])
+    def test_new_position_missing_nav_rejected_at_generation(
+        self, test_db, closed_week_calendar, nav_lag_days, required_date,
+    ):
+        """新持仓未进入预校验范围时，生成点仍严格要求指定交易日净值。"""
         port = create_portfolio(test_db, code="NAV_S6", status="active")
         create_product(test_db, code="STRICTD.OF", market="CN_OTC",
-                       product_type="OEF", asset_class_code="ASSET_STOCK")
+                       product_type="OEF", asset_class_code="ASSET_STOCK",
+                       nav_lag_days=nav_lag_days)
         _setup_cash_snapshot(test_db, port.code, D0)
-        # 窗口内确认的基金买入：confirm_date=NEXT_DAY，持仓首次出现于目标日
         create_trade(
             test_db, port.code, "STRICTD.OF", "CN_OTC",
             trade_type="buy", shares=100.0, amount=150.0, price=1.5,
-            trade_date=D0, confirm_date=NEXT_DAY, status="confirmed",
+            trade_date=D0, confirm_date=LAG2_TARGET, status="confirmed",
         )
+        create_price_record(test_db, "STRICTD.OF", "CN_OTC", date(2025, 6, 4), 1.1)
+        create_price_record(test_db, "STRICTD.OF", "CN_OTC", D0, 1.6)
+        if nav_lag_days:
+            create_price_record(test_db, "STRICTD.OF", "CN_OTC", LAG2_TARGET, 3.0)
+
+        checks = validate_snapshot_dependencies(test_db, port.code, LAG2_TARGET)
+        assert next(c for c in checks if c["check_type"] == "price_data")["status"] == "passed"
+        assert not any(c["status"] == "failed" for c in checks)
+        ids_before = _snapshot_ids(test_db, port.code)
 
         with pytest.raises(BusinessError) as exc:
-            generate_daily_snapshots(test_db, port.code, NEXT_DAY)
+            generate_daily_snapshots(test_db, port.code, LAG2_TARGET)
         assert exc.value.code == "MISSING_NAV"
-        assert "STRICTD.OF" in exc.value.message
-        assert "2025-06-09" in exc.value.message
+        assert "STRICTD.OF(CN_OTC)" in exc.value.message
+        assert required_date.isoformat() in exc.value.message
+        assert exc.value.details["target_date"] == LAG2_TARGET.isoformat()
+        assert _snapshot_ids(test_db, port.code) == ids_before
+        assert test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port.code, snapshot_date=LAG2_TARGET,
+        ).count() == 0
 
 
 class TestExchangeQdiiPricing:
@@ -445,6 +499,71 @@ class TestNavLagDaysPricing:
             PortfolioValueSnapshot.snapshot_date == NEXT_DAY,
         ).first() is None
         assert _snapshot_ids(test_db, port.code) == ids_before
+
+    @pytest.mark.parametrize("endpoint, error_code", [
+        ("generate", "MISSING_NAV"),
+        ("recalculate", "VALIDATION_FAILED"),
+    ])
+    def test_lag2_missing_required_nav_across_closed_week(
+        self, client, admin_headers, test_db, lag2_snapshot, endpoint, error_code,
+    ):
+        port, product = lag2_snapshot
+        ids_before = _snapshot_ids(test_db, port.code)
+        payload = {"portfolio_code": port.code}
+        if endpoint == "generate":
+            payload["target_date"] = LAG2_TARGET.isoformat()
+        else:
+            payload.update(start_date=D0.isoformat(), end_date=LAG2_TARGET.isoformat())
+
+        resp = client.post(
+            f"/api/snapshots/{endpoint}", json=payload, headers=admin_headers,
+        )
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == error_code
+        assert f"{product.code}({product.market})" in detail["message"]
+        assert "[T-2=2025-06-05]" in detail["message"]
+        if endpoint == "recalculate":
+            assert "预校验失败" in detail["message"]
+        assert _snapshot_ids(test_db, port.code) == ids_before
+        assert test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port.code, snapshot_date=LAG2_TARGET,
+        ).count() == 0
+
+    def test_lag2_validation_and_generation_use_exact_calendar_nav(
+        self, client, admin_headers, test_db, lag2_snapshot,
+    ):
+        port, product = lag2_snapshot
+
+        def price_check():
+            resp = client.get(
+                "/api/snapshots/validation",
+                params={"portfolio_code": port.code, "target_date": LAG2_TARGET.isoformat()},
+                headers=admin_headers,
+            )
+            assert resp.status_code == 200, resp.text
+            return next(c for c in resp.json()["checks"] if c["check_type"] == "price_data")
+
+        check = price_check()
+        assert check["status"] == "failed"
+        assert f"{product.code}({product.market})" in check["message"]
+        assert "[T-2=2025-06-05]" in check["message"]
+
+        create_price_record(test_db, product.code, product.market, LAG2_NAV_DATE, 2.0)
+        assert price_check()["status"] == "passed"
+        resp = client.post(
+            "/api/snapshots/generate",
+            json={"portfolio_code": port.code, "target_date": LAG2_TARGET.isoformat()},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True
+        pos = test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port.code, product_code=product.code,
+            market=product.market, snapshot_date=LAG2_TARGET,
+        ).one()
+        assert pos.unit_price == Decimal("2.0")
+        assert pos.market_value == Decimal("200.0")
 
     def test_otc_qdii_with_nav_lag_0_uses_target_date_nav(self, client, admin_headers, test_db):
         """场外产品 is_qdii=True 但 nav_lag_days=0 → 仍取当日净值

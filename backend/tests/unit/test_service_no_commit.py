@@ -1,20 +1,24 @@
 # ============================================================================
-# 单元测试：service 层不 commit（issue #58，backend/AGENTS.md「分层目录与职责」节）
+# 单元测试：service 层事务与领域异常边界（backend/AGENTS.md「分层目录与职责」节）
 # ============================================================================
-# 断言以下 service 函数全程不调用 db.commit()（事务边界交调用方）：
+# 断言以下 service 函数全程不调用 db.commit()/rollback()（事务边界交调用方）：
 # - snapshot_service.generate_daily_snapshots / recalculate_snapshots
 # - trading_calendar_service.sync_trading_calendar
 # - market_data_service.sync_product_prices（含 _mark_failed 失败路径）
 # - task_runner.cleanup_old_logs
 # - trade_service.calculate_confirm_preview（纯计算，不修改 trade，issue #65）
-# 方式：monkeypatch 会话的 commit 为直接抛 AssertionError，
-# 函数若能正常完成即证明无 commit 调用（flush 允许）。
+# 方式：monkeypatch 注入会话的 commit/rollback，保留 flush 与 savepoint 操作。
 # ============================================================================
 
-import pytest
+import ast
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+from textwrap import dedent
 from unittest.mock import patch
+
+import pytest
+from sqlalchemy.orm import Session
 
 from app.models import PortfolioValueSnapshot, PriceRecord, TradingCalendar
 from tests.factories import (
@@ -32,10 +36,35 @@ NEXT_DAY = date(2025, 6, 9)  # 下一交易日（周一）
 
 
 def _forbid_commit(monkeypatch, db):
-    """将会话 commit 替换为断言失败，捕捉 service 层的违规提交"""
-    def _fail(*args, **kwargs):
-        raise AssertionError("service 层不得调用 db.commit()（backend/AGENTS.md「分层目录与职责」节）")
-    monkeypatch.setattr(db, "commit", _fail)
+    """注入会话不得提交或整体回滚；不改 SessionTransaction 的 savepoint 方法。"""
+    for method in ("commit", "rollback"):
+        def _fail(*args, _method=method, **kwargs):
+            raise AssertionError(f"service 层不得调用 db.{_method}()（事务边界交调用方）")
+        monkeypatch.setattr(db, method, _fail)
+
+
+class TestInjectedSessionBoundaryGuard:
+    @pytest.mark.parametrize("method", ["commit", "rollback"])
+    def test_injected_session_transaction_boundary_is_rejected(self, test_db, monkeypatch, method):
+        _forbid_commit(monkeypatch, test_db)
+        with pytest.raises(AssertionError, match=rf"db\.{method}\(\)"):
+            getattr(test_db, method)()
+
+    @pytest.mark.parametrize("method", ["commit", "rollback"])
+    def test_savepoint_transaction_boundary_is_allowed(self, test_db, monkeypatch, method):
+        _forbid_commit(monkeypatch, test_db)
+        sp = test_db.begin_nested()
+        test_db.flush()
+        getattr(sp, method)()
+        assert not sp.is_active
+        assert test_db.is_active
+        test_db.flush()
+
+    def test_owned_session_is_not_patched(self, test_db, monkeypatch):
+        _forbid_commit(monkeypatch, test_db)
+        with Session() as owned:
+            owned.commit()
+            owned.rollback()
 
 
 def _setup_cash_snapshot(db, portfolio_code: str, snapshot_date: date, amount: float = 10000.0):
@@ -266,3 +295,202 @@ class TestSubscriptionPreviewNoCommit:
         assert sub.unit_price is None
         assert sub.shares is None
         assert sub.confirm_date is None
+
+
+_HTTP_EXCEPTION_MODULES = {
+    "fastapi", "fastapi.exceptions", "starlette", "starlette.exceptions",
+}
+
+
+def _collect_http_exception_dependencies(sources):
+    assert sources, "empty services scan"
+    dependencies = set()
+    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+    def local_nodes(node):
+        yield node
+        if not isinstance(node, scopes):
+            for child in ast.iter_child_nodes(node):
+                yield from local_nodes(child)
+
+    def scan_scope(filename, scope, inherited):
+        nodes = [node for child in ast.iter_child_nodes(scope) for node in local_nodes(child)]
+        aliases = inherited.copy()
+        for node in nodes:
+            if isinstance(node, ast.arg):
+                aliases.pop(node.arg, None)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                aliases.pop(node.id, None)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                aliases.pop(node.name, None)
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    aliases[alias.asname or alias.name.split(".")[0]] = (
+                        alias.name if alias.asname else alias.name.split(".")[0]
+                    )
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    qualified = f"{'.' * node.level}{node.module or ''}.{alias.name}"
+                    aliases[alias.asname or alias.name] = qualified
+                    if node.level == 0 and node.module in _HTTP_EXCEPTION_MODULES and alias.name in {"HTTPException", "*"}:
+                        dependencies.add((filename, node.lineno, qualified))
+        for node in nodes:
+            if isinstance(node, scopes):
+                # 方法与嵌套类不捕获类体局部名字，仍可使用类外的词法绑定。
+                outer = inherited if isinstance(scope, ast.ClassDef) else aliases
+                scan_scope(filename, node, outer)
+            elif isinstance(node, ast.Attribute) and node.attr == "HTTPException":
+                parts = []
+                value = node.value
+                while isinstance(value, ast.Attribute):
+                    parts.append(value.attr)
+                    value = value.value
+                if isinstance(value, ast.Name) and value.id in aliases:
+                    module = ".".join([aliases[value.id], *reversed(parts)])
+                    if module in _HTTP_EXCEPTION_MODULES:
+                        dependencies.add((filename, node.lineno, f"{module}.HTTPException"))
+
+    for filename, source in sorted(sources.items()):
+        scan_scope(filename, ast.parse(source, filename=filename), {})
+    return sorted(dependencies)
+
+
+class TestServiceDomainExceptionGuard:
+    def test_services_do_not_depend_on_http_exception(self):
+        services = Path(__file__).resolve().parents[2] / "app" / "services"
+        sources = {
+            path.relative_to(services).as_posix(): path.read_text(encoding="utf-8")
+            for path in services.rglob("*.py")
+        }
+        assert _collect_http_exception_dependencies(sources) == []
+
+    @pytest.mark.parametrize("module", [
+        "fastapi", "fastapi.exceptions", "starlette", "starlette.exceptions",
+    ])
+    @pytest.mark.parametrize("alias", ["", " as WebError"])
+    def test_direct_and_aliased_exception_imports_are_rejected(self, module, alias):
+        source = f"from {module} import HTTPException{alias}\n"
+        assert _collect_http_exception_dependencies({"service.py": source}) == [
+            ("service.py", 1, f"{module}.HTTPException"),
+        ]
+
+    @pytest.mark.parametrize("package", ["fastapi", "starlette"])
+    @pytest.mark.parametrize("statement, reference, suffix", [
+        ("import {package}", "{package}.HTTPException", ""),
+        ("import {package} as web", "web.HTTPException", ""),
+        ("import {package}", "{package}.exceptions.HTTPException", ".exceptions"),
+        ("import {package}.exceptions", "{package}.exceptions.HTTPException", ".exceptions"),
+        ("import {package}.exceptions as errors", "errors.HTTPException", ".exceptions"),
+        ("from {package} import exceptions", "exceptions.HTTPException", ".exceptions"),
+        ("from {package} import exceptions as errors", "errors.HTTPException", ".exceptions"),
+    ])
+    def test_module_qualified_references_are_rejected(self, package, statement, reference, suffix):
+        source = (
+            statement.format(package=package) + "\n"
+            + "error_type = " + reference.format(package=package) + "\n"
+        )
+        assert _collect_http_exception_dependencies({"nested/service.py": source}) == [
+            ("nested/service.py", 2, f"{package}{suffix}.HTTPException"),
+        ]
+
+    def test_nested_async_import_and_raise_are_rejected(self):
+        source = dedent('''\
+            async def service():
+                from fastapi import HTTPException as WebError
+                def fail():
+                    import starlette.exceptions as errors
+                    raise errors.HTTPException(status_code=422)
+                raise WebError(status_code=400)
+        ''')
+        assert _collect_http_exception_dependencies({"service.py": source}) == [
+            ("service.py", 2, "fastapi.HTTPException"),
+            ("service.py", 5, "starlette.exceptions.HTTPException"),
+        ]
+
+    @pytest.mark.parametrize("module", [
+        "fastapi", "fastapi.exceptions", "starlette", "starlette.exceptions",
+    ])
+    def test_wildcard_cannot_hide_exception_dependency(self, module):
+        assert _collect_http_exception_dependencies({
+            "service.py": f"from {module} import *\n",
+        }) == [("service.py", 1, f"{module}.*")]
+
+    def test_business_errors_comments_and_strings_are_allowed(self):
+        source = dedent('''\
+            from app.services.exceptions import BusinessError
+            from app.services import exceptions as domain
+            # from fastapi import HTTPException
+            note = "from starlette.exceptions import HTTPException; fastapi.HTTPException(422)"
+            def service():
+                raise BusinessError("INVALID_PARAM", "invalid")
+            def other_service():
+                raise domain.BusinessError("INVALID_PARAM", "invalid")
+        ''')
+        assert _collect_http_exception_dependencies({"service.py": source}) == []
+
+    def test_unrelated_http_exception_name_is_allowed(self):
+        source = "import http.client as transport\nerror_type = transport.HTTPException\n"
+        assert _collect_http_exception_dependencies({"service.py": source}) == []
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_sibling_functions_do_not_overwrite_import_aliases(self, reverse):
+        invalid = "def fail():\n    import fastapi as errors\n    raise errors.HTTPException(422)\n"
+        valid = "def transport_error():\n    import http.client as errors\n    return errors.HTTPException\n"
+        source = valid + invalid if reverse else invalid + valid
+        assert _collect_http_exception_dependencies({"service.py": source}) == [
+            ("service.py", 6 if reverse else 3, "fastapi.HTTPException"),
+        ]
+
+    @pytest.mark.parametrize("source, expected", [
+        ('''\
+            import starlette.exceptions as errors
+            def transport_error():
+                import http.client as errors
+                return errors.HTTPException
+            def fail():
+                raise errors.HTTPException(422)
+        ''', [(6, "starlette.exceptions.HTTPException")]),
+        ('''\
+            def outer():
+                import fastapi as errors
+                def transport_error():
+                    import http.client as errors
+                    return errors.HTTPException
+                async def fail():
+                    raise errors.HTTPException(422)
+                return fail
+        ''', [(7, "fastapi.HTTPException")]),
+        ('''\
+            import http.client as errors
+            class Owner:
+                import fastapi as errors
+                error_type = errors.HTTPException
+                def transport_error(self):
+                    return errors.HTTPException
+        ''', [(4, "fastapi.HTTPException")]),
+        ('''\
+            import fastapi as errors
+            class Owner:
+                import http.client as errors
+                error_type = errors.HTTPException
+                def fail(self):
+                    raise errors.HTTPException(422)
+        ''', [(6, "fastapi.HTTPException")]),
+        ('''\
+            import fastapi as errors
+            def from_argument(errors):
+                return errors.HTTPException
+            def from_local(other):
+                errors = other
+                return errors.HTTPException
+        ''', []),
+    ], ids=["module-alias", "closure-alias", "class-local", "method-outer", "local-shadow"])
+    def test_scoped_alias_resolution(self, source, expected):
+        assert _collect_http_exception_dependencies({"service.py": dedent(source)}) == [
+            ("service.py", line, name) for line, name in expected
+        ]
+
+    def test_empty_scan_fails(self):
+        with pytest.raises(AssertionError, match="empty services scan"):
+            _collect_http_exception_dependencies({})

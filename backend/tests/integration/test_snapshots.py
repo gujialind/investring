@@ -6,11 +6,25 @@
 # 覆盖重算单事务原子性（#58：预校验拦截、中途失败整体回滚）。
 # ============================================================================
 
-from datetime import date
+from copy import deepcopy
+from datetime import date, datetime
+from decimal import Decimal
 
 import pytest
 
-from app.models import PortfolioValueSnapshot
+from app.models import (
+    InvestorHolding, Portfolio, PortfolioPosition, PortfolioValueSnapshot,
+    ShareChangeEvent, Subscription, Trade,
+)
+from app.services import snapshot_service, subscription_service
+from app.services.exceptions import BusinessError
+from app.services.share_change_event_service import (
+    create_share_change_event, confirm_share_change_event,
+)
+from tests.integration.snapshot_helpers import capture_portfolio_state
+from tests.integration.test_snapshot_forced_adjustment import (
+    EX_DAY, FUND, _ensure_price, _setup_real_history,
+)
 from tests.factories import (
     create_portfolio,
     create_position_snapshot,
@@ -237,7 +251,7 @@ class TestRecalculateAtomicity:
             snapshot_date=self.D0, shares=100.0, market_value=100.0,
             platform_code="MYCF",
         )
-        ids_before = self._snapshot_ids(test_db, port.code)
+        state_before = capture_portfolio_state(test_db, port.code)
 
         resp = client.post(
             "/api/snapshots/recalculate",
@@ -252,17 +266,10 @@ class TestRecalculateAtomicity:
         assert resp.json()["detail"]["error"] == "VALIDATION_FAILED"
         assert "预校验失败" in resp.json()["detail"]["message"]
 
-        # 未删除任何快照（原行 id 不变）
-        assert self._snapshot_ids(test_db, port.code) == ids_before
+        assert capture_portfolio_state(test_db, port.code) == state_before
 
     def test_midloop_failure_rolls_back_all(self, client, admin_headers, test_db):
-        """预校验通过但循环中途失败 → 200 + errors，整体回滚，原快照完整复原
-
-        构造：pending 基金买入 confirm_date=NEXT_DAY，产品无 NAV →
-        auto_confirm(D0) 确认失败仍 pending → NEXT_DAY 逐日校验
-        pending_transactions 失败 → break，router 统一 rollback。
-        基金不在持仓快照中，故 price_data 预校验不拦。
-        """
+        """到期 pending 调仓阻断后续日，router 回滚整个重算事务。"""
         port = create_portfolio(test_db, code="ATOM_MID", status="active")
         create_product(test_db, code="ATOMY.OF", market="CN_OTC",
                        product_type="OEF", asset_class_code="ASSET_STOCK")
@@ -274,8 +281,8 @@ class TestRecalculateAtomicity:
             trade_date=self.D0, confirm_date=self.NEXT_DAY,
             status="pending",
         )
-        ids_before = self._snapshot_ids(test_db, port.code)
-        assert len(ids_before) == 2
+        state_before = capture_portfolio_state(test_db, port.code)
+        assert len(state_before["portfolio_value_snapshot"]) == 2
 
         resp = client.post(
             "/api/snapshots/recalculate",
@@ -290,9 +297,7 @@ class TestRecalculateAtomicity:
         data = resp.json()
         assert data["results"][0]["errors"], "NEXT_DAY 应因 pending 交易校验失败"
 
-        # 整体回滚：D0 的重建也被撤销，原快照行（同 id）完整复原
-        test_db.expire_all()
-        assert self._snapshot_ids(test_db, port.code) == ids_before
+        assert capture_portfolio_state(test_db, port.code) == state_before
 
     def test_success_recalculate_commits(self, client, admin_headers, test_db):
         """无失败的重算 → 统一 commit，快照重建落库（新行 id）
@@ -328,3 +333,138 @@ class TestRecalculateAtomicity:
         assert len(ids_after) == 3
         assert baseline_id in ids_after, "区间外基线快照不受影响"
         assert set(ids_after) != set(ids_before), "重建应产生新快照行并已提交"
+
+
+REBUILD_END = date(2025, 6, 10)
+
+
+def _setup_dependent_history(db, code):
+    _setup_real_history(db, code, "ATOM538_INV")
+    assert snapshot_service.generate_daily_snapshots(db, code, EX_DAY)["success"]
+    db.flush()
+    sub = subscription_service.create_subscription(
+        db, portfolio_code=code, investor_code="ATOM538_INV", platform_code="MYCF",
+        sub_type="subscribe", apply_date=EX_DAY, amount=Decimal("200.00"),
+    )
+    subscription_service.confirm_single_subscription(db, sub)
+    event = create_share_change_event(
+        db, portfolio_code=code, product_code=FUND, market="CN_OTC",
+        event_type="share_split", entitlement_date=EX_DAY, ex_date=REBUILD_END,
+        ratio=Decimal("2"),
+    )
+    db.flush()
+    confirm_share_change_event(db, event)
+    db.flush()
+    _ensure_price(db, REBUILD_END)
+    assert snapshot_service.generate_daily_snapshots(db, code, REBUILD_END)["success"]
+    db.commit()
+    return sub.id, event.id
+
+
+class TestCompleteBusinessAtomicity:
+    @pytest.mark.parametrize("autoflush", [True, False])
+    def test_second_day_failure_restores_all_business_fields(
+        self, client, admin_headers, test_db, monkeypatch, autoflush,
+    ):
+        code = "ATOM538_REBUILD"
+        _setup_dependent_history(test_db, code)
+        before = capture_portfolio_state(test_db, code)
+        original = snapshot_service._generate_investor_holding
+        visited = []
+        intermediate = []
+        monkeypatch.setattr(test_db, "autoflush", autoflush)
+
+        def fail_after_values(db, portfolio_code, target_date, value_snapshot):
+            visited.append(target_date)
+            if target_date == REBUILD_END:
+                db.flush()
+                intermediate.append(capture_portfolio_state(db, portfolio_code))
+                raise BusinessError("POSITION_NOT_FOUND", "injected rebuild failure")
+            return original(db, portfolio_code, target_date, value_snapshot)
+
+        monkeypatch.setattr(snapshot_service, "_generate_investor_holding", fail_after_values)
+        response = client.post(
+            "/api/snapshots/recalculate",
+            json={"portfolio_code": code, "start_date": EX_DAY.isoformat(),
+                  "end_date": REBUILD_END.isoformat()},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()["results"][0]
+        assert result["processed_dates"] == [EX_DAY.isoformat()]
+        assert result["errors"][0]["code"] == "POSITION_NOT_FOUND"
+        assert visited == [EX_DAY, REBUILD_END]
+        changed = intermediate[0]
+        for table in ("portfolio_position", "portfolio_value_snapshot", "investor_holding"):
+            assert any(row["snapshot_date"] == EX_DAY for row in changed[table])
+        for table in ("portfolio_position", "portfolio_value_snapshot"):
+            assert any(row["snapshot_date"] == REBUILD_END for row in changed[table])
+        assert not any(row["snapshot_date"] == REBUILD_END for row in changed["investor_holding"])
+        assert capture_portfolio_state(test_db, code) == before
+
+    @pytest.mark.parametrize("bulk", [False, True], ids=["single", "bulk-checkpoint"])
+    def test_cascade_failure_restores_rows_and_children(
+        self, client, admin_headers, test_db, monkeypatch, bulk,
+    ):
+        code = "ATOM538_CASCADE"
+        sub_id, event_id = _setup_dependent_history(test_db, code)
+        before = capture_portfolio_state(test_db, code)
+        original = snapshot_service._cascade_unconfirm_share_change_events
+        intermediate = []
+        monkeypatch.setattr(test_db, "autoflush", False)
+
+        def fail_after_cascade(db, portfolio_code, target_date):
+            result = original(db, portfolio_code, target_date)
+            if target_date == EX_DAY:
+                db.flush()
+                intermediate.append(capture_portfolio_state(db, portfolio_code))
+                raise BusinessError("SNAPSHOT_DEPENDENCY", "injected cascade failure")
+            return result
+
+        monkeypatch.setattr(
+            snapshot_service, "_cascade_unconfirm_share_change_events", fail_after_cascade,
+        )
+        suffix = f"bulk/{EX_DAY}" if bulk else str(EX_DAY)
+        response = client.delete(
+            f"/api/snapshots/{code}/{suffix}", params={"confirm": True}, headers=admin_headers,
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["error"] == "SNAPSHOT_DEPENDENCY"
+        assert len(intermediate) == 1
+        changed = intermediate[0]
+        sub = next(row for row in changed["subscription"] if row["id"] == sub_id)
+        assert sub["status"] == "pending" and sub["unit_price"] is None
+        assert not any(row["transfer_group"] == f"sub_{sub_id}" for row in changed["trade"])
+        parent = next(row for row in changed["share_change_event"] if row["id"] == event_id)
+        assert parent["status"] == "pending" and parent["entitlement_shares"] is None
+        assert any(row["parent_event_id"] == event_id for row in before["share_change_event"])
+        assert not any(row["parent_event_id"] == event_id for row in changed["share_change_event"])
+        expected = deepcopy(before)
+        if bulk:
+            for table in ("portfolio_position", "portfolio_value_snapshot", "investor_holding"):
+                expected[table] = [row for row in expected[table] if row["snapshot_date"] != REBUILD_END]
+        assert capture_portfolio_state(test_db, code) == expected
+
+    @pytest.mark.parametrize("model, field, value", [
+        (PortfolioPosition, "market_value", Decimal("999.1111")),
+        (PortfolioValueSnapshot, "in_transit_total", Decimal("123.4567")),
+        (InvestorHolding, "cost_per_share", Decimal("1.2345")),
+        (Subscription, "amount", Decimal("222.22")),
+        (Trade, "actual_amount", Decimal("333.33")),
+        (ShareChangeEvent, "entitlement_shares", Decimal("444.44")),
+        (Portfolio, "started_at", datetime(2025, 6, 4)),
+    ])
+    def test_state_detects_changed_fields_with_unchanged_ids(self, test_db, model, field, value):
+        code = "ATOM538_FIELDS"
+        _setup_dependent_history(test_db, code)
+        before = capture_portfolio_state(test_db, code)
+        table = model.__table__
+        row = before[table.name][0]
+        assert set(row) == set(table.columns.keys())
+        key = list(table.primary_key.columns)[0]
+        test_db.execute(table.update().where(key == row[key.name]).values({field: value}))
+        after = capture_portfolio_state(test_db, code)
+        assert [r[key.name] for r in after[table.name]] == [r[key.name] for r in before[table.name]]
+        assert after[table.name][0][field] == value
+        assert row[field] != value
+        assert after != before
