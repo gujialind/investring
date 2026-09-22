@@ -23,7 +23,7 @@
 
 * **领域异常统一**：service 抛 `app/services/exceptions.py::BusinessError`（携 `code`/`message`/`http_status`/`details`）；`main.py` 全局 handler 映射为 `JSONResponse{"detail": {"error": code, "message": message}}`（保持前端契约；默认 422、重复创建类 400、NOT\_FOUND 404）。service 内**禁止** import/抛 `HTTPException`。
 
-守门见 [test_service_no_commit.py](tests/unit/test_service_no_commit.py)：递归 AST 检查服务的 HTTPException 依赖（含别名、模块限定和嵌套导入）；既有普通 service 动态用例同时禁止注入会话 commit/rollback，保留 savepoint。后者不是全服务 Session 所有权分析，不覆盖任务投递入口。
+守门见 [test_service_no_commit.py](tests/unit/test_service_no_commit.py)：递归 AST 检查服务的 HTTPException 依赖（含别名、模块限定和嵌套导入）；既有普通 service 动态用例同时禁止注入会话 commit/rollback，保留 savepoint。**任务投递入口**（`submit_price_sync_job`、`submit_snapshot_recalc_job`）方向相反——它**必须** commit（后台线程另开会话按 job_id 取任务，只 flush 会丢任务），正因如此一律自持 `SessionLocal`、**不接受注入会话**（注入形态下的 commit 会连带提交调用方未提交的写入且 rollback 撤不回，#592 方案 A）；`test_service_no_commit.py::TestTaskSubmissionSessionOwnership` 同时钉住签名（不得重新出现 db/session 形参）、跨会话可见性与投递失败不留 pending 孤儿三条。
 
 ### 1.2 路由与 API 前缀
 

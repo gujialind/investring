@@ -8,19 +8,30 @@
 # - task_runner.cleanup_old_logs
 # - trade_service.calculate_confirm_preview（纯计算，不修改 trade，issue #65）
 # 方式：monkeypatch 注入会话的 commit/rollback，保留 flush 与 savepoint 操作。
+# 另守任务投递入口的反向约定（#592）：submit_* 不得接受注入会话，必须自持
+# SessionLocal 并先行 commit（后台线程凭 job_id 跨会话查任务）。
 # ============================================================================
 
 import ast
+import inspect
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from textwrap import dedent
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models import PortfolioValueSnapshot, PriceRecord, TradingCalendar
+from app.models import (
+    Investor,
+    PortfolioValueSnapshot,
+    PriceRecord,
+    SyncJob,
+    TradingCalendar,
+)
+from app.services.market_data_service import ConflictError, submit_price_sync_job
+from app.services.snapshot_recalc_job import submit_snapshot_recalc_job
 from tests.factories import (
     create_portfolio,
     create_position_snapshot,
@@ -29,6 +40,7 @@ from tests.factories import (
     create_trade,
     create_price_record,
 )
+from tests.session_helpers import patch_non_closing_session_local
 
 
 D0 = date(2025, 6, 6)       # 周五（conftest 日历工作日为交易日）
@@ -65,6 +77,118 @@ class TestInjectedSessionBoundaryGuard:
         with Session() as owned:
             owned.commit()
             owned.rollback()
+
+
+_SUBMIT_ENTRIES = [submit_price_sync_job, submit_snapshot_recalc_job]
+
+
+class TestTaskSubmissionSessionOwnership:
+    """任务投递入口（#592 方案 A）：自持 SessionLocal，绝不接受注入会话。
+
+    与其余「service 不 commit」守卫方向相反——投递入口**必须** commit（后台线程
+    另开会话按 job_id 取任务，只 flush 则线程查不到、任务丢失）；正因它必 commit，
+    才不得借用调用方的会话。此处同时钉死该结构性事实与两条实证过的失败形态。
+    """
+
+    @pytest.mark.parametrize("func", _SUBMIT_ENTRIES, ids=lambda f: f.__name__)
+    def test_signatures_reject_injected_session(self, func):
+        """签名守卫：双路径（注入/自持）不得回归——形参里不能再出现 db/session。"""
+        params = inspect.signature(func).parameters
+        for name in ("db", "session"):
+            assert name not in params, (
+                f"{func.__name__} 重新接受注入会话（形参 {name}）：投递入口的 commit "
+                f"会连带提交调用方未提交的写入（#592）"
+            )
+
+    def test_submitted_job_is_visible_to_independent_session(self, test_db):
+        """交接契约：submit 必须把 job 提交到**其他会话可读见**的持久状态。
+
+        用真实自持会话（非 test_db）——这正是后台线程的执行形态。本用例会留下
+        已提交行（test_db 的 SAVEPOINT 回滚撤不回独立会话的 commit），故必须自清理。
+        """
+        from app.database import SessionLocal
+
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            job_id = submit_price_sync_job({"scope": "all"}, triggered_by="manual")
+
+        try:
+            probe = SessionLocal()
+            try:
+                job = probe.query(SyncJob).filter(SyncJob.id == job_id).first()
+                assert job is not None, "job 未持久化：后台线程将查不到任务"
+                assert job.status == "pending"
+            finally:
+                probe.close()
+        finally:
+            # 自持会话的 commit 逃逸 test_db 回滚，显式清行避免污染同会话后续用例
+            cleanup = SessionLocal()
+            try:
+                cleanup.query(SyncJob).filter(SyncJob.id == job_id).delete()
+                cleanup.commit()
+            finally:
+                cleanup.close()
+
+    def test_caller_uncommitted_writes_are_not_swept_by_submit(self, test_db):
+        """危害反转实证（#592 的核心）：自持会话的 commit 绝不连带提交调用方写入。
+
+        旧注入形态下 submit 直接在 test_db 上 commit，调用方未提交的 Investor 被
+        一起提交、随后 rollback 也撤不回。方案 A 后必须反向成立：test_db 回滚后
+        Investor 消失。用真实自持会话（同后台线程形态），造出的 job 行须自清理。
+        """
+        from app.database import SessionLocal
+
+        investor = Investor(
+            code="NC592", name="未提交投资人", role="viewer", password_hash="x"
+        )
+        test_db.add(investor)
+
+        try:
+            with patch("app.services.market_data_service._get_executor") as mock_exec:
+                mock_exec.return_value = MagicMock()
+                job_id = submit_price_sync_job({"scope": "all"}, triggered_by="manual")
+
+            test_db.rollback()
+            assert test_db.query(Investor).filter(Investor.code == "NC592").first() is None
+        finally:
+            cleanup = SessionLocal()
+            try:
+                cleanup.query(SyncJob).filter(
+                    SyncJob.job_type.in_(
+                        ["price_history_sync", "price_incremental_sync"]
+                    )
+                ).delete(synchronize_session=False)
+                cleanup.commit()
+            finally:
+                cleanup.close()
+
+    def test_submission_failure_marks_job_failed_not_pending(self, test_db, monkeypatch):
+        """投递抛错 → job 终态 failed，不得留下永久占锁的 pending 孤儿。"""
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value.submit.side_effect = RuntimeError("线程池已关闭")
+            with pytest.raises(RuntimeError, match="线程池已关闭"):
+                submit_price_sync_job({"scope": "all"}, triggered_by="manual")
+
+        job = test_db.query(SyncJob).order_by(SyncJob.id.desc()).first()
+        assert job.status == "failed"
+        assert job.error_message and "任务投递失败" in job.error_message
+        assert job.finished_at is not None
+
+        # 关键回归：failed 终态不再阻塞后续提交（pending 孤儿会永久 409）
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            second_id = submit_price_sync_job({"scope": "all"}, triggered_by="manual")
+        assert second_id > job.id
+
+    def test_conflict_lock_counts_pending_rows(self, test_db, monkeypatch):
+        """单 active 锁对 pending 生效——这正是孤儿会永久 409 的机制，钉死语义。"""
+        patch_non_closing_session_local(monkeypatch, test_db)
+        test_db.add(SyncJob(job_type="price_history_sync", status="pending",
+                            triggered_by="manual"))
+        test_db.commit()
+        with pytest.raises(ConflictError, match="已有价格同步任务在运行中"):
+            submit_price_sync_job({"scope": "all"}, triggered_by="manual")
 
 
 def _setup_cash_snapshot(db, portfolio_code: str, snapshot_date: date, amount: float = 10000.0):

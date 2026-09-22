@@ -5,7 +5,8 @@
 - submit_snapshot_recalc_job：落 job 记录（job_type=snapshot_recalc）并提交后台线程，
   立即返回 job_id，客户端经 GET /api/sync-jobs/{id} 轮询终态，消除 HTTP 超时后
   「已提交成功 or 已整体回滚」不可判定的问题。
-- 后台执行体自持 SessionLocal（backend/AGENTS.md「分层目录与职责」节的分层例外），保持 recalculate_snapshots
+- 投递入口与后台执行体**均自持 SessionLocal**（backend/AGENTS.md「分层目录与职责」节的分层例外，
+  #592 起投递入口不再接受注入会话），执行体保持 recalculate_snapshots
   的单一事务语义：无 errors 统一 commit、任一日失败整体 rollback。
 
 锁语义：snapshot_recalc 与价格同步任务互不阻塞，各自单 active 锁。
@@ -29,22 +30,22 @@ logger = logging.getLogger(__name__)
 JOB_TYPE = "snapshot_recalc"
 
 
-def submit_snapshot_recalc_job(
-    params: dict,
-    triggered_by: str = "manual",
-    db: Optional[Session] = None,
-) -> int:
+def submit_snapshot_recalc_job(params: dict, triggered_by: str = "manual") -> int:
     """提交快照重算后台任务，立即返回 job_id。
 
     params: {portfolio_code?: str, start_date: "YYYY-MM-DD", end_date: "YYYY-MM-DD"}
     单 active 锁（仅同类型）：已有 pending/running 的 snapshot_recalc job 抛 ConflictError。
+    自持 SessionLocal、不接受注入会话，理由同 submit_price_sync_job（#592 方案 A）。
     """
     from app.database import SessionLocal
     from app.models.sync_job import SyncJob
 
-    own_db = db is None
-    if own_db:
-        db = SessionLocal()
+    # submit 不复制 contextvars，且线程池与价格同步共用（线程复用），故显式传参；
+    # 只传 request_id——后台执行体无请求主体，审计侧按约定落 SYSTEM 哨兵。
+    # 须在请求线程内读取，且早于投递。
+    request_id = get_request_id()
+
+    db = SessionLocal()
     try:
         active = db.query(SyncJob).filter(
             SyncJob.job_type == JOB_TYPE,
@@ -63,15 +64,19 @@ def submit_snapshot_recalc_job(
         db.commit()
         db.refresh(job)
         job_id = job.id
-    finally:
-        if own_db:
-            db.close()
 
-    # submit 不复制 contextvars，且线程池与价格同步共用（线程复用），故显式传参；
-    # 只传 request_id——后台执行体无请求主体，审计侧按约定落 SYSTEM 哨兵
-    request_id = get_request_id()
-    _get_executor().submit(_run_snapshot_recalc_job_impl, job_id, request_id)
-    return job_id
+        # 投递失败不得留下 pending 孤儿，理由同 submit_price_sync_job（#592）
+        try:
+            _get_executor().submit(_run_snapshot_recalc_job_impl, job_id, request_id)
+        except Exception as e:
+            job.status = "failed"
+            job.error_message = f"任务投递失败: {e}"[:1000]
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            raise
+        return job_id
+    finally:
+        db.close()
 
 
 def _run_snapshot_recalc_job_impl(

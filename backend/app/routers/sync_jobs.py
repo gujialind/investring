@@ -14,7 +14,6 @@ router = APIRouter()
 @router.post("/price")
 def submit_price_sync(
     payload: PriceSyncRequest,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
     try:
@@ -26,7 +25,8 @@ def submit_price_sync(
             "products": payload.products or [],
             "data_source": payload.data_source,
         }
-        job_id = submit_price_sync_job(params, triggered_by="manual", db=db)
+        # 任务记录的事务归投递入口自持会话（#592），本端点不注入请求会话
+        job_id = submit_price_sync_job(params, triggered_by="manual")
         return {"job_id": job_id, "status": "pending", "message": "任务已提交"}
     except ConflictError:
         raise HTTPException(status_code=409, detail="已有价格同步任务在运行中")

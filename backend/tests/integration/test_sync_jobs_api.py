@@ -6,6 +6,9 @@ sync_jobs API 集成测试（P5.5）
 - 已有 running job 时 POST → 409 Conflict
 - GET /api/sync-jobs/{id} → 返回状态
 - GET /api/sync-jobs/{id}/details → 返回明细
+
+投递入口自持会话（#592）：提交类用例统一把 SessionLocal 重定向回 test_db，
+否则独立事务的提交逃逸 SAVEPOINT 回滚、且看不到 test_db 里预置的 running job。
 """
 import pytest
 from datetime import datetime
@@ -13,13 +16,15 @@ from unittest.mock import patch, MagicMock
 
 from app.models.sync_job import SyncJob
 from app.models.nav_sync_detail import NavSyncDetail
+from tests.session_helpers import patch_non_closing_session_local
 
 
 class TestSubmitPriceSync:
     """POST /api/sync-jobs/price"""
 
-    def test_submit_returns_job_id(self, client, admin_headers, test_db):
+    def test_submit_returns_job_id(self, client, admin_headers, test_db, monkeypatch):
         """提交任务返回 job_id"""
+        patch_non_closing_session_local(monkeypatch, test_db)
         with patch("app.services.market_data_service._get_executor") as mock_exec:
             mock_exec.return_value = MagicMock()
             response = client.post(
@@ -33,12 +38,13 @@ class TestSubmitPriceSync:
         assert isinstance(data["job_id"], int)
         assert data["status"] == "pending"
 
-    def test_conflict_when_running(self, client, admin_headers, test_db):
+    def test_conflict_when_running(self, client, admin_headers, test_db, monkeypatch):
         """已有 running job → 409"""
         job = SyncJob(job_type="price_history_sync", status="running", triggered_by="manual")
         test_db.add(job)
         test_db.commit()
 
+        patch_non_closing_session_local(monkeypatch, test_db)
         response = client.post(
             "/api/sync-jobs/price",
             json={"scope": "all"},

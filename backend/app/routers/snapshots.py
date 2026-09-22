@@ -153,6 +153,7 @@ def recalculate_async(
             )
 
     try:
+        # 任务记录的事务归投递入口自持会话（#592）；本端点的 db 只用于上面的只读前置校验
         job_id = submit_snapshot_recalc_job(
             params={
                 "portfolio_code": request.portfolio_code,
@@ -160,7 +161,6 @@ def recalculate_async(
                 "end_date": request.end_date.isoformat(),
             },
             triggered_by="manual",
-            db=db,
         )
     except ConflictError as e:
         raise HTTPException(

@@ -70,7 +70,7 @@ def init_scheduler():
     from app.services.market_data_service import recover_orphan_jobs
     recovered = recover_orphan_jobs()
     if recovered:
-        logger.info(f"恢复 {recovered} 个孤儿 running job -> interrupted")
+        logger.info(f"恢复 {recovered} 个孤儿 running/pending job -> interrupted")
 
 
 def _should_run_today(db, lock_name: str) -> bool:
