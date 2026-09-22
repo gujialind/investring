@@ -213,6 +213,52 @@ class TestPrevTradingDay:
         assert resp.json()["detail"]["error"] == "CALENDAR_NOT_SYNCED"
 
 
+class TestPartialExhaustionIsNow422:
+    """#591 契约收紧：部分耗尽（能走到中间日但凑不满 days）从 200 翻成 422。
+
+    旧 helper 会返回它走到的最后一个交易日（把「凑不满」当成功），现按 resolved_days
+    如实拒绝。端点 days 参数 ge=1，故只测 days≥1 的部分耗尽。
+    """
+
+    def _last_open_days(self, test_db, n):
+        rows = test_db.query(TradingCalendar.calendar_date).filter(
+            TradingCalendar.is_open == True
+        ).order_by(TradingCalendar.calendar_date.desc()).limit(n).all()
+        return [r[0] for r in rows]
+
+    def test_next_partial_exhaustion_is_422(self, client, viewer_headers, test_db):
+        _last, second = self._last_open_days(test_db, 2)[:2]
+        # 从倒数第二个开市日要 T+3，但日历只剩最后一个 → 部分耗尽
+        resp = client.get(
+            "/api/trading-calendar/next",
+            params={"from_date": second.isoformat(), "days": 3},
+            headers=viewer_headers,
+        )
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "CALENDAR_NOT_SYNCED"
+        assert detail["details"]["requested_days"] == 3
+        assert detail["details"]["resolved_days"] == 1
+        assert detail["details"]["direction"] == "next"
+
+    def test_prev_partial_exhaustion_is_422(self, client, viewer_headers, test_db):
+        _first, second = (
+            test_db.query(TradingCalendar.calendar_date)
+            .filter(TradingCalendar.is_open == True)
+            .order_by(TradingCalendar.calendar_date.asc()).limit(2).all()
+        )
+        resp = client.get(
+            "/api/trading-calendar/prev",
+            params={"from_date": second[0].isoformat(), "days": 3},
+            headers=viewer_headers,
+        )
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "CALENDAR_NOT_SYNCED"
+        assert detail["details"]["resolved_days"] == 1
+        assert detail["details"]["direction"] == "prev"
+
+
 class TestIsOpen:
     """GET /api/trading-calendar/is-open"""
 

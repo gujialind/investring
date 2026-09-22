@@ -24,11 +24,13 @@ from app.services.snapshot_service import (
     _check_pending_transactions,
     _check_share_change_events,
     _prev_trading_day,
+    _validate_snapshot_continuity,
     _generate_portfolio_value_snapshot,
     _generate_portfolio_position,
     _generate_investor_holding,
     _cascade_unconfirm_share_change_events,
 )
+from app.services.exceptions import BusinessError
 from app.models import (
     Portfolio, TradingCalendar, Trade, Subscription,
     PortfolioPosition, PortfolioValueSnapshot, Product, Investor,
@@ -120,6 +122,61 @@ class TestPrevTradingDay:
         ensure_trading_day(test_db, date(2025, 3, 3), is_open=True)  # 周一
         result = _prev_trading_day(test_db, date(2025, 3, 3), 1)
         assert result == date(2025, 2, 28)
+
+    def test_prev_trading_day_offset_zero_returns_target(self, test_db):
+        """offset<=0（T+0 产品）不经日历，直接返回入参。"""
+        assert _prev_trading_day(test_db, date(2025, 3, 3), 0) == date(2025, 3, 3)
+
+    def test_prev_trading_day_insufficient_history_raises(self, test_db):
+        """#591：无足够前序交易日 → 抛 CALENDAR_NOT_SYNCED，绝不回退 target_date - offset。"""
+        # 事务内清空整表再受控重建（不用 ensure_trading_day——它会 commit、逃逸 SAVEPOINT 隔离）
+        test_db.query(TradingCalendar).delete(synchronize_session=False)
+        test_db.add(TradingCalendar(calendar_date=date(2025, 3, 3), is_open=True, exchange="SSE"))
+        test_db.flush()
+        with pytest.raises(BusinessError) as ei:
+            _prev_trading_day(test_db, date(2025, 3, 3), 1)
+        err = ei.value
+        assert err.code == "CALENDAR_NOT_SYNCED"
+        # 关键反例：resolved_offset 如实为 0，绝不静默返回 target_date - 1 自然日
+        assert err.details["resolved_offset"] == 0
+        assert err.details["requested_offset"] == 1
+
+    def test_prev_trading_day_no_natural_day_substitution(self, test_db):
+        """跨周一要 T-2 但只有一天前序 → 抛错；被伪造的 target_date-2 绝不作为结果返回。"""
+        test_db.query(TradingCalendar).delete(synchronize_session=False)
+        test_db.add_all([
+            TradingCalendar(calendar_date=date(2025, 3, 3), is_open=True, exchange="SSE"),
+            TradingCalendar(calendar_date=date(2025, 3, 4), is_open=True, exchange="SSE"),
+        ])
+        test_db.flush()
+        with pytest.raises(BusinessError):
+            _prev_trading_day(test_db, date(2025, 3, 4), 2)
+
+
+class TestContinuityCalendarExhaustion:
+    """#591：连续性校验撞上「最新快照日之后已无交易日」→ CALENDAR_NOT_SYNCED。
+
+    旧回退返回入参本身，会产出**指名错误期望日**的 SNAPSHOT_NOT_CONTINUOUS 文案。
+    经 generate_daily_snapshots 走不到这个分支（target 非交易日会先被
+    _validate_trading_day 拒掉），故直接测该 helper。
+    """
+
+    def test_no_next_trading_day_raises_calendar_not_synced(self, test_db):
+        create_portfolio(test_db, code="CONT_EXH", status="active")
+        last_open = date(2025, 3, 3)
+        create_value_snapshot(test_db, "CONT_EXH", last_open,
+                              total_value=1.0, total_shares=1.0, unit_price=1.0)
+        # 事务内裁掉 last_open 之后的一切日历行 → 最新快照日之后无交易日
+        test_db.query(TradingCalendar).filter(
+            TradingCalendar.calendar_date > last_open
+        ).delete(synchronize_session=False)
+        test_db.flush()
+
+        with pytest.raises(BusinessError) as ei:
+            _validate_snapshot_continuity(test_db, "CONT_EXH", date(2025, 3, 10))
+        assert ei.value.code == "CALENDAR_NOT_SYNCED"
+        assert "最新快照日" in ei.value.message
+        assert "SNAPSHOT_NOT_CONTINUOUS" != ei.value.code  # 不再是误导性的连续性问题
 
 
 class TestCheckPendingTransactions:

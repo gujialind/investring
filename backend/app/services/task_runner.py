@@ -238,7 +238,9 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     """
     from app.services.snapshot_service import generate_daily_snapshots, auto_confirm_after_snapshot
     from app.services.exceptions import BusinessError
-    from app.services.trading_utils import is_trading_day, get_next_trading_day, get_prev_trading_day
+    from app.services.trading_utils import (
+        is_trading_day, try_get_next_trading_day, try_get_prev_trading_day,
+    )
     from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
     from sqlalchemy import func
 
@@ -249,8 +251,16 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
         "auto_confirm_failed": [],
     }
 
-    end_date = target_date if is_trading_day(db, target_date) else get_prev_trading_day(db, target_date, days=1)
-    if not end_date:
+    # 调度回补把「日历到头」当合法控制流（#591）：用 try_* 显式探测，None 即无日可补。
+    # 抛错版会经 run_task 外抛把整个任务判 failed、跳过其余组合——逐日 checkpoint
+    # 退化成全有全无，正是本处要保住的东西。
+    end_date = target_date if is_trading_day(db, target_date) else try_get_prev_trading_day(db, target_date, days=1)
+    if end_date is None:
+        outcome["warnings"].append({
+            "type": "calendar_exhausted",
+            "date": target_date.isoformat(),
+            "message": f"交易日历缺少 {target_date} 之前的交易日，本轮快照回补跳过",
+        })
         return outcome
 
     active_portfolios = db.query(Portfolio).filter(
@@ -261,8 +271,22 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
         latest_snapshot = db.query(func.max(PortfolioValueSnapshot.snapshot_date)).filter(
             PortfolioValueSnapshot.portfolio_code == portfolio.code
         ).scalar()
-        current = get_next_trading_day(db, latest_snapshot, days=1) if latest_snapshot else end_date
-        if current and current <= end_date:
+        current = (
+            try_get_next_trading_day(db, latest_snapshot, days=1)
+            if latest_snapshot else end_date
+        )
+        if current is None:
+            # 该组合的最新快照日已贴着日历末尾：跳过本组合（保住其余组合），记告警。
+            outcome["warnings"].append({
+                "type": "calendar_exhausted",
+                "date": target_date.isoformat(),
+                "portfolio_code": portfolio.code,
+                "message": (
+                    f"组合 {portfolio.code} 最新快照日 {latest_snapshot} 之后无交易日，已跳过"
+                ),
+            })
+            continue
+        if current <= end_date:
             outcome["portfolios_processed"] += 1
         while current and current <= end_date:
             try:
@@ -282,8 +306,8 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
                     f"组合 {portfolio.code} 于 {current} 快照生成失败: code={code}, error={str(e)}"
                 )
                 break
-            nxt = get_next_trading_day(db, current, days=1)
-            if not nxt or nxt == current:
+            nxt = try_get_next_trading_day(db, current, days=1)
+            if nxt is None:
                 break
             current = nxt
     return outcome

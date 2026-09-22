@@ -36,10 +36,8 @@ def get_next_trading_day(
     current_user=Depends(get_current_user),
 ):
     """查询 from_date 之后第 days 个交易日"""
+    # 日历不足由 helper 抛 CALENDAR_NOT_SYNCED（422 + details），不再在 router 判回退哨兵
     result = trading_utils.get_next_trading_day(db, from_date, days)
-    # days>=1 时成功结果必严格晚于 from_date；等于 from_date 说明日历数据缺失
-    if result is None or result == from_date:
-        raise BusinessError(*_CALENDAR_NOT_SYNCED, http_status=422)
     return TradingDayResponse(from_date=from_date, trading_day=result)
 
 
@@ -51,9 +49,8 @@ def get_prev_trading_day(
     current_user=Depends(get_current_user),
 ):
     """查询 from_date 之前第 days 个交易日"""
+    # 日历不足由 helper 抛 CALENDAR_NOT_SYNCED（422 + details）
     result = trading_utils.get_prev_trading_day(db, from_date, days)
-    if result is None or result == from_date:
-        raise BusinessError(*_CALENDAR_NOT_SYNCED, http_status=422)
     return TradingDayResponse(from_date=from_date, trading_day=result)
 
 

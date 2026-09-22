@@ -115,6 +115,17 @@ class TestSnapshotGenerateDerivation:
         assert message == "warnings: negative_cash"
         assert (total, success, failed) == (1, 1, 0)
 
+    def test_calendar_exhausted_warning_is_success_not_failed(self):
+        """#591：组合贴日历末尾被跳过 → 只落 warnings，任务记 success（不是 partial/failed）。"""
+        status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 0,
+            "warnings": [{"type": "calendar_exhausted", "portfolio_code": "P1"}],
+            "auto_confirm_failed": [],
+        })
+        assert status == "success"
+        assert failed == 0
+        assert "calendar_exhausted" in message
+
     def test_auto_confirm_failed_is_partial_success_with_codes(self):
         """#305：有 auto_confirm_failed → partial_success，error_message 含逐条 code: error"""
         status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
