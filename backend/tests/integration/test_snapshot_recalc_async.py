@@ -64,6 +64,26 @@ class TestSubmit:
             job_id = submit_price_sync_job({"scope": "all"})
         assert job_id is not None
 
+    def test_submission_failure_marks_job_failed_not_pending(self, test_db, monkeypatch):
+        """投递抛错 → job 终态 failed，不留永久占锁的 pending 孤儿（#592，同价格同步）"""
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.snapshot_recalc_job._get_executor") as mock_exec:
+            mock_exec.return_value.submit.side_effect = RuntimeError("线程池已关闭")
+            with pytest.raises(RuntimeError, match="线程池已关闭"):
+                submit_snapshot_recalc_job(PARAMS)
+
+        job = test_db.query(SyncJob).filter(
+            SyncJob.job_type == "snapshot_recalc"
+        ).order_by(SyncJob.id.desc()).first()
+        assert job.status == "failed"
+        assert job.error_message and "任务投递失败" in job.error_message
+        assert job.finished_at is not None
+
+        # failed 终态不再阻塞后续提交（pending 孤儿会永久 409）
+        with _mock_executor():
+            second_id = submit_snapshot_recalc_job(PARAMS)
+        assert second_id > job.id
+
 
 class TestRunImpl:
     """后台执行体终态（注入 test_db，mock recalculate_snapshots）"""
