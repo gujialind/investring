@@ -56,6 +56,28 @@ def test_policy_invariants():
     assert gate.read_json('{"a": [1, null, true]}') == {"a": [1, None, True]}
 
 
+def test_exact_policy_paths_are_tracked():
+    tracked = set(os.fsdecode(subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)).split("\0"))
+    exact = {path for rule in POLICY["rules"] if rule["kind"] == "exact" for path in rule["paths"]}
+    assert not (missing := exact - tracked), f"untracked exact policy paths: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("stderr,detail", [
+    (b"  fatal: bad object probe\n", "fatal: bad object probe"),
+    (b"fatal: \xff\n", "fatal: \ufffd"),
+    (b"x" * 201, "x" * 200),
+    (b"", ""),
+])
+def test_git_failure_keeps_bounded_stderr(tmp_path, monkeypatch, stderr, detail):
+    def fail_git(args, **kwargs):
+        return subprocess.CompletedProcess(args, 128, stdout=b"", stderr=stderr)
+
+    monkeypatch.setattr(gate.subprocess, "run", fail_git)
+    with pytest.raises(gate.GateError) as exc:
+        gate._git(tmp_path, "diff", "--name-only")
+    assert str(exc.value) == f"git diff failed (exit 128): {detail}"
+
+
 @pytest.mark.parametrize("text,error", [
     ("{", "invalid JSON"), ('{"x": 1, "x": 2}', "duplicate JSON key: x"),
     ('{"outer": {"result": "success", "result": "failure"}}', "duplicate JSON key: result"),
@@ -96,7 +118,7 @@ def test_invalid_policy(path, value, error):
 @pytest.mark.parametrize("path,scopes", [
     ("README.md", ""), ("backend/x.py", "backend"), ("ir-cli/x.py", "cli"),
     ("scripts/x.py", "scripts"), ("frontend/e2e/x.ts", "frontend e2e_morph"),
-    ("unknown.conf", FULL),
+    ("backend/openapi.json", "backend frontend"), ("unknown.conf", FULL),
 ])
 @pytest.mark.parametrize("job", JOBS)
 @pytest.mark.parametrize("result", ["success", "skipped", "failure", "cancelled"])
@@ -199,6 +221,7 @@ def assert_exit(proc, code, message=""):
     ({"backend/deleted.py": "x"}, {}, ["backend/deleted.py"], "backend"),
     ({}, {"frontend/e2e/a\nunknown.py": "x"}, ["frontend/e2e/a\nunknown.py"], "frontend e2e_morph"),
     ({}, {"backend/x.py": "x", "unknown.conf": "x"}, ["backend/x.py", "unknown.conf"], FULL),
+    ({}, {"backend/openapi.json": "{}"}, ["backend/openapi.json"], "backend frontend"),
     ({}, {"README.md": "x"}, ["README.md"], ""),
     ({}, {}, [], FULL),
 ])

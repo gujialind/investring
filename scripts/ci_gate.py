@@ -115,7 +115,8 @@ def scope_outputs(reasons):
 def _git(root, *args):
     proc = subprocess.run(["git", *args], cwd=root, capture_output=True)
     if proc.returncode:
-        raise GateError(f"git {args[0]} failed (exit {proc.returncode})")
+        detail = proc.stderr.decode(errors="replace").strip()[:200]
+        raise GateError(f"git {args[0]} failed (exit {proc.returncode}): {detail}")
     return proc.stdout
 
 
