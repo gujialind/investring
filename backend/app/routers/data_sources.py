@@ -7,6 +7,7 @@ from app.database import get_db
 from app.schemas.data_source import DataSourceResponse, DataSourceUpdate
 from app.dependencies import get_current_user, get_current_admin
 from app.models.product import Product
+from app.services.null_guard import reject_explicit_nulls
 
 router = APIRouter()
 
@@ -87,35 +88,47 @@ def update_data_source(
     支持更新：
     - tushare: 更新 TUSHARE_TOKEN
     - akshare: 更新 AKSHARE_ENABLED
+
+    显式 null 一律 422 拒绝（#579，与 #573 同口径）；未提供或空值零写入，
+    message 如实报「未变更」，不再谎报「已更新」。
     """
-    env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
-    
-    if name == "tushare":
-        # 更新 Tushare Token
-        if data_source.api_key:
-            _update_env_file(env_file, "TUSHARE_TOKEN", data_source.api_key)
-            os.environ["TUSHARE_TOKEN"] = data_source.api_key
-        
-        return {
-            "message": "Tushare 配置已更新",
-            "name": "tushare",
-            "is_enabled": bool(data_source.api_key or os.environ.get("TUSHARE_TOKEN")),
-        }
-    
-    elif name == "akshare":
-        # 更新 AkShare 启用状态
-        if data_source.is_enabled is not None:
-            _update_env_file(env_file, "AKSHARE_ENABLED", str(data_source.is_enabled).lower())
-            os.environ["AKSHARE_ENABLED"] = str(data_source.is_enabled).lower()
-        
-        return {
-            "message": "AkShare 配置已更新",
-            "name": "akshare",
-            "is_enabled": data_source.is_enabled,
-        }
-    
-    else:
+    if name not in ("tushare", "akshare"):
+        # 404 专用码先于通用收口（#576 评审 🟡3 同款教训：不让 INVALID_PARAM 抢占）
         raise HTTPException(status_code=404, detail=f"未知的数据源: {name}")
+
+    updates = data_source.dict(exclude_unset=True)
+    reject_explicit_nulls(updates)
+
+    env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+
+    if name == "tushare":
+        # 更新 Tushare Token；未提供或空串 = 零写入（清空 token 不是已支持能力）
+        api_key = updates.get("api_key")
+        if api_key:
+            _update_env_file(env_file, "TUSHARE_TOKEN", api_key)
+            os.environ["TUSHARE_TOKEN"] = api_key
+            message = "Tushare 配置已更新"
+        else:
+            message = "api_key 未提供或为空，Tushare 配置未变更"
+        return {
+            "message": message,
+            "name": "tushare",
+            "is_enabled": bool(os.environ.get("TUSHARE_TOKEN")),
+        }
+
+    # akshare：更新启用状态；未提供 = 零写入
+    if "is_enabled" in updates:
+        value = str(updates["is_enabled"]).lower()
+        _update_env_file(env_file, "AKSHARE_ENABLED", value)
+        os.environ["AKSHARE_ENABLED"] = value
+        message = "AkShare 配置已更新"
+    else:
+        message = "is_enabled 未提供，AkShare 配置未变更"
+    return {
+        "message": message,
+        "name": "akshare",
+        "is_enabled": os.environ.get("AKSHARE_ENABLED", "true").lower() == "true",
+    }
 
 
 def _update_env_file(env_file: str, key: str, value: str) -> None:
