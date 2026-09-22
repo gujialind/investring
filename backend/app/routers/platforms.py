@@ -10,6 +10,7 @@ from app.schemas.platform import (
     PaginatedPlatformResponse,
 )
 from app.dependencies import get_current_user, get_current_admin
+from app.services.null_guard import reject_explicit_nulls
 
 router = APIRouter()
 
@@ -73,7 +74,12 @@ def update_platform(
     if not db_platform:
         raise HTTPException(status_code=404, detail="Platform not found")
 
-    for field, value in platform.dict(exclude_unset=True).items():
+    updates = platform.dict(exclude_unset=True)
+    # 显式 null 收口（#579 无悔子集，与 #573 同口径）：name 是 NOT NULL 列，
+    # 此前显式 null 直落 setattr → IntegrityError 500；platform_type 列可空且
+    # 响应 Optional，null = 清除类型是既有合法路径（investor.phone/email 同款），进 allow
+    reject_explicit_nulls(updates, allow={"platform_type"})
+    for field, value in updates.items():
         setattr(db_platform, field, value)
 
     db.commit()
