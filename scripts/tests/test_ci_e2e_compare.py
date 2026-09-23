@@ -1,5 +1,6 @@
 # ============================================================================
-# E2E 形态对比链路守门：判定体、豁免来源、needs 与 artifact 命名耦合（issue #490）
+# E2E 形态对比链路守门：判定体、豁免来源、needs、artifact 命名耦合（issue #490）
+# 与 flaky 汇总的 outcome 接线（issue #570）
 # ============================================================================
 # compare 系 job 是「纯测试重构 PR 假绿灯」的唯一防线（#410）：两侧各跑一遍全量 E2E，
 # 归一化成 TSV 后期望空 diff。而**判定本身写在 shell 里**——删掉收尾的 `exit 1`、把
@@ -288,9 +289,13 @@ def flaky_wiring_problems(stack_text: str, *, source: str) -> list[str]:
             "条件分支前没有 `ARGS=` 的默认值初始化——bash -e 下 `[ cond ] && VAR=x` "
             "在条件为假时会让该步以 rc=1 结束（e2e-stack.yml 该步注释）"
         )
-    if not any("--require-input" in line for line in run[cond[0]:]):
+    # 判「在分支内」而不是「出现在条件行之后」：把赋值挪到 `fi` 后面同样脱离了两档口径
+    # （变成恒生效），只按位置先后判会漏掉这种形态。找不到配对 `fi` 时退回「到末尾」。
+    branch_end = next((i for i in range(cond[0] + 1, len(run)) if run[i] == "fi"), len(run))
+    if not any("--require-input" in line for line in run[cond[0]:branch_end]):
         problems.append(
-            "`--require-input` 不在 success 分支内——E2E 成功却缺 JSON 产物时门禁不判红，"
+            f"`--require-input` 不在 success 分支内（`if … ${E2E_OUTCOME_ENV} … success` 与"
+            "配对的 `fi` 之间）——E2E 成功却缺 JSON 产物时门禁不判红，"
             "json reporter 的 wiring 断了也全绿（#491 的收口判据）"
         )
     if not any("e2e_flaky_summary.py" in line and "$ARGS" in line for line in run):
@@ -367,6 +372,33 @@ def compliant_capture_stack() -> str:
             "      - name: Upload Playwright report",
             "        continue-on-error: true",
             "        uses: actions/upload-artifact@v7",
+        ]
+    )
+
+
+def compliant_flaky_stack(step_id: str = "e2e_main") -> str:
+    """flaky 汇总接线的合规骨架（step 头缩进与真身一致：6 空格）。
+
+    `step_id` 可参数化是为了让「一致改名判绿 / 只改一处判红」这对反例跑在同一份底本上：
+    判据钉的是**来源**（outcome 取自主运行步当前的 id），不是某个具体名字。
+    """
+    return "\n".join(
+        [
+            f"      - name: {MAIN_RUN_STEP}",
+            f"        id: {step_id}",
+            "        if: inputs.mode == 'main'",
+            "        run: npx playwright test --retries=${{ inputs.retries }}",
+            f"      - name: {FLAKY_STEP}",
+            "        if: always() && inputs.mode == 'main'",
+            "        env:",
+            f"          {E2E_OUTCOME_ENV}: ${{{{ steps.{step_id}.outcome }}}}",
+            "        run: |",
+            '          ARGS=""',
+            f'          if [ "${E2E_OUTCOME_ENV}" = "success" ]; then',
+            '            ARGS="--require-input"',
+            "          fi",
+            '          python3 scripts/e2e_flaky_summary.py --input /tmp/e2e-flaky.json $ARGS'
+            ' >> "$GITHUB_STEP_SUMMARY"',
         ]
     )
 
@@ -485,6 +517,20 @@ class TestCaptureStructure:
         assert not problems, "e2e-stack.yml 的 capture 分支不再满足：" + "；".join(problems)
 
 
+class TestFlakyWiring:
+    """#570：flaky 汇总的 outcome 接线。
+
+    判据函数先于用例存在过一版（PR #615 审查 Blocker 1）：`flaky_wiring_problems` 全仓
+    零调用方，真身绿例与合成反例都没有——把 `id: e2e_main` 改名而不同步引用，全套测试
+    照绿、`--require-input` 两档口径静默失效，正是 #570 立项要防的形态。守门没被调用
+    就等于不存在，还会在台账上留下「已守住」的虚假信心。
+    """
+
+    def test_real_flaky_wiring_is_pinned(self, stack_text):
+        problems = flaky_wiring_problems(stack_text, source="e2e-stack.yml:e2e")
+        assert not problems, "e2e-stack.yml 的 flaky 汇总接线不再满足：" + "；".join(problems)
+
+
 # ============================================================================
 # 反例：守门本身必须会红（全部走合成文本，真身结构漂移时这组仍要能跑）
 # ============================================================================
@@ -575,3 +621,68 @@ class TestGuardIsDiscriminating:
     def test_compliant_capture_template_is_compliant(self):
         text = compliant_capture_stack()
         assert capture_problems(text, code_lines(text), "合成 capture") == []
+
+    # ---- flaky 汇总的 outcome 接线（#570）----
+
+    def test_compliant_flaky_template_is_compliant(self):
+        text = compliant_flaky_stack()
+        assert flaky_wiring_problems(text, source="合成 flaky") == []
+
+    def test_single_sited_step_id_rename_is_caught(self):
+        """只改主运行步 id、不同步 outcome 引用 → 必须点名（#570 的失效形态本体）"""
+        text = compliant_flaky_stack()
+        mutated = text.replace("        id: e2e_main\n", "        id: e2e_run_renamed\n")
+        assert mutated != text
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert len(problems) == 1, problems
+        assert E2E_OUTCOME_ENV in problems[0], problems
+
+    def test_consistent_step_id_rename_is_green(self):
+        """id 与引用一起改名判绿：钉来源不钉名字，否则守门会逼人保留旧 id"""
+        assert flaky_wiring_problems(compliant_flaky_stack("e2e_run"), source="合成 flaky") == []
+
+    def test_missing_step_id_is_caught(self):
+        mutated = compliant_flaky_stack().replace("        id: e2e_main\n", "")
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert problems and "id:" in problems[0], problems
+
+    def test_dropped_outcome_condition_is_caught(self):
+        """没有以 outcome 为判据的分支 → 两档口径整体不成立"""
+        mutated = compliant_flaky_stack().replace(
+            '          if [ "$E2E_OUTCOME" = "success" ]; then\n', ""
+        )
+        assert mutated != compliant_flaky_stack()
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert any(E2E_OUTCOME_ENV in p for p in problems), problems
+
+    def test_dropped_args_default_is_caught(self):
+        """少了 `ARGS=` 默认值初始化：bash -e 下条件为假会让该步 rc=1"""
+        mutated = compliant_flaky_stack().replace('          ARGS=""\n', "")
+        assert mutated != compliant_flaky_stack()
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert any("ARGS=" in p for p in problems), problems
+
+    def test_require_input_hoisted_above_the_branch_is_caught(self):
+        """挪到条件之前 = 恒生效（E2E 红了还判红），两档口径同样不成立"""
+        mutated = compliant_flaky_stack().replace(
+            '          ARGS=""\n', '          ARGS="--require-input"\n'
+        ).replace('            ARGS="--require-input"\n', "")
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert any("--require-input" in p for p in problems), problems
+
+    def test_require_input_after_the_branch_is_caught(self):
+        """挪到 `fi` 之后也是「不在 success 分支内」——只判「出现在条件行之后」会漏掉"""
+        mutated = compliant_flaky_stack().replace(
+            '            ARGS="--require-input"\n          fi\n',
+            '          fi\n          ARGS="--require-input"\n',
+        )
+        assert mutated != compliant_flaky_stack()
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert any("--require-input" in p for p in problems), problems
+
+    def test_dropped_args_from_the_call_is_caught(self):
+        """汇总调用不带 `$ARGS`：条件算出来的参数没有生效路径"""
+        mutated = compliant_flaky_stack().replace(" $ARGS", "")
+        assert mutated != compliant_flaky_stack()
+        problems = flaky_wiring_problems(mutated, source="合成 flaky")
+        assert any("$ARGS" in p for p in problems), problems
