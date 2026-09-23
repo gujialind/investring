@@ -13,9 +13,10 @@
 #   ③ 处理器体内没有任何 ERROR 级日志出口 → 判红，点名 `文件:行`。
 # 日志出口的认定：`report_unexpected(...)`（本仓库统一入口，见
 # `app/error_reporting.py`）或任何 `X.error/exception/critical(...)` 调用；且出口必须
-# **真拿到原始异常**——首参是 `except … as e` 的绑定名，或关键字 `exc_info=e`。两种形态
-# 都认：只认首参会把 `logger.error("…", exc_info=e)` 这条合法写法判成「失真出口」，而
-# 判红文案又正好推荐它，自相矛盾（审查 Suggestion 2）。
+# **真拿到原始异常**——首参是 `except … as e` 的绑定名、关键字 `exc_info=e`，或
+# `X.exception(...)`（隐含 `exc_info=True`）。三种形态都认：只认首参会把
+# `logger.error("…", exc_info=e)` 与 `logger.exception("…")` 这两条合法写法判成「失真
+# 出口」，而判红文案又正好推荐前者，自相矛盾（审查 Suggestion 2）。
 #
 # **刻意不把判据放宽成「任何 except X → 5xx」**：422/404/409 是**有意的**领域映射，
 # 给它们强制加 ERROR 出口只会把业务拒绝刷成噪音（#405 定的口径是 WARNING）。同理，
@@ -106,11 +107,18 @@ def _is_outlet(call: ast.Call) -> bool:
 
 
 def _outlet_receives_exception(call: ast.Call, bound: str) -> bool:
-    """出口是否拿到了原始异常：首参是绑定名（`report_unexpected(e, …)`），
-    或 `exc_info=<绑定名>`（`logger.error("…", exc_info=e)`）。
+    """出口是否拿到了原始异常。三种形态都算：
 
-    两者都算——判据要钉的是「error_type 不失真」，不是某种调用姿势。
+    - 首参是绑定名：`report_unexpected(e, …)`；
+    - `exc_info=<绑定名>`：`logger.error("…", exc_info=e)`；
+    - `X.exception(…)`：`logging.exception` 隐含 `exc_info=True`，取的就是当前异常。
+
+    判据要钉的是「error_type / 堆栈不失真」，不是某种调用姿势——把合法写法判成
+    「失真出口」，修复者会照着判红文案白改一轮（#613 审查 Suggestion 2）。
     """
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr == "exception":
+        return True
     if call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == bound:
         return True
     return any(
@@ -163,8 +171,8 @@ def _scan_source(source: str, *, path: Path) -> list[Site]:
             reason = "块内无任何 ERROR 级日志出口"
         elif bound and all(not _outlet_receives_exception(out, bound) for out in outlets):
             reason = (
-                f"日志出口未收到原始异常（既不是首参 `{bound}`，也不是 `exc_info={bound}`），"
-                "error_type 会失真"
+                f"日志出口未收到原始异常（首参 `{bound}` / `exc_info={bound}` / "
+                "`logger.exception(...)` 三者都不是），error_type 与堆栈会失真"
             )
         sites.append(
             Site(
@@ -306,6 +314,18 @@ def endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 '''
 
+    # `logger.exception(...)` 隐含 exc_info=True：不带任何异常参数也算拿到了原始异常
+    SOURCE_LOGGER_EXCEPTION = '''
+from fastapi import HTTPException
+
+def endpoint():
+    try:
+        do_work()
+    except Exception as e:
+        logger.exception("端点兜底")
+        raise HTTPException(status_code=500, detail=str(e))
+'''
+
     def _scan(self, source: str) -> list[Site]:
         return _scan_source(source, path=Path("synthetic.py"))
 
@@ -347,6 +367,15 @@ def endpoint():
         sites = self._scan(self.SOURCE_LOGGER_WITHOUT_EXC)
         assert sites and not sites[0].has_outlet, f"未识别无异常的日志出口：{sites}"
         assert "exc_info" in sites[0].reason, sites[0].reason
+
+    def test_logger_exception_form_turns_green(self):
+        """`logger.exception("…")` 隐含 `exc_info=True`，不带异常参数也算拿到原始异常。
+
+        判它「失真」是同一类假红：出口本来就在 `OUTLET_METHODS` 里被认作合法出口，
+        绑定检查却说它没拿到异常，修复者只会更糊涂。
+        """
+        sites = self._scan(self.SOURCE_LOGGER_EXCEPTION)
+        assert sites and sites[0].has_outlet, f"logger.exception 形态被误判：{sites}"
 
     def test_parse_failure_fails_closed(self):
         """解析失败必须抛出（fail-closed），不允许「扫不动就跳过」的静默失效"""
