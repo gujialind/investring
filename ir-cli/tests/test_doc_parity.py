@@ -3,8 +3,8 @@ ir-cli 手册/schema 承诺一致性守门（issue #562）
 
 2026-09-19 审查复盘 S3：ir-cli 的**文档承诺面**（`CLI_MANUAL.md` 的选项表与退出码说明、
 `ir schema` 的 WORKFLOWS 配方）与**实现面**（Click 命令选项、`output.py` 的 `EXIT_*`）之间
-没有一致性守门，窗口内同一处漂移被人工抓出 3 次。本文件把这三条 intrusivenowledge 变成
-四条**方向明确**的等价断言：
+没有一致性守门，窗口内同一处漂移被人工抓出 3 次。本文件把这三条只存在于人脑里的默会知识
+（institutional knowledge）变成四条**方向明确**的等价断言：
 
 1. **配方选项存在性**：`schema.WORKFLOWS` 每个 step 里的 `--opt` 必须在该命令的 Click 选项面上
    （拼错/已删选项 ⇒ 红）
@@ -18,7 +18,12 @@ ir-cli 手册/schema 承诺一致性守门（issue #562）
 **解析口径一律 fail-closed**：抽不到就红。禁止「解析失败即跳过」——那会让本文件自己变成
 复盘 F1 族的第 15 项。`TestParsersFailClosed` 钉住这一点。
 
-**反例自检**：每条断言都配一条合成输入使其变红（`TestChecksAreNotTautological`）。
+**反例自检**：每条断言都配一条合成输入使其变红。反例**内联在各自的断言组里**，不单独成类：
+`TestRecipeOptionExistence::test_typo_in_recipe_option_is_red`、
+`TestRecipeRequiredCompleteness::test_dropping_a_required_option_is_red`、
+`TestManualOptionParity::test_unknown_manual_option_is_red` /
+`test_undocumented_impl_option_is_red` / `test_stale_exemption_is_red`、
+`TestExitCodeClosure::test_colliding_exit_code_is_red`。
 某条断言如果对反例不红，说明它恒真 ⇒ 视为未完成（#502 💭-1 的同型失效）。
 
 运行方式（ir-cli/.venv 无 pytest，用仓库根 .venv）：
@@ -46,7 +51,8 @@ EXIT_ANCHOR_RE = re.compile(r"退出码|exit code")
 SECTION4 = "## 4."
 SECTION5 = "## 5."
 
-# 通用约定选项：全局章节统一登记，不逐命令进选项表（`TestGlobalOptions` 反向钉住这一点）
+# 通用约定选项：全局章节统一登记，不逐命令进选项表
+# （`TestManualOptionParity::test_global_options_are_documented_before_section4` 反向钉住这一点）
 GLOBAL_OPTIONS = {key for key in CONVENTIONS if key.startswith("--")}
 
 CommandSpec = namedtuple("CommandSpec", "options required")
