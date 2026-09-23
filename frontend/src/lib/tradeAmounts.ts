@@ -8,14 +8,21 @@
  * 金额量化到 2 位小数（ROUND_HALF_UP，负数按绝对值对称、远离零进位）。
  * 与后端同用「字符串位移」口径（后端 Decimal(str(x))），
  * 避免 JS toFixed/Math.round 在 1.005 类二进制浮点边界值上错判。
- * 非法输入（空串/非数值）返回 null。
+ * 非法输入（空串/非数值）返回 null；字符串位移无法安全量化的输入同样返回 null（#504）：
+ * ① `|value| ≥ 1e19`：取整值 ≥ 1e21，`String(rounded)` 转指数记法（数字与十进制串均命中）；
+ * ② 数字入参 `0 < |value| < 1e-6`：`String(value)` 即指数记法（同量级十进制串如 `"0.0000001"`
+ * 不命中，按常规路径返回 0）；③ 入参本身为指数记法字符串（`"1e5"`/`"1e-7"`）。
+ * 注：这些量级下后端 `Decimal(str(x))` 仍能算出结果（如 `1e-7 → 0.00`），前端按「不可量化
+ * 即 null（调用方清空/不渲染）」收口；不做数字归一化，以免动摇上面 1.005 的字符串位移口径。
  */
 export function quantizeAmount2(value: number | string): number | null {
   const s = typeof value === "string" ? value.trim() : String(value);
   if (s === "" || !Number.isFinite(Number(s))) return null;
   const shifted = Number(`${s}e2`);
   const rounded = Math.sign(shifted) * Math.round(Math.abs(shifted));
-  return Number(`${rounded}e-2`);
+  const result = Number(`${rounded}e-2`);
+  // 只守卫入参不够：字符串位移在指数记法边界会产出 NaN，须落回 null（#504）
+  return Number.isFinite(result) ? result : null;
 }
 
 /** 2 位小数字符串（供派生字段回填，组件内禁 toFixed 走此处，视觉规范 §3） */
@@ -62,6 +69,8 @@ export function sellDerivedAmounts(
   if (sh === null || !Number.isFinite(p) || f === null) return null;
   const gross = quantizeAmount2(sh * p);
   if (gross === null) return null;
+  // 守卫保留（#504 判定）：gross 与 f 异号时差值可越过 1e19 重新落入不可量化区
+  //（例 sellDerivedAmounts(9e18, 1, -9e18)）；全非负输入下不可达，但纯函数不做此假设。
   const actualReceived = quantizeAmount2(gross - f);
   if (actualReceived === null) return null;
   return { gross, actualReceived };

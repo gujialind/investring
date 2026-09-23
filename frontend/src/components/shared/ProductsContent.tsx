@@ -58,6 +58,10 @@ interface ProductsContentProps {
   variant?: "desktop" | "mobile";
 }
 
+// 虚拟产品判定口径（#514）：对齐后端 product_service.VIRTUAL_PRODUCT_TYPES（#327）与
+// lib/api/product.ts 的 include_virtual 注释——系统虚拟产品无数据源同步概念。
+const VIRTUAL_PRODUCT_TYPES = ["CASH", "IN_TRANSIT"];
+
 // 筛选选项（label 与产品筛选弹窗/产品表单下拉保持一致）；市场选项走 @/lib/market 共享（#324）
 const PRODUCT_TYPE_OPTIONS = [
   { value: "ETF", label: "ETF" },
@@ -517,6 +521,9 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
                         <CheckCircle className="h-4 w-4 text-success" />
                       ) : product.data_source_status === "failed" ? (
                         <XCircle className="h-4 w-4 text-destructive" />
+                      ) : VIRTUAL_PRODUCT_TYPES.includes(product.product_type) ? (
+                        // #514：虚拟产品是「不适用数据源同步」，区别于真实产品的「尚未验证」
+                        <span className="text-muted-foreground">不适用</span>
                       ) : (
                         <span className="text-warning">待验证</span>
                       )}

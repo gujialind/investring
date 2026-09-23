@@ -20,8 +20,9 @@ import { defineConfig } from "vitest/config";
 // 100/99.65/100/100；#507 收紧 tradePairs 的异常 2 腿组规则——均非 CASH、双 CASH 均 sell
 // 由 pair 改为回落 single（与既有的均 buy 兜底对齐，规则注释的边界即契约），分支补齐
 // 后到全 100、阈值随棘轮 98→99。
-// 残余：无。⚠️ #504 落地后 tradeAmounts 的「到手无法量化」守卫将失去触发路径、产生
-// 新残余，届时同步复核本段与 frontend/AGENTS.md §3。
+// 残余：无。#504 已落地（quantizeAmount2 非有限结果返回 null）：tradeAmounts 的「到手无法
+// 量化」守卫经「毛额与手续费异号 + 量级越界」用例（9e18, 1, -9e18）保持可达并已覆盖，
+// 未产生新残余；本段与 frontend/AGENTS.md §3 已同批复核。
 // 分母边界（#505 结论：维持 src/lib，hooks/stores 的缺口**成文接受**）：src/hooks/**
 // （17 文件 / 2226 行，≈2 倍分母）与 src/stores/**（2 文件 / 146 行）不在 include 内，
 // 于是一行测试都没有也不会让任何门禁变红——这是被记录下来、而不是被修掉的已知缺口。

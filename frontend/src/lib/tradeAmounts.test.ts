@@ -37,6 +37,27 @@ describe("quantizeAmount2（对齐后端 quantize_amount：2 位 HALF_UP、负�
     expect(quantizeAmount2(NaN)).toBeNull();
     expect(quantizeAmount2(Infinity)).toBeNull();
   });
+
+  it("不可安全量化的量级返回 null（#504：非有限中间/结果不得冒充 null 契约）", () => {
+    // 上限：|value| ≥ 1e19 时取整值 ≥ 1e21，String(rounded) 转指数记法 → 二次拼 `e-2` 非有限
+    expect(quantizeAmount2(1e19)).toBeNull();
+    expect(quantizeAmount2(-1e19)).toBeNull();
+    expect(quantizeAmount2(Number.MAX_VALUE)).toBeNull();
+    // 上限十进制串同样命中（数字/字符串对称）
+    expect(quantizeAmount2("10000000000000000000")).toBeNull();
+    // 下限：数字入参 0 < |value| < 1e-6 时 String(value) 即指数记法，`${s}e2` 解析失败 → 非有限
+    expect(quantizeAmount2(1e-7)).toBeNull();
+    expect(quantizeAmount2(-1e-7)).toBeNull();
+    expect(quantizeAmount2(5e-7)).toBeNull();
+    // 指数记法字符串入参（issue 未列、同源失效面）：数值合法但字符串位移解析失败
+    expect(quantizeAmount2("1e-7")).toBeNull();
+    expect(quantizeAmount2("1e5")).toBeNull();
+    // 下限同量级十进制串不命中（数字/字符串不对称）：位移解析正常，不足半分 → 0
+    expect(quantizeAmount2("0.0000001")).toBe(0);
+    // 边界内保持可用：1e-6 不足半分 → 0；1e18 原值返回
+    expect(quantizeAmount2(1e-6)).toBe(0);
+    expect(quantizeAmount2(1e18)).toBe(1e18);
+  });
 });
 
 describe("formatAmount2", () => {
@@ -49,6 +70,11 @@ describe("formatAmount2", () => {
   it("非有限入参回填空串（非法输入不落屏）", () => {
     expect(formatAmount2(NaN)).toBe("");
     expect(formatAmount2(Infinity)).toBe("");
+  });
+
+  it("极端量级回填空串（#504：修复前会产出字面量 \"NaN\" 字符串）", () => {
+    expect(formatAmount2(1e19)).toBe("");
+    expect(formatAmount2(1e-7)).toBe("");
   });
 });
 
@@ -111,12 +137,16 @@ describe("sellDerivedAmounts（镜像后端 _derive_sell_amounts 有价分支）
 
   it("极端数值下中间结果非有限时返回 null（无法量化即不渲染）", () => {
     // 本组锁的契约是「中间结果无法量化 ⇒ 返回 null」：
-    // ① 份额×价格溢出为 Infinity → tradeAmounts.ts L64 的 gross 守卫；
+    // ① 份额×价格溢出为 Infinity → tradeAmounts.ts 的 gross === null 守卫；
     expect(sellDerivedAmounts(1e18, 1e300, 0)).toBeNull();
-    // ② 手续费大到 quantizeAmount2 产出 NaN（1e19 级指数记法边界，根因见 #504）→ 今日经
-    //    L66 的到手守卫返回 null；#504 按「非有限结果返回 null」修复后改由 L62 拦截，
-    //    断言不变（若 #504 选择「抛错」修法，本条须同步改）。
+    // ② 手续费大到 quantizeAmount2 返回 null（1e19 级指数记法边界，根因见 #504）——#504 修复后
+    //    由 f === null 入参守卫拦截（修复前是 NaN 落到手守卫），断言不变。
     expect(sellDerivedAmounts(1, 1, 1e19)).toBeNull();
+    // ③ 到手守卫（actualReceived === null）的真实触发路径（#504 修复后仍可达）：毛额与手续费
+    //    异号且量级越界，差值 1.8e19 超出可量化区 → null（修复前该输入会返回
+    //    { gross, actualReceived: NaN }）。仅当 shares/price/fee 全非负时该守卫才不可达，
+    //    纯函数契约不做此假设。
+    expect(sellDerivedAmounts(9e18, 1, -9e18)).toBeNull();
   });
 });
 
