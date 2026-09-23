@@ -58,7 +58,14 @@ class RequestContextMiddleware:
 
         request_id = _inbound_request_id(scope) or uuid.uuid4().hex
         scope[SCOPE_REQUEST_ID_KEY] = request_id
-        token = request_context_var.set(RequestContext(request_id=request_id))
+        token = request_context_var.set(
+            RequestContext(
+                request_id=request_id,
+                method=scope["method"],
+                # 只记 path 不记 query（查询串可能带凭据），与访问日志同口径
+                path=scope["path"],
+            )
+        )
 
         started = time.perf_counter()
         status_code: Optional[int] = None

@@ -22,6 +22,7 @@ from app.services.trading_calendar_service import (
     TushareNotConfiguredError,
     TushareAPIError,
 )
+from app.error_reporting import report_unexpected
 
 router = APIRouter()
 
@@ -124,11 +125,15 @@ def sync_trading_calendar(
             detail={"error": "DATA_SOURCE_NOT_CONFIGURED", "message": str(e)},
         )
     except TushareAPIError as e:
+        # 非 catch-all（不计入 #553 那 10 处），但同是「500 且零日志」形态：不出口的话
+        # 上游数据源报错在服务侧查不到任何痕迹。一并接观测；响应契约不变
+        report_unexpected(e, operation="sync_trading_calendar")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "SYNC_FAILED", "message": str(e)},
         )
     except Exception as e:
+        report_unexpected(e, operation="sync_trading_calendar")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "SYNC_FAILED", "message": f"同步失败: {str(e)}"},

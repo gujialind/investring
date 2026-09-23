@@ -13,6 +13,7 @@ from app.schemas.task import (
 )
 from app.dependencies import get_current_admin
 from app.services.exceptions import BusinessError
+from app.error_reporting import report_unexpected
 
 router = APIRouter()
 
@@ -94,6 +95,7 @@ def run_task(
         # detail={error, message}（与其它端点同口径），而非 500 兜底
         if isinstance(e, BusinessError):
             raise
+        report_unexpected(e, operation="run_task", task_code=code)
         raise HTTPException(status_code=500, detail=f"任务执行失败: {str(e)}")
 
     if code == "log_cleanup":

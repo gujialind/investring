@@ -12,6 +12,7 @@ from app.services.market_data_service import (
     get_nav_coverage,
     sync_price_data,
 )
+from app.error_reporting import report_unexpected
 
 router = APIRouter()
 
@@ -40,6 +41,7 @@ def get_price_data(
     except HTTPException:
         raise
     except Exception as e:
+        report_unexpected(e, operation="get_price_data")
         raise HTTPException(status_code=500, detail=f"查询价格数据失败: {str(e)}")
 
 
@@ -86,6 +88,7 @@ def sync_price_data_endpoint(
         raise
     except Exception as e:
         db.rollback()
+        report_unexpected(e, operation="sync_price_data_endpoint")
         raise HTTPException(status_code=500, detail=f"同步价格数据失败: {str(e)}")
 
 
@@ -113,4 +116,5 @@ def sync_history(
         raise
     except Exception as e:
         db.rollback()
+        report_unexpected(e, operation="sync_history")
         raise HTTPException(status_code=500, detail=f"同步历史数据失败: {str(e)}")

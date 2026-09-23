@@ -32,6 +32,7 @@ from app.services.snapshot_service import (
     recalculate_snapshots,
     validate_snapshot_dependencies,
 )
+from app.error_reporting import report_unexpected
 
 router = APIRouter()
 
@@ -68,6 +69,7 @@ def generate_snapshot(
         )
     except Exception as e:
         db.rollback()
+        report_unexpected(e, operation="generate_snapshot")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "SNAPSHOT_GENERATION_FAILED", "message": str(e)},
@@ -110,7 +112,9 @@ def recalculate(
         # 之前 rollback 并原样上抛，交全局 handler 映射为 422 + 稳定错误码；否则落到
         # except Exception → 500 RECALCULATION_FAILED，违反「200+errors / 422、绝不 500」。
         # 预校验早于任何删除/写操作，整体回滚后对外仍是「无变化」。
-        # （routers/snapshots.py 其余端点的 catch-all→500 通病属 open issue #553，不在本次范围。）
+        # （本端点与其后 catch-all→500 的端点已由 #553 接上日志出口：翻 5xx 前先
+        # report_unexpected 落 ERROR 日志与 system_error_log，错误码与响应契约不变——
+        # 契约之所以保留，是因为 500 只是最后一道兜底，领域异常必须仍走这里。）
         db.rollback()
         raise
     except ValueError as e:
@@ -121,6 +125,7 @@ def recalculate(
         )
     except Exception as e:
         db.rollback()
+        report_unexpected(e, operation="recalculate")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "RECALCULATION_FAILED", "message": str(e)},
@@ -241,6 +246,7 @@ def generate_next(
         )
     except Exception as e:
         db.rollback()
+        report_unexpected(e, operation="generate_next")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "SNAPSHOT_GENERATION_FAILED", "message": str(e)},
@@ -416,6 +422,7 @@ def delete_snapshot(
         raise
     except Exception as e:
         db.rollback()
+        report_unexpected(e, operation="delete_snapshot")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "DELETE_FAILED", "message": str(e)},
@@ -514,6 +521,7 @@ def delete_snapshots_bulk(
             raise
         except Exception as e:
             db.rollback()
+            report_unexpected(e, operation="delete_snapshots_bulk", snap_date=str(snap_date))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "BULK_DELETE_FAILED", "message": f"删除 {snap_date} 快照失败: {str(e)}"},
