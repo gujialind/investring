@@ -42,8 +42,14 @@ class TestReportUnexpected:
         assert captured["error_message"] == "快照单价是 None"
         assert "TypeError" in captured["error_stack"]
 
-    def test_logs_error_with_traceback_and_operation(self, caplog):
-        """出口要同时满足「有 ERROR 行」与「有堆栈」，两者缺一都无法事后定位"""
+    def test_logs_error_with_traceback_and_operation(self, caplog, monkeypatch):
+        """出口要同时满足「有 ERROR 行」与「有堆栈」，两者缺一都无法事后定位
+
+        落库侧替换为空实现：本用例只断言日志，而 `record_system_error` 走独立 session
+        提交，不受任何事务回滚保护——真落一行就会留在测试库里，让 test_log_cleanup
+        那类按整表计数的断言失准（跨用例污染，#553 引入后实测）。
+        """
+        monkeypatch.setattr(er, "record_system_error", lambda **_kw: None)
         try:
             raise ValueError("boom")
         except ValueError as e:

@@ -20,6 +20,7 @@ from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import func
 
 from app.models.system_error_log import SystemErrorLog
 from app.request_context import REQUEST_ID_HEADER
@@ -33,6 +34,28 @@ SNAP_DATE = date(2026, 1, 5)
 
 def _boom(exc: BaseException) -> MagicMock:
     return MagicMock(side_effect=exc)
+
+
+@pytest.fixture
+def purge_system_error_rows():
+    """清掉本用例真落进 system_error_log 的行——跨用例污染防护。
+
+    `record_system_error` 走**独立 session** 提交（见 audit_service），不受 test_db
+    事务回滚保护，所以真落库用例结束後行是留着的；而 test_log_cleanup 那类用例按整表
+    计数断言（「清理后还剩几行」），多一行就红。谁落谁清，别把脏数据留给下一个用例。
+    """
+    from app.database import SessionLocal
+
+    probe = SessionLocal()
+    watermark = probe.query(func.max(SystemErrorLog.id)).scalar() or 0
+    probe.close()
+    yield
+    probe = SessionLocal()
+    try:
+        probe.query(SystemErrorLog).filter(SystemErrorLog.id > watermark).delete()
+        probe.commit()
+    finally:
+        probe.close()
 
 
 def _assert_outlet_logged(json_log_capture, *, operation: str, method: str, path: str, request_id: str):
@@ -165,7 +188,7 @@ class TestSnapshotCatchAllOutlets:
         assert line["snap_date"] == SNAP_DATE.isoformat()
         _assert_error_record(spy, path=url, method="DELETE")
 
-    def test_real_system_error_log_row(self, client, admin_headers, monkeypatch):
+    def test_real_system_error_log_row(self, client, admin_headers, monkeypatch, purge_system_error_rows):
         """不替换落库函数：system_error_log 真新增一行（验收断言「至少快照侧」的那条）
 
         断言用**独立会话**读：`record_system_error` 走的也是独立 session（见
