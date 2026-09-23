@@ -1,6 +1,6 @@
 """快照管理API路由"""
 from datetime import date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
@@ -33,6 +33,7 @@ from app.services.snapshot_service import (
     validate_snapshot_dependencies,
 )
 from app.error_reporting import report_unexpected
+from app.utils.db_retry import retry_on_deadlock
 
 router = APIRouter()
 
@@ -48,7 +49,7 @@ def generate_snapshot(
     
     权限：仅admin
     """
-    try:
+    def _generate_and_commit() -> Dict[str, Any]:
         result = generate_daily_snapshots(
             db=db,
             portfolio_code=request.portfolio_code,
@@ -56,6 +57,17 @@ def generate_snapshot(
         )
         # service 不 commit（backend/AGENTS.md「分层目录与职责」节），事务边界在 router
         db.commit()
+        return result
+
+    try:
+        # #618：并发生成快照时，两个事务各自那条命中 0 行的 DELETE 会在唯一索引上
+        # 留下互相兼容的 gap lock，随后的 INSERT 又要 insert intention lock，
+        # 循环等待 → InnoDB 报 1213 并把一方整体回滚（REPEATABLE READ 下必现，
+        # 实测与取舍见 app/utils/db_retry.py 的模块 docstring）。争的是**同一段索引
+        # 间隙**而非同一行，故按组合加锁治不了它；这里按 1213 的语义整体回滚后
+        # 有界重放。commit 必须在重试范围内——死锁既可能在 service 的 flush 处抛出，
+        # 也可能在 commit 处抛出。
+        result = retry_on_deadlock(db, _generate_and_commit, operation="generate_snapshot")
         return SnapshotGenerationResult(**result)
     except BusinessError:
         # 领域异常（如 SNAPSHOT_NOT_CONTINUOUS）交给全局 handler 映射
