@@ -60,20 +60,20 @@
 ### 3.1 分支模型（GitHub Flow，单长期分支，issue #211）
 
 - `main` 是唯一长期分支与生产交付线，受 ruleset 保护：禁删除/强推、require PR、required check `CI OK`。
-- 一切改动从最新 `origin/main` 拉短命分支，经 PR 合入 main；不从本地旧 ref 重建。命名用 `feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`，AI 可用 `trae/`、`codex/` 前缀。
+- 一切改动从最新 `origin/main` 拉短命分支，经 PR 合入 main；不从本地旧 ref 重建。命名用 `feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`；按下方 Issue 约定免开 issue 的小修可用 `hotfix/<简述>`。AI 可用 `trae/`、`codex/` 前缀。
 - 合入 main 触发 CI → CD 自动部署，**纯文档例外**（#456）：ci.yml 的 push 触发器忽略 `**/*.md` 与 `docs/**`，纯文档合入不重建镜像、不重部署。`deploy/YYYYMMDD-SHA` 标签因此不随每次文档合入推进，见版本规范。
 - **PR 触发器禁止添加 paths-ignore**：docs-only PR 仍须产出 CI OK，否则 required check 永久等待（#377）。路径模式只按后缀/目录精确匹配，不能扩大到漏掉代码；合入前验证不减，完整执行策略见 ci.yml 与[审查规范的合入条件](docs/reference/code-review.md#review-merge)。
 - 手动部署（deploy.yml workflow_dispatch）只接受已有镜像 tag，用于回滚/重部署。
 
 ### 3.2 Issue 约定
 
-- 新功能、大改、涉及业务规则或 DB 迁移必须先提 issue；影响面大或需留痕的 bug 同样如此。
+- 新功能、大改、涉及业务规则或 DB 迁移必须先提 issue；影响面大或需留痕的 bug 同样如此。需留痕的决策、延期缺陷或跨 PR 工作使用 issue；局部 bug 可直接修复、验证并在 PR 说明，不强制另开 issue（#608）。
 - 按 `.github/ISSUE_TEMPLATE/` 的 bug_report / feature_request / chore 模板提交。
 - 标题使用 `[bug]` / `[feat]` / `[chore]`（含文档和运维），与 Conventional Commits 对齐。
 
 ### 3.3 PR 约定
 
-- 使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)。
+- 使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)。同目标、可共同验收的小改可合并，不要求一 issue 一 PR，不按行数或每日数量凑批。
 - 审查标准、分级处置与规模护栏见 [code-review](docs/reference/code-review.md)。CI 已强制的 lint、类型、构建、测试和契约漂移属 L1，审查不重复。
 - **改 PR base 不触发 CI**：默认 opened/synchronize/reopened 不包含 edited；retarget 后须 close/reopen 或推新 commit 触发，不能等待空 checks 自行补齐（#377）。
 
@@ -85,7 +85,9 @@ Conventional Commits：`fix:` / `feat:` / `docs:` / `refactor:` / `chore:`，简
 ### 3.5 AI AGENT铁律
 
 1. **改完必须验证，以证据交付**：按第 2 节任务入口及模块指南圈定影响面，本地相关检查与测试必须通过，拿不准宁宽勿窄；前端还须实际操作验证，按模块指南完成必要的双端目检。CI 兜底不替代本地验证。交付说明改动、验证结果和未覆盖项；验证不了不提交，不把未运行写成通过。
-2. **开发负责闭环，排查/审查不越权修复**：已授权开发范围内的实现、自检和修复直接推进，本次改动引入的问题必须修复并回归验证；专项排查/审查及任务外发现先核实并报告证据、影响与建议，不顺手改代码，需跟进的问题经授权提 issue。任务外问题若阻塞验收，先确认是否扩围；审查分级处置及机械修例外遵循[审查规范](docs/reference/code-review.md#review-disposition)，不得以 follow-up 绕过阻塞项。
+2. **开发负责闭环，排查/审查不越权修复**：已授权开发范围内的实现、自检和修复直接推进，本次改动引入的问题必须修复并回归验证；专项排查/审查及任务外发现先核实并报告证据、影响与建议，不顺手改代码。可选建议不自动派生任务，确需跟进时按 Issue 约定经授权登记。任务外问题若阻塞验收，先确认是否扩围；审查分级处置及机械修例外遵循[审查规范](docs/reference/code-review.md#review-disposition)，不得以 follow-up 绕过阻塞项。
 3. **只做最小必要变更，保护已有工作**：不夹带无关重构，不引入未明确要求的依赖或表结构变更；获准的 DB 变更必须同步提供 Alembic 迁移。修改前检查工作区状态，不覆盖用户或其他 agent 的改动，不擅自清理其他 worktree 的进程或数据。
-4. **文档按需同步，操作授权不推定**：按 [AI 文档规范](docs/reference/documentation.md#doc-sync)在同一次提交中同步受影响文档、引用与生成契约，无需同步时说明理由；设计决策与方案记录进 issue 讨论。提交、推送、合入、发布、其他远程写操作及生产或破坏性操作均须明确授权；授权只覆盖指定动作与范围，不自动延续到后续任务。
+4. **文档按需同步，操作授权不推定**：按 [AI 文档规范](docs/reference/documentation.md#doc-sync)在同一次提交中同步受影响文档、引用与生成契约，无需同步时说明理由；决策留痕按 Issue 约定执行。提交、推送、合入、发布、其他远程写操作及生产或破坏性操作均须明确授权；授权只覆盖指定动作与范围，不自动延续到后续任务。
 5. **边界内自主，关键歧义才询问**：先查代码、测试和项目约定；目标明确、局部可逆且不改变业务规则或公开契约的实现细节自行决定，交付时说明关键取舍。需求歧义、文档与实现冲突、数据安全或授权不清时必须询问，未澄清前不做相关决定；仅暂停受影响部分，可独立完成的工作继续推进。
+6. **把建议说清楚**：先用白话说明会错什么、已有证据、是否需要现在处理，再推荐最小方案；可选项允许“不做”。术语须解释，不把未核实的担忧或可自行解决的技术细节交给维护者裁决。不理解不代表同意增加工作，详见[表达要求](docs/reference/code-review.md#review-output)。
+7. **避免过度增加自动检查**：先核实已有检查和更简单的修法，说明新增检查能避免的具体错误及以后要维护什么；不只因“更稳健”就加层、建后续任务或扩大范围。保留必要的正确性、安全检查及验证检查有效的测试，详见[按需保护](docs/reference/code-review.md#review-guard-cost)。

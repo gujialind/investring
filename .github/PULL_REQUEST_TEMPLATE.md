@@ -42,12 +42,12 @@
 
 ## 审查记录
 
-<!-- 审查者填写或链接已授权发布的完整结论；格式见[输出与复核](../docs/reference/code-review.md#review-output)。 -->
+<!-- 先用白话说明结论与实际影响，再给证据；可填写或链接已授权发布的完整结论，见[输出与复核](../docs/reference/code-review.md#review-output)。 -->
 
 - 审查对象与覆盖范围（base/head SHA；未审部分及原因）：
-- 结论与状态（打回修改 / 审查未完成 / 待 follow-up 处置 / 通过，可进入合入确认）：
+- 结论与状态（打回修改 / 审查未完成 / 通过，可进入合入确认）：
 - Blocker / Suggestion / Nit：
 - 验证证据、未验证项与关键待确认：
-- follow-up 处置（经授权创建，标题带「PR #X 评审 follow-up」；未授权注明待处置）：
-- 修复后的复核版本与结果：
+- 可选建议（修复 / 接受现状 / 不做 / 暂缓及短理由；未决定如实注明，不阻塞；需登记跟进时遵循[处置规则](../docs/reference/code-review.md#review-disposition)）：
+- 有修改时的复核版本与结果：
 - 做得好的地方及证据：

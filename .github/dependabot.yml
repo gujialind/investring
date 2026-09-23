@@ -1,20 +1,34 @@
-# Dependabot 版本更新（issue #252）：每周检查三类生态的依赖升级并自动提 PR。
+# Dependabot 版本更新（#252 / #608）：常规升级改为月度分组，减少零散 PR。
 # 与 Security Scan（security-scan.yml）互补：告警发现漏洞，这里提升级 PR。
 version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/backend"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels:
       - "dependencies"
+    groups:
+      backend-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels:
       - "dependencies"
+    groups:
+      vitest-suite:
+        applies-to: version-updates
+        patterns: ["vitest", "@vitest/coverage-v8"]
+      frontend-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        exclude-patterns: ["vitest", "@vitest/coverage-v8"]
+        update-types: ["minor", "patch"]
     ignore:
       # TS 7 为 Go 原生编译器（tsgo），typescript-eslint / eslint-config-next 尚不支持，
       # 升级后 Frontend Lint & Build 必挂（见 PR #265 评估）。升 TS 7 需等工具链支持后
@@ -41,6 +55,11 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels:
       - "dependencies"
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
