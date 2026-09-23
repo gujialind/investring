@@ -191,15 +191,20 @@ class TestSnapshotCatchAllOutlets:
     def test_real_system_error_log_row(self, client, admin_headers, monkeypatch, purge_system_error_rows):
         """不替换落库函数：system_error_log 真新增一行（验收断言「至少快照侧」的那条）
 
-        断言用**独立会话**读：`record_system_error` 走的也是独立 session（见
-        audit_service），而 `test_db` 这条连接上的事务快照读不到另一条连接新提交的
-        行（SQLite 测试库实测）——拿 test_db 去数永远数不到，不是落库失败。
+        读数的两个坑都踩过，都写在这里：
+        1. 必须用**独立会话**读：`record_system_error` 走的也是独立 session（见
+           audit_service），`test_db` 这条连接上的事务快照读不到另一条连接新提交的行
+           ——拿 test_db 去数永远数不到，不是落库失败。
+        2. 换了独立会话还不够：MySQL 默认 REPEATABLE READ，同一事务内的第二次查询
+           沿用第一次的快照，仍然看不到新行（CI Backend Tests (MySQL) 实测红）。故取完
+           水位就 commit 结束事务，让后面的查询另起快照；SQLite 下不需要，但两边同款。
         """
         from app.database import SessionLocal
 
         probe = SessionLocal()
         try:
-            before = probe.query(SystemErrorLog).count()
+            watermark = probe.query(func.max(SystemErrorLog.id)).scalar() or 0
+            probe.commit()
             monkeypatch.setattr(
                 "app.routers.snapshots.generate_daily_snapshots",
                 _boom(RuntimeError(BOOM_MESSAGE)),
@@ -211,9 +216,9 @@ class TestSnapshotCatchAllOutlets:
             )
             assert resp.status_code == 500
 
-            rows = probe.query(SystemErrorLog).order_by(SystemErrorLog.id).all()
-            assert len(rows) == before + 1, f"system_error_log 未新增行：{before} → {len(rows)}"
-            row = rows[-1]
+            rows = probe.query(SystemErrorLog).filter(SystemErrorLog.id > watermark).all()
+            assert len(rows) == 1, f"system_error_log 未新增行：水位 {watermark} 之后新增 {len(rows)} 行"
+            row = rows[0]
             assert row.error_type == "RuntimeError", "error_type 必须是原始异常类名"
             assert row.request_path == "/api/snapshots/generate"
             assert row.request_method == "POST"
