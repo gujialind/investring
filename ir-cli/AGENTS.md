@@ -8,6 +8,12 @@
 pip install -e ir-cli pytest && pytest ir-cli/tests -q   # 仓库根目录执行
 ```
 
+> **一致性守门**：[tests/test_doc_parity.py](tests/test_doc_parity.py)（issue #562）把
+> [手册](CLI_MANUAL.md) 的选项表与退出码说明、`ir schema` 的 WORKFLOWS 配方，和 Click 命令
+> 选项面、`output.py` 的 `EXIT_*` 做**双向**比对，任一侧漂移即红——窗口内同一处漂移曾被
+> 人工抓出 3 次，故改由机器兜。已知漂移登记在文件内的 `KNOWN_*` 豁免表并**必须注明理由**，
+> 漂移一旦消失守门反向要求删条目（防豁免永久化）。改手册或命令选项后必跑。
+
 ## 2. 响应字段契约（CI 强制）
 
 后端 API 响应结构变化后必须重新生成契约并**同一次提交**：
