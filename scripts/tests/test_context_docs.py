@@ -35,6 +35,10 @@ def doc_tree(tmp_path):
     return tmp_path
 
 
+def _append(path, text):
+    path.write_text(path.read_text(encoding="utf-8") + text, encoding="utf-8")
+
+
 def test_valid_managed_tree(doc_tree):
     assert docs.check(doc_tree) == []
 
@@ -89,8 +93,72 @@ def test_legacy_root_reference_in_source(doc_tree, reference):
 
 
 def test_module_sections_and_fenced_examples_are_not_legacy_root(doc_tree):
+    _append(doc_tree / "backend/AGENTS.md", "## 2. 跑测试\n")  # 让首行的跨文件 §2 有真实落点
     path = doc_tree / "docs/reference/documentation.md"
     path.write_text("backend/AGENTS.md §2\n```text\n根 AGENTS.md §2.5\n[x](missing.md)\n```\n", encoding="utf-8")
+    assert docs.check(doc_tree) == []
+
+
+def test_section_reference_resolves_inside_the_same_document(doc_tree):
+    _append(doc_tree / "docs/reference/documentation.md", "## 2. 条目\n见 §2 与本节。\n")
+    assert docs.check(doc_tree) == []
+
+
+def test_renumbering_a_heading_turns_its_section_reference_red(doc_tree):
+    path = doc_tree / "docs/reference/documentation.md"
+    _append(path, "## 2. 条目\n见 §2。\n")
+    path.write_text(path.read_text(encoding="utf-8").replace("## 2. 条目", "## 3. 条目"), encoding="utf-8")
+    assert ("docs/reference/documentation.md:3: missing section: §2 in docs/reference/documentation.md"
+            in docs.check(doc_tree))
+
+
+def test_missing_section_number_reports_its_line(doc_tree):
+    _append(doc_tree / "docs/reference/documentation.md", "见 §9.9 的细节。\n")
+    assert ("docs/reference/documentation.md:2: missing section: §9.9 in docs/reference/documentation.md"
+            in docs.check(doc_tree))
+
+
+def test_cross_file_section_reference_resolves_in_the_named_document(doc_tree):
+    _append(doc_tree / "docs/design/visual-spec.md", "## 1.5 豁免登记\n")
+    _append(doc_tree / "docs/reference/logging.md", "豁免见 `docs/design/visual-spec.md` §1.5。\n")
+    assert docs.check(doc_tree) == []
+
+
+def test_cross_file_section_reference_reports_the_named_document(doc_tree):
+    _append(doc_tree / "docs/design/visual-spec.md", "## 1.5 豁免登记\n")
+    _append(doc_tree / "docs/reference/logging.md", "豁免见 `docs/design/visual-spec.md` §9.9。\n")
+    assert any("missing section: §9.9 in docs/design/visual-spec.md" in e for e in docs.check(doc_tree))
+
+
+def test_root_agents_section_reference_resolves_from_a_nested_document(doc_tree):
+    _append(doc_tree / "AGENTS.md", "### 3.5 AI AGENT铁律\n")
+    _append(doc_tree / "docs/reference/code-review.md", "权限见根 `AGENTS.md` §3.5。\n")
+    assert docs.check(doc_tree) == []
+
+
+def test_missing_section_target_file_is_reported(doc_tree):
+    _append(doc_tree / "docs/reference/documentation.md", "见 `absent.md` §9.9。\n")
+    assert any("missing section target: absent.md" in e for e in docs.check(doc_tree))
+
+
+def test_section_number_in_a_heading_is_not_a_reference(doc_tree):
+    _append(doc_tree / "docs/reference/documentation.md", "### 6.1 §9.9 处置留痕\n")
+    assert docs.check(doc_tree) == []
+
+
+@pytest.mark.parametrize("reference", ["#237（§9.9 已过时）\n", "原有 §9.9 的口径\n", "曾在 §9.9 写过\n"])
+def test_historical_section_references_are_exempt(doc_tree, reference):
+    _append(doc_tree / "docs/reference/documentation.md", reference)
+    assert docs.check(doc_tree) == []
+
+
+def test_section_reference_inside_a_fence_is_not_checked(doc_tree):
+    _append(doc_tree / "docs/reference/documentation.md", "```text\n见 §9.9\n```\n")
+    assert docs.check(doc_tree) == []
+
+
+def test_section_references_outside_managed_docs_are_not_checked(doc_tree):
+    _append(doc_tree / "docs/design/visual-spec.md", "见 §9.9 的说明。\n")
     assert docs.check(doc_tree) == []
 
 

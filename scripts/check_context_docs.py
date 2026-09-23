@@ -2,6 +2,7 @@
 
 import re
 import sys
+from bisect import bisect_right
 from collections import Counter
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -58,6 +59,15 @@ LEGACY_ROOT = re.compile(
     r"(?:根(?:指南|文档)?\s*(?:`?AGENTS\.md`?)?|(?<![\w/])`?AGENTS\.md`?)"
     r"\s*(?:§\s*2(?:\.\d+)*|[「\"](?:核心领域模型|平台与现金账本|快照)[」\"])"
 )
+# 散文章节引用（§N.M）不是链接，链接检查看不见它，故单列一类：必须解析到真实编号标题。
+SECTION = re.compile(r"§\s*(\d+(?:\.\d+)*)")
+SECTION_PATH = re.compile(r"`?((?:[\w.-]+/)+[\w.-]+|[\w.-]+\.md)`?")
+SECTION_CLAUSE = re.compile(r"[^\n。；;！？]+")
+SECTION_HEADING_LINE = re.compile(r"^[ \t]{0,3}#{1,6}\s", re.MULTILINE)
+NUMBERED_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}\s+(\d+(?:\.\d+)*)(?!\.?\d)", re.MULTILINE)
+# 豁免判据是启发式：谈「过去」的引用（历史叙述）无法靠解析消除，只能靠同句线索识别，
+# 会漏判未来的历史型引用，也会放过同句带 issue 号的当前引用（误报优先让位于漏报）。
+HISTORICAL_SECTION = re.compile(r"#\d{2,4}|已过时|已废弃|已删除|曾|原有|原为|原名")
 
 
 def without_fences(text: str) -> str:
@@ -90,6 +100,25 @@ def anchors(text: str) -> set[str]:
     return result
 
 
+def section_numbers(text: str) -> set[str]:
+    return set(NUMBERED_HEADING.findall(without_fences(text)))
+
+
+def section_target(root: Path, name: str, raw: str) -> Path | None:
+    """解析小句里的 Markdown 路径提示（先相对当前文件目录，再回落仓库根，允许 `.md` 补全）。
+
+    解析不到 Markdown 文件返回 None：无提示或非文档路径（如 `.ts`）由调用方回落到本文，
+    只有显式写成 `.md` 却不存在时才是缺陷。
+    """
+    base = (root / name).parent
+    for candidate in (raw, f"{raw}.md"):
+        for parent in (base, root):
+            target = (parent / candidate).resolve()
+            if target.is_relative_to(root) and target.is_file() and target.suffix == ".md":
+                return target
+    return None
+
+
 def check(root: Path = REPO_ROOT) -> list[str]:
     root = root.resolve()
     errors = []
@@ -97,6 +126,7 @@ def check(root: Path = REPO_ROOT) -> list[str]:
     rule_locations = {}
     target_anchors = {}
     target_explicit_ids = {}
+    section_index = {}
     for name in (*MANAGED_DOCS, *SOURCE_REFERENCES):
         path = root / name
         if not path.is_file():
@@ -120,6 +150,32 @@ def check(root: Path = REPO_ROOT) -> list[str]:
                         report(match.start(), f"duplicate ID {anchor}; first in {rule_locations[anchor]}")
                     else:
                         rule_locations[anchor] = name
+
+            line_starts = [0] + [i + 1 for i, char in enumerate(text) if char == "\n"]
+            heading_lines = {match.start() for match in SECTION_HEADING_LINE.finditer(text)}
+            for clause in SECTION_CLAUSE.finditer(text):
+                body = clause[0]
+                hints = [(hit.start(), hit[1]) for hit in SECTION_PATH.finditer(body)]
+                for match in SECTION.finditer(body):
+                    offset = clause.start() + match.start()
+                    if line_starts[bisect_right(line_starts, offset) - 1] in heading_lines:
+                        continue  # 标题里的 § 是被引对象的标签，不是引用
+                    if HISTORICAL_SECTION.search(body, 0, match.start()):
+                        continue
+                    hint = ""
+                    for position, path in hints:
+                        if position < match.start():
+                            hint = path
+                    target = section_target(root, name, hint)
+                    if target is None:
+                        if hint.endswith(".md"):
+                            report(offset, f"missing section target: {hint}")
+                            continue
+                        target = root / name  # 无提示或提示不是文档：按本文解析
+                    if target not in section_index:
+                        section_index[target] = section_numbers(target.read_text(encoding="utf-8"))
+                    if match[1] not in section_index[target]:
+                        report(offset, f"missing section: §{match[1]} in {target.relative_to(root).as_posix()}")
 
         found = set()
         patterns = (LINK, REFERENCE, INCLUDE) if name == "CLAUDE.md" else (LINK, REFERENCE)
