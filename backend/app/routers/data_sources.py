@@ -7,6 +7,7 @@ from app.database import get_db
 from app.schemas.data_source import DataSourceResponse, DataSourceUpdate
 from app.dependencies import get_current_user, get_current_admin
 from app.models.product import Product
+from app.services.exceptions import BusinessError
 from app.services.null_guard import reject_explicit_nulls
 
 router = APIRouter()
@@ -90,7 +91,8 @@ def update_data_source(
     - akshare: 更新 AKSHARE_ENABLED
 
     显式 null 一律 422 拒绝（#579，与 #573 同口径）；未提供或空值零写入，
-    message 如实报「未变更」，不再谎报「已更新」。
+    message 如实报「未变更」，不再谎报「已更新」。写入值经 `_reject_unsafe_env_value`
+    收口（#601 评审 follow-up：防 .env 任意键注入）。
     """
     if name not in ("tushare", "akshare"):
         # 404 专用码先于通用收口（#576 评审 🟡3 同款教训：不让 INVALID_PARAM 抢占）
@@ -105,6 +107,7 @@ def update_data_source(
         # 更新 Tushare Token；未提供或空串 = 零写入（清空 token 不是已支持能力）
         api_key = updates.get("api_key")
         if api_key:
+            _reject_unsafe_env_value(api_key)
             _update_env_file(env_file, "TUSHARE_TOKEN", api_key)
             os.environ["TUSHARE_TOKEN"] = api_key
             message = "Tushare 配置已更新"
@@ -119,6 +122,7 @@ def update_data_source(
     # akshare：更新启用状态；未提供 = 零写入
     if "is_enabled" in updates:
         value = str(updates["is_enabled"]).lower()
+        _reject_unsafe_env_value(value)
         _update_env_file(env_file, "AKSHARE_ENABLED", value)
         os.environ["AKSHARE_ENABLED"] = value
         message = "AkShare 配置已更新"
@@ -131,11 +135,31 @@ def update_data_source(
     }
 
 
+def _reject_unsafe_env_value(value: str) -> None:
+    """拒绝无法安全整行写入 .env 的取值（#601 评审 follow-up）。
+
+    写入形态是 `f"{key}={value}\\n"`，而 .env 按行解析：value 里含 `\\n`/`\\r` 时，
+    其后内容会另起一行成为新的配置项，下次进程启动经 app/config.py 的 env_file
+    解析后即成为真实环境变量——也就是任意键注入（例如 `"tok\\nAKSHARE_ENABLED=false"`）。
+    不可见的控制字符同样会污染文件且难以排查，故一并拒绝（含 TAB、NUL、DEL）。
+
+    由调用方在写前调用本函数（而非塞进 `_update_env_file` 内部）：集成测试把
+    `_update_env_file` 换成调用记录来断言「零写入」，放在内部就测不到这道闸门。
+    """
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise BusinessError(
+            "INVALID_PARAM",
+            "配置值不可包含换行或控制字符",
+        )
+
+
 def _update_env_file(env_file: str, key: str, value: str) -> None:
     """
     更新 .env 文件中的配置项
     
     如果配置项已存在则更新，不存在则追加
+
+    前置条件：value 已过 `_reject_unsafe_env_value`（整行写入，值必须为单行安全）。
     """
     lines = []
     key_found = False
