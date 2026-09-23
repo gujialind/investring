@@ -52,6 +52,10 @@ DIFF_STEP = "Diff morphology"
 SWAP_STEP = "Swap e2e to base (baseline only)"
 CAPTURE_RUN_STEP = "Run Playwright tests (capture)"
 RAW_UPLOAD_STEP = "Upload raw JSON"
+#: flaky 汇总的接线（#570）：主运行步的 step id 是 `--require-input` 两档口径的唯一来源。
+MAIN_RUN_STEP = "Run Playwright tests (main)"
+FLAKY_STEP = "Summarize flaky tests"
+E2E_OUTCOME_ENV = "E2E_OUTCOME"
 #: 诊断品上传步：缺文件**不该**染红 job（#414），故它们带 continue-on-error 且不带
 #: `if-no-files-found: error`。登记在案，新增诊断品步骤时加一行。
 DIAGNOSTIC_UPLOAD_STEPS = ("Upload Playwright report", "Upload failure evidence")
@@ -238,6 +242,59 @@ def capture_problems(stack_text: str, stack_lines: list[str], source: str) -> li
         body = code_lines(step_body(stack_text, step=step, source=source))
         if not _lines_with(body, "continue-on-error: true"):
             problems.append(f"诊断品步骤 `{step}` 丢了 continue-on-error: true（#414）")
+    return problems
+
+
+def flaky_wiring_problems(stack_text: str, *, source: str) -> list[str]:
+    """flaky 汇总 `--require-input` 的接线（#570）→ 问题清单（空 = 合规）。
+
+    PR #568 引入的两档口径（E2E 成功 ⇒ 缺 JSON 判红，否则只发 warning）以
+    `steps.<主运行步 id>.outcome` 为唯一判据；而**这条接线自己过去零守门**：把主运行步的
+    `id: e2e_main` 改名，GitHub 把 `steps.e2e_main.outcome` 解析成空串 ⇒ 条件恒假 ⇒
+    `--require-input` 静默失效，flaky 可见性退回 #491 修复前，且不会有任何一步变红。
+
+    与 `exempt_problems` 同款立场：**钉来源，不钉结果**——断言 outcome 取自**主运行步当前
+    的 step id**，一致改名（id 与引用同步）判绿，只改一处判红。
+    """
+    main_step = code_lines(step_body(stack_text, step=MAIN_RUN_STEP, source=source))
+    step_id = next((line.split(":", 1)[1].strip() for line in main_step if line.startswith("id:")), None)
+    if not step_id:
+        return [
+            f"`{MAIN_RUN_STEP}` 没有 `id:`——`{FLAKY_STEP}` 的 outcome 没有来源，"
+            "`--require-input` 的两档口径无从接线（#570）"
+        ]
+    problems: list[str] = []
+    flaky_step = code_lines(step_body(stack_text, step=FLAKY_STEP, source=source))
+    expected_env = f"{E2E_OUTCOME_ENV}: ${{{{ steps.{step_id}.outcome }}}}"
+    if expected_env not in flaky_step:
+        problems.append(
+            f"`{FLAKY_STEP}` 的 {E2E_OUTCOME_ENV} 不再是 `{expected_env}`——"
+            "主运行步 id 改名没同步时 GitHub 会把表达式解析成空串：条件恒假，"
+            "`--require-input` 静默失效，该红的时候只发 warning（#570）"
+        )
+    run = code_lines(step_run_block(stack_text, step=FLAKY_STEP, source=source))
+    defaults = [i for i, line in enumerate(run) if line.startswith("ARGS=")]
+    cond = [i for i, line in enumerate(run)
+            if line.startswith("if ") and f"${E2E_OUTCOME_ENV}" in line and "success" in line]
+    if not cond:
+        problems.append(
+            f"`{FLAKY_STEP}` 没有以 ${E2E_OUTCOME_ENV} 是否 success 为条件的分支——"
+            "`--require-input` 要么恒生效（E2E 红了还判红，噪声）要么永不生效（静默空转），"
+            "两档口径都不成立（#491/#570）"
+        )
+        return problems
+    if not defaults or defaults[0] > cond[0]:
+        problems.append(
+            "条件分支前没有 `ARGS=` 的默认值初始化——bash -e 下 `[ cond ] && VAR=x` "
+            "在条件为假时会让该步以 rc=1 结束（e2e-stack.yml 该步注释）"
+        )
+    if not any("--require-input" in line for line in run[cond[0]:]):
+        problems.append(
+            "`--require-input` 不在 success 分支内——E2E 成功却缺 JSON 产物时门禁不判红，"
+            "json reporter 的 wiring 断了也全绿（#491 的收口判据）"
+        )
+    if not any("e2e_flaky_summary.py" in line and "$ARGS" in line for line in run):
+        problems.append("汇总调用没有带上 `$ARGS`——条件算出的参数没有生效路径，两档口径形同虚设")
     return problems
 
 
