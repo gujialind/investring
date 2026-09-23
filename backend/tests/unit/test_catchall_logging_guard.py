@@ -12,7 +12,10 @@
 #      时 HTTPException 的默认值 500**；
 #   ③ 处理器体内没有任何 ERROR 级日志出口 → 判红，点名 `文件:行`。
 # 日志出口的认定：`report_unexpected(...)`（本仓库统一入口，见
-# `app/error_reporting.py`）或任何 `X.error/exception/critical(...)` 调用。
+# `app/error_reporting.py`）或任何 `X.error/exception/critical(...)` 调用；且出口必须
+# **真拿到原始异常**——首参是 `except … as e` 的绑定名，或关键字 `exc_info=e`。两种形态
+# 都认：只认首参会把 `logger.error("…", exc_info=e)` 这条合法写法判成「失真出口」，而
+# 判红文案又正好推荐它，自相矛盾（审查 Suggestion 2）。
 #
 # **刻意不把判据放宽成「任何 except X → 5xx」**：422/404/409 是**有意的**领域映射，
 # 给它们强制加 ERROR 出口只会把业务拒绝刷成噪音（#405 定的口径是 WARNING）。同理，
@@ -102,6 +105,22 @@ def _is_outlet(call: ast.Call) -> bool:
     return False
 
 
+def _outlet_receives_exception(call: ast.Call, bound: str) -> bool:
+    """出口是否拿到了原始异常：首参是绑定名（`report_unexpected(e, …)`），
+    或 `exc_info=<绑定名>`（`logger.error("…", exc_info=e)`）。
+
+    两者都算——判据要钉的是「error_type 不失真」，不是某种调用姿势。
+    """
+    if call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == bound:
+        return True
+    return any(
+        keyword.arg == "exc_info"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == bound
+        for keyword in call.keywords
+    )
+
+
 def _is_catch_all(handler: ast.ExceptHandler) -> bool:
     if handler.type is None:  # 裸 except:
         return True
@@ -142,11 +161,11 @@ def _scan_source(source: str, *, path: Path) -> list[Site]:
         reason = ""
         if not outlets:
             reason = "块内无任何 ERROR 级日志出口"
-        elif bound and all(
-            not (out.args and isinstance(out.args[0], ast.Name) and out.args[0].id == bound)
-            for out in outlets
-        ):
-            reason = f"日志出口未收到原始异常（缺第一个实参 `{bound}`），error_type 会失真"
+        elif bound and all(not _outlet_receives_exception(out, bound) for out in outlets):
+            reason = (
+                f"日志出口未收到原始异常（既不是首参 `{bound}`，也不是 `exc_info={bound}`），"
+                "error_type 会失真"
+            )
         sites.append(
             Site(
                 path=path,
@@ -194,8 +213,10 @@ class TestCatchAllLoggingOutlet:
             "以下 catch-all 把非预期异常翻成 5xx 却没有日志出口（#553：HTTPException 走的是"
             "中间件链内侧，外层全局 handler 接不到，500 事后不可追溯）：\n"
             + "\n".join(f"    {_rel(s)} —— {s.reason}（HTTP {s.status}）" for s in offenders)
-            + "\n修法：在 raise 之前调 `report_unexpected(e, operation=\"<端点名>\")`，"
-            "或自行 logger.error(..., exc_info=e)；响应契约与错误码不因此改变。"
+            + "\n修法：在 raise 之前调 `report_unexpected(e, operation=\"<端点名>\")`"
+            "（统一入口，同时落 system_error_log；见下面 test_report_unexpected_is_wired）；"
+            "自行记日志则必须把原始异常交给出口（`logger.error(\"…\", exc_info=e)`），"
+            "否则 error_type 失真、等同没有出口。响应契约与错误码不因此改变。"
         )
 
     def test_report_unexpected_is_wired(self):
@@ -261,6 +282,30 @@ def endpoint():
         raise HTTPException(status_code=500, detail="boom")
 '''
 
+    # 自行记日志的合法形态：异常经 `exc_info=` 交给出口（首参是消息串）
+    SOURCE_LOGGER_EXC_INFO = '''
+from fastapi import HTTPException
+
+def endpoint():
+    try:
+        do_work()
+    except Exception as e:
+        logger.error("端点兜底", exc_info=e)
+        raise HTTPException(status_code=500, detail=str(e))
+'''
+
+    # 自行记日志但根本没带异常：堆栈与 error_type 都无从谈起，仍须判红
+    SOURCE_LOGGER_WITHOUT_EXC = '''
+from fastapi import HTTPException
+
+def endpoint():
+    try:
+        do_work()
+    except Exception as e:
+        logger.error("端点兜底失败")
+        raise HTTPException(status_code=500, detail=str(e))
+'''
+
     def _scan(self, source: str) -> list[Site]:
         return _scan_source(source, path=Path("synthetic.py"))
 
@@ -287,6 +332,21 @@ def endpoint():
         """出口没拿到原始异常 → error_type 失真，等同没有出口（#553 教训的另一半）"""
         sites = self._scan(self.SOURCE_WRONG_ARG)
         assert sites and not sites[0].has_outlet, f"未识别失真出口：{sites}"
+
+    def test_logger_exc_info_form_turns_green(self):
+        """`logger.error("…", exc_info=e)` 是判红文案给出的替代修法，必须真能过判据。
+
+        只认首参会把这条合法写法判成「失真出口」——守门与自己的修复提示互相打脸，
+        照提示改的人白跑一轮（审查 Suggestion 2）。
+        """
+        sites = self._scan(self.SOURCE_LOGGER_EXC_INFO)
+        assert sites and sites[0].has_outlet, f"exc_info 形态被误判：{sites}"
+
+    def test_logger_without_exception_turns_red(self):
+        """放宽到 exc_info 不等于放宽到「记了日志就行」：没带异常仍须判红"""
+        sites = self._scan(self.SOURCE_LOGGER_WITHOUT_EXC)
+        assert sites and not sites[0].has_outlet, f"未识别无异常的日志出口：{sites}"
+        assert "exc_info" in sites[0].reason, sites[0].reason
 
     def test_parse_failure_fails_closed(self):
         """解析失败必须抛出（fail-closed），不允许「扫不动就跳过」的静默失效"""
