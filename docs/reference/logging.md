@@ -41,6 +41,17 @@ JSON；异常折进 `exception` 字段（**不拼进 `message`**，否则换行�
 未预期异常由同一个 `main.py` 的 `Exception` handler 记 ERROR（**带堆栈**），并同时落一条
 `system_error_log`；`request_path` 在写入侧按列宽截断，完整 path 只在 stdout 行里。
 
+**5xx 兜底必须有日志出口**（#553）：router 里「`except Exception` → 抛 `HTTPException(5xx)`」
+的分支**到不了上面那个全局 handler**——`HTTPException` 由中间件链内侧的
+`ExceptionHandlerMiddleware` 就地渲染，永远冒不到装着 `Exception` handler 的最外层，
+原始异常类型与堆栈因此被丢掉（只剩响应体里 `str(e)` 一句，事后查不到为什么 500）。这类
+分支必须自己留痕：抛之前调 `app/error_reporting.py::report_unexpected(e, operation=...)`
+（一条 ERROR 带 `operation` / `method` / `path` + 落一条 `system_error_log`，
+`error_type` 取**原始异常类名**；raise 与 rollback 仍归调用点）。**只给 catch-all 用**——
+`BusinessError` / `ValueError` 这类预期内拒绝仍是 WARNING 口径（上一条），刷成 ERROR 就是
+噪音。守门：`backend/tests/unit/test_catchall_logging_guard.py`（AST 扫 `app/routers/**`，
+块内无出口即判红并点名 `文件:行`；带下限棘轮与合成反例的自检，探针自身有判红能力）。
+
 **采集侧须容忍非 JSON 行**：`--workers 2`（生产）与 `--reload`（dev）下 uvicorn **父进程
 不 import 应用**，每次启停有 2~4 行明文。解析用 `jq -R 'fromjson? // empty'`。
 
@@ -91,6 +102,7 @@ NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不�
 - 不把审计换成 session 级 savepoint；需要 ORM 状态复位的是失败后继续循环的 auto_confirm。`sync_transfer_group` / `_confirm_fund_level_event` 失败即 rollback/raise、不承诺继续，同样保留连接级。auto_confirm 的显式 session savepoint 与禁止 with 的原因见[后端事务说明](../../backend/AGENTS.md#backend-auto-confirm)。
 - savepoint 前先 flush 调用方业务改动到外层，否则 ROLLBACK TO SAVEPOINT 会一并撤销它们而调用方收到成功；**flush 和建 savepoint 都在 try 内**，`sp = None` 哨兵（#422a），否则重算收尾埋点可能把承诺的 `200 + results[].errors` 变成 500。
 - 审计失败不外抛：回滚 savepoint、stdout ERROR，再用独立 SessionLocal 写 `error_type=AuditWriteFailure` 的 system_error_log；后者自身 best-effort，失败只记 stdout。守护覆盖 flush、建 savepoint、Core INSERT、回滚四段（#422）；回滚失败另记带 exc_info 的 ERROR，文案须按结果分支，不能宣称业务事务不受影响。
+- **`system_error_log` 的写入点有三类**，一律 best-effort 且走独立 session（业务事务不可信，写不进去只记 stdout，绝不掩盖原始异常）：① 审计写入失败；② **router 把未预期异常翻成 5xx 的兜底分支**（#553，统一入口 `app/error_reporting.py::report_unexpected`——那些分支抛的是 `HTTPException`，全局 handler 接不到，见[第 1 节](#logging-runtime)）；③ `main.py` 的全局未预期异常 handler。新加写入点走 `report_unexpected`，不要在各 router 里各写一套 `logger.error`。
 - request_path 在唯一写入路径按 `SYSTEM_ERROR_PATH_MAX`（绑定模型列宽 200）截断，完整值保留在 stdout，避免 MySQL 严格模式超宽丢整条记录。自由文本的 4 字节字符由全库 utf8mb4 解决（#427/#433），不采用写入侧转义清单；迁移兼容约束见[后端数据模型说明](../../backend/AGENTS.md#backend-models)。
 
 ### 载荷与去重边界

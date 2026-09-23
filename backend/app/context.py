@@ -28,6 +28,11 @@ class RequestContext:
     request_id: Optional[str] = None
     actor: Optional[str] = None
     client_ip: Optional[str] = None
+    # method / path 供 router 兜底（#553）补上下文：那条 ERROR 不走全局 handler，
+    # 手头没有 Request 对象，只能从上下文取回。与访问日志同口径——只记 path 不记
+    # query（查询串可能带凭据）。
+    method: Optional[str] = None
+    path: Optional[str] = None
 
 
 request_context_var: ContextVar[Optional[RequestContext]] = ContextVar(

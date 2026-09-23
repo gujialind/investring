@@ -71,6 +71,7 @@
   - 金额转份额的两步量化及 pending NULL 语义见[事件正文](../docs/reference/business-constraints.md#rule-event)，不要在预览另算一套。
 
 * **审计与系统错误**只经 `audit_service.record_audit` / `record_system_error`，不 commit；Core INSERT + 连接级 savepoint 的理由、失败隔离与载荷规则统一见[审计规范](../docs/reference/logging.md#logging-audit)。不要套用 auto_confirm 的 ORM savepoint。
+  - **`system_error_log` 的覆盖面含 router 兜底**（#553）：`HTTPException` 由中间件链内侧就地渲染、冒不到全局 `Exception` handler，故 `app/routers/**` 里「`except Exception` → 抛 5xx」的分支**必须自己留痕**——统一走 `app/error_reporting.py::report_unexpected(e, operation=...)`（ERROR 带原异常堆栈 + 落 `system_error_log`，`error_type` 取原始异常类名；`raise` / `db.rollback()` 仍归调用点，错误码与响应契约不变）。**只给 catch-all 用**：`BusinessError` / `ValueError` 走全局 handler 的 WARNING 口径。守门：`tests/unit/test_catchall_logging_guard.py`（AST 扫 `app/routers/**`，缺出口即判红并点名 `文件:行`）+ `tests/integration/test_router_catchall_observability.py`（行为）。
 * **任务记录**只经 `task_runner.run_task`；这是分阶段提交的事务例外，session 归调用方、不 close。编排、跳过、NULL 语义与异常收口见[任务执行规范](../docs/reference/logging.md#logging-tasks)。
 
 <a id="backend-models"></a>

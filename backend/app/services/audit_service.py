@@ -18,9 +18,11 @@
   本身（#422a，flush 干的是调用方的活、撞约束即抛），savepoint 回滚失败也不再静默
   （#422b，另记一条带堆栈的 stdout ERROR，并把「业务事务状态不可信」写进日志与
   `system_error_log` 文案——回滚失败几乎必然意味着连接已死）；
-- **system_error_log 走独立 session**：`record_system_error` 的两个调用点（审计 flush
-  失败、`main.py` 全局未预期异常 handler）所处的事务都已不可信，且 best-effort——
-  写不进去只记 stdout，绝不外抛掩盖原始错误。
+- **system_error_log 走独立 session**：`record_system_error` 用独立 session，
+  best-effort——写不进去只记 stdout，绝不外抛掩盖原始错误。调用点有三类：
+  本模块审计写入失败、**router 层把未预期异常翻成 5xx 的兜底分支**（#553，统一入口
+  `app/error_reporting.py::report_unexpected`——那些分支抛 `HTTPException`，全局
+  handler 接不到）与 `main.py` 全局未预期异常 handler。
 """
 
 import json

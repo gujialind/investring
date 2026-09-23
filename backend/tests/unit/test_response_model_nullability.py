@@ -54,20 +54,27 @@ from app.models.subscription import Subscription
 from app.models.sync_job import SyncJob
 from app.models.system_error_log import SystemErrorLog
 from app.models.task_execution_log import TaskExecutionLog
+from app.models.price_record import PriceRecord
 from app.models.trading_calendar import TradingCalendar
 from app.models.trade import Trade
 from app.schemas.asset_classification import AssetClassificationDetail
 from app.schemas.investor import InvestorResponse
+from app.schemas.market_data import PriceDataResponse
 from app.schemas.log import AuditLogResponse, LoginLogResponse, SystemErrorLogResponse
 from app.schemas.notification import NotificationResponse
 from app.schemas.platform import PlatformResponse
-from app.schemas.portfolio import PortfolioResponse, PortfolioValueSnapshotResponse
+from app.schemas.portfolio import (
+    NavHistoryRecord,
+    PortfolioResponse,
+    PortfolioValueSnapshotResponse,
+)
 from app.schemas.position import PositionResponse
 from app.schemas.product import ProductResponse
 from app.schemas.share_change_event import ShareChangeEventResponse
+from app.schemas.snapshot import SnapshotGenerateNextResult, SnapshotGenerationResult
 from app.schemas.subscription import SubscriptionResponse
 from app.schemas.sync_job import NavSyncDetailResponse, SyncJobResponse
-from app.schemas.task import TaskExecutionLogResponse, TaskResponse
+from app.schemas.task import TaskDetailResponse, TaskExecutionLogResponse, TaskResponse
 from app.schemas.trading_calendar import TradingCalendarResponse
 from app.schemas.trade import TradeResponse
 
@@ -99,6 +106,20 @@ ORM_SCHEMA_PAIRS: list[tuple[type, type]] = [
     # calendar_date / is_open / created_at（3 个，均无违规：前两列 NOT NULL、
     # created_at 有 server_default），收录无害且把该出口纳入棘轮保护
     (TradingCalendar, TradingCalendarResponse),
+    # #580 纳入：GET /api/products/{code}/{market}/price-data 有 REST 出口
+    # （response_model=List[PriceDataResponse]）却此前未配对，是本次新发现的漏项。
+    # unit_price 是本类的主干——它可空时路由里的 float(r.unit_price) 抛 TypeError
+    # 变 500；本轮把列收口为 NOT NULL（迁移 0017）且写入侧滤掉无价行，收录把它钉住、
+    # 防止日后有人把列改回可空却没人发现。参与核对的同名字段 4 个（product_code /
+    # market / price_date 三列均 NOT NULL，unit_price 已随本轮改为 NOT NULL）。
+    (PriceRecord, PriceDataResponse),
+    # #580 收录面互证发现的第二批漏项：守门按「路由出口的响应 schema 与 ORM 同名字段
+    # ≥3」扫描得出。其中 TaskDetailResponse 与 ScheduledTask 同名字段多达 11 个却从未
+    # 参与核对——它与已收录的 TaskResponse 是同一模型的两张出口，漏掉一张等于漏掉一半。
+    (ScheduledTask, TaskDetailResponse),
+    (PortfolioValueSnapshot, NavHistoryRecord),
+    (PortfolioValueSnapshot, SnapshotGenerationResult),
+    (PortfolioValueSnapshot, SnapshotGenerateNextResult),
 ]
 
 # (模型名, 字段名) -> (kind, 理由)。kind 的机制必须能被 MECHANISM_CHECKERS 机器复核。
@@ -181,7 +202,7 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
 # 204 → 210（#573 纳入 AssetClassification ↔ AssetClassificationDetail 配对，6 个同名字段）。
 # 210 → 213（#580 纳入 TradingCalendar ↔ TradingCalendarResponse 配对，3 个同名字段：
 # calendar_date / is_open / created_at；exchange 未在响应暴露、不参与核对）。
-MIN_CHECKED_FIELDS = 213
+MIN_CHECKED_FIELDS = 241
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
@@ -459,3 +480,119 @@ _MECHANISM_CHECKERS = {
     "service_guard": _check_service_guard,
     "known_gap": _check_known_gap,
 }
+
+
+# --------------------------------------------------------------------------- #
+# 收录面互证（issue #580）
+# --------------------------------------------------------------------------- #
+# `ORM_SCHEMA_PAIRS` 是一份手写清单，而手写清单的失效方式是**静默**的：少登记一对，
+# 那一对就不会被扫描，缺口继续存在而 CI 全绿——#573 漏掉 AssetClassification、
+# 本次又漏掉 PriceRecord/TradingCalendar/TaskDetailResponse，都是同一个形态。
+# 这里把「清单漏项」从盲区变成红灯：凡是**挂了 REST 出口**（response_model 用到）
+# 且与某个 ORM 模型同名字段足够多的响应 schema，都必须在清单里；否则要求收录或
+# 显式豁免并注明理由。阈值取 3 是经验值——低于它多半是汇总/统计类的响应，压根
+# 没有对应的 ORM 行可谈。
+
+ROUTERS_DIR = Path(__file__).resolve().parents[2] / "app" / "routers"
+MIN_SHARED_FIELDS = 3
+
+
+def _all_orm_models() -> list:
+    import pkgutil
+    import importlib
+
+    import app.models as models_pkg
+
+    found = []
+    for _, name, _ in pkgutil.iter_modules(models_pkg.__path__):
+        if name == "base":
+            continue
+        module = importlib.import_module(f"app.models.{name}")
+        for obj in vars(module).values():
+            if isinstance(obj, type) and hasattr(obj, "__table__"):
+                found.append(obj)
+    return found
+
+
+def _response_schemas_from_routers() -> dict:
+    """路由 `response_model` 里出现的 schema 名 → 出处；抽不到就红，绝不静默跳过"""
+    import ast
+
+    names = {}
+    for path in sorted(ROUTERS_DIR.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                if not isinstance(dec, ast.Call):
+                    continue
+                for kw in dec.keywords:
+                    if kw.arg != "response_model":
+                        continue
+                    target = kw.value
+                    if isinstance(target, ast.Subscript):  # List[X] / Optional[X]
+                        target = target.slice
+                    if isinstance(target, ast.Name):
+                        names.setdefault(target.id, f"{path.name}:{node.lineno}")
+    return names
+
+
+def _unenrolled(router_schemas: dict, orm_models: list, pairs: set) -> dict:
+    """返回「有 ORM 孪生却未收录」的 {schema 名: 说明}"""
+    import pkgutil
+    import importlib
+
+    import app.schemas as schemas_pkg
+
+    index = {}
+    for _, name, _ in pkgutil.iter_modules(schemas_pkg.__path__):
+        module = importlib.import_module(f"app.schemas.{name}")
+        for attr, obj in vars(module).items():
+            if isinstance(obj, type) and hasattr(obj, "model_fields"):
+                index.setdefault(attr, obj)
+
+    missing = {}
+    for name, where in sorted(router_schemas.items()):
+        schema = index.get(name)
+        if schema is None:
+            continue
+        fields = set(schema.model_fields)
+        twin = max(
+            ((m, len(fields & set(m.__table__.columns.keys()))) for m in orm_models),
+            key=lambda x: x[1],
+            default=(None, 0),
+        )
+        if twin[0] is None or twin[1] < MIN_SHARED_FIELDS:
+            continue
+        if (twin[0].__name__, name) not in pairs:
+            missing[name] = f"{twin[0].__name__}（同名字段 {twin[1]}，{where}）"
+    return missing
+
+
+class TestEnrollmentCompleteness:
+    def test_every_schema_with_an_orm_twin_is_enrolled(self):
+        router_schemas = _response_schemas_from_routers()
+        # fail-closed：一个都抽不到说明装饰器写法变了或扫描失效，那比漏报更危险
+        assert router_schemas, "没能从 routers 抽出任何 response_model——守门正在空转"
+
+        pairs = {(m.__name__, s.__name__) for m, s in ORM_SCHEMA_PAIRS}
+        missing = _unenrolled(router_schemas, _all_orm_models(), pairs)
+        assert missing == {}, (
+            f"这些响应 schema 有 ORM 孪生却未收录（#580）：{missing}。"
+            "补进 ORM_SCHEMA_PAIRS，或说明它为何不该纳入"
+        )
+
+    def test_guard_detects_a_missing_pair(self):
+        """恒真的守门等于没有守门：抽掉一条已收录配对，本断言必须变红"""
+        router_schemas = _response_schemas_from_routers()
+        orm_models = _all_orm_models()
+        pairs = {(m.__name__, s.__name__) for m, s in ORM_SCHEMA_PAIRS}
+        assert _unenrolled(router_schemas, orm_models, pairs) == {}
+
+        # 必须挑一条「守门真的在比对」的收录项：集合顺序不定，随手取第一条可能落在
+        # 没挂 REST 出口或同名字段不够的配对上，去掉它守门自然没反应（那是假绿）。
+        dropped = next(
+            (c for c in sorted(pairs) if _unenrolled(router_schemas, orm_models, pairs - {c})),
+            None,
+        )
+        assert dropped, "去掉任何一条收录守门都毫无反应——它并不真的在比对"

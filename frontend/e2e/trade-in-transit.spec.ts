@@ -348,7 +348,12 @@ async function generateSnapshot(page: Page, targetISO: string): Promise<void> {
     ),
     dlg.getByRole('button', { name: '确认生成' }).click(),
   ]);
-  expect(generateResp.ok(), `快照生成接口返回 ${generateResp.status()}`).toBeTruthy();
+  // #553：500 时 `detail.message` 是唯一的线索来源（那次 CI 归因全靠它），只打印状态码
+  // 等于把它丢掉——失败信息必须带上响应体
+  expect(
+    generateResp.ok(),
+    `快照生成接口返回 ${generateResp.status()} ${await generateResp.text()}`,
+  ).toBeTruthy();
   await expect(toastByTitle(page, '快照生成成功')).toBeVisible({ timeout: 15_000 });
   await expect(dlg).toBeHidden({ timeout: 15_000 });
 }
