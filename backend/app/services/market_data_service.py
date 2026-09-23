@@ -330,6 +330,15 @@ def _bulk_upsert_prices(
             },
         )
 
+    if not values:
+        # 整批都无可用单价（数据源整段缺净值，正是存量 NULL 行的来源形态）：上面已经
+        # WARNING 记过被跳过的交易日，这里必须早退。MySQL 分支把空列表交给
+        # `db.execute(sql, [])` 会抛 StatementError（SQLAlchemy 2.0：A value is required
+        # for bind parameter …），让「跳过」被上层记成假失败——同步任务里该产品落成
+        # failed、错误信息还是 SQLAlchemy 的内部文案；SQLite 分支遍历空列表恰好无感，
+        # 所以这条方言分叉只有生产会踩到。
+        return 0
+
     if db.bind.dialect.name == "mysql":
         sql = text("""
             INSERT INTO price_record (product_code, market, price_date, unit_price, accumulated_nav, pre_close, pct_change, source)
