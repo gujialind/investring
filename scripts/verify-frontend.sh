@@ -43,7 +43,9 @@ case "$(command -v node)" in
 esac
 echo "✔ Node $(node -v)"
 
-# --- 依赖检查（lockfile 含 npmmirror 远程 tarball URL，npm ≥12 默认禁拉需显式放行） ---
+# --- 依赖检查（#577 ①：lock 的 resolved host 已归一为 registry.npmjs.org；本机 registry 若配成
+#     镜像，npm ≥12 会把 npmjs tarball 视为 remote，故保留 --allow-remote=all 兼容；
+#     防复发守门（#577 ③）未落地前不要摘掉该 flag） ---
 if [ ! -x node_modules/.bin/next ]; then
   echo "→ npm ci（依赖安装）"
   npm ci --allow-remote=all
