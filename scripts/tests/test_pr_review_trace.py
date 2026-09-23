@@ -28,7 +28,16 @@ trace = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(trace)
 
 CI_YML = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+TEMPLATE = Path(__file__).resolve().parents[2] / ".github" / "PULL_REQUEST_TEMPLATE.md"
 REVIEW_TRACE_STEP = "Assert review trace"
+
+
+def _conclusion_lines(text: str) -> list[str]:
+    """文本里命中判据 A 的行（冒号后非空白）。"""
+    return [
+        line for line in text.splitlines()
+        if (match := trace.CONCLUSION_RE.search(line)) and match.group("tail").strip()
+    ]
 
 #: 合规底本：结论写在 `## 审查记录` 里（判据 A），文件数在限内（判据 C）。
 COMPLIANT_BODY = "\n".join(
@@ -118,6 +127,98 @@ class TestSizeCriterion:
     def test_oversize_red_is_independent_of_conclusion(self):
         """超规模且无结论 → 两条都要报，不能只报一条（否则补了结论就漏掉规模）。"""
         assert len(trace.review_trace_problems("什么都没写", 23)) == 2
+
+
+# ============================================================================
+# 模板样板不是留痕：门禁不能被它自己的模板绕过（#615 审查 Blocker 2）
+# ============================================================================
+
+
+@pytest.fixture(scope="module")
+def template_body() -> str:
+    return TEMPLATE.read_text(encoding="utf-8")
+
+
+class TestTemplateBoilerplateIsNotATrace:
+    """GitHub UI 建 PR 默认预填模板：注释渲染后不可见、占位行一个字没改，都不算作者写下留痕。
+
+    实测形态（修复前）：把模板原文当正文喂判据，3 文件与 23 文件（超规模）场景都返回
+    空问题清单——判据 A 被「审查记录」节的填写说明里那句「结论：…」满足，判据 C 被
+    「自审清单」复选框文案里的「理由」「豁免」满足。门禁与它的绕过文本同批交付。
+    """
+
+    def test_the_bypass_lives_in_the_template_itself(self, template_body):
+        """前提自检：模板原文确实能命中判据 A，而剥掉注释后命中消失。
+
+        没有这条，下面整组反例可能在跟影子较劲（模板改一句话就静默空转）。
+        """
+        assert _conclusion_lines(template_body), (
+            "模板原文已不含带内容的「结论：…」——绕过路径变了，请同步本组用例"
+        )
+        assert not _conclusion_lines(trace.visible_body(template_body)), (
+            "剥掉 HTML 注释后模板仍有结论行命中：绕过不只在注释里，请检查模板占位行"
+        )
+
+    def test_untouched_template_is_red(self, template_body):
+        problems = trace.review_trace_problems(template_body, 3)
+        assert [p for p in problems if "结论" in p], problems
+
+    def test_untouched_template_is_red_when_oversize(self, template_body):
+        """判据 C 同理由：模板**可见**行里本来就带「理由」「豁免」（复选框与占位文案）。
+
+        只剥注释堵不住这条——那两行渲染后是可见的，得按「与模板逐字相同」剔除。
+        """
+        problems = trace.review_trace_problems(template_body, 23)
+        assert len(problems) == 2, problems
+
+    def test_template_filled_in_place_is_green(self, template_body):
+        """照模板原样填写（在占位行后面补内容）仍须判绿——不能把作者的话一起剔掉。"""
+        placeholder = "- 结论与状态（打回修改 / 审查未完成 / 通过，可进入合入确认）："
+        assert placeholder in template_body
+        filled = template_body.replace(placeholder, placeholder + "通过，可进入合入确认")
+        assert filled != template_body
+        assert trace.review_trace_problems(filled, 3) == []
+
+    def test_oversize_needs_the_authors_own_reason(self, template_body):
+        """填了结论但规模理由只有模板文案 → 判据 C 仍红；作者自己写一句 → 绿。"""
+        filled = template_body + "\n- 结论与状态（…）：通过，可进入合入确认\n"
+        problems = trace.review_trace_problems(filled, 23)
+        assert len(problems) == 1 and "23" in problems[0], problems
+        assert trace.review_trace_problems(
+            filled + "\n规模：23 个文件同属一次机械改名，不拆分。\n", 23
+        ) == []
+
+    def test_conclusion_only_inside_a_comment_is_red(self):
+        assert trace.conclusion_problem("<!-- 结论：通过，可进入合入确认 -->")
+
+    def test_size_reason_only_inside_a_comment_is_red(self):
+        assert trace.size_problem("<!-- 规模：23 个文件，不拆分 -->", 23)
+
+    def test_unclosed_comment_is_not_a_hiding_place(self):
+        """未闭合的 `<!--` 之后渲染器同样看不见（CommonMark 注释块延伸到文末）。"""
+        assert trace.conclusion_problem("<!-- 结论：通过\n这一整段渲染后都不可见")
+
+    def test_only_verbatim_template_lines_are_dropped(self):
+        """剔除按整行逐字比对：补过一个字就是作者的话，不得连坐。"""
+        boilerplate = {"- 结论与状态（打回修改 / 审查未完成 / 通过，可进入合入确认）："}
+        assert trace.author_lines("- 结论与状态（打回修改 / 审查未完成 / 通过，可进入合入确认）：",
+                                 boilerplate) == []
+        assert trace.author_lines("- 结论与状态（打回修改 / 审查未完成 / 通过，可进入合入确认）：通过",
+                                 boilerplate)
+
+    def test_missing_template_fails_closed(self, monkeypatch, tmp_path):
+        """模板读不到 → TraceError：判不出样板就等于判据失效，不静默放行（exit 2）。"""
+        monkeypatch.setattr(trace, "TEMPLATE_PATH", tmp_path / "nope.md")
+        with pytest.raises(trace.TraceError):
+            trace.load_boilerplate()
+
+    def test_comment_only_template_fails_closed(self, monkeypatch, tmp_path):
+        """模板剥注释后为空同样 fail-closed——那等于「所有正文行都判不出是不是样板」。"""
+        template = tmp_path / "PULL_REQUEST_TEMPLATE.md"
+        template.write_text("<!-- 只剩注释 -->\n", encoding="utf-8")
+        monkeypatch.setattr(trace, "TEMPLATE_PATH", template)
+        with pytest.raises(trace.TraceError):
+            trace.load_boilerplate()
 
 
 class TestExemption:
