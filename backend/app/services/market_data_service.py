@@ -1,4 +1,6 @@
 from datetime import date, datetime, timedelta
+import logging
+import math
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -8,6 +10,23 @@ from app.models.product import Product
 from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.tushare_client import get_fund_daily, get_fund_nav, TushareAPIError
+
+logger = logging.getLogger(__name__)
+
+
+def _usable_price(value: Any) -> bool:
+    """单价是否可入库（#580）。
+
+    数据源缺值时给的是 None/空串，pandas 转换还说不准给 NaN——三者都不能作为
+    「这一天的价格」落库。它们一旦进了 price_record，`unit_price` 就从此不再可靠：
+    读取侧 `float(None)` 直接 500，快照取价反过来把 NULL 当成说好吧有价。
+    """
+    if value is None or value == "":
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def get_price_records(
@@ -279,9 +298,15 @@ def _bulk_upsert_prices(
     if not rows:
         return 0
 
-    values = []
+    values, skipped = [], []
     for r in rows:
         td = r["trade_date"]
+        # #580：无单价的行不入库。落进去的后果比缺一行严重得多——读取路径
+        # `float(None)` 炸成 500（market_data.py），快照取价把 NULL 当作「有这一天」、
+        # 让 nav_coverage 误计为已覆盖，事后再难从这里定位缺失的那个日期。
+        if not _usable_price(r.get("unit_price")):
+            skipped.append(td)
+            continue
         d = date(int(td[:4]), int(td[4:6]), int(td[6:8]))
         values.append({
             "product_code": product_code,
@@ -293,6 +318,17 @@ def _bulk_upsert_prices(
             "pct_change": r.get("pct_change"),
             "source": source,
         })
+
+    if skipped:
+        logger.warning(
+            "跳过无单价的行情行（#580）",
+            extra={
+                "operation": "bulk_upsert_prices",
+                "product_code": product_code,
+                "market": market,
+                "skipped": skipped,
+            },
+        )
 
     if db.bind.dialect.name == "mysql":
         sql = text("""
