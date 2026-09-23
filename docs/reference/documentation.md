@@ -55,6 +55,7 @@ PR 必须说明“已同步文档及位置”或“无需同步及理由”。�
 
 - 文档链接使用相对当前文件的仓库内路径；禁止将本机绝对路径或 `file:///` 地址写作共享入口。
 - 长期跨文件规则引用使用显式稳定锚点（如 `rule-snapshot`）或稳定标题，不新增仅靠章节序号的引用；重命名或迁移时同批修复调用方。
+- 受管文档内引用章节一律写作 `§N.M`（跨文件时写成 `路径 §N.M`，如 `docs/design/visual-spec.md §1.5`），该写法由[检查器](../../scripts/check_context_docs.py)校验编号在目标文件里真实存在——改标题号必须同批改引用，否则门禁判红。叙史谈旧状态（同句带 issue 号或「已过时」类词）的引用不校验。
 - 源码引用以文件和符号定位。代码链接可指向文件，并注明 `文件::符号`；不要把源码行号当永久锚点。
 - [错误码总表](business-constraints.md#错误码总表) 的标题、表结构及 `文件::符号` 格式是机器接口，不得随排版重构破坏。
 - 该文档正文中，单独反引号包裹的大写下划线 token 被现有检查器视为错误码。非错误码常量应明确字段语境（例如 `market="CN_EXCHANGE"`），不要靠扩大豁免让检查变绿。
@@ -71,7 +72,7 @@ PR 必须说明“已同步文档及位置”或“无需同步及理由”。�
 ## 验证与交付
 
 - 核对完整 diff：规则无遗漏、引用可定位、例外未丢失、生成产物没有手改。
-- 从仓库运行 `python scripts/check_context_docs.py`；自测为 `python -m pytest scripts/tests/test_context_docs.py scripts/tests/test_ci_path_mapping.py -q`。受管文档与源码引用文件明确列在[检查器](../../scripts/check_context_docs.py)的 `MANAGED_DOCS` / `SOURCE_REFERENCES`，不递归扩展目标、不访问外部网站，也不涵盖被忽略的本地工具规则；目前识别普通行内 Markdown 链接、引用式链接定义、显式 ID 和 ATX 标题，代码围栏中的示例不当作入口。
+- 从仓库运行 `python scripts/check_context_docs.py`；自测为 `python -m pytest scripts/tests/test_context_docs.py scripts/tests/test_ci_path_mapping.py -q`。受管文档与源码引用文件明确列在[检查器](../../scripts/check_context_docs.py)的 `MANAGED_DOCS` / `SOURCE_REFERENCES`，不递归扩展目标、不访问外部网站，也不涵盖被忽略的本地工具规则；目前识别普通行内 Markdown 链接、引用式链接定义、显式 ID、ATX 标题与散文章节引用 `§N.M`，代码围栏中的示例不当作入口。
 - CI 的 changes job 在 checkout 后无条件运行此检查，docs-only PR 也不绕过；自测复用 Run scripts tests。错误码总表及源码符号继续由已有后端测试守门，不复制 AST 逻辑。
 - 运行本次影响面的契约检查及相关测试；检查范围和局限必须明示。机械检查不能证明业务语义正确，仍需对照实现与测试核实。
 - 分别报告通过、失败、未运行和无法验证，不能把计划执行写成执行完成，不能用 AI 自评代替证据。

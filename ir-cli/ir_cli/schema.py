@@ -109,7 +109,7 @@ WORKFLOWS = {
             "ir share-event create --event-type <type> --entitlement-date D1 --ex-date D2 ...",
             "确保 entitlement_date 当日快照已存在",
             "ir share-event confirm <id>",
-            "ir snapshot generate --target-date <ex_date>",
+            "ir snapshot generate --portfolio-code <code> --target-date <ex_date>",
         ],
         "notes": "ex_date > entitlement_date 且均为交易日；基金级事件（拆分/合并/送股）不传 platform_code，平台级（分红等）必传",
     },
