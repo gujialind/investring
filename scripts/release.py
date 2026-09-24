@@ -3,16 +3,15 @@
 InvestRing 发布脚本（issue #375）
 
 以根 VERSION 文件为项目版本单一事实来源。main 的 ruleset 要求一切改动经 PR 且
-CI OK（直接推送会被拒绝），而 v 标签必须落在 main tip（merge-commit）上
-deploy.yml 才能给镜像追加 :vX.Y.Z 语义标签，故发布分两阶段：
+CI OK（直接推送会被拒绝），故发布分两阶段：
 
   阶段一（本脚本默认命令）：同步版本文件 → 用钉版 .venv-openapi 隔离重导出
     openapi.json → 契约验证 → 从 conventional commits 生成 CHANGELOG →
     在 release/vX.Y.Z 分支单 commit → 推送分支并创建发布 PR。
-  阶段二（release.py tag vX.Y.Z）：发布 PR 合并后，校验 origin/main 的 VERSION
-    与 chore(release) 提交，在 origin/main tip 打附注标签并推送。
-    应在合并后立即执行——deploy 在 CI（约 8-10 分钟）之后才构建，窗口充裕；
-    若错过，重跑该 commit 的 CI run 会重新触发 deploy 补上语义标签。
+  阶段二（release.py tag vX.Y.Z --pr N 或 --sha 完整SHA）：校验发布 PR 身份、
+    main 可达性、目标版本投影与该 SHA 的 main push CI，在精确合并提交打标签。
+    本步骤不补镜像标签；现有 CD 仍只在构建时检测 v 标签。
+  doctor：只读检查当前工作区版本投影，不要求 HEAD 位于版本标签上。
 
 版本号规范见 docs/reference/versioning.md（Semver；0.x 初始阶段；无 pre-release）。
 
@@ -28,7 +27,8 @@ deploy.yml 才能给镜像追加 :vX.Y.Z 语义标签，故发布分两阶段：
     python3 scripts/release.py patch --yes           # 阶段一（跳过确认，非交互环境必须）
     python3 scripts/release.py --initial v0.1.0 --fixes 375
                                                      # 首个发布：无 v tag 时用指定版本作基线
-    python3 scripts/release.py tag v0.1.0            # 阶段二：发布 PR 合并后打 tag 并推送
+    python3 scripts/release.py tag v0.1.0 --pr 123    # 阶段二：发布 PR 合并后打 tag 并推送
+    python3 scripts/release.py doctor               # 只读版本投影检查
 """
 import argparse
 import json
@@ -38,6 +38,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
@@ -47,6 +48,8 @@ BACKEND_DIR = REPO_ROOT / "backend"
 
 SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 CONVENTIONAL_RE = re.compile(r"^([a-zA-Z]+)(\(([^)]+)\))?(!)?:\s*(.+)$")
+SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
+CI_WORKFLOW = ".github/workflows/ci.yml"
 
 # 版本同步目标：(文件, 说明)。openapi.json 不经文本替换，由重导出生成。
 CHANGELOG_HEADER = (
@@ -76,16 +79,21 @@ def write_text(path: Path, content: str) -> None:
         f.write(content)
 
 
-def run(cmd, cwd=REPO_ROOT, env=None, check=True):
-    """执行命令并返回 stdout；check=True 时非零退出即中止。"""
-    proc = subprocess.run(
-        [str(c) for c in cmd],
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+def run(cmd, cwd=None, env=None, check=True, redact=False):
+    """执行命令并返回 stdout；网络命令失败时不回显可能含凭据的输出。"""
+    try:
+        proc = subprocess.run(
+            [str(c) for c in cmd],
+            cwd=str(cwd or REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        fail(f"无法执行 {Path(cmd[0]).name}")
     if check and proc.returncode != 0:
+        if redact:
+            fail(f"{Path(cmd[0]).name} {cmd[1]} 失败（exit {proc.returncode}）；请检查认证、权限与网络")
         print(proc.stdout, file=sys.stderr)
         print(proc.stderr, file=sys.stderr)
         fail(f"命令失败（exit {proc.returncode}）: {' '.join(str(c) for c in cmd)}")
@@ -93,7 +101,10 @@ def run(cmd, cwd=REPO_ROOT, env=None, check=True):
 
 
 def git(*args, check=True) -> str:
-    return run(["git", *args], check=check).strip()
+    return run(
+        ["git", *args], check=check,
+        redact=args[0] in {"fetch", "push", "ls-remote", "remote"},
+    ).strip()
 
 
 def parse_semver(text: str):
@@ -163,9 +174,10 @@ def suggest_bump(commits: list[tuple[str, str]]) -> tuple[str, str]:
     return "patch", "仅 fix/chore 等向后兼容提交"
 
 
-def render_file_edits(target: str) -> list[tuple[Path, str, str]]:
-    """计算各版本文件替换后的内容（不写盘），供 dry-run 预览与执行共用。"""
-    old_version = read_text(VERSION_FILE)
+def render_file_edits(target: str, *, reader=None) -> list[tuple[Path, str, str]]:
+    """计算版本投影（不写盘），供发布、预览及只读检查共用。"""
+    reader = reader or read_text
+    old_version = reader(VERSION_FILE)
     eol = "\r\n" if old_version.endswith("\r\n") else "\n"
     edits = [(VERSION_FILE, old_version, f"{target}{eol}")]
     for path, pattern, repl, count in [
@@ -175,12 +187,43 @@ def render_file_edits(target: str) -> list[tuple[Path, str, str]]:
         # package-lock 的前两处 "version" 恰为顶层与 packages[""]，不同步会击穿 npm ci
         (REPO_ROOT / "frontend" / "package-lock.json", r'"version": "[^"]*"', f'"version": "{target}"', 2),
     ]:
-        old = read_text(path)
+        old = reader(path)
         new, n = re.subn(pattern, repl, old, count=count, flags=re.MULTILINE)
         if n != count:
             fail(f"{path} 中版本行匹配 {n} 处（期望 {count}），文件结构可能已变化，请人工检查")
         edits.append((path, old, new))
     return edits
+
+
+def check_version_projection(target: str | None = None, *, ref: str | None = None) -> str:
+    def reader(path):
+        if ref:
+            return run(["git", "show", f"{ref}:{path.relative_to(REPO_ROOT).as_posix()}"])
+        return read_text(path)
+
+    try:
+        current = reader(VERSION_FILE).strip()
+        if not parse_semver(current) or current.startswith("v"):
+            fail("根 VERSION 内容非法（期望 X.Y.Z）")
+        target = target or current
+        drift = [str(p.relative_to(REPO_ROOT)) for p, old, new in render_file_edits(target, reader=reader) if old != new]
+        schema = json.loads(reader(BACKEND_DIR / "openapi.json"))
+        info = schema.get("info") if isinstance(schema, dict) else None
+        if not isinstance(info, dict) or info.get("version") != target:
+            drift.append("backend/openapi.json info.version")
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        fail("版本投影读取失败：文件缺失、编码错误或 OpenAPI JSON 非法")
+    if drift:
+        fail(f"版本投影与 VERSION/目标 {target} 不一致: {', '.join(drift)}")
+    return target
+
+
+def doctor_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="只读检查工作区版本投影，不 fetch、不调用应用或生成器")
+    parser.parse_args(argv)
+    version = check_version_projection()
+    print(f"[ok] 版本投影一致: {version}（不要求 HEAD 位于 v 标签上）")
+    return 0
 
 
 def regen_openapi(py: Path) -> None:
@@ -247,6 +290,10 @@ def preflight() -> None:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "tag":
         return tag_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        return doctor_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "alias":
+        return alias_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description="InvestRing 发布脚本（docs/reference/versioning.md）")
     parser.add_argument("bump", nargs="?", choices=["major", "minor", "patch"], help="bump 类型；省略则用 --suggest 结果")
     parser.add_argument("--suggest", action="store_true", help="仅打印建议的 bump 类型，不写文件")
@@ -331,12 +378,11 @@ def main() -> int:
             fail(f"非交互环境请带 --yes（commit 已在本地 {branch}；手动: git push -u origin {branch} 后创建 PR）")
         answer = input(f"将推送 {branch} 并创建发布 PR，继续？[y/N] ").strip().lower()
         if answer != "y":
-            print(f"已取消推送。手动: git push -u origin {branch}；PR 合并后运行 python3 scripts/release.py tag v{target}")
+            print(f"已取消推送。手动: git push -u origin {branch}；PR 合并后使用 tag v{target} --pr <PR号>")
             return 0
     git("push", "-u", "origin", branch)
     git("switch", "main")
     create_release_pr(branch, target, entry, args.fixes)
-    print(f"[next] 发布 PR 合并后立即运行: python3 scripts/release.py tag v{target}")
     return 0
 
 
@@ -353,11 +399,14 @@ def create_release_pr(branch: str, target: str, entry: str, fixes: int | None) -
             "",
             "## 合并后动作（必须）",
             "",
-            "立即在 main 上运行阶段二打 tag（v 标签必须落在 main tip，deploy 才会给镜像追加语义标签）：",
+            "本 PR 合入 main 且合并提交的 push CI 成功后，用本 PR 编号定位发布提交（不依赖 main tip）：",
             "",
             "```bash",
-            f"python3 scripts/release.py tag v{target}",
+            f"python3 scripts/release.py tag v{target} --pr <本PR号>",
             "```",
+            "",
+            "也可使用 --sha <完整合并SHA>；创建 PR 时合并 SHA 尚未产生，不预先记录。",
+            "此步骤仅打 Git 标签；现有 CD 仍在构建时检测标签，不保证补齐已构建镜像的语义标签。",
             "",
             "--- CHANGELOG 条目预览 ---",
             "",
@@ -367,46 +416,293 @@ def create_release_pr(branch: str, target: str, entry: str, fixes: int | None) -
     gh = shutil.which("gh")
     if not gh:
         print(f"未检测到 gh CLI；请手动创建 PR（base: main, head: {branch}, 标题: chore(release): v{target}）")
+        print(f"[next] PR 合并且 push CI 成功后: python3 scripts/release.py tag v{target} --pr <PR号>")
         return
+    repo = origin_repository()
     url = run(
-        [gh, "pr", "create", "--base", "main", "--head", branch,
-         "--title", f"chore(release): v{target}", "--body", body]
+        [gh, "pr", "create", "--repo", repo, "--base", "main", "--head", branch,
+         "--title", f"chore(release): v{target}", "--body", body], redact=True,
     ).strip()
-    print(f"发布 PR 已创建: {url}")
+    match = re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/([1-9][0-9]*)", url)
+    if not match:
+        fail("gh 未返回有效的发布 PR URL；请检查 release 分支对应的 PR，勿盲目重复创建")
+    print(f"发布 PR 已创建: {repo}#{match[1]} ({url})")
+    print(f"[next] PR 合并且 push CI 成功后: python3 scripts/release.py tag v{target} --pr {match[1]}")
+    print("也可使用 --sha <完整合并SHA>；此时尚无合并 SHA。")
+
+
+def origin_repository() -> str:
+    remote = git("remote", "get-url", "origin")
+    if remote.startswith("git@github.com:"):
+        path = remote.removeprefix("git@github.com:")
+    else:
+        try:
+            url = urlsplit(remote)
+            if url.scheme not in {"https", "ssh"} or url.hostname != "github.com" or url.query or url.fragment:
+                fail("origin 必须指向 github.com 仓库（不回显 remote URL）")
+            path = url.path.lstrip("/")
+        except ValueError:
+            fail("无法解析 origin 仓库地址（不回显 remote URL）")
+    repo = path.removesuffix(".git")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        fail("无法解析 origin 仓库身份（不回显 remote URL）")
+    return repo
+
+
+def gh_api(endpoint: str, *args):
+    gh = shutil.which("gh")
+    if not gh:
+        fail("未检测到 gh CLI；无法验证发布 PR 与 CI")
+    output = run([gh, "api", "--hostname", "github.com", "--method", "GET", endpoint, *args], redact=True)
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError:
+        fail("gh API 未返回有效 JSON；无法验证发布 PR 与 CI")
+
+
+def is_release_pr(pr, repo: str, tag: str) -> bool:
+    if not isinstance(pr, dict):
+        return False
+    base, head = pr.get("base"), pr.get("head")
+    if not isinstance(base, dict) or not isinstance(head, dict):
+        return False
+    base_repo, head_repo = base.get("repo"), head.get("repo")
+    return (
+        isinstance(pr.get("merged_at"), str) and bool(pr["merged_at"])
+        and pr.get("merged", True) is True and pr.get("state") == "closed"
+        and type(pr.get("number")) is int and pr["number"] > 0
+        and pr.get("title") == f"chore(release): {tag}"
+        and base.get("ref") == "main" and head.get("ref") == f"release/{tag}"
+        and isinstance(base_repo, dict) and str(base_repo.get("full_name", "")).lower() == repo.lower()
+        and isinstance(head_repo, dict) and str(head_repo.get("full_name", "")).lower() == repo.lower()
+        and isinstance(pr.get("merge_commit_sha"), str) and SHA_RE.fullmatch(pr["merge_commit_sha"]) is not None
+    )
+
+
+def resolve_release_target(repo: str, tag: str, *, pr_number: int | None, sha: str | None) -> tuple[str, int]:
+    if pr_number is not None:
+        pr = gh_api(f"repos/{repo}/pulls/{pr_number}")
+        if not is_release_pr(pr, repo, tag) or pr["number"] != pr_number:
+            fail("目标 PR 不是已合并到 main 的对应 release PR（标题、分支、仓库或合并 SHA 不符）")
+        return pr["merge_commit_sha"].lower(), pr_number
+    pages = gh_api(f"repos/{repo}/commits/{sha}/pulls", "--paginate", "--slurp")
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        fail("gh API 返回的提交关联 PR 列表无效")
+    matches = [pr for page in pages for pr in page if is_release_pr(pr, repo, tag) and pr["merge_commit_sha"].lower() == sha]
+    if len(matches) != 1:
+        fail("目标 SHA 必须唯一对应一个已合并到 main 的 release PR 合并提交")
+    return sha, matches[0]["number"]
+
+
+def verify_release_ci(repo: str, sha: str) -> list:
+    """验证目标 SHA 的可信 main push CI；返回可信 run 列表（alias 用它绑定发布包 run）。"""
+    workflow = gh_api(f"repos/{repo}/actions/workflows/ci.yml")
+    if (
+        not isinstance(workflow, dict) or type(workflow.get("id")) is not int
+        or workflow["id"] <= 0 or workflow.get("path") != CI_WORKFLOW or workflow.get("name") != "CI"
+    ):
+        fail("无法确认可信 CI workflow（.github/workflows/ci.yml，名称 CI）")
+    pages = gh_api(
+        f"repos/{repo}/actions/workflows/{workflow['id']}/runs",
+        "-f", f"head_sha={sha}", "-f", "branch=main", "-f", "event=push", "-f", "per_page=100",
+        "--paginate", "--slurp",
+    )
+    if not isinstance(pages, list) or any(
+        not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list) for page in pages
+    ):
+        fail("gh API 返回的 CI run 列表无效")
+    trusted = []
+    for page in pages:
+        for run_info in page["workflow_runs"]:
+            if not isinstance(run_info, dict):
+                fail("gh API 返回的 CI run 无效")
+            head_repo = run_info.get("head_repository")
+            if (
+                run_info.get("workflow_id") == workflow["id"] and run_info.get("path") == CI_WORKFLOW
+                and run_info.get("head_sha") == sha and run_info.get("head_branch") == "main"
+                and run_info.get("event") == "push" and isinstance(head_repo, dict)
+                and str(head_repo.get("full_name", "")).lower() == repo.lower()
+                and type(run_info.get("id")) is int and run_info["id"] > 0
+            ):
+                trusted.append(run_info)
+    if not trusted:
+        fail("目标 SHA 缺少可信的 main push CI run")
+    latest = max(trusted, key=lambda item: item["id"])
+    if latest.get("status") != "completed" or latest.get("conclusion") != "success":
+        fail("目标 SHA 最新的 main push CI 未成功完成")
+    return trusted
+
+
+def existing_tag_targets(tag: str) -> tuple[str | None, str | None]:
+    ref = f"refs/tags/{tag}"
+    local = None
+    if git("rev-parse", "--verify", "--quiet", ref, check=False):
+        local = git("rev-parse", "--verify", f"{ref}^{{commit}}")
+    output = git("ls-remote", "--tags", "origin", ref, f"{ref}^{{}}")
+    remote_refs = {}
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2 or not SHA_RE.fullmatch(parts[0]) or parts[1] not in {ref, f"{ref}^{{}}"} or parts[1] in remote_refs:
+            fail("远程标签查询返回无效结果")
+        remote_refs[parts[1]] = parts[0].lower()
+    if f"{ref}^{{}}" in remote_refs and ref not in remote_refs:
+        fail("远程附注标签缺少原始引用")
+    return local, remote_refs.get(f"{ref}^{{}}", remote_refs.get(ref))
+
+
+def full_sha(value: str) -> str:
+    if not SHA_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("--sha 必须是完整的 40 位 commit SHA")
+    return value.lower()
+
+
+def positive_pr(value: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError("--pr 必须是正整数 PR 号")
+    return int(value)
 
 
 def tag_main(argv: list[str]) -> int:
-    """阶段二：发布 PR 合并后，在 origin/main tip 打附注标签 vX.Y.Z 并推送。"""
-    parser = argparse.ArgumentParser(description="在 main tip 打 v 标签并推送（docs/reference/versioning.md §4）")
-    parser.add_argument("version", metavar="vX.Y.Z", help="目标版本，须与 origin/main 的 VERSION 一致")
+    parser = argparse.ArgumentParser(description="在已验证的 release PR 合并 SHA 打 v 标签并推送")
+    parser.add_argument("version", metavar="vX.Y.Z", help="目标版本，须与目标 SHA 的版本投影一致")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--sha", type=full_sha, help="发布 PR 的完整合并 SHA")
+    source.add_argument("--pr", type=positive_pr, help="已合并的发布 PR 号")
     parser.add_argument("--yes", action="store_true", help="跳过交互确认")
     args = parser.parse_args(argv)
     if not parse_semver(args.version):
         fail(f"版本非法: {args.version!r}（期望 vX.Y.Z）")
     target = args.version.lstrip("v")
     tag = f"v{target}"
-
-    git("fetch", "origin", "--tags", "--force")
-    if git("tag", "-l", tag):
-        fail(f"标签 {tag} 已存在，无需重复打")
-    remote_tip = git("rev-parse", "origin/main")
-    version_on_main = git("show", "origin/main:VERSION").strip()
-    if version_on_main != target:
-        fail(f"origin/main 的 VERSION 为 {version_on_main}，与目标 {target} 不一致；发布 PR 是否已合并？")
-    subjects = git("log", "origin/main", "-20", "--pretty=%s").splitlines()
-    if f"chore(release): {tag}" not in subjects:
-        fail(f"origin/main 近 20 条提交中未见 chore(release): {tag}；发布 PR 可能尚未合并")
-
+    repo = origin_repository()
+    sha, number = resolve_release_target(repo, tag, pr_number=args.pr, sha=args.sha)
+    git("fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main")
+    if git("rev-parse", "--verify", f"{sha}^{{commit}}") != sha:
+        fail("目标 SHA 不是 commit")
+    if git("merge-base", sha, "refs/remotes/origin/main", check=False) != sha:
+        fail("目标 SHA 不可从 origin/main 到达；不允许给未合入 main 的提交打标签")
+    check_version_projection(target, ref=sha)
+    verify_release_ci(repo, sha)
+    local, remote = existing_tag_targets(tag)
+    if any(existing is not None and existing != sha for existing in (local, remote)):
+        fail(f"标签 {tag} 已指向其他 SHA；拒绝覆盖本地或远程标签")
+    if remote == sha:
+        print(f"[ok] {tag} 已指向 {sha}（PR #{number}）；无需重复推送")
+        return 0
     if not args.yes:
         if not sys.stdin.isatty():
-            fail(f"非交互环境请带 --yes（手动: git tag -a {tag} {remote_tip} -m 'Release {tag}' && git push origin {tag}）")
-        answer = input(f"将在 origin/main（{remote_tip[:7]}）打标签 {tag} 并推送，继续？[y/N] ").strip().lower()
+            fail("非交互环境请带 --yes；尚未创建或推送标签")
+        answer = input(f"将发布 PR #{number} 的 {sha} 标记为 {tag} 并推送，继续？[y/N] ").strip().lower()
         if answer != "y":
             print("已取消。")
             return 0
-    git("tag", "-a", tag, remote_tip, "-m", f"Release {tag}")
-    git("push", "origin", tag)
-    print(f"[ok] {tag} 已推送，指向 main tip {remote_tip[:7]}；CI 通过后 deploy.yml 将为镜像追加 :{tag} 标签。")
+    if local is None:
+        git("tag", "-a", tag, sha, "-m", f"Release {tag}")
+    git("push", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
+    print(f"[ok] {tag} 已推送，指向 {sha}（PR #{number}）；本步骤不补镜像标签、不触发 CD。")
+    return 0
+
+
+def docker(*args, check=True):
+    """执行 docker CLI 并返回 CompletedProcess（alias 需要按 returncode 分支）。"""
+    cmd = ["docker", *[str(a) for a in args]]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError:
+        fail("无法执行 docker（alias 需要本机 docker CLI 与已登录的 ACR 凭据）")
+    if check and proc.returncode != 0:
+        print(proc.stderr, file=sys.stderr)
+        fail(f"docker {args[0]} 失败（exit {proc.returncode}）")
+    return proc
+
+
+def alias_image(repo: str, digest: str, tag: str, *, dry_run: bool) -> None:
+    """把 repo:tag 指到 repo@digest。冲突拒绝、同 digest 幂等（#540）。
+
+    判定用注册表实况（pull 后比对 RepoDigests），不缓存、不猜测：
+      - :tag 不存在        → 按 digest 拉取、打标签、推送；
+      - :tag == 本 digest  → 幂等成功（部分成功后重试走这条路）；
+      - :tag == 其他 digest → 拒绝覆盖。alias 冲突必须人工核对来源，
+        不通过重建/重部署「补」出一个语义标签。
+    """
+    source, target = f"{repo}@{digest}", f"{repo}:{tag}"
+    if dry_run:
+        print(f"[dry-run] alias {target} → {digest[:19]}…")
+        return
+    docker("pull", source)
+    if docker("pull", target, check=False).returncode == 0:
+        digests = json.loads(
+            docker("image", "inspect", target, "--format", "{{json .RepoDigests}}").stdout or "[]")
+        if source in digests:
+            print(f"[ok] {target} 已指向 {digest[:19]}…（幂等，无需推送）")
+            return
+        fail(f"{target} 已指向其他 digest（{digests!r}）；拒绝覆盖语义标签")
+    image_id = docker("image", "inspect", source, "--format", "{{.Id}}").stdout.strip()
+    if not image_id:
+        fail(f"无法解析 {source} 的镜像 ID")
+    docker("tag", image_id, target)
+    docker("push", target)
+    print(f"[ok] {target} → {digest[:19]}…")
+
+
+def alias_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="把 vX.Y.Z 语义镜像标签 alias 到已验证发布包的 digest（与构建时机解耦，#540）")
+    parser.add_argument("version", metavar="vX.Y.Z", help="目标语义版本")
+    parser.add_argument("--bundle", required=True,
+                        help="release-bundle 目录（scripts/release_bundle.py build 的产物）")
+    parser.add_argument("--dry-run", action="store_true", help="只打印将执行的 alias，不动注册表")
+    parser.add_argument("--yes", action="store_true", help="跳过交互确认")
+    args = parser.parse_args(argv)
+    if not parse_semver(args.version):
+        fail(f"版本非法: {args.version!r}（期望 vX.Y.Z）")
+    tag = f"v{args.version.lstrip('v')}"
+
+    # 发布包校验与 release_bundle.py verify 同一判据（不抄第二份）。
+    # 按 __file__ 定位同目录兄弟模块，不依赖 REPO_ROOT（测试会替换它）。
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from release_bundle import BundleError, BundleMismatch, validate_bundle_dir
+    except ImportError:
+        fail("无法导入 scripts/release_bundle.py；alias 与发布包必须同源")
+    try:
+        bundle = validate_bundle_dir(args.bundle)
+    except (BundleError, BundleMismatch) as exc:
+        fail(f"发布包校验失败：{exc}")
+
+    sha = bundle["git"]["sha"]
+    repo = origin_repository()
+    # 1) 该版本必须已走完可信 git tag 流程且指向发布包 SHA（先 tag 后 alias）
+    _, remote_tag = existing_tag_targets(tag)
+    if remote_tag != sha:
+        fail(f"远程标签 {tag} 未指向发布包 SHA {sha[:12]}…；"
+             f"请先完成 release.py tag 流程（当前远程指向 {remote_tag or '（无）'}）")
+    # 2) 发布包必须产自该 SHA 的可信成功 CI run（不只信 JSON 自报字段）
+    trusted = verify_release_ci(repo, sha)
+    succeeded = {r["id"] for r in trusted
+                 if r.get("status") == "completed" and r.get("conclusion") == "success"}
+    if bundle["build"]["run_id"] not in succeeded:
+        fail(f"发布包 run_id={bundle['build']['run_id']} 不在 {sha[:12]}… 的可信成功 CI run 中；"
+             "拒绝以此包 alias")
+    if not args.dry_run:
+        if shutil.which("docker") is None:
+            fail("未检测到 docker CLI；alias 需要本机 docker 与已登录的 ACR 凭据")
+        if not args.yes:
+            if not sys.stdin.isatty():
+                fail("非交互环境请带 --yes（或 --dry-run 预览）；尚未改动注册表")
+            answer = input(
+                f"将把 {tag} 指向 {sha[:12]}… 的前后端镜像 digest 并推送，继续？[y/N] ").strip().lower()
+            if answer != "y":
+                print("已取消。")
+                return 0
+    for role in ("backend", "frontend"):
+        image = bundle["images"][role]
+        alias_image(image["repo"], image["digest"], tag, dry_run=args.dry_run)
+    if args.dry_run:
+        print("[dry-run] 未改动注册表。")
+    else:
+        print(f"[ok] {tag} 语义标签已对齐 {sha[:12]}…（run {bundle['build']['run_id']}."
+              f"{bundle['build']['run_attempt']}）")
     return 0
 
 
