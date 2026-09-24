@@ -54,6 +54,10 @@ fi
 QUICK=false
 [ "${1:-}" = "--quick" ] && QUICK=true
 
+mkdir -p ../.cache
+exec 9>../.cache/frontend-build.lock
+flock -n 9 || { echo "另一个构建或本地验证正在使用本 worktree" >&2; exit 2; }
+
 echo ""
 echo "=== [1/$([ "$QUICK" = true ] && echo 3 || echo 4)] ESLint ==="
 npm run lint

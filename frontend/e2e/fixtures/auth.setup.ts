@@ -4,7 +4,7 @@
  */
 import { test as setup } from '@playwright/test';
 
-const ADMIN_AUTH_FILE = 'e2e/.auth/admin.json';
+const ADMIN_AUTH_FILE = process.env.E2E_AUTH_FILE || 'e2e/.auth/admin.json';
 
 setup('以管理员身份登录并保存状态', async ({ page }) => {
   // 访问登录页

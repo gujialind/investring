@@ -65,12 +65,15 @@ def collect_rows(data, keep):
     if total != len(rows):
         sys.exit(f"❌ 归一化 {len(rows)} 行 ≠ reporter stats 总数 {total}：JSON reporter 形态可能已变")
 
-    rows = [r for r in rows if r[1] in keep]
-    missing = sorted(keep - {r[1] for r in rows})
-    if missing:
-        sys.exit(f"❌ --projects 里的 {missing} 没产出用例行（project 名拼错？）")
-    if not rows:
-        sys.exit(f"❌ 没有 --projects {sorted(keep)} 的用例行（--projects 为空？）")
+    if keep is not None:
+        rows = [r for r in rows if r[1] in keep]
+        missing = sorted(keep - {r[1] for r in rows})
+        if missing:
+            sys.exit(f"❌ --projects 里的 {missing} 没产出用例行（project 名拼错？）")
+        if not rows:
+            sys.exit(f"❌ 没有 --projects {sorted(keep)} 的用例行（--projects 为空？）")
+    elif not rows:
+        sys.exit("没有测试记录")
     rows.sort()
     return rows
 

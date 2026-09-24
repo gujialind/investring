@@ -55,20 +55,20 @@ npm run test:watch   # watch 模式（不收集覆盖率）
 
 ## 4. E2E（Playwright）
 
+从仓库根使用已安装项目依赖的 Python 环境运行（#619）：
+
 ```bash
-python3 backend/scripts/run_e2e_backend.py   # 1. 起本地后端（自动种子，监听 :8000；
-                                             #    E2E_DB_PATH / E2E_PORT 可覆盖库与端口，
-                                             #    见 backend/AGENTS.md「E2E 相关脚本」）
-cd frontend && npm run build \
-  && cp -r .next/static .next/standalone/.next/static \
-  && cp -r public .next/standalone/public    # 2. 生产构建 + 组装 standalone
-npm run test:e2e                             # 3. 跑测试
+.venv/bin/python scripts/verify.py run e2e -- \
+  --backend-port 18000 --frontend-port 13000 \
+  e2e/auth.spec.ts e2e/regression.spec.ts --workers 2 --retries 0
 ```
 
+统一入口调用 `scripts/local_stack.py`，每次新建 SQLite、种子、认证与产物，构建并持有前后端，结束时只清理自己启动的进程；不需另开后端终端。直接调用 `local_stack.py e2e` 仍可用。JSON 报告须有实际执行的非 setup 用例，只有收集、全部跳过或仅 setup 不算通过；交互调试/自定义配置与 reporter 请直接用 Playwright，不作为该入口的验证结果。
+
 - **本地默认只跑影响面 spec，全量由 CI 兜底**（`frontend-e2e` job 合入前强制跑全套）：`npx playwright test e2e/regression.spec.ts` 或 `--grep "关键词"` 圈定；质量门禁（`verify-frontend.sh`）仍必须本地过。影响面拿不准就宁宽勿窄。注意：门禁只是静态层（lint/tsc/build），**运行时行为（水合、API 联调、交互流程）只有 E2E 能拦**（历史 P0 均如此）；且 CI 种子含 draft `E2E_PORT` 与 active `E2E_ACTIVE` 两个组合，快照/持仓/编辑交易类用例在 CI 真跑（#354 前因只有 draft 组合而恒 skip）——动交互流程的改动至少要本地跑对应 spec。
-- **webServer 是 production standalone**（`node .next/standalone/server.js`），**不是 `npm run dev`**——dev 按需编译竞态是历史 flaky 根因（issue #171）。端口由 `use.baseURL` 派生（`webServer.port`，不设 `BASE_URL` 时即 :3000），故需要隔离栈的调用方把 `BASE_URL` 指向自己的端口后，Playwright 不会再在 :3000 上另起一份它控制不了的服务。
-- **数据依赖**（种子见 `backend/tests/seed_base.py`）：登录 ADMIN/admin@2026（`auth.setup.ts`，storageState `e2e/.auth/admin.json`）；两个种子组合是契约——draft 组合 `E2E_PORT`（零交易/申赎/快照，承载表单交互与首购激活类用例）+ active 组合 `E2E_ACTIVE`（#354：首购确认 + 已确认场内交易 + 连续 2 日快照 + 1 笔 pending 场内交易，承载快照/持仓/编辑交易类用例）；另有 4 平台 + 产品（含 161017 LOF 双市场种子）。**日期锚定**（#468）：交易日经 `/api/trading-calendar` 取「today 起最近一个交易日」，不写死年份、不假设周末（日历终点随 today 滚动，固定日期会随时间失效）。
-  - **净值夹具**（#493）：快照严格取价，故 `seed_e2e_active` 另为 `000300.OF`/`CN_OTC` 铺 D..D+4 一段净值（1.5000/1.5500/1.6000/1.6000/1.6000），供自建隔离组合的 spec（`trade-in-transit.spec.ts`）逐日生成快照——**D+3 是卖出到账日快照，份额已减但仍持仓，同样要取价**。口径与 spec 的 `NAV` 常量一一对应，改一侧必须改另一侧；种子侧由 `test_seed_contract.py::TestE2EActiveContract` 锁定。**spec 不得直连 E2E 数据库注入夹具**：本地是 SQLite（`/tmp/ir_e2e.db`、`E2E_DB_PATH`），CI 的栈跑 **MySQL**（`e2e-stack.yml`）且从不设 `E2E_DB_PATH`，直连写法本地绿、CI 红。同理，**自建组合的 code 必须区分 project（`testInfo.project.name`）与 `testInfo.retry`**——`workerIndex`/`parallelIndex` 每个 project 内重新计数，只用它会与另一端/重试撞主键。自建组合**不设 per-run nonce**（#551 §4 评估后的定案：组合根本没有 DELETE 端点，加了 nonce 只是把一次响亮失败换成同一后端生命周期内不可回收的残留堆积）。这条的代价是**「跑 E2E 前先重启后端重灌种子」是契约前提、不是可选项**：`run_e2e_backend.py` 每次启动 drop+create，而 code 里的日期只到天，不重启直接二跑必在 `POST /api/portfolios` 确定性撞 `ALREADY_EXISTS` —— **那是预期信号，说明数据前提破了，去重启，别改 code 绕开**。
+- **被测前端是 production standalone**（`node .next/standalone/server.js`），**不是 `npm run dev`**——dev 按需编译竞态是历史 flaky 根因（issue #171）。本地 runner 持有服务并设置 `E2E_SERVER_MANAGED=true`，Playwright 不另起服务；直接运行与 CI 未设置该标记时仍由 Playwright `webServer` 启动，端口从 `use.baseURL` 派生，禁止复用已监听服务。
+- **数据依赖**（种子见 `backend/tests/seed_base.py`）：登录 ADMIN/admin@2026（`auth.setup.ts`，本地 runner 的 storageState 按运行隔离，直接运行/CI 默认 `e2e/.auth/admin.json`）；两个种子组合是契约——draft 组合 `E2E_PORT`（零交易/申赎/快照，承载表单交互与首购激活类用例）+ active 组合 `E2E_ACTIVE`（#354：首购确认 + 已确认场内交易 + 连续 2 日快照 + 1 笔 pending 场内交易，承载快照/持仓/编辑交易类用例）；另有 4 平台 + 产品（含 161017 LOF 双市场种子）。**日期锚定**（#468）：交易日经 `/api/trading-calendar` 取「today 起最近一个交易日」，不写死年份、不假设周末（日历终点随 today 滚动，固定日期会随时间失效）。
+  - **净值夹具**（#493）：快照严格取价，故 `seed_e2e_active` 另为 `000300.OF`/`CN_OTC` 铺 D..D+4 一段净值（1.5000/1.5500/1.6000/1.6000/1.6000），供自建隔离组合的 spec（`trade-in-transit.spec.ts`）逐日生成快照——**D+3 是卖出到账日快照，份额已减但仍持仓，同样要取价**。口径与 spec 的 `NAV` 常量一一对应，改一侧必须改另一侧；种子侧由 `test_seed_contract.py::TestE2EActiveContract` 锁定。**spec 不得直连 E2E 数据库注入夹具**：本地是独占 SQLite（路径见本次产物目录；直接启动可传 `--database` / `E2E_DB_PATH`，已有文件拒绝），CI 的栈跑 **MySQL**（`e2e-stack.yml`）且从不设 `E2E_DB_PATH`，直连写法本地绿、CI 红。同理，**自建组合的 code 必须区分 project（`testInfo.project.name`）与 `testInfo.retry`**——`workerIndex`/`parallelIndex` 每个 project 内重新计数，只用它会与另一端/重试撞主键。自建组合**不设 per-run nonce**（#551 §4 评估后的定案：组合根本没有 DELETE 端点，加了 nonce 只是把一次响亮失败换成同一后端生命周期内不可回收的残留堆积）。因此**每次 E2E 必须使用全新种子库**：本地 runner 自动独占创建新库，不 drop 或删除旧库；直接复用同一后端二跑会在 `POST /api/portfolios` 撞 `ALREADY_EXISTS`，应重新运行隔离入口，不改 code 绕开。
 - **按 code 直达，不再 `.first()`**（#354）：所有业务 spec 经 `e2e/helpers.ts` 按组合 code 导航（`gotoPortfolioDetail` / `gotoPortfolioSubpage` / `portfolioPath`），不再经组合列表 `.first()`——`list_portfolios` 无 ORDER BY，新增组合后「首个」不确定。**两个组合是种子契约：缺组合或形态退化即硬失败，helper 不做优雅 skip**（旧惯例下种子退化会让用例在 CI 静默全 skip、覆盖无声蒸发，正是 #354 要消除的）。`portfolioPath` 恒返回桌面路径，mobile project 靠 `src/proxy.ts` 按 UA 重定向到 `/m`，结构性消除 `href^="/portfolio/"` 类只在桌面成立的定位。
 - **`test.skip` 只留给真正条件性数据与两类合法端专属**：平台数 < 2、无平台/产品数据、LOF 双市场种子缺失；端专属仅「功能确实缺」「输入设备语义缺」两类（见下条）。「同一控件两端各测一次、互为镜像」属去重、不是端专属理由，skip 文案须点名镜像用例。**禁止对共享 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**：固定快照与可编辑窗口是种子契约，不用于推进/重算测试；auto_confirm 不确认调仓，到期 pending 调仓会阻断推进，相关场景须自建隔离组合。改种子时对照 `e2e/*.spec.ts` 头部「数据说明」注释与 `backend/tests/integration/test_seed_contract.py`。
 - **「移动端无此页/无此路由」不是端专属理由，是待证前提**（#371）：`components/shared/*Content.tsx` 桌面/移动共用同一组件与同一 Dialog，`variant` 一般只改栅格列数、筛选栏折叠与控件宽度，故桌面断言多能 1:1 移植；移动路由是否存在以 `src/app/m/portfolio/[code]/` 为准，不靠印象。曾有两处据此丢弃移动端覆盖（`datepicker-in-dialog` 用例 6 的 `if (!isMobile)`、`platform-select-search` 用例 11 的 `test.skip`），实测路由存在、放开后双端直接通过——覆盖无声蒸发了很久，而两端都是绿的。合法的端专属 skip 只有两类：**功能确实缺**（移动端无现金转移）、**输入设备语义缺**（移动端无物理键盘）。#383 已把剩余 9 处「桌面断言仅针对桌面项目」skip 逐条复核完毕，**前提全为假**：5 处表单类（platform-select-search 用例 2/3/4/5/10）双端共用同一 Dialog，直接删 skip；4 处筛选栏类（用例 1/8/9/12）经 `helpers.openFilterPanelIfMobile` 展开移动端折叠面板后双端同断言；该 spec 端专属 skip 只剩用例 6/7/13。**「桌面断言仅针对桌面项目」这句文案自此不得再出现**——要 skip 就点名是哪一类合法理由，否则等于把未证前提写进代码。
@@ -80,18 +80,9 @@ npm run test:e2e                             # 3. 跑测试
 
 ### E2E / 目检前置检查
 
-跑 `npm run test:e2e` 或 `scripts/visual-verify.sh` 前，先核对监听进程归属：
+先安装当前 worktree 的后端依赖与前端 lockfile 依赖、Playwright 浏览器；runner 不自动安装。端口被占用即拒绝，不因 cwd 相同或 HTTP 200 就复用，也不杀未知进程；并行 worktree 显式选择不同 `--backend-port` / `--frontend-port`。
 
-```bash
-ss -tlnp | grep -E ":8000|:3000"
-readlink /proc/<pid>/cwd  # 看是否当前 worktree
-```
-
-- cwd 已 `(deleted)` → 死会话残留，可安全 `kill <pid>`（脚本会自起新服务）
-- cwd 属其他工作树 → 不要动（可能干扰并行会话）
-- cwd 是当前工作树 → 正常，复用即可
-
-不检查的后果：`playwright.config.ts` 本地 `reuseExistingServer: !process.env.CI` 会复用旧服务，测到旧代码或 ECONNREFUSED；`visual-verify.sh` 同样复用已监听服务。
+同 worktree 的 `verify-frontend.sh` 与本地 runner 共用构建锁，持有至服务退出；构建失败不启动旧 `.next`。构建期 `API_BASE_URL` 固定到本次后端，`NEXT_PUBLIC_API_URL` 显式置空，避免绕过同源代理。日志、数据库、认证和截图留在输出的本次产物目录（默认 `.cache/verification/` 下），按运行保留供排查，不作为下一次验证的缓存。
 
 ### 目检（视觉验证）
 
@@ -101,9 +92,9 @@ readlink /proc/<pid>/cwd  # 看是否当前 worktree
 ```
 
 - **第三条验证层**：§2 门禁（lint/tsc/build）看不到运行时，§3 单测只覆盖 lib 纯函数，E2E 断言定位与文本、**不断言像素**——列宽挤压、CJK 竖排换行、双行单元格错位、结对行 `colSpan` 对不齐这类问题只有人眼看图能拦（#355「市场」列窄到「A股场内」四字竖排是 issue 里人眼发现的，e2e 全程绿灯）。改 `components/shared/*Content.tsx` 的表格/图表列结构时按本节目检。
-- 两个文件分工：`scripts/visual-verify.sh` 管服务与构建（复用已监听的 :8000/:3000，否则起后端 → `npm run build` → 组装 standalone → 起 `server.js`），`frontend/scripts/visual-shot.mjs` 管登录态与截图。参数（`--path` 可重复 / `--device desktop|mobile` 可重复 / `--out` / `--base`）以 `visual-shot.mjs` 头部注释为单一事实来源，勿在此处另立清单。
+- `scripts/visual-verify.sh` 是 `local_stack.py visual` 的薄壳，负责独占栈与构建；也可从仓库根运行 `.venv/bin/python scripts/verify.py run visual -- <参数>` 取得结构化结果。截图参数见 `frontend/scripts/visual-shot.mjs`；托管入口的 `--out` 是新建运行目录的父目录，`--base` 由所选端口固定、不可覆盖。脚本的直接模式仍支持自选地址，但调用者自行承担资源归属。
 - **视口与 E2E 同口径**：桌面 `Desktop Chrome` 1280×720、移动 `iPhone 13`（webkit），故 `--path` 只写桌面路径，靠 `src/proxy.ts` 按 UA 重定向到 `/m`（同 `portfolioPath` 的道理，不必写两条）。1280 是**保守值**——越窄越容易暴露挤压。每个 `--path` 出两张图：`*-<device>.png` 整页（fullPage）与 `*-<device>-table.png` 表格裁剪（放大读列布局）。
-- **空表目检等于没目检，但造数会污染 e2e 同一个库**：目检与 `npm run test:e2e` 共用 `/tmp/ir_e2e.db`，脚本因此优先复用已运行的后端（重启即清库重灌）。用完的临时记录要么 `DELETE` 掉，要么 kill 后端让下次 e2e 重灌种子，否则多出来的行会打脏行数 / `.first()` 类断言。「kill 后端重灌」这一手对 E2E 侧还是**硬前提**而非清洁习惯：`trade-in-transit.spec.ts` 的自建隔离组合不设 per-run nonce（#551 §4 定案），不重启则同后端二跑必撞 `ALREADY_EXISTS`（详述见上文「净值夹具」条）。份额变动事件在 `E2E_ACTIVE` 无种子行，需先造一条：`ex_date` 取晚于最新快照日的交易日、`entitlement_date` 取其前一交易日（先查 `snapshots` 与 `trading-calendar` 定日期），截图后删。**目检同样禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**（红线见上一节）。
+- **空表目检等于没目检**：优先使用恒有行的 `E2E_ACTIVE` 交易/申赎页；目检与 E2E 的库按运行隔离，不复用、不清理别的运行数据。份额变动事件在 `E2E_ACTIVE` 无种子行，需在本次独占库先造一条：`ex_date` 取晚于最新快照日的交易日、`entitlement_date` 取其前一交易日（先查 `snapshots` 与 `trading-calendar` 定日期），截图后删。**目检同样禁止对 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**（红线见上一节）。
 
 ### E2E 归一化对比（纯测试重构验证）
 
@@ -111,23 +102,20 @@ readlink /proc/<pid>/cwd  # 看是否当前 worktree
 
 - **触发**：PR 改动命中 `frontend/e2e/**`、`frontend/playwright.config.ts`、`backend/tests/seed_base.py`、`backend/scripts/seed_e2e.py`、`scripts/e2e_normalize.py`、`scripts/tests/` 时自动跑——baseline/candidate 两 job 各跑一遍**全量** E2E，归一化成 TSV 后 diff（触发检测在 `ci.yml` 的 `changes` job；**不含 `.github/workflows/**`**，#467 起移除：改 CI 配置本身就要求四栈全跑，且此前任何 ci.yml 改动都会多触发两轮全量 E2E）。**两侧构建源同为 PR head，唯一变量是 `frontend/e2e/` 目录**（baseline 侧 `rm -rf frontend/e2e` 后 checkout base 版本；src 侧改动被两侧同等看到，故 #401 那种「重构 + 补 data-testid」的 PR diff 依然可读）。
 - **期望空 diff；非空 diff 硬 fail**。形态变化属预期时（增删用例/调整 skip）给 PR 打 `e2e-morph-expected` 标签——labeled 事件自动重跑 CI，compare 转为 warning 放行。豁免是 PR 期的临时动作，**标签长期挂载会被定时巡检（`.github/workflows/label-hygiene.yml`，见 #483）点名：该 run 变红、注解带 PR 号**，用完即摘。diff 全文在 compare job 的 Summary，raw JSON 与失败证据在 `e2e-raw-*` artifact。**判定体（`exit 1` 收尾与顺序）、`EXEMPT` 必须由标签派生、`ci-ok.needs` 含 compare、artifact 前缀的六处耦合、capture 步的 `--workers=2` 与 base.sha 引号，由 `scripts/tests/test_ci_e2e_compare.py` 守门（#490）**——这些位置改错不会让任何用例变红，只会让门禁静默失效，所以改 `ci.yml` / `e2e-stack.yml` 的对应片段必须同步那个文件（只改 workflow 的 PR 因 `.github/workflows/**` 强制位必然跑 `scripts/tests`，漏改在同一个 PR 就红）。
-- **栈步骤是 reusable workflow**（`e2e-stack.yml`，`workflow_call`，#467）：`frontend-e2e` 与 compare 采集共用同一份栈（MySQL/迁移/种子/uvicorn/构建/浏览器），差异只剩入参（`mode`/`side`/`retries`/`log_file`/artifact 名前缀）。改栈只改那一处；注意 caller 的 `uses:` job 上不能写 `services`/`timeout-minutes`/`env`（GitHub 硬约束，详见该文件头部注释）。栈里的 MySQL 一律以**与库同名的最小权限账号 `ir_e2e`** 连接（root 只出现在建库建号与服务健康检查），账号口径与权限清单的单一事实来源见 `backend/AGENTS.md`「测试库一律由 pytest 选定」与 `scripts/tests/test_ci_mysql_account.py`（#548）；本地 `run_e2e_backend.py` 走 SQLite `/tmp/ir_e2e.db`，不受此约束。
+- **栈步骤是 reusable workflow**（`e2e-stack.yml`，`workflow_call`，#467）：`frontend-e2e` 与 compare 采集共用同一份栈（MySQL/迁移/种子/uvicorn/构建/浏览器），差异只剩入参（`mode`/`side`/`retries`/`log_file`/artifact 名前缀）。改栈只改那一处；注意 caller 的 `uses:` job 上不能写 `services`/`timeout-minutes`/`env`（GitHub 硬约束，详见该文件头部注释）。栈里的 MySQL 一律以**与库同名的最小权限账号 `ir_e2e`** 连接（root 只出现在建库建号与服务健康检查），账号口径与权限清单的单一事实来源见 `backend/AGENTS.md`「测试库一律由 pytest 选定」与 `scripts/tests/test_ci_mysql_account.py`（#548）；本地 `run_e2e_backend.py` 走每次独占创建的 SQLite，不受此 MySQL 账号约束。
 - **主 E2E job 的 flaky 可见性**（#466）：`retries: 2` 保留（偶发抖动不阻断 PR），但 `PLAYWRIGHT_JSON_OUTPUT_FILE` 触发配置追加 json reporter，`scripts/e2e_flaky_summary.py` 把 flaky 清单写进 Step Summary 并发 `::warning::`（经 stderr，stdout 已被重定向到 Summary）——重试转绿不再等于无事发生。**产物缺失分两档（#491）**：E2E 本次成功却没有 JSON，只可能是 json reporter 的 wiring 断了（`playwright.config.ts` 的 append 分支被删 / `PLAYWRIGHT_JSON_OUTPUT_FILE` 改名），汇总步骤此时以 `--require-input` 判红（fail-closed，口径同 `ci.yml` 的 Assert lcov data source）；E2E 已经红了则缺产物是它自己的症状，只发 `::warning::` 不叠加红。该脚本与 normalizer 共用同一套 JSON reporter 形态假设，`scripts/tests/test_e2e_flaky_summary.py` 是形态登记处；stats 与实际条目数不一致即响亮失败（假绿灯比崩掉更坏）。「连续 N 次 flaky 自动开 issue / quarantine」评估后未实现（只做可见性）。
 - **采集口径**：`--retries=0 --workers=2`（retry 会把 flaky 洗成 passed、形态对比失真）；归一化逻辑在 `scripts/e2e_normalize.py`（stdlib-only），`scripts/tests/test_e2e_normalize.py` 锁定 JSON reporter 形态假设——**Playwright 升级后先跑这个单测**（#402 教训：1.62 把 title 挪到 spec 节点自身）。TSV 列：`[spec, project, 用例标题, status, 结果, skip 文案]`，按行排序；第 4 列 `tests[].status` ∈ `expected|unexpected|flaky|skipped`（`passed` 永不出现），第 5 列 `results[-1].status` ∈ `passed|failed|skipped|timedOut`；`setup` project 的行已滤除。
 - **已知噪音**：两 capture 若跨 0 点起跑，`seed_e2e_active` 的 `date.today()` 锚点不同会产假 diff——重跑即愈。
 
-本地手工菜谱（排查 CI compare 红时的临时对比）：先按本节开头三步起一个栈，然后在两个 worktree（base 内容与 PR 内容）里各采集一次再 diff：
+本地排查 compare 红时，两份 worktree 使用相同应用代码、仅 `frontend/e2e/` 内容不同，各从仓库根运行隔离入口：
 
 ```bash
-# worktree A（base 内容）里：
-cd frontend && CI= PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/e2e-raw-a.json \
-  npx playwright test --retries=0 --reporter=list,json   # rc 非 0 不拦，fail 进 JSON
-python3 ../scripts/e2e_normalize.py --input /tmp/e2e-raw-a.json --output /tmp/a.tsv \
-  --projects chromium,mobile --side base
-# worktree B（PR 内容）里同法产 /tmp/b.tsv，然后：
-diff /tmp/a.tsv /tmp/b.tsv
+.venv/bin/python scripts/verify.py run e2e -- \
+  --backend-port 18000 --frontend-port 13000 --retries 0 --workers 2
+python3 scripts/e2e_normalize.py --input <本次产物目录>/playwright.json \
+  --output <本次产物目录>/rows.tsv --projects chromium,mobile --side baseline
 ```
 
-同一栈同一数据是可比性来源；`CI=` 置空让 `reuseExistingServer` 复用已起栈。两跑之间重启一次后端（重灌种子）可消除上一跑的数据残留。
+另一份 worktree 使用不同端口、`--side candidate`，再 diff 两份 `rows.tsv`。测试失败时仍查看本次 JSON，不把未产出报告当空结果。可比性来自相同应用与种子，不来自复用服务；日期跨日噪音和 CI 采集规则保持不变。
 
 CI compare 红的重跑语义（#414 实踩）：因 capture 失败而被 skip 的 compare **无法单独重跑**——`gh run rerun --job <compare>` 返回 `cannot be rerun`，且新 attempt 产生后旧 attempt 的失败 job 也不可再重跑；须重跑失败的 capture job（会级联带起 compare + CI OK）或 `gh run rerun <run-id>` 整 run 重跑。
