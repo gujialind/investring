@@ -2418,7 +2418,7 @@
           "数据源配置"
         ],
         "summary": "Update Data Source",
-        "description": "更新数据源配置\n\n支持更新：\n- tushare: 更新 TUSHARE_TOKEN\n- akshare: 更新 AKSHARE_ENABLED\n\n显式 null 一律 422 拒绝（#579，与 #573 同口径）；未提供或空值零写入，\nmessage 如实报「未变更」，不再谎报「已更新」。",
+        "description": "更新数据源配置\n\n支持更新：\n- tushare: 更新 TUSHARE_TOKEN\n- akshare: 更新 AKSHARE_ENABLED\n\n显式 null 一律 422 拒绝（#579，与 #573 同口径）；未提供或空值零写入，\nmessage 如实报「未变更」，不再谎报「已更新」。写入值经 `_reject_unsafe_env_value`\n收口（#601 评审 follow-up：防 .env 任意键注入）。",
         "operationId": "update_data_source_api_system_data_sources__name__put",
         "security": [
           {

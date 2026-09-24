@@ -9,6 +9,8 @@
 # fixture 里登记以便 teardown 还原原值——测试全程不触碰真实环境。
 # ============================================================================
 
+import os
+
 import pytest
 
 TUSHARE_URL = "/api/system/data-sources/tushare"
@@ -106,3 +108,57 @@ class TestDataSourceHonestMessage:
         assert "未变更" in body["message"]
         assert env_writer == []
         assert body["is_enabled"] is True
+
+
+class TestEnvWriteValueGuard:
+    """写入值注入防护（#601 评审 follow-up）
+
+    `_update_env_file` 以 `f"{key}={value}\\n"` 整行落盘，而 .env 逐行解析：value 含
+    换行即把其后内容写成下一行配置项，进程重启后成为真实环境变量（任意键注入）。
+    校验位于写入之前，故本类断言「零写入」等价于「未落盘」，且 os.environ 未被污染。
+    """
+
+    @pytest.mark.parametrize(
+        "malicious",
+        [
+            "tok\nAKSHARE_ENABLED=false",  # 换行注入新键
+            "tok\rDEBUG=true",  # CR 换行
+            "tok\n\rtest@example.com",  # CRLF
+            "tok\x00pad",  # NUL
+            "tok\x1f",  # US（单元分隔符）
+            "tok\x7f",  # DEL
+            "tok\tTAB=1",  # TAB 亦按控制字符处理
+        ],
+    )
+    def test_tushare_injection_rejected_zero_write(
+        self, client, admin_headers, env_writer, malicious
+    ):
+        resp = client.put(TUSHARE_URL, json={"api_key": malicious}, headers=admin_headers)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        assert env_writer == []
+        # 校验必须在写 .env 前完成，否则进程内环境变量已被污染
+        assert os.environ["TUSHARE_TOKEN"] == "old-token"
+
+    def test_akshare_non_boolean_is_enabled_rejected_by_schema(
+        self, client, admin_headers, env_writer
+    ):
+        """钉住 is_enabled 的 bool 约束。
+
+        str(is_enabled).lower() 只会产出 true/false 的前提是 pydantic 已把入参收敛
+        为 bool；若将来 schema 放宽为 str，此处会红，提醒改在数据面而非写入面收口。
+        """
+        resp = client.put(AKSHARE_URL, json={"is_enabled": "yes-please"}, headers=admin_headers)
+        assert resp.status_code == 422
+        assert env_writer == []
+
+    def test_normal_value_with_space_and_punctuation_still_writes(
+        self, client, admin_headers, env_writer
+    ):
+        """反向用例：只收紧控制字符，不得误伤含空格/标点的合法 token"""
+        token = "ab-12_34.x y"
+        resp = client.put(TUSHARE_URL, json={"api_key": token}, headers=admin_headers)
+        assert resp.status_code == 200
+        assert len(env_writer) == 1
+        _env_file, key, value = env_writer[0]
+        assert (key, value) == ("TUSHARE_TOKEN", token)
