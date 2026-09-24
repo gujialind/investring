@@ -62,12 +62,23 @@ markers = [
 # 覆盖率设防（issue #254；#171 观察期结束转入设防期）：
 # 配置放 [tool.coverage.*] 而非 pytest addopts——不传 --cov 时 coverage 完全不激活，
 # 本地跑子集零开销；CI（backend-test job）带 --cov 即自动启用分支口径 + 硬阈值。
-# fail_under 为 branch-inclusive 口径：2026-09-08 实测基线 82.15%（#405 审计埋点），下取整定 82。
-# 棘轮规则（只升不降、上调时机）见 backend/AGENTS.md「跑测试」节。
+# fail_under 为 branch-inclusive 的合并口径（stmts 与 branches 一起算，即 coverage.py 的
+# TOTAL），本文件是该数值的单一事实来源（#621 之前它同时硬编码在 backend/AGENTS.md 三处
+# 与 ci.yml 一处，改一次要动 4 个文件）。
+# 历次上调：80（2026-08-29 实测 80.81%，#254/#320）→ 81（2026-09-08 实测 81.42%，#404）
+# → 82（2026-09-08 实测 82.15%，#405 审计埋点，#416）→ 86（2026-09-24 补 #621 缺口）。
+# 86 的来历：82 自 #416 起 94 个 merge 未动，main 实测已到 87.06%（CI，e882912）/ 87.12%
+# （本地全量重跑），至少 4 次触发点（84/85/86/87）被跳过，缺口 5.06pp ≈ 458 units——
+# 删/skip 掉这个量级的测试 CI 仍全绿（增量门禁只看 app/ 改动行，删测试不产生改动行）。
+# 目标值口径为 floor(main 实测 − 1pp) 而非 floor(实测)：9050 units 下 1pp = 90 units，
+# 而同一 commit 两次运行的噪声就有 5 units（CI 87.06 / 本地 87.12）；按 floor(实测) 定 87
+# 只余 0.06pp，base 漂移容忍 ≈5 小时（近期涨速 0.27pp/天），且新代码按增量门禁最低档 80%
+# 覆盖时加 ~79 units 就会让全局门禁红。留 1pp 后：余量 1.06pp、漂移容忍 ≈4 天。
+# 棘轮触发口径（谁该动、实测取哪一次运行）见 backend/AGENTS.md「跑测试」节。
 [tool.coverage.run]
 branch = true
 source = ["app"]
 
 [tool.coverage.report]
-fail_under = 82
+fail_under = 86
 show_missing = true
