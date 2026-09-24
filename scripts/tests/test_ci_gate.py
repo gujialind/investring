@@ -20,7 +20,7 @@ POLICY = gate.validate_policy(gate.read_json(POLICY_TEXT))
 SCOPES = ("backend", "frontend", "cli", "scripts", "e2e_morph")
 FULL = "backend frontend cli scripts"
 JOBS = {
-    "changes": [], "docker-build-smoke": [],
+    "changes": [], "docker-build-smoke": [], "image-smoke": [],
     "backend-test": ["backend"], "backend-test-mysql": ["backend"],
     "cli-contract-check": ["cli", "backend", "scripts"],
     "frontend-check": ["frontend"], "frontend-e2e": ["frontend"],
@@ -374,12 +374,14 @@ def assert_workflow(text):
     assert len(needs) == len(JOBS) and set(needs) == set(JOBS)
     for job, header in headers.items():
         assert not re.search(r"^    continue-on-error:", header, re.M), job
-        if job in ("changes", "docker-build-smoke", "e2e-compare"):
+        if job in ("changes", "docker-build-smoke", "e2e-compare", "image-smoke"):
             assert not re.search(r"^    if:", header, re.M), job
         elif job != "ci-ok":
             assert field(header, "needs") == "changes"
             assert field(header, "if") == " || ".join(f"needs.changes.outputs.{s} == 'true'" for s in JOBS[job])
     assert field(headers["e2e-compare"], "needs") == "e2e-compare-capture"
+    # image-smoke 全事件运行（发布链在 main push 上不可跳过），构建失败即不冒烟
+    assert field(headers["image-smoke"], "needs") == "docker-build-smoke"
     actual = re.findall(r"^      (\w+): \$\{\{ steps.detect.outputs\.(\w+) \}\}$", headers["changes"], re.M)
     assert actual == [(scope, scope) for scope in SCOPES]
     for job, step, command in [("changes", "detect", "detect"), ("ci-ok", "Aggregate result", "aggregate")]:

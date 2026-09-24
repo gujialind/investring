@@ -72,9 +72,11 @@ services:
 
   # --------------------------------------------------------------------------
   # Nginx：唯一对外入口（80 → 301 跳转 + ACME 验证；443 → 反代前后端）
+  # 镜像引用由发布包 images.env 的 NGINX_IMAGE_REF 指定（digest 化，issue #537），
+  # 保证回滚/恢复时 nginx 与冒烟验证过的版本一致；缺省值兼容既有人工运维。
   # --------------------------------------------------------------------------
   nginx:
-    image: nginx:1.27-alpine
+    image: ${NGINX_IMAGE_REF:-nginx:1.27-alpine}
     container_name: investring-nginx
     restart: unless-stopped
     ports:

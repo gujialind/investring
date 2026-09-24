@@ -51,6 +51,11 @@ FROM node:24-alpine AS runtime
 
 WORKDIR /app
 
+# 构建身份（#537 第四批）：可信 CI 以 --build-arg GIT_REVISION=<完整SHA> 注入，
+# 写入 OCI revision 标签；scripts/smoke_images.py 对最终镜像校验标签与目标提交一致
+ARG GIT_REVISION=
+LABEL org.opencontainers.image.revision="${GIT_REVISION}"
+
 # 安全：创建非 root 用户（魔搭平台用 su 切换用户，必须指定有效 shell）
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 --shell /bin/sh nextjs

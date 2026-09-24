@@ -38,6 +38,12 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+# 构建身份（#537 第四批）：可信 CI 以 --build-arg GIT_REVISION=<完整SHA> 注入，
+# 写入 OCI revision 标签；scripts/smoke_images.py 对最终镜像校验标签与目标提交一致，
+# 保证「冒烟/晋级的制品」与「CI 验证的代码」是同一身份。本地构建缺省为空标签。
+ARG GIT_REVISION=
+LABEL org.opencontainers.image.revision="${GIT_REVISION}"
+
 # 使用阿里云 Debian 镜像（国内加速）
 RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 

@@ -15,6 +15,7 @@
   "jobs": {
     "changes": [],
     "docker-build-smoke": [],
+    "image-smoke": [],
     "backend-test": ["backend"],
     "backend-test-mysql": ["backend"],
     "cli-contract-check": ["cli", "backend", "scripts"],
