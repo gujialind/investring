@@ -12,6 +12,10 @@ daily_snapshot_generate（组合快照生成，仅处理开启 auto_snapshot_ena
 import logging
 from datetime import date
 
+from apscheduler.jobstores.base import BaseJobStore
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from sqlalchemy import inspect
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -23,11 +27,18 @@ NAV_SYNC_LOCK = "daily_nav_sync_lock"
 SNAPSHOT_GENERATE_LOCK = "snapshot_generate_lock"
 
 
+class PreparedSQLAlchemyJobStore(SQLAlchemyJobStore):
+    def start(self, scheduler, alias):
+        # SQLAlchemyJobStore.start() issues CREATE TABLE even when the schema is prepared.
+        BaseJobStore.start(self, scheduler, alias)
+        if not inspect(self.engine).has_table(self.jobs_t.name, schema=self.jobs_t.schema):
+            raise RuntimeError("Scheduler table is missing; run the explicit bootstrap prepare command")
+
+
 def init_scheduler():
     """应用启动时调用：初始化 scheduler + 注册每日 job + 孤儿恢复。"""
     global _scheduler
     from apscheduler.schedulers.background import BackgroundScheduler
-    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
     from apscheduler.executors.pool import ThreadPoolExecutor as APSThreadPool
 
     settings = get_settings()
@@ -35,9 +46,9 @@ def init_scheduler():
         logger.info("调度器已禁用 (scheduler_enabled=False)")
         return
 
-    _scheduler = BackgroundScheduler(
+    scheduler = BackgroundScheduler(
         jobstores={
-            "default": SQLAlchemyJobStore(
+            "default": PreparedSQLAlchemyJobStore(
                 url=settings.database_url,
                 tablename=settings.scheduler_jobstore_table,
             )
@@ -47,7 +58,8 @@ def init_scheduler():
         },
         timezone="Asia/Shanghai",
     )
-    _scheduler.start()
+    scheduler.start()
+    _scheduler = scheduler
 
     _scheduler.add_job(
         _trigger_daily_nav_sync,

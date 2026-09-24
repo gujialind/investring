@@ -17,10 +17,7 @@ from typing import Generator
 # ---------------------------------------------------------------------------
 # 关键：在所有 app 模块导入之前选定测试库并关闭调度副作用（#539 第二单元）。
 #
-# 顺序是硬要求：app.main 模块期执行 `Base.metadata.create_all(bind=engine)`，
-# 打的正是那一刻的 DATABASE_URL，所以「无条件覆盖环境 + 归属判定」必须早于下面
-# 的 app 导入。`tests/db_isolation.py` 持有判据——破坏性初始化（本文件
-# test_engine 的 drop_all）只允许打在 pytest 创建并持有的实例上，不看库名。
+# app.database 在导入时绑定配置，因此测试库选择必须早于 app 导入。
 #
 # 测试库优先级：显式测试通道 env TEST_DB_URL（CI 显式指定）
 #              > backend/.env.test（gitignored，按需配置本地/远程 MySQL）
@@ -105,8 +102,7 @@ def test_engine():
         )
 
     # 会话开始：先删后建，清掉上一轮测试的残留数据。
-    # 此处不重复归属判定——conftest 导入期 `prepare_test_database()` 已对同一个 URL
-    # 判过一次，且 app.main 的 import 期 create_all 也已打在它上面。
+    # prepare_test_database() 已对这个 URL 完成归属检查；应用导入不建表。
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     write_ownership_marker(engine)

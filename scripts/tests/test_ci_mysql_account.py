@@ -4,9 +4,7 @@
 # 覆盖面 = TARGETS 里每一项 (workflow 文件, job, 期望连接串条数)。当前两个目标：
 #   - ci.yml:backend-test-mysql —— pytest 会话开头就是一次 drop_all，迁移步骤还做
 #     upgrade head → downgrade -1 → upgrade head，权限面最广。
-#   - e2e-stack.yml:e2e —— 三条连接串全指 ir_e2e，跑 create_all + alembic upgrade head
-#     两遍（迁移步骤一遍；Start backend 时 main.py:30 的 import 期 create_all 与 :47 的
-#     lifespan upgrade head 再各一遍）。**没有 drop_all、也没有 downgrade。**
+#   - e2e-stack.yml:e2e —— 三条连接串全指 ir_e2e；bootstrap 显式初始化后再种子、启动，无 drop_all/downgrade。
 #
 # 连接身份一旦退回 root，「URL 被指错 = 这个账号够得着的东西就能被毁」这条风险面就重新
 # 出现，而**没有任何用例会因此变红**——root 一样能通过 `tests/db_isolation.py` 的归属闸门

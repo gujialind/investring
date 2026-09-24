@@ -2,20 +2,8 @@ from sqlalchemy.orm import Session
 from app.models.scheduled_task import ScheduledTask
 
 
-def init_scheduled_tasks(db: Session) -> None:
-    """
-    初始化定时任务数据
-    
-    确保 4 个核心任务记录存在于数据库中：
-    1. nav_sync - 净值同步
-    2. snapshot_generate - 组合快照生成（issue #156，自 nav_sync 剥离）
-    3. trading_calendar_sync - 交易日历同步
-    4. log_cleanup - 日志清理
-
-    已存在的记录会同步最新的 name/description 文案，
-    保证任务说明随代码演进更新（不覆盖启用状态、运行记录与 cron_expr）。
-    """
-    tasks = [
+def scheduled_task_definitions() -> list[dict]:
+    return [
         {
             "code": "nav_sync",
             "name": "净值同步",
@@ -55,7 +43,9 @@ def init_scheduled_tasks(db: Session) -> None:
         },
     ]
 
-    for task_data in tasks:
+
+def init_scheduled_tasks(db: Session) -> None:
+    for task_data in scheduled_task_definitions():
         existing = db.query(ScheduledTask).filter(
             ScheduledTask.code == task_data["code"]
         ).first()
