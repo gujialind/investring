@@ -128,7 +128,8 @@ jobs:
             --junitxml=junit.xml --durations=20
 
       # 增量覆盖率门禁（issue #464）：只约束本 PR 改动行，堵住「新模块 0% 覆盖被既有
-      # 高覆盖稀释通过」的缺口；全局 fail_under=82 仍兜整体退化，两者职责正交。
+      # 高覆盖稀释通过」的缺口；全局 fail_under（值见 backend/pyproject.toml，不在别处复述）
+      # 仍兜整体退化，两者职责正交。
       # 从仓库根运行并传 backend/coverage.xml：diff-cover 自行按 git root 对齐
       # coverage.xml 的 <source>（绝对路径 + filename 相对 app/；实测 cwd 不影响选行，
       # 见 #464 评审）；显式 working-directory 是为了让 `diff-cover.md` 落在仓库根
@@ -166,24 +167,63 @@ jobs:
             echo "::warning::本次改动往 backend/app/ 新增了 ${added} 行，但 diff-cover 未测到任何改动行——可能是 coverage.xml↔git 路径映射断裂、增量门禁空转，请人工确认"
           fi
 
-      # 覆盖率摘要进 PR 页（issue #465）——失败/成功后都写，便于对比趋势
+      # 覆盖率摘要进 PR 页（issue #465）——失败/成功后都写，便于对比趋势。
+      # #621：必须印「合并口径 TOTAL」——它才是 fail_under 比较的那个数，而 XML 的
+      # line-rate / branch-rate 各自都偏离它 2~8pp（main@e882912 实测 87.06 / 89.63 / 78.67），
+      # 只印两个分项时，想按棘轮规则下取整的人会照 line-rate 写出一个立刻长红的阈值。
+      # 同时印出距阈值的 pp 差，让「缺口 ≥1pp ⇒ 棘轮触发」这件事在每个 PR 页上可见
+      # （此前 82 与实测 87.06 之间的 5.06pp 缺口在 94 个 merge 里无人察觉）。
       - name: Append coverage summary
         if: always()
         continue-on-error: true  # 诊断品解析失败不染红 job（#414），与同批 artifact/注解口径一致
         working-directory: backend
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import math
           import os
+          import re
+          import tomllib
           import xml.etree.ElementTree as ET
 
           if not os.path.exists("coverage.xml"):
               print("### 后端覆盖率\n⚠️ 未生成 coverage.xml，无法汇总")
               raise SystemExit(0)
           root = ET.parse("coverage.xml").getroot()
-          print("### 后端覆盖率（SQLite 全量，line+branch 合并口径）")
-          print(f"- 行覆盖：{float(root.get('line-rate', 0)) * 100:.2f}%")
-          print(f"- 分支覆盖：{float(root.get('branch-rate', 0)) * 100:.2f}%")
-          print("- 全局阈值 `fail_under` 见 `backend/pyproject.toml`（跌破即红）")
+          print("### 后端覆盖率（SQLite 全量）")
+          print(f"- 行覆盖 line-rate：{float(root.get('line-rate', 0)) * 100:.2f}%")
+          print(f"- 分支覆盖 branch-rate：{float(root.get('branch-rate', 0)) * 100:.2f}%")
+
+          # 合并口径 TOTAL = (命中 stmts + 命中 branches) / (stmts + branches)，
+          # 与 coverage.py 的 term 报告 TOTAL 行同源（branch=true 时的 fail_under 判据）。
+          stmts = hit_stmts = branches = hit_branches = 0
+          for line in root.iter("line"):
+              stmts += 1
+              if int(line.get("hits", "0")) > 0:
+                  hit_stmts += 1
+              if line.get("branch") == "true":
+                  m = re.search(r"\((\d+)/(\d+)\)", line.get("condition-coverage", ""))
+                  if m:
+                      hit_branches += int(m.group(1))
+                      branches += int(m.group(2))
+          units = stmts + branches
+          if not units:
+              print("- ⚠️ coverage.xml 里没有可计量的行/分支，算不出合并口径 TOTAL")
+              raise SystemExit(0)
+          total = (hit_stmts + hit_branches) / units * 100
+          with open("pyproject.toml", "rb") as fh:
+              fail_under = float(tomllib.load(fh)["tool"]["coverage"]["report"]["fail_under"])
+          # 判「该不该动」用目标值而不是 pp 差：口径是 floor(实测 − 1pp)，故阈值到位后
+          # gap 仍会稳在 1~2pp，只比 gap ≥1 会永久喊触发（#621）。
+          target = math.floor(total - 1)
+          print(f"- **合并口径 TOTAL（`fail_under` 比较的就是它）：{total:.2f}%**"
+                f"（{hit_stmts + hit_branches}/{units} units；本次数值，棘轮口径取最近一次 main 的实测）")
+          if target > fail_under:
+              print(f"- 距 `fail_under={fail_under:g}`：{total - fail_under:+.2f}pp ⇒ **棘轮触发**："
+                    f"应上调到 {target}（= floor(实测 − 1pp)），且不得高于本 PR 自身全量实测的下取整"
+                    f"——口径见 `backend/AGENTS.md`「跑测试」，与本 PR 无关时可另开 chore")
+          else:
+              print(f"- 距 `fail_under={fail_under:g}`：{total - fail_under:+.2f}pp"
+                    f"（未触发：floor(实测 − 1pp) = {target} ≤ 当前阈值；该差值跌破 0 即门禁红）")
           PY
 
       - name: Upload coverage report

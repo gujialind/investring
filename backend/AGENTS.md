@@ -162,17 +162,21 @@ cd backend && pytest tests -q
 - **共享测试 helper（#478/#479/#481 评审，issue #494）**：仅单目录内复用 → `tests/<layer>/<domain>_helpers.py`；跨层/全局 → `tests/` 根（与 `factories.py`、`seed_base.py` 同层）。命名固定 `<domain>_helpers.py`、**无 `test_` 前缀**（pytest 不收集，也不会被 `test_dialect_marker_guard.py` 的 AST 扫描误判为用例）。形态是**模块级工厂函数 + 显式 import**，不是 fixture（业务数据仍按上条走 function 级 fixture/factories）；**跨 ≥2 个测试文件共用才提取**，调用点全在单文件则留原位。头部注释分「溯源 / 现状」两句写，不把 helper 绑死单一 issue；改 helper 时跑消费它的同一 `-k` 子集。
 - pytest 配置在 `pyproject.toml`（`--strict-markers`），新增 marker 须登记。
 - **分层 marker（#469）**：`unit` / `integration` / `e2e` 由 `tests/conftest.py::pytest_collection_modifyitems` 按目录自动打标（新增文件天然带标），可用 `pytest tests -m integration -q` 选子集；`dialect` 表达「依赖 MySQL 方言行为（SQLite 下自动 skip）」，由用例显式 `@pytest.mark.dialect` 声明（迁移 0014/0015/0016 的 MySQL 类、审计日志的列宽/4 字节用例），**守门**：`tests/unit/test_dialect_marker_guard.py` 断言「凡调用 `_mysql_only()` 或判断 `dialect.name` 含 mysql 的用例必带该标记」（漏标时 `-m` 收窄会静默丢覆盖，#382 教训）；`slow` 已登记备用、暂未使用。**CI 仍全量双跑**（`backend-test` SQLite + `backend-test-mysql` 同一批用例）：#469 原设想的「MySQL job 只跑 `-m "integration or dialect"`」经评估否决——省约 1.5 分钟，代价是 dialect 漏标即静默失去 MySQL 覆盖，收益不抵风险；marker 能力先落地，narrowing 待有实测依据再议（漏标已由上述守门测试兜住）。
-- **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under=82`（2026-09-08 实测基线 82.15% 下取整，#405 审计埋点后上调）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败。
-  - **棘轮规则**：`fail_under` 只升不降；任何 PR 全量实测总覆盖率超当前阈值 ≥1pp 时，顺手把阈值上调到实测值下取整（随该 PR 提交）；分支覆盖不单设独立阈值（branch=true 下 fail_under 已是分支含口径）。
+- **覆盖率（#254 设防期，#171 观察期已结束）**：本地跑测试默认**不收集**覆盖率（不传 `--cov` 即零开销）；查看口径用 `pytest tests/ -q --cov=app --cov-report=term-missing`（带分支列与缺失行号）。口径与阈值配置在 `pyproject.toml [tool.coverage.*]`：`branch=true`（分支含口径，line+branch 合并计总覆盖率）+ `fail_under`（**当前值、基线来历与历次上调以该文件的注释为单一事实来源**；本指南与 `ci.yml` 都不复述数值——#621 之前 `82` 同时硬编码在 5 处、改一次要动 4 个文件，这本身就是棘轮长期没被执行的摩擦之一）。CI backend-test job 带 `--cov` 运行，跌破阈值即门禁失败；该 job 的 Step Summary 同时印出**门禁真正比较的合并口径 TOTAL** 与距阈值的 pp 差（#621）。
+  - **棘轮规则（口径由 #621 钉死）**：`fail_under` 只升不降。此前条文只写「任何 PR 全量实测超阈值 ≥1pp 就上调到实测下取整」，没定义「实测」是哪一次运行、也没定余量，结果是 2026-09-09 定 82 之后 **94 个 merge 里至少 4 次触发点（84/85/86/87）全被跳过**，缺口长到 5.06pp（≈458 units：删/skip 掉这个量级的测试 CI 仍全绿，而增量门禁只看 `app/` 改动行、删测试不产生改动行，它看不见）。四条口径：
+    - **触发（谁该动）**：任何 PR——只要「最近一次 main 的全量实测」超当前阈值 ≥1pp 即触发，**不看本 PR 自身增量多少**（+0.01pp 的 PR 照样触发）。刻意用「距阈值的缺口」而非「本 PR 的贡献」作判据：后者要 CI 多测一次 base 全量（≈3 分钟/PR），且缺口会永久留在原地——自愈性是这条规则唯一的执行力来源。与覆盖率无关的 PR 触发时，可另开独立 chore PR 补齐，不强制夹带（铁律 3）。
+    - **「实测」= 最近一次 main 的全量运行**，不是本 PR head/merge 那次的数：后者会因 base 落后而系统性偏低（实测 #614 的 base 落后 main 8 小时即低 0.60pp）。
+    - **目标值 = `floor(main 实测 − 1pp)`**，与前端 `vitest.config.ts` 同口径；并受硬约束「**不得高于本 PR 自身那次全量实测的下取整**」（否则本 PR 会被自己刚抬的阈值弄红：#614 自身运行 86.47%，写 87 即 CI 红，而它的改动行覆盖是 100%）。两者取小。留 1pp 不是保守而是必要：分母 9050 units 下 1pp = 90 units，而同一 commit 两次运行的噪声就有 5 units（CI 87.06 / 本地 87.12）；若按 `floor(实测)` 定 87，余量只剩 0.06pp ≈ 5 units，base 漂移容忍 ≈5 小时，且新代码按增量门禁最低档 80% 覆盖时加 ~79 units 就会让全局门禁红——等于把「新码 ≥80%」偷偷抬成「≈100%」。
+    - **「实测」指合并口径 TOTAL**（stmts 与 branches 一起算），即 `--cov-report=term` 的 `TOTAL` 行 / Step Summary 的「合并口径 TOTAL」行。**不是** `line-rate`（行覆盖）也不是 `branch-rate`（分支覆盖）：main@e882912 三者分别是 87.06 / 89.63 / 78.67，照 line-rate 下取整会写 89 而立刻长红。分支覆盖不单设独立阈值（`branch=true` 下 `fail_under` 已是分支含口径）。
   - 注意 fail_under 作用于 `--cov` 收集的那次运行：本地跑**子集**加 `--cov` 必然跌破阈值（子集覆盖不了全量代码），属预期，阈值只对全量运行有语义。
 - **增量覆盖率门禁（#464）**：CI `backend-test` 在 pytest 之后跑
   `diff-cover backend/coverage.xml --compare-branch=<PR base.sha> --fail-under=80`，
   只约束**本 PR 改动行**——堵住「新模块 0% 覆盖被既有高覆盖稀释通过」。与全局
-  `fail_under=82` 职责正交（增量防新码裸奔、全局防整体退化），两者并行。本地复现：
+  `fail_under` 职责正交（增量防新码裸奔、全局防整体退化），两者并行。本地复现：
   `cd backend && pytest tests -q --cov=app --cov-report=xml`，再从**仓库根**跑 diff-cover
   （diff-cover 自行按 git root 对齐 `<source>` 绝对路径，实测 cwd 不影响选行；从仓库根跑
-  是为了 `diff-cover.md` 落在仓库根，Summary/artifact 依赖该相对路径）。阈值 80 低于全局 82：
-  首次启用避免大面积红，观察一期后可上调。该门禁与全局阈值度量的是**同一个集合**——
+  是为了 `diff-cover.md` 落在仓库根，Summary/artifact 依赖该相对路径）。阈值 80 低于全局
+  `fail_under`：首次启用避免大面积红，观察一期后可上调。该门禁与全局阈值度量的是**同一个集合**——
   只有 `--cov=app` 收集到的文件（`pyproject.toml` `source = ["app"]`），alembic/scripts
   等口径外文件**不受任何覆盖率门禁约束**。**退化可见化**：若映射断裂，diff-cover 会
   报 `No lines with coverage information` 并 exit 0（静默空转），故 CI 在有新增行落
