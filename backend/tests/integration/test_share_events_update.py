@@ -361,3 +361,103 @@ class TestForcedAdjustmentInputValidation:
         )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "SHARES_CHANGE_ON_CASH_PRODUCT"
+
+
+class TestUpdateEventNullGuard:
+    """PUT 显式 null 收口（#579 口径 A，与 #573 同口径）：ex_date /
+    entitlement_date 是 NOT NULL 列，显式 null 此前直落 setattr 循环 →
+    IntegrityError 500（靠列约束兜底），现 422 拒绝；其余可更新字段均为可空列
+    且响应 Optional，null = 清空是 setattr 循环的既有语义、进 allow 显式化，
+    清空后的双空终态仍由 #279 合并校验（EMPTY_ADJUSTMENT）兜底"""
+
+    ENT = date(2025, 11, 10)
+    EX = date(2025, 11, 12)
+
+    def _pending_event(self, test_db, *, code, event_type="cash_dividend", **kwargs):
+        create_portfolio(test_db, code=code, status="active")
+        create_product(test_db, code="FUND_NG", market="CN_OTC",
+                       product_type="OEF", asset_class_code="ASSET_STOCK")
+        create_platform(test_db, code="NG_PLAT")
+        ensure_trading_day(test_db, self.ENT, is_open=True)
+        ensure_trading_day(test_db, self.EX, is_open=True)
+        return create_share_change_event(
+            test_db, code, "FUND_NG", "CN_OTC",
+            event_type=event_type, ex_date=self.EX,
+            entitlement_date=self.ENT, status="pending",
+            platform_code="NG_PLAT", **kwargs,
+        )
+
+    def test_update_null_ex_date_rejected_not_500(self, client, admin_headers, test_db):
+        """NOT NULL 列显式 null：422 拒绝（修复前 IntegrityError 500）且零写入"""
+        event = self._pending_event(test_db, code="NG_P1", div_cash=Decimal("0.1"))
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"ex_date": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "INVALID_PARAM"
+        assert "ex_date" in detail["message"]
+        # 拒绝即零写入：日期保持原值且仍可读
+        test_db.expire_all()
+        row = test_db.query(ShareChangeEvent).get(event.id)
+        assert row.ex_date == self.EX
+        assert client.get(
+            f"/api/share-change-events/{event.id}", headers=admin_headers
+        ).status_code == 200
+
+    def test_update_null_entitlement_date_rejected(self, client, admin_headers, test_db):
+        event = self._pending_event(test_db, code="NG_P2", div_cash=Decimal("0.1"))
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"entitlement_date": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "INVALID_PARAM"
+        assert "entitlement_date" in detail["message"]
+
+    def test_update_null_notes_and_div_cash_clear(self, client, admin_headers, test_db):
+        """allow 例外：可空列 null = 清空（既有 setattr 语义，不得被收口误拒）"""
+        event = self._pending_event(
+            test_db, code="NG_P3", div_cash=Decimal("0.1"), notes="原备注"
+        )
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"notes": None, "div_cash": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["notes"] is None
+        assert data["div_cash"] is None
+
+    def test_update_adjustment_single_null_clears_double_null_rejected(self, client, admin_headers, test_db):
+        """forced_adjustment：清单项合法（另一项仍在）；双 null 由 #279 合并校验
+        兜底为 EMPTY_ADJUSTMENT——allow 放行不等于放弃终态校验"""
+        event = self._pending_event(
+            test_db, code="NG_P4", event_type="forced_adjustment",
+            shares_change=Decimal("100"), cash_change=Decimal("50"),
+        )
+        one = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"cash_change": None},
+            headers=admin_headers,
+        )
+        assert one.status_code == 200, one.json()
+        assert one.json()["cash_change"] is None
+        assert float(one.json()["shares_change"]) == 100.0
+
+        both = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"shares_change": None, "cash_change": None},
+            headers=admin_headers,
+        )
+        assert both.status_code == 422
+        assert both.json()["detail"]["error"] == "EMPTY_ADJUSTMENT"
+        # 拒绝即零写入：shares_change 保持原值
+        test_db.expire_all()
+        row = test_db.query(ShareChangeEvent).get(event.id)
+        assert Decimal(str(row.shares_change)) == Decimal("100")

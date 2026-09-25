@@ -16,6 +16,7 @@ from app.schemas.portfolio import (
 )
 from app.dependencies import get_current_user, get_current_admin
 from app.services import performance_service, portfolio_service
+from app.services.null_guard import reject_explicit_nulls
 
 router = APIRouter()
 
@@ -73,11 +74,22 @@ def update_portfolio(
     current_user=Depends(get_current_admin),
 ):
     updates = portfolio.dict(exclude_unset=True)
+    # 显式 null 收口（#579 口径 A，与 #573 同口径）：name / auto_snapshot_enabled
+    # 是 NOT NULL 列，显式 null 此前被 service 的 `is not None` 静默跳过（恒 no-op，
+    # 调用方以为改了）；description 列可空且响应 Optional → null = 清空进 allow
+    # （asset_classification.description 先例）；display_config 的 None = 清空是
+    # #144 既定语义，同进 allow（两者均以哨兵区分「不传 = 不修改」）。
+    reject_explicit_nulls(updates, allow={"description", "display_config"})
     db_portfolio = portfolio_service.update_portfolio(
         db,
         code=code,
         name=updates.get("name"),
-        description=updates.get("description"),
+        # description 区分「不传 = 不修改」与「显式 null = 清空」（#579，哨兵同 display_config）
+        description=(
+            updates["description"]
+            if "description" in updates
+            else portfolio_service.UNSET
+        ),
         # display_config 区分「不传 = 不修改」与「显式 null = 清空」（issue #144）
         display_config=(
             updates["display_config"]

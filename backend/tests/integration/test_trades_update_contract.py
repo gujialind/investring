@@ -649,3 +649,108 @@ class TestPlatformRequired:
         assert resp.status_code == 404, f"Response: {resp.status_code} {resp.json()}"
         assert resp.json()["detail"]["error"] == "PLATFORM_NOT_FOUND"
         assert test_db.query(Trade).filter_by(portfolio_code="PLR_P3").count() == base_count
+
+
+class TestUpdateTradeNullGuard:
+    """PUT 显式 null 收口（#579 口径 A，与 #573 同口径）：数值/日期字段的 None
+    此前被 _dec() 归为「未提供」——静默 no-op，调用方以为已清空/清零；现一律
+    422 INVALID_PARAM，fee 清零改为显式传 0（修复前后均合法）。notes null = 清空
+    进 allow（列可空且响应 Optional）；cash_confirm_date 进 allow 交 #493 专用
+    校验收口（pending 整体拒该字段、confirmed 拒显式 null——专用消息不被本码抢占，
+    confirmed 侧回归见 test_trades_in_transit_lifecycle.py 的
+    test_update_arrival_null_and_mixed_fields_rejected）"""
+
+    PRODUCT = "ETF_NG"
+
+    def _setup_pending_buy(self, client, admin_headers, test_db, *, code, fee=5.0):
+        """组合 + 产品 + 平台 + 交易日 + 可用现金（confirmed CASH buy）+ pending 基金买入"""
+        create_portfolio(test_db, code=code, status="active")
+        create_product(test_db, code=self.PRODUCT, market="CN_EXCHANGE",
+                       product_type="ETF", asset_class_code="ASSET_STOCK",
+                       confirm_days=0)
+        create_platform(test_db, code=f"{code}_PL")
+        ensure_trading_day(test_db, date(2025, 10, 6), is_open=True)
+        create_trade(
+            test_db, code, "CASH", "",
+            trade_type="buy", amount=10000.0, price=None,
+            platform_code=f"{code}_PL", trade_date=date(2025, 10, 3),
+            confirm_date=date(2025, 10, 3), status="confirmed",
+        )
+        resp = client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": code, "product_code": self.PRODUCT,
+                "market": "CN_EXCHANGE", "trade_type": "buy",
+                "amount": 1000.0, "price": 1.5, "fee": fee,
+                "platform_code": f"{code}_PL", "trade_date": "2025-10-06",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), f"Response: {resp.status_code} {resp.json()}"
+        return resp.json()["id"]
+
+    def test_update_explicit_null_fee_rejected_zero_write(self, client, admin_headers, test_db):
+        trade_id = self._setup_pending_buy(client, admin_headers, test_db, code="UNG_FEE")
+        resp = client.put(
+            f"/api/trades/{trade_id}", json={"fee": None}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        assert "fee" in resp.json()["detail"]["message"]
+        # 拒绝即零写入：fee 保持创建值且仍可读
+        test_db.expire_all()
+        row = test_db.query(Trade).get(trade_id)
+        assert float(row.fee) == 5.0
+        assert client.get(f"/api/trades/{trade_id}", headers=admin_headers).status_code == 200
+
+    def test_update_fee_zero_still_clears(self, client, admin_headers, test_db):
+        """清零走显式 0（修复前后均合法）：fee null 被拒后的正确姿势"""
+        trade_id = self._setup_pending_buy(client, admin_headers, test_db, code="UNG_ZERO")
+        resp = client.put(
+            f"/api/trades/{trade_id}", json={"fee": 0}, headers=admin_headers
+        )
+        assert resp.status_code == 200, f"Response: {resp.status_code} {resp.json()}"
+        assert float(resp.json()["fee"]) == 0.0
+
+    def test_update_explicit_null_price_and_date_rejected(self, client, admin_headers, test_db):
+        trade_id = self._setup_pending_buy(client, admin_headers, test_db, code="UNG_PRC")
+        for payload, field in (
+            ({"price": None}, "price"),
+            ({"trade_date": None}, "trade_date"),
+            ({"amount": None}, "amount"),
+        ):
+            resp = client.put(
+                f"/api/trades/{trade_id}", json=payload, headers=admin_headers
+            )
+            assert resp.status_code == 422, f"{field}: {resp.status_code} {resp.json()}"
+            detail = resp.json()["detail"]
+            assert detail["error"] == "INVALID_PARAM"
+            assert field in detail["message"]
+
+    def test_update_null_notes_clears(self, client, admin_headers, test_db):
+        """allow 例外：notes null = 清空（notes-only 非会计分支照常放行）"""
+        trade_id = self._setup_pending_buy(client, admin_headers, test_db, code="UNG_NOTE")
+        set_resp = client.put(
+            f"/api/trades/{trade_id}", json={"notes": "临时备注"}, headers=admin_headers
+        )
+        assert set_resp.status_code == 200
+        assert set_resp.json()["notes"] == "临时备注"
+        clear = client.put(
+            f"/api/trades/{trade_id}", json={"notes": None}, headers=admin_headers
+        )
+        assert clear.status_code == 200, f"Response: {clear.status_code} {clear.json()}"
+        assert clear.json()["notes"] is None
+
+    def test_update_pending_null_cash_confirm_date_dedicated_message(self, client, admin_headers, test_db):
+        """allow 不吞专用口径：pending 交易传 cash_confirm_date（含 null）仍是
+        「只在已确认卖出上可改」的 #493 专用消息，而非通用 null 收口"""
+        trade_id = self._setup_pending_buy(client, admin_headers, test_db, code="UNG_CCD")
+        resp = client.put(
+            f"/api/trades/{trade_id}",
+            json={"cash_confirm_date": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "INVALID_PARAM"
+        assert "只在已确认卖出上可改" in detail["message"]

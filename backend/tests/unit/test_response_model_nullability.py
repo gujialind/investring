@@ -171,8 +171,9 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
     ),
     ("Trade", "fee"): (
         "orm_default",
-        "ORM default=0；创建按金额推导或显式传入。更新路径显式 null 安全："
-        "trade_service.update_trade 用 _dec() 把 null 归为「未提供」，仅 fee_input 非 None 才 setattr",
+        "ORM default=0；创建按金额推导或显式传入。更新路径显式 null 由 "
+        "null_guard.reject_explicit_nulls 拒绝 422（#579），清零须显式传 0；"
+        "未提供时 _dec() 保持原值，仅 fee_input 非 None 才 setattr",
     ),
     ("Trade", "status"): (
         "orm_default",

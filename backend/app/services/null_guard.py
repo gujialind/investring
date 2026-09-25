@@ -1,14 +1,22 @@
-"""更新请求的显式 null 收口（issue #573）
+"""更新请求的显式 null 收口（issue #573；#579 起全仓统一为本方向）
 
 部分更新语义约定：**不传 = 不动**。显式传 null 在多数字段上没有定义语义，放行后会沿
 `exclude_unset` → 服务层 setattr → 可空列 落库（UPDATE 不触发列默认值），而响应模型
-字段不接受 None → 序列化 500，且该行此后 GET 单条/列表恒 500，不可自愈。
+字段不接受 None → 序列化 500，且该行此后 GET 单条/列表恒 500，不可自愈；即便不 500，
+也是「静默 no-op / 谎报成功 / 误清空」三种不可感知形态之一（#579）。
+
+已接入的更新路径：investor / product / asset_classification / subscription /
+trade / share_change_event 六个服务，与 platforms / data_sources / portfolios
+三个路由（portfolios 的更新入口在 router 分解 kwargs，守卫随之放 router）。
 
 各调用点用 `allow` 声明「显式 null 有明确语义或另有专用校验器」的字段：
 - 可空列 + 响应 Optional 的字段：null = 清除（如 investor.phone/email、
-  asset_classification.description、product 五个维度标签）；
-- 已有专用校验器收口的字段：product 的 product_type/confirm_days/nav_lag_days
-  （保留各自专用错误码，不并入本码）。
+  asset_classification.description、product 五个维度标签、portfolio.description、
+  trade.notes、share_change_event 的八个可空数值/备注字段）；
+- null = 清空属既定业务语义的字段：portfolio.display_config（#144，router 以
+  哨兵区分「不传」）；
+- 已有专用校验器收口的字段：product 的 product_type/confirm_days/nav_lag_days、
+  trade 的 cash_confirm_date（#493）——保留各自专用错误码，不并入本码。
 
 service 层只抛领域异常，不 commit。
 """
