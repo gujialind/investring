@@ -7,8 +7,8 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.database import engine, SessionLocal
-from app.models.base import Base
+from app.database import SessionLocal
+from app.bootstrap import check as check_database
 from app.logging_config import setup_logging
 from app.request_context import (
     REQUEST_ID_HEADER,
@@ -24,35 +24,24 @@ from app.init_tasks import init_scheduled_tasks
 
 logger = logging.getLogger(__name__)
 
-# 必须早于下面两处 import 期副作用（建表、初始化调度任务），它们本身可能产日志（issue #404）
 setup_logging()
-
-Base.metadata.create_all(bind=engine)
-
-db = SessionLocal()
-try:
-    init_scheduled_tasks(db)
-finally:
-    db.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import os
-    from alembic.config import Config as AlembicCfg
-    from alembic import command as alembic_command
-
-    alembic_ini = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
-    alembic_cfg = AlembicCfg(alembic_ini)
-    alembic_command.upgrade(alembic_cfg, "head")
+    check_database()
+    with SessionLocal() as db:
+        init_scheduled_tasks(db)
 
     from app.services.market_data_service import recover_orphan_jobs
     recover_orphan_jobs()
 
     from app.services.scheduler_service import init_scheduler, shutdown_scheduler
-    init_scheduler()
-    yield
-    shutdown_scheduler()
+    try:
+        init_scheduler()
+        yield
+    finally:
+        shutdown_scheduler()
 
 
 def _resolve_version() -> str:

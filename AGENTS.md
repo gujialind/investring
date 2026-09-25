@@ -32,6 +32,12 @@
 | 代码审查 | [code-review](docs/reference/code-review.md)、本次变更涉及的规则 | L2 语义审查，不重复 CI 的 L1 检查 |
 | 文档变更 | [documentation](docs/reference/documentation.md)、持有正文的专题及其引用方 | `python scripts/check_context_docs.py` 与相关契约/测试 |
 
+### 本地验证入口
+
+从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`--json` 输出机器可读结果（#619）。E2E/目检的运行前提及参数入口见[前端指南](frontend/AGENTS.md#4-e2eplaywright)。
+
+`plan` 不是验证，单次 `run` 不是全任务验收；每次真实执行、不缓存跳测，输出范围、状态和日志引用，不替代对应业务测试、人工看图或必需 CI。`scripts/check_openapi_stop.py` 仅提供契约 Stop 适配；宿主接线需单独确认，不自动修改私有配置。
+
 ### 跨域不变量摘要
 
 下列只作导航，完整定义、原因和例外以链接正文为准。
@@ -63,7 +69,7 @@
 - 一切改动从最新 `origin/main` 拉短命分支，经 PR 合入 main；不从本地旧 ref 重建。命名用 `feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`；按下方 Issue 约定免开 issue 的小修可用 `hotfix/<简述>`。AI 可用 `trae/`、`codex/` 前缀。
 - 合入 main 触发 CI → CD 自动部署，**纯文档例外**（#456）：ci.yml 的 push 触发器忽略 `**/*.md` 与 `docs/**`，纯文档合入不重建镜像、不重部署。`deploy/YYYYMMDD-SHA` 标签因此不随每次文档合入推进，见版本规范。
 - **PR 触发器禁止添加 paths-ignore**：docs-only PR 仍须产出 CI OK，否则 required check 永久等待（#377）。路径模式只按后缀/目录精确匹配，不能扩大到漏掉代码；合入前验证不减，完整执行策略见 ci.yml 与[审查规范的合入条件](docs/reference/code-review.md#review-merge)。
-- 手动部署（deploy.yml workflow_dispatch）只接受已有镜像 tag，用于回滚/重部署。
+- 手动部署（deploy.yml workflow_dispatch）只对服务器已保留的发布（release-id）操作，显式区分 redeploy / rollback / migrate；migrate 须附服务器 `bootstrap status` 的 DB 状态指纹授权。
 
 ### 3.2 Issue 约定
 

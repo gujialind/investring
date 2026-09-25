@@ -10,12 +10,10 @@ import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/te
  *   npx playwright test --ui          # 交互式 UI 模式
  *   npx playwright test --debug       # 调试模式
  */
-// webServer.port 从 use.baseURL 派生而非另设环境变量：端口与被测地址同源，
-// 不可能各说各话。需要隔离栈的调用方传 BASE_URL 指向自己的端口后，
-// Playwright 就不会再在 :3000 上另起一份本调用方控制不了的服务。
-// 不设 BASE_URL 时（CI 只设 CI=true）与改动前逐字等价：:3000。
+// 直接运行时从被测地址派生服务端口，避免启动服务与请求地址不一致。
 const baseURL = process.env.BASE_URL || 'http://localhost:3000';
 const webServerPort = Number(new URL(baseURL).port) || 3000;
+const authFile = process.env.E2E_AUTH_FILE || 'e2e/.auth/admin.json';
 
 // 报告器：html + list 恒定；PLAYWRIGHT_JSON_OUTPUT_FILE 存在时追加 json（#466 主 E2E job
 // 用它汇总 flaky 用例）。刻意在配置里追加而非用 CLI --reporter：CLI 会整体替换本列表，
@@ -30,6 +28,7 @@ if (process.env.PLAYWRIGHT_JSON_OUTPUT_FILE) {
 
 export default defineConfig({
   testDir: './e2e',
+  outputDir: process.env.E2E_OUTPUT_DIR || 'test-results',
   timeout: 30_000,
   expect: { timeout: 5_000 },
 
@@ -66,10 +65,10 @@ export default defineConfig({
   // （cp .next/static 与 public 入 .next/standalone，见 e2e-stack.yml / Dockerfile）。
   // 历史上曾跑在 next dev 上，按需编译/Fast Refresh full reload 竞态
   // 是 PR #169 类 flaky 的根因，切生产构建后此类竞态结构性消失。
-  webServer: {
-    command: `PORT=${webServerPort} node .next/standalone/server.js`,
+  webServer: process.env.E2E_SERVER_MANAGED === 'true' ? undefined : {
+    command: `HOSTNAME=127.0.0.1 PORT=${webServerPort} node .next/standalone/server.js`,
     port: webServerPort,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 
@@ -86,7 +85,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'e2e/.auth/admin.json',
+        storageState: authFile,
       },
       dependencies: ['setup'],
     },
@@ -100,7 +99,7 @@ export default defineConfig({
       name: 'mobile',
       use: {
         ...devices['iPhone 13'],
-        storageState: 'e2e/.auth/admin.json',
+        storageState: authFile,
       },
       dependencies: ['setup'],
     },

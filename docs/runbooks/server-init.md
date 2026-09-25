@@ -52,6 +52,9 @@
   若该用户需要任何密码相关认证会失败；确认锁定状态 `passwd -S deploy`，必要时
   `passwd -u deploy` 解锁（纯密钥/无登录需求场景可保持锁定）。
 - CD 的 SSH 凭据（deploy.yml secrets）对应该用户；业务目录属主设为该用户。
+- **主机指纹入库**：CD 强制校验 SSH 主机指纹（`StrictHostKeyChecking=yes`），需把服务器
+  known_hosts 条目配成 GitHub secret `SERVER_KNOWN_HOSTS`（缺失时部署直接拒绝）。经可信
+  首连核对指纹后用 `ssh-keyscan -t ed25519 <host>` 生成；换机/重装后同步更新该 secret。
 
 ## 6. 防火墙 / 安全组
 
@@ -61,9 +64,18 @@
 
 ## 7. 部署目录与 RDS
 
-- 建部署目录（如 `/opt/investring`，含 `nginx/`），属主为部署用户；
-  `docker-compose.yml` / `nginx.conf` / `.env` 由部署流程落位，secrets 配置见部署文档。
+- 建部署目录（如 `/opt/investring`），属主为部署用户。**人工只维护 `.env`**（数据库连接
+  等秘密；发布链只对它建符号链接，永不复制/回滚）；`releases/`、`current`、`state/`、
+  `incoming/`、`certbot/www` 由部署链（`scripts/server_deploy.sh`）自动创建维护。
+- `docker-compose.yml` / `nginx.conf` 不再人工落位：随每个发布包进入 `releases/<id>/`
+  （digest 化 `images.env` 同包保留），目录约定见 `server_deploy.sh` 头部注释与
+  [deploy-rollback runbook](deploy-rollback.md)。secrets 配置见部署文档。
 - RDS 白名单添加服务器内网 IP；应用经内网连接，不做公网直连。
+- **首次数据库初始化须显式授权**：空库自动部署会以 exit 4 停止，未写库、未激活。
+  从失败部署日志取得已 staged 的 release-id（此时尚无 accepted 记录），按
+  [初始化与迁移流程](deploy-rollback.md#5-自动化配合deployyml--server_deploysh)
+  使用目标发布、同一 `.env` 账号取 `bootstrap status` 指纹，核对后以
+  `workflow_dispatch action=migrate release_id=<ID> expect_state=<fingerprint>` 继续。
 
 ## 8. 安全自查清单
 
@@ -80,6 +92,7 @@
 
 | 脚本 | 定位 |
 | --- | --- |
+| `scripts/server_deploy.sh` | 服务器端单用途部署脚本（stage/preflight/activate/probe + migrate 授权）；只应由 CD 经 SSH 调用，人工执行前先读头部注释与 [deploy-rollback runbook](deploy-rollback.md) |
 | `scripts/verify-frontend.sh` | 前端本地门禁（lint + tsc + build，与 CI 同口径），推送前高频使用 |
 | `scripts/visual-verify.sh` | 前端目检脚手架（起服务 + 截图，产物是人看的图，不做通过与否判定）；用法见 `frontend/AGENTS.md` §4「目检」，勿与上一行的门禁混用 |
 | `ir-cli/scripts/gen_response_fields.py` | ir-cli 响应字段契约生成器（CI 一致性校验），后端 openapi 变更后运行 |

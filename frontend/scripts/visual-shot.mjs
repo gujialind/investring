@@ -5,23 +5,22 @@
  *                                     [--out DIR] [--base URL]
  *   --path    要截的页面路径，可重复；默认三个流水列表（见 DEFAULT_PATHS）
  *   --device  可重复；默认双端都截
- *   --out     输出目录，默认 /tmp/visual-verify
- *   --base    前端地址，默认 http://localhost:3000（须已由 visual-verify.sh 起好）
+ *   --out     输出目录，默认创建独立临时目录
+ *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）。
  *
  * 与 playwright.config.ts 同口径：desktop = Desktop Chrome(1280x720)，
  * mobile = iPhone 13(webkit)，UA 驱动 src/proxy.ts 的 /m 重定向，
- * 故同一个 --path 双端通用。认证复用 e2e/.auth/admin.json 的 storageState，
- * 失效/不存在时走 auth.setup.ts 的登录流程并回写。
+ * 故同一个 --path 双端通用。认证状态仅保存在本次输出目录。
  *
  * 通常由 scripts/visual-verify.sh 调用（那个脚本负责起后端与 standalone 前端）。
  * 造数与红线见 frontend/AGENTS.md §4「目检」。
  */
-import { existsSync, mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { chromium, webkit, devices } from '@playwright/test';
 
-const AUTH_FILE = 'e2e/.auth/admin.json';
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
   mobile: { descriptor: devices['iPhone 13'], launch: () => webkit.launch() },
@@ -35,7 +34,7 @@ const DEFAULT_PATHS = [
 
 const opts = {
   base: 'http://localhost:3000',
-  out: '/tmp/visual-verify',
+  out: null,
   paths: [],
   devices: [],
 };
@@ -67,12 +66,10 @@ for (const d of opts.devices) {
     process.exit(2);
   }
 }
+opts.out ??= mkdtempSync(join(tmpdir(), 'investring-visual-'));
 mkdirSync(opts.out, { recursive: true });
+const AUTH_FILE = resolve(opts.out, 'auth.json');
 
-/**
- * storageState 可能不存在（e2e/.auth/ 被 gitignore）或 token 已过期：
- * 先访问 /dashboard 验，被弹回登录页就现场登录并回写，不要求先跑 playwright setup
- */
 async function ensureLoggedIn(page, context) {
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
   if (!new URL(page.url()).pathname.includes('login')) return;

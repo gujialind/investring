@@ -1,27 +1,33 @@
 # ============================================================================
-# InvestRing CD 持续部署流水线（backend + frontend + nginx）
+# InvestRing CD 持续部署流水线（消费发布包，不再构建 —— issue #537 第四批）
 # ============================================================================
 # 触发条件：
-#   1. main 分支 CI 通过后自动部署（上线新代码的唯一入口）
-#   2. 手动触发（workflow_dispatch）：仅重新部署/回滚到已有镜像 tag（留空会被拒绝，issue #211）
+#   1. main 分支 CI 通过后自动部署（上线新代码的唯一入口）。CI 的 image-smoke
+#      job 已构建、按 digest 冒烟并上传 release-bundle；本 workflow 验证触发
+#      run 的来源（仓库/workflow/event/head SHA/run ID/attempt）后下载该包。
+#   2. 手动触发（workflow_dispatch）：显式区分 redeploy / rollback / migrate，
+#      目标是服务器上已保留的发布（state/accepted-releases.log），严格校验格式。
 #
-# 部署链路：并行构建前后端镜像 → 推送阿里云 ACR → SSH 到服务器 docker compose up -d
+# 部署链路：来源验证 → 下载发布包 → release_bundle verify → 服务器记录快照 →
+#   祖先关系判据（auto）→ scp 包与 server_deploy.sh → 服务器端锁内执行
+#   stage → preflight → activate → probe（scripts/server_deploy.sh）。
 # 目标环境：4核4G 云服务器（backend/frontend/nginx 三容器）+ 云 RDS MySQL
 # 对外入口：nginx 80/443（HTTPS，Let's Encrypt）；backend 仅绑定 127.0.0.1:8000
 #
 # 需要配置的 GitHub Secrets：
-#   ACR_REGISTRY   - ACR 地址，如 registry.cn-hangzhou.aliyuncs.com
-#   ACR_NAMESPACE  - ACR 命名空间
-#   ACR_USERNAME   - ACR 登录用户名
-#   ACR_PASSWORD   - ACR 登录密码
-#   SERVER_HOST    - 服务器 IP
-#   SERVER_USER    - SSH 用户名
-#   SERVER_SSH_KEY - SSH 私钥
+#   ACR_REGISTRY / ACR_USERNAME / ACR_PASSWORD - 服务器端 docker login 拉取 digest 镜像
+#   SERVER_HOST / SERVER_USER / SERVER_SSH_KEY - SSH 连接
+#   SERVER_KNOWN_HOSTS - known_hosts 条目（主机指纹校验；缺失直接拒绝部署）
 #
-# 服务器约定：
-#   部署目录 /opt/investring；应用配置 .env 由服务器人工维护，
-#   CD 仅更新其中 BACKEND_IMAGE_REF / FRONTEND_IMAGE_REF 两行。
-#   Let's Encrypt 证书由服务器 certbot 维护（/etc/letsencrypt），不在本流水线范围。
+# 服务器约定（详见 scripts/server_deploy.sh 头部）：
+#   /opt/investring：releases/<id> 自包含发布目录、current 原子指针、
+#   state/{accepted-releases.log,last-known-good,migrate/}；
+#   .env（秘密）与 certbot/ 证书由服务器人工维护，CD 只建符号链接，
+#   永不复制、永不回滚。
+#
+# server_deploy.sh 退出码 → 本 workflow 的处置提示：
+#   3 旧任务/并发拒绝；4 DB 需迁移或兼容未知（自动部署已停在写库前）；
+#   5 启动/探活失败（统一策略已处理）；6 迁移 DDL 失败（现场保留，无自动回退）。
 # ============================================================================
 
 name: Deploy
@@ -32,15 +38,22 @@ on:
     workflows: ["CI"]
     types: [completed]
 
-  # 手动触发：仅用于重新部署 / 回滚到已有镜像 tag（如短 commit SHA），跳过构建直接部署该版本。
-  # 收口（issue #211）：上线新代码的唯一入口是 push main 走 CI 自动部署；留空 image_tag 会被
-  # setup 直接拒绝（exit 1），避免手动构建触发分支绕过 CI 覆盖生产（8-21 事故第 4 环）。
-  # 前后端镜像共用同一 tag（同一 commit 构建），回滚时两者一起回退。
-  # ⚠️ 回滚含数据库迁移的版本前，先按 docs/runbooks/deploy-rollback.md 判定迁移缺口。
+  # 手动触发：只对服务器上已保留的发布做显式操作（issue #211 收口不变：
+  # 上线新代码的唯一入口是 push main 走 CI 自动部署）。
+  # ⚠️ 回滚/迁移含数据库变更的版本前，先按 docs/runbooks/deploy-rollback.md 判定。
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "要回滚/重部署的已有镜像 tag（必填；留空将被拒绝）"
+      action:
+        description: "操作类型：redeploy 重部署 / rollback 回滚 / migrate 显式迁移升级"
+        required: true
+        type: choice
+        options: [redeploy, rollback, migrate]
+      release_id:
+        description: "服务器保留的发布 id（<sha7>-<run>.<attempt>，见 accepted-releases.log）"
+        required: false
+        type: string
+      expect_state:
+        description: "仅 migrate：服务器 bootstrap status 的 64 位 fingerprint（迁移授权，锁内重验）"
         required: false
         type: string
 
@@ -49,25 +62,22 @@ concurrency:
   group: deploy
   cancel-in-progress: false
 
-env:
-  BACKEND_IMAGE: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/investring-backend
-  FRONTEND_IMAGE: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/investring-frontend
-
-# 部署成功后给已部署 commit 打 deploy/ tag（回滚目标单一视图，issue #211）需要写 contents 权限
+# 默认最小权限；deploy job 单独放宽（deploy/ tag 需要 contents: write）
 permissions:
-  contents: write
+  contents: read
+  actions: read
 
 jobs:
   # ==========================================================================
-  # 前置判断：确定是否部署、部署哪个版本
+  # 前置判断：确定模式与目标；手动输入在这里严格校验（经 env 传递，不内插进 shell）
   # ==========================================================================
   setup:
-    name: "确定部署版本"
+    name: "确定部署模式与目标"
     runs-on: ubuntu-latest
     # workflow_run 仅在「push 触发的」main CI 成功时继续；手动触发总是继续。
     # ⚠️ event == 'push' 守卫不可删：workflow_run 对 CI 的**任何**触发源都会触发
     # （含手动 workflow_dispatch 跑出来的全量 CI 成功），少了它，一次手动全量的绿灯
-    # 会被判成「main CI 成功」→ 重建前后端镜像、重启生产容器（#456 实测过的浪费）。
+    # 会被判成「main CI 成功」→ 重启生产容器（#456 实测过的浪费）。
     if: >
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
@@ -75,322 +85,252 @@ jobs:
        github.event.workflow_run.event == 'push') ||
       github.event_name == 'workflow_dispatch'
     outputs:
-      # 要部署的镜像 tag（前后端共用）
-      image_tag: ${{ steps.ver.outputs.image_tag }}
-      # 是否需要构建（手动指定已有 tag 时跳过构建）
-      need_build: ${{ steps.ver.outputs.need_build }}
-      # 构建所用的代码 commit
+      mode: ${{ steps.ver.outputs.mode }}
+      head_sha: ${{ steps.ver.outputs.head_sha }}
+      run_id: ${{ steps.ver.outputs.run_id }}
+      run_attempt: ${{ steps.ver.outputs.run_attempt }}
+      release_id: ${{ steps.ver.outputs.release_id }}
       checkout_ref: ${{ steps.ver.outputs.checkout_ref }}
     steps:
-      - name: 计算镜像版本
+      - name: 计算部署模式与目标
         id: ver
+        env:
+          INPUT_ACTION: ${{ github.event.inputs.action }}
+          INPUT_RELEASE_ID: ${{ github.event.inputs.release_id }}
+          INPUT_EXPECT_STATE: ${{ github.event.inputs.expect_state }}
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_RUN_ID: ${{ github.event.workflow_run.id }}
+          WR_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            # 手动触发：收口为仅回滚/重部署已有 tag（issue #211）。
-            # 留空 image_tag 直接拒绝——上线新代码的唯一入口是 push main 走 CI 自动部署，
-            # 避免手动构建触发分支绕过 CI 覆盖生产（8-21 事故第 4 环）。
-            if [ -z "${{ github.event.inputs.image_tag }}" ]; then
-              echo "❌ 手动部署只接受已有 tag（回滚/重部署）；上线新代码请 push main 走 CI 自动部署"
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # 手动输入全部经 env 传入后严格校验；不合法直接拒绝，不含糊回退
+            case "$INPUT_ACTION" in
+              redeploy|rollback|migrate) ;;
+              *) echo "❌ 未知 action: '$INPUT_ACTION'"; exit 1 ;;
+            esac
+            if ! [[ "$INPUT_RELEASE_ID" =~ ^[0-9a-f]{7}-[0-9]+\.[0-9]+$ ]]; then
+              echo "❌ release_id 非法: '$INPUT_RELEASE_ID'（期望 <sha7>-<run>.<attempt>，"
+              echo "   取自服务器 /opt/investring/state/accepted-releases.log 或 deploy/ tag 对应记录）"
               exit 1
             fi
-            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
-            echo "need_build=false" >> $GITHUB_OUTPUT
-            echo "checkout_ref=main" >> $GITHUB_OUTPUT
+            if [ "$INPUT_ACTION" = "migrate" ]; then
+              if ! [[ "$INPUT_EXPECT_STATE" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "❌ migrate 必须提供 expect_state（服务器 bootstrap status 输出的 64 位 fingerprint）"
+                exit 1
+              fi
+            elif [ -n "$INPUT_EXPECT_STATE" ]; then
+              echo "❌ expect_state 只允许用于 migrate；redeploy/rollback 不做数据库变更"
+              exit 1
+            fi
+            {
+              echo "mode=$INPUT_ACTION"
+              echo "head_sha="
+              echo "run_id="
+              echo "run_attempt="
+              echo "release_id=$INPUT_RELEASE_ID"
+              echo "checkout_ref=main"
+            } >> "$GITHUB_OUTPUT"
           else
-            # workflow_run（main CI 成功）触发：部署 CI 对应的 commit
-            #（workflow_run 事件中 github.sha 是默认分支，必须用 head_sha 才能与 CI 校验的代码一致）
-            SHA="${{ github.event.workflow_run.head_sha }}"
-            echo "image_tag=${SHA:0:7}" >> $GITHUB_OUTPUT
-            echo "need_build=true" >> $GITHUB_OUTPUT
-            echo "checkout_ref=$SHA" >> $GITHUB_OUTPUT
+            # workflow_run（main push CI 成功）触发：部署 CI 对应的 commit 与 run 产物
+            #（github.sha 在 workflow_run 事件中是默认分支 tip，必须用 head_sha）
+            if ! [[ "$WR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] \
+               || ! [[ "$WR_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$WR_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
+              echo "❌ workflow_run 事件字段非法，拒绝部署"
+              exit 1
+            fi
+            {
+              echo "mode=auto"
+              echo "head_sha=$WR_HEAD_SHA"
+              echo "run_id=$WR_RUN_ID"
+              echo "run_attempt=$WR_RUN_ATTEMPT"
+              echo "release_id=${WR_HEAD_SHA:0:7}-${WR_RUN_ID}.${WR_RUN_ATTEMPT}"
+              echo "checkout_ref=$WR_HEAD_SHA"
+            } >> "$GITHUB_OUTPUT"
           fi
 
   # ==========================================================================
-  # 并行构建前后端镜像并推送至阿里云 ACR（matrix 两个并发 job）
-  # ==========================================================================
-  build-and-push:
-    name: "构建镜像 & 推送 ACR (${{ matrix.service }})"
-    needs: setup
-    if: needs.setup.outputs.need_build == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - service: backend
-            image: investring-backend
-            context: .
-            dockerfile: backend/Dockerfile
-            build_args: ""
-          - service: frontend
-            image: investring-frontend
-            # 前端 Dockerfile 要求以 frontend/ 为上下文（根目录 .dockerignore 排除了 frontend/）
-            context: frontend
-            dockerfile: frontend/Dockerfile
-            # rewrites 在 build 时固化：生产环境下 Next.js 经容器网络访问后端服务
-            build_args: |
-              API_BASE_URL=http://backend:8000
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.setup.outputs.checkout_ref }}
-
-      # #375：被部署 commit 带 vX.Y.Z 标签（scripts/release.py 直接打在 main tip）时，
-      # 镜像在 :sha7/:latest 之外追加语义标签 :vX.Y.Z（见 docs/reference/versioning.md §5）
-      - name: Resolve semver image tag
-        id: semver
-        env:
-          CHECKOUT_REF: ${{ needs.setup.outputs.checkout_ref }}
-          IMAGE_BASE: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/${{ matrix.image }}
-        run: |
-          git fetch --tags --force origin
-          VTAG=$(git tag --points-at "$CHECKOUT_REF" \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
-          if [ -n "$VTAG" ]; then
-            echo "extra=${IMAGE_BASE}:$VTAG" >> "$GITHUB_OUTPUT"
-            echo "语义标签: $VTAG"
-          else
-            echo "extra=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login to Aliyun ACR
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ secrets.ACR_REGISTRY }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Build and push ${{ matrix.service }} image
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          push: true
-          build-args: ${{ matrix.build_args }}
-          tags: |
-            ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/${{ matrix.image }}:${{ needs.setup.outputs.image_tag }}
-            ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/${{ matrix.image }}:latest
-            ${{ steps.semver.outputs.extra }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
-          # 阿里云 ACR 个人版不支持 OCI attestation manifest（application/vnd.oci.empty.v1+json），
-          # buildx 默认开启 provenance 会导致推送被拒（issue #141），显式关闭
-          provenance: false
-          sbom: false
-
-  # ==========================================================================
-  # SSH 部署到服务器（拉取镜像 → compose up → 健康检查 → 失败自动回滚）
+  # 部署：来源验证 → 发布包消费 → 服务器端锁内 stage/preflight/activate/probe
   # ==========================================================================
   deploy:
     name: "部署到生产服务器"
-    needs: [setup, build-and-push]
-    # build 被跳过（部署已有 tag）时也要继续
-    if: >
-      !cancelled() && needs.setup.result == 'success' &&
-      (needs.build-and-push.result == 'success' || needs.build-and-push.result == 'skipped')
+    needs: setup
     runs-on: ubuntu-latest
     environment:
       name: production
+    permissions:
+      contents: write    # 部署成功后打 deploy/ tag（issue #211 回滚目标单一视图）
+      actions: read      # 来源验证与发布包下载
+    env:
+      MODE: ${{ needs.setup.outputs.mode }}
+      HEAD_SHA: ${{ needs.setup.outputs.head_sha }}
+      CI_RUN_ID: ${{ needs.setup.outputs.run_id }}
+      CI_RUN_ATTEMPT: ${{ needs.setup.outputs.run_attempt }}
+      RELEASE_ID: ${{ needs.setup.outputs.release_id }}
+      INPUT_RELEASE_ID: ${{ github.event.inputs.release_id }}
+      INPUT_EXPECT_STATE: ${{ github.event.inputs.expect_state }}
+      SERVER: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+      BASE: /opt/investring
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.setup.outputs.checkout_ref }}
+          fetch-depth: 0    # 祖先判据需要完整历史（git merge-base --is-ancestor）
 
-      # 同步 compose 与 nginx 配置到服务器（.env 由服务器人工维护，不覆盖）
-      # scp-action 保留相对路径：nginx/nginx.conf → /opt/investring/nginx/nginx.conf
-      - name: Copy compose & nginx config to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "docker-compose.yml,nginx/nginx.conf"
-          target: "/opt/investring"
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          command_timeout: 15m
-          script: |
-            set -e
-            cd /opt/investring
-            TAG="${{ needs.setup.outputs.image_tag }}"
-            BACKEND_IMG="${{ env.BACKEND_IMAGE }}:$TAG"
-            FRONTEND_IMG="${{ env.FRONTEND_IMAGE }}:$TAG"
-
-            echo "============================================"
-            echo "  InvestRing 部署"
-            echo "  后端镜像: $BACKEND_IMG"
-            echo "  前端镜像: $FRONTEND_IMG"
-            echo "============================================"
-
-            # 0. 前置检查：.env 必须已由人工配置好（CD 只更新镜像引用两行）
-            if [ ! -f .env ]; then
-              echo "❌ /opt/investring/.env 不存在，请先在服务器上配置应用环境变量"
-              exit 1
-            fi
-
-            # certbot webroot 目录（nginx 容器只读挂载，certbot --webroot 写入验证文件）
-            mkdir -p certbot/www
-
-            # 将镜像版本写入 .env（仅替换/追加指定行，其余配置不动），
-            # 保证后续人工 docker compose up -d 也能拉起正确版本
-            update_image_ref() {
-              local KEY="$1" VAL="$2"
-              if grep -q "^${KEY}=" .env; then
-                sed -i "s|^${KEY}=.*|${KEY}=${VAL}|" .env
-              else
-                echo "${KEY}=${VAL}" >> .env
-              fi
-            }
-
-            # 重载 nginx 刷新 upstream 解析：nginx.conf 的 upstream 块用容器主机名，
-            # 仅在配置加载时解析一次并永久缓存；backend/frontend 重建后换新 IP，
-            # 而 nginx 镜像不变从不重建，不刷新会持续 502（issue #104）。
-            # bind mount 陷阱（issue #119）：scp 替换 nginx.conf 会换新 inode，而容器
-            # 挂载绑定的是创建时的旧 inode，reload 重读的仍是旧内容。故先比对宿主机
-            # 文件与容器内挂载点的 inode：漂移时强制 restart 重建挂载视图，
-            # 一致时才走无中断 reload（reload 失败再回退 restart）。
-            reload_nginx() {
-              local host_inode ctr_inode
-              host_inode=$(stat -c %i nginx/nginx.conf)
-              ctr_inode=$(docker compose exec -T nginx stat -c %i /etc/nginx/nginx.conf 2>/dev/null || true)
-              if [ -z "$ctr_inode" ] || [ "$host_inode" != "$ctr_inode" ]; then
-                echo "nginx.conf inode 漂移（host=$host_inode container=${ctr_inode:-<不可读>}），restart 重建挂载"
-                docker compose restart nginx
-              else
-                docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose restart nginx
-              fi
-            }
-
-            # frontend 独立探活：从 nginx 容器内经容器网络访问 frontend:7860
-            #（nginx:1.27-alpine 自带 busybox wget），一举验证 frontend 存活 +
-            # 网络连通 + nginx 当前解析到的 upstream IP 有效；必须排在 reload_nginx 之后。
-            probe_frontend() {
-              docker compose exec -T nginx wget -qO- http://frontend:7860/ > /dev/null
-            }
-
-            # 1. 登录 ACR 并拉取新镜像（先拉后停，缩短停机时间）
-            echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} \
-              -u "${{ secrets.ACR_USERNAME }}" --password-stdin
-            docker pull "$BACKEND_IMG"
-            docker pull "$FRONTEND_IMG"
-
-            # 2. 记录当前运行版本（用于失败回滚）
-            PREV_BACKEND=$(docker inspect --format '{{.Config.Image}}' investring-backend 2>/dev/null || true)
-            PREV_FRONTEND=$(docker inspect --format '{{.Config.Image}}' investring-frontend 2>/dev/null || true)
-            echo "当前后端版本: ${PREV_BACKEND:-<无>}"
-            echo "当前前端版本: ${PREV_FRONTEND:-<无>}"
-
-            # 3. 移除同名旧容器（兼容早期人工 docker run 部署的容器）
-            docker rm -f investring-backend 2>/dev/null || true
-
-            # 4. 启动/更新全部服务（compose 仅重建镜像变化的容器；
-            #    后端容器启动时经 entrypoint 一次性执行 alembic upgrade head）
-            update_image_ref BACKEND_IMAGE_REF "$BACKEND_IMG"
-            update_image_ref FRONTEND_IMAGE_REF "$FRONTEND_IMG"
-            docker compose up -d --remove-orphans
-
-            # 4.5 重建后立即重载 nginx，避免 upstream 缓存旧容器 IP 导致入口 502
-            reload_nginx
-
-            # 5. 健康检查（最长等待 120s，覆盖迁移执行时间）
-            #    后端：本机回环 8000（backend 仅绑定 127.0.0.1）
-            #    入口：HTTPS 必须通过（备案期已结束，HTTP 兜底已移除，issue #119）
-            check() {
-              local NAME="$1"; shift
-              for i in $(seq 1 60); do
-                if "$@" > /dev/null 2>&1; then
-                  echo "✅ ${NAME} 健康检查通过"
-                  return 0
-                fi
-                sleep 2
-              done
-              echo "❌ ${NAME} 健康检查超时"
-              return 1
-            }
-
-            # nginx 入口探活：HTTPS 必须通过（-k：证书按域名签发，经 localhost 访问跳过主机名校验）。
-            # 443 未生效时部署必须失败并触发回滚，不得静默放行（issue #119）。
-            probe_nginx() {
-              curl -skf https://127.0.0.1/health > /dev/null 2>&1
-            }
-
-            HEALTHY=true
-            check "后端" curl -sf http://127.0.0.1:8000/health || HEALTHY=false
-            if [ "$HEALTHY" == "true" ]; then
-              check "frontend" probe_frontend || HEALTHY=false
-            fi
-            if [ "$HEALTHY" == "true" ]; then
-              check "nginx 入口" probe_nginx || HEALTHY=false
-            fi
-
-            if [ "$HEALTHY" != "true" ]; then
-              echo "输出容器日志："
-              docker logs --tail 100 investring-backend || true
-              docker logs --tail 50 investring-frontend || true
-              docker logs --tail 50 investring-nginx || true
-
-              # 回滚前置检查：失败版本可能已执行新的 alembic 迁移，而旧镜像的
-              # versions/ 目录中不存在该 revision——此时旧后端启动时 upgrade head
-              # 会报 "Can't locate revision"，盲目翻回镜像只会让回滚自身失败。
-              # 用旧镜像跑一次 alembic current 探测迁移缺口；其他错误（如网络抖动）
-              # 不阻断回滚，保持原有兜底行为。
-              # 决策路径见 docs/runbooks/deploy-rollback.md
-              if [ -n "$PREV_BACKEND" ]; then
-                ROLLBACK_CHECK=$(docker run --rm --env-file .env "$PREV_BACKEND" \
-                  python -m alembic current 2>&1) || true
-                if echo "$ROLLBACK_CHECK" | grep -q "Can't locate revision"; then
-                  echo "❌ 检测到迁移缺口：数据库已应用旧镜像不认识的 alembic revision，"
-                  echo "   直接回退镜像会导致旧后端启动失败，已跳过自动回滚。"
-                  echo "   请按 docs/runbooks/deploy-rollback.md §4 人工决策（前滚修复或先 downgrade）。"
-                  echo "   探测输出：$ROLLBACK_CHECK"
-                  exit 1
-                fi
-              fi
-
-              if [ -n "$PREV_BACKEND" ]; then
-                echo "🔄 回滚后端到上一版本: $PREV_BACKEND"
-                update_image_ref BACKEND_IMAGE_REF "$PREV_BACKEND"
-              fi
-              if [ -n "$PREV_FRONTEND" ]; then
-                echo "🔄 回滚前端到上一版本: $PREV_FRONTEND"
-                update_image_ref FRONTEND_IMAGE_REF "$PREV_FRONTEND"
-              fi
-              if [ -n "$PREV_BACKEND" ] || [ -n "$PREV_FRONTEND" ]; then
-                docker compose up -d
-                # 回滚路径同样重建了容器，必须同步刷新 nginx upstream 解析，
-                # 否则回滚“成功”后入口照样 502（issue #104）
-                reload_nginx
-              fi
-              exit 1
-            fi
-
-            # 6. 清理悬空旧镜像，释放磁盘
-            docker image prune -f
-
-            echo "============================================"
-            echo "  ✅ 部署完成: tag $TAG"
-            echo "============================================"
-
-      # 部署成功后给已部署 commit 打 deploy/ tag（issue #211）：回滚目标的单一视图，
-      # 手动 workflow_dispatch 回滚时 image_tag 即取此处短 SHA。仅新构建部署（need_build）打 tag，
-      # 纯回滚/重部署已有 tag 不重复打。同日同 commit 重跑时 tag 已存在则跳过，避免误报失败。
-      - name: Tag deployed commit
-        if: needs.setup.outputs.need_build == 'true'
+      # 不只信 workflow_run 事件载荷（可被伪造/错配）：用 API 按 run ID+attempt
+      # 拉取权威记录，核对仓库、workflow、event、head SHA、结论（第四批 B 要求）
+      - name: 验证触发 CI run 来源
+        if: env.MODE == 'auto'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="deploy/$(date +%Y%m%d)-${{ needs.setup.outputs.image_tag }}"
+          set -euo pipefail
+          RUN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/attempts/$CI_RUN_ATTEMPT")"
+          echo "$RUN_JSON" | jq -e \
+            --arg sha "$HEAD_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            --arg attempt "$CI_RUN_ATTEMPT" '
+              .head_sha == $sha
+              and .head_branch == "main"
+              and .event == "push"
+              and .status == "completed"
+              and .conclusion == "success"
+              and (.run_attempt | tostring) == $attempt
+              and ((.head_repository.full_name // "") | ascii_downcase) == ($repo | ascii_downcase)
+            ' > /dev/null || { echo "❌ 触发 run 来源验证失败（仓库/分支/event/SHA/结论不符）"; exit 1; }
+          WORKFLOW_ID="$(echo "$RUN_JSON" | jq -r '.workflow_id')"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID" \
+            | jq -e '.path == ".github/workflows/ci.yml" and .name == "CI"' > /dev/null \
+            || { echo "❌ 触发 workflow 不是可信 CI（.github/workflows/ci.yml）"; exit 1; }
+          echo "✅ 来源验证通过: run $CI_RUN_ID.$CI_RUN_ATTEMPT @ ${HEAD_SHA:0:12}"
+
+      - name: 下载并校验发布包
+        if: env.MODE == 'auto'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh run download "$CI_RUN_ID" --attempt "$CI_RUN_ATTEMPT" \
+            --name release-bundle --dir bundle
+          # 与 CI 生产侧同一判据（scripts/release_bundle.py verify），不抄第二份
+          python3 scripts/release_bundle.py verify --bundle-dir bundle --sha "$HEAD_SHA"
+          # release-id 与包身份互证（与服务器端 verify_bundle_identity 同一规则）
+          python3 - "$RELEASE_ID" <<'PY'
+          import json, sys
+          b = json.load(open("bundle/bundle.json"))
+          rid = f"{b['git']['sha'][:7]}-{b['build']['run_id']}.{b['build']['run_attempt']}"
+          if rid != sys.argv[1]:
+              sys.exit(f"❌ 发布包身份 {rid} 与目标 release-id {sys.argv[1]} 不一致")
+          print(f"✅ 发布包校验通过: {rid}")
+          PY
+
+      - name: 配置 SSH（主机指纹校验）
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          # 无已知主机指纹则拒绝连接：防中间人替换部署目标（第四批 C 要求）
+          if [ -z "$SERVER_KNOWN_HOSTS" ]; then
+            echo "❌ SERVER_KNOWN_HOSTS 未配置；拒绝不做主机指纹校验的 SSH 部署"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$SERVER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          echo "SSH_OPTS=-i $HOME/.ssh/id_deploy -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o BatchMode=yes" >> "$GITHUB_ENV"
+
+      - name: 同步部署脚本与发布包
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # SSH_OPTS 需要分词
+          ssh $SSH_OPTS "$SERVER" "mkdir -p '$BASE/incoming'"
+          scp $SSH_OPTS scripts/server_deploy.sh "$SERVER:$BASE/server_deploy.sh"
+          ssh $SSH_OPTS "$SERVER" "chmod +x '$BASE/server_deploy.sh'"
+          if [ "$MODE" = "auto" ]; then
+            # 每次重新落地，避免半个旧包混入（服务器端还会 sha256sum -c 复核）
+            ssh $SSH_OPTS "$SERVER" \
+              "rm -rf '$BASE/incoming/$RELEASE_ID' && mkdir -p '$BASE/incoming/$RELEASE_ID'"
+            scp $SSH_OPTS -r bundle/. "$SERVER:$BASE/incoming/$RELEASE_ID/"
+          fi
+
+      - name: 读取服务器发布记录并验证祖先关系
+        run: |
+          set -euo pipefail
+          # 记录快照在锁外读取；server_deploy.sh 会在 flock 内重读比对（--expect-accepted），
+          # 快照过期即按旧任务拒绝——两步之间被并发任务插队不会静默通过
+          PREV="$(ssh $SSH_OPTS "$SERVER" "bash '$BASE/server_deploy.sh' record --last-auto --base '$BASE'")"
+          PREV_SHA="$(awk '{print $1}' <<<"$PREV")"
+          PREV_SPEC="$(awk '{print ($1 == "none" ? "none" : $2)}' <<<"$PREV")"
+          # 服务器输出也不可尽信：格式校验后才允许拼进后续远程命令
+          [[ "$PREV_SHA" =~ ^(none|[0-9a-f]{40})$ ]] || { echo "❌ 记录快照 SHA 非法: '$PREV_SHA'"; exit 1; }
+          [[ "$PREV_SPEC" =~ ^(none|[0-9]+\.[0-9]+)$ ]] || { echo "❌ 记录快照 run 规格非法: '$PREV_SPEC'"; exit 1; }
+          echo "PREV_SPEC=$PREV_SPEC" >> "$GITHUB_ENV"
+          if [ "$MODE" = "auto" ]; then
+            # 旧任务晚到 / 历史分叉在这里拒绝；docs-only 提交推进 main 不误挡（祖先≠父子）
+            python3 scripts/deploy_ancestry.py \
+              --prev-sha "$PREV_SHA" --head-sha "$HEAD_SHA" --repo-root .
+          fi
+
+      - name: 服务器端 ACR 登录
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # 密码经 stdin 传给远端 docker login，不进 argv、不回显
+          printf '%s' "$ACR_PASSWORD" | ssh $SSH_OPTS "$SERVER" \
+            "docker login '$ACR_REGISTRY' -u '$ACR_USERNAME' --password-stdin"
+
+      - name: 执行部署
+        run: |
+          set -uo pipefail
+          CMD=deploy
+          TARGET="$RELEASE_ID"
+          if [ "$MODE" != "auto" ]; then
+            CMD="$MODE"
+            TARGET="$INPUT_RELEASE_ID"
+          fi
+          ARGS="$CMD --release-id $TARGET --base $BASE --expect-accepted $PREV_SPEC"
+          if [ "$MODE" = "auto" ]; then
+            ARGS="$ARGS --incoming $BASE/incoming/$TARGET"
+          fi
+          if [ "$MODE" = "migrate" ]; then
+            ARGS="$ARGS --expect-state $INPUT_EXPECT_STATE"
+          fi
+          set +e
+          # shellcheck disable=SC2086  # ARGS 分词是预期行为；各字段均已严格校验
+          ssh $SSH_OPTS "$SERVER" "bash '$BASE/server_deploy.sh' $ARGS"
+          RC=$?
+          set -e
+          case "$RC" in
+            0) echo "✅ 部署完成: $TARGET（mode=$MODE）" ;;
+            3) echo "⛔ 旧任务/并发拒绝：服务器已接受了更新的部署。核对 accepted-releases.log 后如需上线本版本请重新触发。" >&2 ;;
+            4) echo "⛔ 数据库需迁移/初始化或兼容状态未知：自动部署已停在任何写库启动之前，未激活。" >&2
+               echo "   下一步：ssh 服务器执行 docker compose … run --rm --no-deps backend python -m app.bootstrap status" >&2
+               echo "   取 fingerprint 并人工核对迁移内容后，workflow_dispatch：action=migrate release_id=$TARGET expect_state=<fingerprint>" >&2 ;;
+            5) echo "⛔ 启动/reload/探活失败：已按统一策略处理（恢复上一发布或保留现场）。查看服务器 state/accepted-releases.log 与容器日志。" >&2 ;;
+            6) echo "⛔ 迁移 DDL 失败：未做自动回滚/downgrade；DDL 前状态已持久化在 $BASE/state/migrate/，按 docs/runbooks/deploy-rollback.md 人工处置。" >&2 ;;
+            *) echo "⛔ 部署脚本 harness 错误（exit $RC）；未改动运行状态或状态未知，先核对服务器再重试。" >&2 ;;
+          esac
+          exit "$RC"
+
+      # 部署成功后给已部署 commit 打 deploy/ tag（issue #211）：回滚目标单一视图。
+      # 仅 auto（新代码上线）打 tag；手动 rollback/redeploy/migrate 不重复打。
+      - name: Tag deployed commit
+        if: env.MODE == 'auto'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="deploy/$(date -u +%Y%m%d)-${HEAD_SHA:0:7}"
           if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
             echo "tag $TAG 已存在于 origin，跳过"
           else
-            git tag "$TAG" "${{ needs.setup.outputs.checkout_ref }}"
-            git push origin "$TAG"
+            git tag "$TAG" "$HEAD_SHA"
+            git push origin "refs/tags/$TAG"
             echo "已打部署 tag: $TAG"
           fi

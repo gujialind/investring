@@ -251,7 +251,7 @@ jobs:
           annotate_only: true
 
   # MySQL 门禁：覆盖 SQLite 测不出的方言差异（VARCHAR 长度、DECIMAL 截断、
-  # 隐式排序、排序规则等），并验证生产启动顺序（create_all → alembic upgrade head）
+  # 隐式排序、排序规则等），并验证部署期显式 prepare 顺序（create_all → alembic upgrade head）
   backend-test-mysql:
     name: "Backend Tests (MySQL)"
     needs: changes
@@ -305,7 +305,7 @@ jobs:
       # 与 test_migration_0015.py 变红。
       #
       # 注：`CREATE DATABASE` 的库级设置只决定**将来**建表的默认值，不会改动已存在的表；
-      # 且新库路径下 `create_all`（main.py import 期）在迁移之前跑，故模型层另有
+      # 且新库路径下 `create_all`（bootstrap prepare 阶段）在迁移之前跑，故模型层另有
       # app/models/base.py 的钩子确保每张表自带 CHARSET，不单纯依赖这里。
       #
       # 最小权限测试账号（#539 第二单元）：pytest 会话开头就是一次 drop_all，用 root 连接
@@ -327,13 +327,13 @@ jobs:
             GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES
               ON ir_migration.* TO 'ir_migration'@'%';"
 
-      # 复刻生产启动顺序：main.py import 期 create_all 建全表，lifespan 内 upgrade head 增量修补
       - name: Verify migration chain (create_all + alembic upgrade head)
         env:
           DATABASE_URL: mysql+pymysql://ir_migration:ir_migration@127.0.0.1:3306/ir_migration?charset=utf8mb4
         run: |
-          python -c "from app.database import engine; from app.models.base import Base; import app.models; Base.metadata.create_all(bind=engine)"
-          alembic upgrade head
+          STATE=$(python -m app.bootstrap status | python -c 'import json,sys; print(json.load(sys.stdin)["fingerprint"])')
+          python -m app.bootstrap prepare --expect-state "$STATE"
+          python -m app.bootstrap check
           alembic current | grep "(head)"
           # 可逆性验证：downgrade -1 只回退最新一条迁移（已知不可逆的 0006/0008 不会被触碰）
           if [ "${SKIP_DOWNGRADE}" != "true" ]; then
@@ -392,7 +392,7 @@ jobs:
           pip install -r backend/requirements.txt
 
       # openapi.json 漂移门禁：改 router/schema 忘记重新导出时 exit 1
-      # （隔离子进程在独立临时 SQLite 内执行 create_all + init_scheduled_tasks，不继承业务配置）
+      # 隔离子进程仅导入 app 并生成 OpenAPI，不连接数据库、不继承业务配置
       - name: Check openapi.json drift
         run: python backend/check_openapi.py
 
@@ -667,7 +667,7 @@ jobs:
 
   # Dockerfile 构建冒烟（issue #170）：每个 PR 验证两个 Dockerfile 可构建，
   # 避免「构建问题合入 main 触发 CD 才暴露」（#141 ACR 拒推 provenance 即此类）。
-  # 与 deploy.yml 共用 gha 缓存 scope（相互预热）；push: false 不产生 ACR tag。
+  # 与 image-smoke 共用 gha 缓存 scope（相互预热）；push: false 不产生 ACR tag。
   docker-build-smoke:
     name: "Docker Build Smoke (${{ matrix.service }})"
     runs-on: ubuntu-latest
@@ -682,7 +682,7 @@ jobs:
           - service: frontend
             context: frontend
             dockerfile: frontend/Dockerfile
-            # rewrites 在 build 时固化，与 deploy.yml 保持一致
+            # rewrites 在 build 时固化，与 image-smoke 保持一致
             build_args: |
               API_BASE_URL=http://backend:8000
 
@@ -703,9 +703,178 @@ jobs:
           tags: investring-${{ matrix.service }}:smoke
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
-          # 与 deploy.yml 一致：ACR 个人版不支持 OCI attestation（issue #141）
+          # ACR 个人版不支持 OCI attestation（issue #141）
           provenance: false
           sbom: false
+
+  # ==========================================================================
+  # 最终镜像冒烟（#537 第四批 P2-B）：构建一次，按精确身份冒烟。
+  # - pull_request / workflow_dispatch：本地构建（load），不使用任何注册表凭据；
+  # - push（可信同仓 main）：推送 ACR（:sha7/:latest），随后按 digest 拉回，
+  #   冒烟「已发布的不可变制品」本身——冒烟对象与 CD 部署对象是同一 digest。
+  # GIT_REVISION build-arg 写入 OCI revision 标签，冒烟校验标签 == github.sha，
+  # 防止标签被重指到别的制品（语义标签 :vX.Y.Z 由 release.py alias 指向同一 digest）。
+  # 本 job 全事件运行且总是必需（policy []）：push-only 在 ci_gate 的 scope 模型中
+  # 不可表达，且 docs-only 合入 main 也必须产出冒烟通过的候选镜像供发布链消费。
+  # needs docker-build-smoke：构建坏了先在那里快速失败，本 job 借其 gha 缓存加速。
+  # ==========================================================================
+  image-smoke:
+    name: "Image Smoke"
+    needs: docker-build-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve image mode
+        id: mode
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+        run: |
+          # 仅 push（可信 main）发布到注册表；PR/dispatch 只本地构建冒烟。
+          # secrets 经 env 传递、不回显；输出里只有仓库名与标签，无凭据。
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ -n "$ACR_REGISTRY" ] && [ -n "$ACR_NAMESPACE" ]; then
+            SHA7="${GITHUB_SHA:0:7}"
+            BACKEND_REPO="$ACR_REGISTRY/$ACR_NAMESPACE/investring-backend"
+            FRONTEND_REPO="$ACR_REGISTRY/$ACR_NAMESPACE/investring-frontend"
+            {
+              echo "publish=true"
+              echo "backend_tags<<EOF"
+              echo "$BACKEND_REPO:$SHA7"
+              echo "$BACKEND_REPO:latest"
+              echo "EOF"
+              echo "frontend_tags<<EOF"
+              echo "$FRONTEND_REPO:$SHA7"
+              echo "$FRONTEND_REPO:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "publish=false"
+              echo "backend_tags=investring-backend:smoke"
+              echo "frontend_tags=investring-frontend:smoke"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to Aliyun ACR
+        if: steps.mode.outputs.publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build backend image
+        id: backend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: ${{ steps.mode.outputs.publish == 'true' }}
+          load: ${{ steps.mode.outputs.publish != 'true' }}
+          build-args: |
+            GIT_REVISION=${{ github.sha }}
+          tags: ${{ steps.mode.outputs.backend_tags }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          # ACR 个人版不支持 OCI attestation（issue #141）
+          provenance: false
+          sbom: false
+
+      - name: Build frontend image
+        id: frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: ${{ steps.mode.outputs.publish == 'true' }}
+          load: ${{ steps.mode.outputs.publish != 'true' }}
+          build-args: |
+            GIT_REVISION=${{ github.sha }}
+            # rewrites 在 build 时固化，与 docker-build-smoke 保持一致
+            API_BASE_URL=http://backend:8000
+          tags: ${{ steps.mode.outputs.frontend_tags }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          provenance: false
+          sbom: false
+
+      - name: Resolve smoke refs
+        id: refs
+        env:
+          PUBLISH: ${{ steps.mode.outputs.publish }}
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH" = "true" ]; then
+            # 发布模式按 digest 拉回：冒烟与部署消费同一不可变引用，
+            # :sha7/:latest 在冒烟期间被后续推送重指也不会偷换被验制品。
+            BACKEND_REF="$ACR_REGISTRY/$ACR_NAMESPACE/investring-backend@$BACKEND_DIGEST"
+            FRONTEND_REF="$ACR_REGISTRY/$ACR_NAMESPACE/investring-frontend@$FRONTEND_DIGEST"
+            docker pull "$BACKEND_REF"
+            docker pull "$FRONTEND_REF"
+          else
+            BACKEND_REF="investring-backend:smoke"
+            FRONTEND_REF="investring-frontend:smoke"
+          fi
+          echo "backend=$BACKEND_REF" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke images
+        env:
+          BACKEND_REF: ${{ steps.refs.outputs.backend }}
+          FRONTEND_REF: ${{ steps.refs.outputs.frontend }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          python3 scripts/smoke_images.py \
+            --backend-ref "$BACKEND_REF" \
+            --frontend-ref "$FRONTEND_REF" \
+            --expected-revision "$EXPECTED_REVISION" \
+            --report smoke-report.json
+
+      # 发布包只在可信 main push 生成（#537 第四批 C）：CD 不再重建镜像，
+      # 只消费本包内 digest 化制品与可恢复配置文件；build 后立即 verify，
+      # 生成器回归当场失败而不是等部署时才发现包损坏。
+      - name: Build release bundle
+        if: steps.mode.outputs.publish == 'true'
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          python3 scripts/release_bundle.py build \
+            --smoke-report smoke-report.json \
+            --sha "$EXPECTED_REVISION" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --workflow CI \
+            --out-dir release-bundle
+          python3 scripts/release_bundle.py verify \
+            --bundle-dir release-bundle --sha "$EXPECTED_REVISION"
+
+      - name: Upload release bundle
+        if: steps.mode.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle
+          path: release-bundle/
+          if-no-files-found: error
+
+      # 诊断产物：失败时也上传（报告含脱敏后的逐检查明细与容器日志尾部）
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-smoke-report
+          path: smoke-report.json
+          if-no-files-found: error
 
   # 变更路径检测（issue #462 起同时服务 job 裁剪与 E2E 形态对比触发）。
   # 本 job **全事件运行**：若只在 PR 侧运行，push 时它被 skip，各 job 因
@@ -843,6 +1012,7 @@ jobs:
       - frontend-check
       - frontend-e2e
       - docker-build-smoke
+      - image-smoke
       - changes
       - e2e-compare-capture
       - e2e-compare

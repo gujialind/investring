@@ -156,7 +156,7 @@ cd backend && pytest tests -q
   表中的通配项（`test_trades*.py` / `test_subscriptions*.py` / `test_cash_transfers*.py`）只匹配该前缀开头的文件：新增这些领域的集成测试必须以**复数前缀**命名（`test_trades_*` / `test_subscriptions_*` / `test_cash_transfers_*`），否则静默落在影响面外；不便改名的单数文件（如 `test_trade_cash_check.py`）在表中显式列出，后续同类文件照此登记。
 
   跨核心服务的改动（snapshot/position/trade/subscription 任一）额外连带 `-k snapshot` 兜底——快照链是所有写路径的下游。
-- **测试库一律由 pytest 选定**（#539 第二单元，判据在 `tests/db_isolation.py`、由 `tests/conftest.py` 在 **`import app.main` 之前**调用）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> **缺省 = 本次会话自建的临时目录 SQLite**。外部环境 `DATABASE_URL` 一律忽略（只 WARN），不再像早期那样 `setdefault` 继承；`SCHEDULER_ENABLED` 测试期恒关（调度 job 在 lifespan 内会真写库）。次序是硬要求：`app.main` 模块期即 `create_all`，打的正是那一刻的 `DATABASE_URL`。CI 的 SQLite job 两条显式通道都不存在（走缺省临时目录），MySQL job 显式设 `TEST_DB_URL`，且连接账号是**与库同名的最小权限账号**（`ci.yml` 的 `ir_test`/`ir_migration` 各一、`e2e-stack.yml` 的 `ir_e2e` 一个（#548），root 只留在建库建号那一步；权限清单以该守门的 `REQUIRED_PRIVILEGES` 为单一事实来源，两个 job 共用一份、不分叉）——归属闸门判的是「这个库归不归 pytest」，不给小权限，指错 URL 照样能毁整库；**E2E 侧连这道闸门都没有**（它走 `app/database.py` 直吃 `DATABASE_URL`），DBACL 是那条路径上唯一的结构防线。该约束钉在 `scripts/tests/test_ci_mysql_account.py`（`TARGETS` 覆盖两个 workflow，含逐目标的反例用例与「连接串条数」断言）。
+- **测试库一律由 pytest 选定**（#539 第二单元，判据在 `tests/db_isolation.py`、由 `tests/conftest.py` 在 **`import app.main` 之前**调用）：env `TEST_DB_URL` > `backend/.env.test`（gitignored，按需配置本地/远程 MySQL）> **缺省 = 本次会话自建的临时目录 SQLite**。外部环境 `DATABASE_URL` 一律忽略（只 WARN），不再像早期那样 `setdefault` 继承；`SCHEDULER_ENABLED` 测试期恒关（调度 job 在 lifespan 内会真写库）。次序仍是硬要求：`app.database` 导入时绑定设置与引擎；`app.main` 导入不再连接或建表，pytest 继续自行显式建库。CI 的 SQLite job 两条显式通道都不存在（走缺省临时目录），MySQL job 显式设 `TEST_DB_URL`，且连接账号是**与库同名的最小权限账号**（`ci.yml` 的 `ir_test`/`ir_migration` 各一、`e2e-stack.yml` 的 `ir_e2e` 一个（#548），root 只留在建库建号那一步；权限清单以该守门的 `REQUIRED_PRIVILEGES` 为单一事实来源，两个 job 共用一份、不分叉）——归属闸门判的是「这个库归不归 pytest」，不给小权限，指错 URL 照样能毁整库；**E2E 侧连这道闸门都没有**（它走 `app/database.py` 直吃 `DATABASE_URL`），DBACL 是那条路径上唯一的结构防线。该约束钉在 `scripts/tests/test_ci_mysql_account.py`（`TARGETS` 覆盖两个 workflow，含逐目标的反例用例与「连接串条数」断言）。
 - **破坏性初始化只允许打在 pytest 创建并持有的实例上**，判据**不看库名**（名字含不含 test 都不构成许可）：目标为空、或本次会话自建、或带 pytest 写入的归属标记表 `__ir_pytest_ownership__` 且除标记表与模型表外无来源不明之表——三者皆不满足即整体拒绝，探测连不上同样拒绝（失败不等于空库）。会话开始仍 `drop_all + create_all` 保证干净起跑；会话结束**只回收本次自建的临时目录**，显式声明的库保留数据（那种情况下跑完仍可直接登录本地前端浏览种子数据）。守门反例集：`tests/unit/test_db_isolation.py`。
 - fixture 层级：session（`test_engine`、`_seed_base_data`）→ autouse（认证全局状态隔离）→ function（`test_db`/`client`/`admin_headers`/`sample_portfolio` 等），业务数据一律用 function 级 fixture/factories 造，不动 session 种子。
 - **共享测试 helper（#478/#479/#481 评审，issue #494）**：仅单目录内复用 → `tests/<layer>/<domain>_helpers.py`；跨层/全局 → `tests/` 根（与 `factories.py`、`seed_base.py` 同层）。命名固定 `<domain>_helpers.py`、**无 `test_` 前缀**（pytest 不收集，也不会被 `test_dialect_marker_guard.py` 的 AST 扫描误判为用例）。形态是**模块级工厂函数 + 显式 import**，不是 fixture（业务数据仍按上条走 function 级 fixture/factories）；**跨 ≥2 个测试文件共用才提取**，调用点全在单文件则留原位。头部注释分「溯源 / 现状」两句写，不把 helper 绑死单一 issue；改 helper 时跑消费它的同一 `-k` 子集。
@@ -200,11 +200,19 @@ cd backend && pytest tests -q
 
 ## 4. 本地启动
 
+先确认配置指向要操作的数据库（见 `.env.example`），从 `backend/` 运行：
+
 ```bash
-cd backend && uvicorn app.main:app --reload   # 配置见 .env.example
+python -m app.bootstrap status
+python -m app.bootstrap check
+uvicorn app.main:app --reload
 ```
 
-启动时序：import 期 `create_all` → lifespan 内 `alembic upgrade head`。**alembic 不能单独从零建库**（迁移依赖 create_all 先建表，如 0007 直接 UPDATE product）。
+首次初始化或 schema 待升级时，在明确授权目标库后执行 `python -m app.bootstrap prepare --expect-state "<status 输出的 fingerprint>"`，再运行 check。`status` 只报告状态（探测成功退出 0 不等于已准备）；`check` 仅 ready 退出 0，未准备退出 1；执行错误退出 2。指纹绑定目标身份、当前 schema（含列与必需非空约束）、revision、任务缺失项及本次迁移内容；prepare 在数据库锁内再次比对，状态改变即拒绝，不自动接受新状态。
+
+应用 import 不连接数据库；lifespan 先 check，再同步已有任务文案、恢复孤儿任务和启动调度，**不运行 DDL/迁移**。调度 JobStore 缺表拒绝启动，容器 entrypoint 仅透传命令（#537）。prepare 显式执行 `create_all → alembic upgrade head → JobStore 建表与任务种子`；**alembic 不能单独从零建库**（如 0007 直接 UPDATE product）。MySQL 使用同一连接持有初始化锁并执行迁移；失败不自动 downgrade，不以 revision 未变推断 DDL 未执行。
+
+SQLite 的 prepare 仅建模型/调度表与任务种子，**不跑 MySQL 历史迁移、不 stamp 伪造迁移完成**，不能替代 MySQL 验收。只读探测不创建或修改数据库本体；SQLite 自身可能生成 WAL/SHM 协调文件，不使用会忽略 WAL 内容的 immutable 模式。后端 pytest 的自有建库入口和本地 E2E 的空 lifespan 仍独立于生产迁移链。
 
 ## 5. 迁移（alembic）
 
@@ -223,7 +231,7 @@ cd backend && uvicorn app.main:app --reload   # 配置见 .env.example
 
 ## 7. E2E 相关脚本
 
-- `scripts/run_e2e_backend.py`：本地 E2E 后端（SQLite 临时库，每次启动重建 + 自动种子，空 lifespan 跳迁移）。默认 `/tmp/ir_e2e.db` + `:8000`，可用 **`E2E_DB_PATH` / `E2E_PORT`** 覆盖（并行会话/隔离栈复用）。
+- `scripts/run_e2e_backend.py`：本地 E2E 后端，先独占监听 `127.0.0.1`，每次独占新建 SQLite 并灌种子，空 lifespan 跳迁移；导入不启动。默认临时目录在退出时清理，`--database` / `E2E_DB_PATH` 指定的新文件保留，已有文件或符号链接拒绝、绝不删除；端口由 `--port` / `E2E_PORT` 指定，默认 8000。子进程隔离 cwd/应用配置，关闭行情和调度。前后端联调优先使用[本地隔离入口](../frontend/AGENTS.md#4-e2eplaywright)，不复用其他运行的库或服务（#619）。
 - `scripts/seed_e2e.py`：CI E2E 种子入口，**未设 `DATABASE_URL` 直接拒绝**（防误连）。
 
 ## 8. OpenAPI 契约检查与导出
