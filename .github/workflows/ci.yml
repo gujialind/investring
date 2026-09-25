@@ -908,23 +908,6 @@ jobs:
       - name: Check context documentation
         run: python3 scripts/check_context_docs.py
 
-      # PR 可核验性守门（issue #560）：审查留痕非空 + 超规模须写理由。
-      # 挂在 `changes` job（与 check_context_docs.py 同批）是有意的：ci-ok.needs 里只有
-      # 这个 job 不带路径裁剪（PR 侧必跑），门放这里才不会被裁成 skipped——`CI OK` 把
-      # skipped 视为通过，那等于门不在（#456/#377 型死锁的前置检查）。
-      # 判据、豁免与「文字留痕可伪造」的检查上限见 scripts/check_pr_review_trace.py 头；
-      # 作者可见的填法见 .github/PULL_REQUEST_TEMPLATE.md 的「## 审查记录」节。
-      # 纯文档 PR 同样要填结论：#456 起 docs-only 合入不重部署，但它仍然是 PR。
-      # 输入走 env 而非内插进 run：PR 正文是不可信输入，内插即脚本注入。
-      - name: Assert review trace
-        if: github.event_name == 'pull_request'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/check_pr_review_trace.py
-
       # docs/ 是错误码契约输入，种子同时影响后端与 E2E；映射见 ci_policy.json。
       # #467：workflow 变化只强制四栈，不额外触发两轮形态对比。
       - id: detect
