@@ -22,6 +22,7 @@ from app.services.trading_utils import get_next_trading_day, is_trading_day, get
 from app.services.position_service import calculate_available_cash, calculate_available_shares
 from app.services.product_service import resolve_product_market
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.null_guard import reject_explicit_nulls
 from app.services.audit_service import record_audit
 from app.constants.audit_actions import (
     ACTION_CREATE, ACTION_UPDATE, ACTION_CONFIRM, ACTION_UNCONFIRM,
@@ -1500,6 +1501,14 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
 
     if not update_data:
         return trade
+
+    # 显式 null 收口（#579 口径 A，与 #573 同口径）：数值/日期字段的 None 此前被
+    # 下方 _dec() 归一为「未提供」——静默 no-op，调用方以为已清空/清零。统一拒绝后
+    # 「不传」仍是未提供语义、fee 清零改为显式传 0（修复前后均合法）。
+    # notes null = 清备注（列可空且响应 Optional，subscription.notes 同款）进 allow；
+    # cash_confirm_date 由 #493 专用校验收口（confirmed 分支拒显式 null 保留专用
+    # 消息、pending 分支整体拒该字段），进 allow 不让本码抢占。
+    reject_explicit_nulls(update_data, allow={"notes", "cash_confirm_date"})
 
     if is_notes_only:
         return _update_notes_only(db, trade, update_data)

@@ -542,3 +542,77 @@ class TestPortfolioDisplayConfig:
         assert resp.status_code == 200
         item = next(i for i in resp.json()["items"] if i["code"] == "P_DC_L")
         assert item["display_config"] == {"ASSET_STOCK": "style"}
+
+
+class TestPortfolioUpdateNullGuard:
+    """PUT 显式 null 收口（#579 口径 A，与 #573 同口径）：
+    name / auto_snapshot_enabled 拒绝（NOT NULL 列，修复前被 `is not None` 静默
+    跳过、恒 no-op）；description 进 allow（列可空且响应 Optional，null = 清空，
+    修复「恒无法清空」缺口）；display_config 的 None=清空 是 #144 既定语义
+    （回归由 TestPortfolioDisplayConfig::test_put_null_clears_display_config 持有）"""
+
+    def test_update_explicit_null_name_rejected(self, client, admin_headers, test_db):
+        create_portfolio(test_db, code="P_NG1", name="原名称")
+        resp = client.put(
+            "/api/portfolios/P_NG1", json={"name": None}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        assert "name" in resp.json()["detail"]["message"]
+        # 拒绝即零写入：行保持原值且仍可读
+        test_db.expire_all()
+        row = test_db.query(Portfolio).filter(Portfolio.code == "P_NG1").first()
+        assert row.name == "原名称"
+        assert client.get("/api/portfolios/P_NG1", headers=admin_headers).status_code == 200
+
+    def test_update_explicit_null_auto_snapshot_rejected(self, client, admin_headers, test_db):
+        create_portfolio(test_db, code="P_NG2")
+        resp = client.put(
+            "/api/portfolios/P_NG2",
+            json={"auto_snapshot_enabled": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        assert "auto_snapshot_enabled" in resp.json()["detail"]["message"]
+
+    def test_update_mixed_null_rejects_only_non_allow_field(self, client, admin_headers, test_db):
+        """allow 口径：description 放行、name 拒绝——报错只点名不可为空的字段"""
+        create_portfolio(test_db, code="P_NG3", name="混合")
+        resp = client.put(
+            "/api/portfolios/P_NG3",
+            json={"name": None, "description": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "INVALID_PARAM"
+        assert detail["message"] == "字段不可为空: name"
+        # 拒绝即零写入：description 也不被部分应用
+        test_db.expire_all()
+        row = test_db.query(Portfolio).filter(Portfolio.code == "P_NG3").first()
+        assert row.description == "测试"
+
+    def test_update_null_description_clears(self, client, admin_headers, test_db):
+        """allow 例外：显式 null = 清空描述（修复前 `is not None` 跳过、恒无法清空）"""
+        create_portfolio(test_db, code="P_NG4", name="清空测试")
+        resp = client.put(
+            "/api/portfolios/P_NG4", json={"description": None}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["description"] is None
+        test_db.expire_all()
+        row = test_db.query(Portfolio).filter(Portfolio.code == "P_NG4").first()
+        assert row.description is None
+        # 清空后仍可读（响应 Optional，无 #573 式序列化 500）
+        assert client.get("/api/portfolios/P_NG4", headers=admin_headers).status_code == 200
+
+    def test_update_omitted_description_unchanged(self, client, admin_headers, test_db):
+        """不传 = 不动：哨兵接入后不得退化为「缺省即清空」"""
+        create_portfolio(test_db, code="P_NG5", name="不传测试")
+        resp = client.put(
+            "/api/portfolios/P_NG5", json={"name": "改名"}, headers=admin_headers
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "改名"
+        assert resp.json()["description"] == "测试"  # factory 默认值未被误清

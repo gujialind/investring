@@ -265,19 +265,23 @@ def update_portfolio(
     *,
     code: str,
     name: Optional[str] = None,
-    description: Optional[str] = None,
+    description=UNSET,
     display_config=UNSET,
     auto_snapshot_enabled: Optional[bool] = None,
 ) -> Portfolio:
     """更新组合信息。不 commit。
 
+    description 哨兵语义（#579 口径 A）：UNSET = 不修改；None = 清空；str = 覆盖。
+    显式 null 由 router 层 null_guard 收口后进 allow（列可空且响应 Optional，
+    null = 清空，asset_classification.description 先例）——此前 `is not None`
+    跳过使 description 恒无法清空。
     display_config 哨兵语义（issue #144）：UNSET = 不修改；None = 清空恢复
     默认；dict = 校验后覆盖（router 以 "display_config" in updates 区分）。
     """
     portfolio = _get_portfolio_or_404(db, code)
     if name is not None:
         portfolio.name = name
-    if description is not None:
+    if description is not UNSET:
         portfolio.description = description
     if display_config is not UNSET:
         # 校验并归一（空 dict → None）；JSON 列赋新对象（避免 in-place 突变不触发脏检测）

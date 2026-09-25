@@ -21,6 +21,7 @@ from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.services.trading_utils import is_trading_day, get_latest_snapshot_date
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.null_guard import reject_explicit_nulls
 from app.services.product_service import resolve_product_market
 from app.services.audit_service import record_audit, _diff_fields
 from app.constants.audit_actions import (
@@ -661,6 +662,19 @@ def update_share_change_event(
             "CANNOT_MODIFY_CONFIRMED",
             "已确认的份额变动事件不可直接修改，请先取消确认后再修改",
         )
+
+    # 显式 null 收口（#579 口径 A，与 #573 同口径）：ex_date / entitlement_date 是
+    # NOT NULL 列，显式 null 此前直落下方 setattr 循环 → IntegrityError 500（靠列
+    # 约束兜底，#573 形态），现统一 422 拒绝。其余可更新字段均为可空列且响应
+    # Optional，null = 清空是 setattr 循环的既有语义，进 allow 显式化；清空后的
+    # 双空终态仍由下方 #279 合并校验兜底（EMPTY_ADJUSTMENT 等）。
+    reject_explicit_nulls(
+        updates,
+        allow={
+            "shares_before", "shares_change", "shares_after", "cash_change",
+            "div_cash", "reinvest_nav", "ratio", "notes",
+        },
+    )
 
     if updates.keys() & {"ex_date", "entitlement_date"}:
         effective_ex_date = updates.get("ex_date", event.ex_date)
