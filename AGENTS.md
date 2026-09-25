@@ -34,7 +34,7 @@
 
 ### 本地验证入口
 
-从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`--json` 输出机器可读结果（#619）。E2E/目检的运行前提及参数入口见[前端指南](frontend/AGENTS.md#4-e2eplaywright)。
+从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`run env` 核对当前解释器已装包与 `backend/requirements.txt` 声明钉版的漂移，`--json` 输出机器可读结果（#619）。E2E/目检的运行前提及参数入口见[前端指南](frontend/AGENTS.md#4-e2eplaywright)。
 
 `plan` 不是验证，单次 `run` 不是全任务验收；每次真实执行、不缓存跳测，输出范围、状态和日志引用，不替代对应业务测试、人工看图或必需 CI。`scripts/check_openapi_stop.py` 仅提供契约 Stop 适配；宿主接线需单独确认，不自动修改私有配置。
 

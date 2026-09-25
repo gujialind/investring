@@ -226,7 +226,7 @@ SQLite 的 prepare 仅建模型/调度表与任务种子，**不跑 MySQL 历史
 
 - `requirements.txt` 是镜像与 CI 的**唯一安装来源**（`Dockerfile:30-32` + CI 侧三个安装点均裸 `pip install -r requirements.txt`——`ci.yml` 两个 job、`e2e-stack.yml` 一个）；`pyproject.toml` 的 `dependencies` 全是 `>=` 下界，**不参与构建**，改它不改变任何安装结果。加依赖须更新 requirements.txt。
 - **传递依赖不显式钉版就等于没钉**：未出现在 requirements.txt 的包，版本由构建时解析决定、仓库零记录。已钉：`click`（uvicorn 传递）、`starlette`（fastapi 传递，#314）。干净环境实测解析 79 个包、requirements.txt 仅声明 30 个，**其余 50 个传递依赖仍浮动**（清单见 issue #314；含 `anyio`、`typing_extensions`、`pydantic_core`、`cryptography`、`greenlet`、`h11`/`httptools`/`websockets` 等可能跨大版本者）。
-- **本地 ≠ CI**：pip 不升级已满足下界的已装包 → 同一份 requirements.txt 在本地可能是旧版、干净环境解析成新版；排查版本相关现象先 `pip show <pkg>` 对齐。
+- **本地 ≠ CI**：pip 不升级已满足下界的已装包 → 同一份 requirements.txt 在本地可能是旧版、干净环境解析成新版。dependabot 只 bump 文件、不碰本地 venv，长期不重装即漂移（实测曾落后 28/31 个钉版）。跑后端测试前从仓库根 `.venv/bin/python scripts/verify.py run env` 核对**声明钉版**与当前解释器已装包（不查传递依赖，见上条）；报漂移按输出给出的命令同步（`uv pip install --python .venv/bin/python -r backend/requirements.txt`，幂等、已满足时秒级）。排查单个包版本现象仍可直接 `pip show <pkg>`。
 - `pip-audit`（`security-scan.yml`）按**声明**解析，抓不到未声明的传递依赖，别当锁文件用。
 
 ## 7. E2E 相关脚本
