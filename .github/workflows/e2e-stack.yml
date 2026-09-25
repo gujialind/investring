@@ -191,7 +191,10 @@ jobs:
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci
+        # node/npm 版本先落日志作证据（#577 ③）；形态由 scripts/tests/test_lock_registry.py 钉死
+        run: |
+          node -v && npm -v
+          npm ci
 
       # E2E 跑生产构建形态（issue #171）：standalone server.js 与 Docker
       # 容器完全同形态（next start 与 output:'standalone' 不兼容）；
