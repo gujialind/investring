@@ -12,7 +12,8 @@ CD 重写后的不变量，逐条变成可执行判据；每条判据配反例�
   7. 手动 inputs 只经 env 映射进入 shell（注入卫生）且格式严格校验；
   8. 失败退出码有人工处置指引（尤其 4=停在写库前、6=不自动回滚）；
   9. 权限最小化：顶层 read，仅 deploy job 为 deploy/ tag 放宽 contents: write；
- 10. deploy/ tag 仅 auto 模式打，且已存在则跳过。
+ 10. deploy/ tag 仅 auto 与 migrate 打（rollback/redeploy 不打），tag 目标必须先解析为
+     完整 commit，且已存在则跳过。
 """
 from pathlib import Path
 
@@ -142,9 +143,19 @@ def assert_manual_modes(text, source=SOURCE):
 
 def assert_tag_gated(text, source=SOURCE):
     sec = section(text, "- name: Tag deployed commit", None)
-    assert "if: env.MODE == 'auto'" in sec, f"{source}: deploy/ tag 仅 auto 模式打"
+    # 整行精确匹配（含行尾换行）：子串匹配会被 "auto || 任意其他模式" 静默满足。
+    # migrate 必须打——它的目标发布通常来自一次停在 exit 4 的自动部署，那次没走到本步骤，
+    # 只认 auto 会让标签停在迁移前的 commit（docs/reference/versioning.md §3 的追溯口径）。
+    # rollback/redeploy 不打：目标是既有的已部署发布，标签已存在，再按当天日期打只会给
+    # 同一 SHA 造出第二个标签。
+    assert "if: env.MODE == 'auto' || env.MODE == 'migrate'\n" in sec, \
+        f"{source}: deploy/ tag 仅 auto 与 migrate 打"
     assert 'git ls-remote --tags origin "refs/tags/$TAG"' in sec, f"{source}: tag 已存在必须跳过"
-    assert 'git tag "$TAG" "$HEAD_SHA"' in sec, f"{source}: tag 必须打在验证过的 head SHA 上"
+    # 手动模式没有来源 CI run（HEAD_SHA 为空），改取 release-id 的 sha7；两种模式都先
+    # rev-parse 成完整 commit——解析不到就让步骤红，不静默漏打标签。
+    assert 'git rev-parse --verify "${HEAD_SHA:-${RELEASE_ID%%-*}}^{commit}"' in sec, \
+        f"{source}: tag 目标必须先解析为完整 commit SHA"
+    assert 'git tag "$TAG" "$SHA"' in sec, f"{source}: tag 必须打在解析过的 commit 上"
 
 
 ALL_JUDGMENTS = [
@@ -187,8 +198,8 @@ MUTATIONS = [
     # #456 的 event=='push' 守卫被删
     (_mutate("       github.event.workflow_run.event == 'push') ||", ") ||"),
      assert_event_guard),
-    # deploy/ tag 对手动回滚也打（污染回滚目标视图）
-    (_mutate("      - name: Tag deployed commit\n        if: env.MODE == 'auto'",
+    # deploy/ tag 对手动回滚/重部署也打（污染回滚目标视图，同一 SHA 出现双标签）
+    (_mutate("      - name: Tag deployed commit\n        if: env.MODE == 'auto' || env.MODE == 'migrate'",
              "      - name: Tag deployed commit"), assert_tag_gated),
     # 发布包校验被跳过（直接信任 artifact 内容）
     (_mutate('python3 scripts/release_bundle.py verify --bundle-dir bundle --sha "$HEAD_SHA"',

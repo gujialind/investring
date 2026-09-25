@@ -4,6 +4,7 @@
 > 回滚/重部署/迁移升级。核心问题：**镜像、配置与数据库兼容性必须共同判断；数据库迁移不会自己回退**。
 > 自动化状态机（stage → preflight → activate → probe、锁内旧任务拒绝、LKG 与追加式记录、
 > 迁移授权）见 §5；服务器目录约定见 `scripts/server_deploy.sh` 头部注释。
+> **自动部署停在 exit 4（待迁移）不是故障**，把该发布正常上线的步骤见 §7。
 
 ---
 
@@ -39,13 +40,13 @@
 
 ```bash
 cd /opt/investring
-ID=<目标发布 id，见 state/accepted-releases.log>
+ID=<目标发布 id，见 state/accepted-releases.log；exit 4 停下的 staged 发布还不在该日志里，见 §7.1>
 
 docker compose --project-name investring --project-directory "releases/$ID" \
   --env-file "releases/$ID/images.env" -f "releases/$ID/docker-compose.yml" \
   run --rm --no-deps -T backend python -m app.bootstrap status
 # state=ready               → 仅证明 schema 匹配该发布代码，仍须核对数据与配置兼容性
-# state=migration_required  → 该发布需要迁移；只能走显式 migrate 授权（§5），禁止直接激活
+# state=migration_required  → 该发布需要迁移；只能走显式 migrate 授权（授权语义 §5，操作步骤 §7），禁止直接激活
 # state=unknown_revision    → 迁移缺口/来源不明；停止，人工核对 alembic_version 与各发布迁移清单
 # state=error 或探测失败     → 未知状态同样停止；未知不以「revision 未变」推断安全
 ```
@@ -180,3 +181,85 @@ CD 不构建（消费 CI `image-smoke` 产出并经 `release_bundle.py verify` �
 - **未覆盖项（如实记录）**：以真实旧镜像（tag-old）做双镜像「Can't locate revision」
   容器演练未执行——该机理已由 2026-07-31 alembic 层双目录演练复现（§上），unknown
   revision 的拒绝路径另有单元与服务器脚本测试覆盖；判断容器层增量低，需要时可补。
+
+## 7. 待迁移发布的上线流程
+
+自动部署停在 exit 4 是**设计内的安全停**，不是故障：发布包已 staged 到 `releases/<id>/`
+（镜像已按 digest 拉取），`current` 未切换，数据库零写入。§1–§4 处理的是激活后失败，
+本节是把待迁移发布正常上线。
+
+### 7.1 前提
+
+- 已取得**本次生产迁移的明确授权**：DDL 属生产写操作，授权只覆盖指定动作与范围
+  （[根指南铁律](../../AGENTS.md#ai-agent-rules) 4）。**拿到指纹本身不构成授权。**
+- 操作人能 SSH 到服务器执行只读探测。服务器地址、账号与密钥路径属私有配置，
+  **禁止写入本仓库**（[文档规范](../reference/documentation.md#doc-content)）。
+- 目标发布已 staged：`ls /opt/investring/releases/` 里有 `<sha7>-<run>.<attempt>` 目录。
+  此时它**还不在** `state/accepted-releases.log` 里——该日志只在发布被接受后追加，
+  exit 4 的发布只有目录、没有记录，别用「日志里查不到」判断发布不存在。
+
+### 7.2 步骤
+
+1. **取指纹**（只读，一次性容器 `--rm`）。必须用 **staged 发布自己的目录**：
+   `server_deploy.sh` 的 migrate 分支会从这个目录重读状态并在锁内比对指纹。
+
+   ```bash
+   cd /opt/investring
+   ID=<staged 发布 id>
+   docker compose --project-name investring --project-directory "releases/$ID" \
+     --env-file "releases/$ID/images.env" -f "releases/$ID/docker-compose.yml" \
+     run --rm --no-deps -T backend python -m app.bootstrap status
+   ```
+
+   命令与 §3 同形，差别只在 `$ID` 取 staged 目录而非 `current`。exit 4 的提示文案里那段
+   `docker compose …` 是省略号占位，**不可直接粘贴执行**，按上面展开。取输出最后一行
+   JSON 的 `fingerprint`（64 位）。
+2. **核对状态**：`state` 为 `migration_required`；`revisions` 是旧 head、`expected_heads`
+   是新 head 且**单一**（多 head 或 `unknown_revision` 停止，转 §2）；`missing_tables` /
+   `missing_not_null` / `missing_tasks` 为空，`missing_columns` 恰好等于本次迁移应加的列
+   ——多出任何一项都说明库与代码的差距不止本次迁移。
+3. **人工核对迁移内容**：读目标区间每条迁移的 `upgrade()`，并对照 §4.3 确认其
+   `downgrade()` 是否实现、是否有损。**上线后还能不能回退，在这一步就已确定。**
+4. **授权后 dispatch**（`--expect-accepted` 由 CI 自己读服务器记录，人工不提供）：
+
+   ```bash
+   gh workflow run deploy.yml --ref main -f action=migrate \
+     -f release_id=<发布 id> -f expect_state=<64 位 fingerprint>
+   gh run watch <run id> --exit-status
+   ```
+
+   `action=migrate` 不只迁移：`prepare` 与迁移后 `check` 通过后紧接 `activate` → 三路探活
+   → `mark_success migrate`，即**一次 dispatch 同时完成 DDL 与上线**。
+
+**指纹有效期**：`fingerprint` 是整个 status 字典的摘要（`app/bootstrap.py::status`），
+只由 schema / revision / 计划任务构成，**不含业务数据**——交易与快照照常写入不会让它失效；
+任何人在此期间执行 DDL 都会让锁内重验失败（exit 4，零写入），重新取指纹即可。
+
+### 7.3 成功判据
+
+- run 全绿，「执行部署」步骤日志出现 `✅ 迁移升级完成: <发布 id>`；
+- 该步骤打印的迁移后 status JSON 为 `"state": "ready"`、`revisions` 等于新 head、
+  `missing_*` 全空，且 `schema_fingerprint` 与 `fingerprint` **都已变化**（没变说明 DDL
+  其实没发生）；
+- 服务器上 `readlink -f current` 指向该发布；`state/accepted-releases.log` 追加了一行
+  `kind=migrate`；`state/last-known-good` 已推进到该发布——**此后 rollback 的目标就是它**，
+  而回滚镜像不会回滚 DDL（§5），跨有损迁移的回退能力见 §4.3；
+- 三路探活通过，后端日志无 ERROR。按 `error` 关键字过滤会误报：`uvicorn.error` 是 logger
+  名，其行级别是 INFO；
+- **公网免认证冒烟**（nginx 代理了这两个后端入口，见 `nginx/nginx.conf`）：
+  `GET /health` 应为 `{"status":"healthy"}`；`GET /openapi.json` 里应能查到本次改动引入的
+  字段——这是「新代码确实在跑」的外部证据，不需要登录。带认证的 `/api/*` 在未登录时返回
+  401 JSON，这本身也证明后端已启动且 lifespan 的只读 `bootstrap check` 通过（不 ready 会
+  拒绝启动，nginx 侧表现为 502）；
+- **业务冒烟**：登录后抽查受本次改动影响的数据（新列可读写、相关列表口径未变）。
+
+### 7.4 失败与恢复
+
+| 现象 | 含义 | 处置 |
+| --- | --- | --- |
+| exit 4，「DB 状态已变化」 | 授权后有人执行过 DDL，指纹失效 | 重走 §7.2 步骤 1 重新取指纹与授权；未写库 |
+| exit 4，`state=unknown_revision` / `error` | 迁移缺口或探测失败 | 停止，按 §2 人工判定，不要重试 |
+| exit 6 | `prepare` 或迁移后 `check` 失败 | **无自动回滚、无自动 downgrade**；DDL 前状态在 `state/migrate/<ts>-<id>.json`，按 §4 决策 |
+| exit 5 | 迁移已成功但激活/探活失败 | DB 已改 ⇒ 不回退镜像（§5）；按 §4.1 前滚修复 |
+| exit 3 | 排队期间有更新的部署介入 | 服务器已接受更新发布；核对 `accepted-releases.log` 后重新判断是否仍需本次迁移 |
+

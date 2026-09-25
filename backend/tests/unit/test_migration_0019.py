@@ -23,6 +23,8 @@ DAY = date(2025, 11, 12)
 PRODUCT = Product.__table__
 EVENT = ShareChangeEvent.__table__
 KEY = sa.and_(PRODUCT.c.code == CODE, PRODUCT.c.market == "")
+# 运行时元数据探针表：不属于 Base.metadata，会话开头的 drop_all 收不走它。
+PROBE_TABLE = "migration_0019_reference_probe"
 
 
 def _run(fn, conn):
@@ -51,6 +53,11 @@ def migration_conn(test_engine, _seed_base_data):
             conn.info.pop("migration_0019_rows", None)
     # MySQL DDL 隐式提交；新连接只清理本用例插入的行并恢复目标态。
     with test_engine.begin() as conn:
+        # 探针表的 CREATE 在 SQLite 下走 DDL 自动提交，DROP 却留在用例事务里被上面的
+        # rollback 一起撤掉，留下一张空表；它不在 Base.metadata 里，下一轮会话开头
+        # drop_all 收不走，db_isolation 归属守卫会以「来源不明的表」拒跑整个会话。
+        # 故在这个提交型连接上兜底清理（MySQL 侧用例内已 DROP，此处为幂等空操作）。
+        conn.execute(sa.text(f"DROP TABLE IF EXISTS {PROBE_TABLE}"))
         if "cash_pay_date" not in _columns(conn):
             Operations(MigrationContext.configure(conn)).add_column(
                 "share_change_event", sa.Column("cash_pay_date", sa.Date(), nullable=True)
@@ -194,7 +201,7 @@ def test_runtime_metadata_finds_unlisted_renamed_columns(migration_conn):
     metadata = sa.MetaData()
     PRODUCT.to_metadata(metadata)
     extra = sa.Table(
-        "migration_0019_reference_probe", metadata,
+        PROBE_TABLE, metadata,
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("fund", sa.String(20)), sa.Column("venue", sa.String(20)),
         sa.ForeignKeyConstraint(["fund", "venue"], ["product.code", "product.market"],

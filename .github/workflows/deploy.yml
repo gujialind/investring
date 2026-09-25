@@ -313,8 +313,9 @@ jobs:
             0) echo "✅ 部署完成: $TARGET（mode=$MODE）" ;;
             3) echo "⛔ 旧任务/并发拒绝：服务器已接受了更新的部署。核对 accepted-releases.log 后如需上线本版本请重新触发。" >&2 ;;
             4) echo "⛔ 数据库需迁移/初始化或兼容状态未知：自动部署已停在任何写库启动之前，未激活。" >&2
-               echo "   下一步：ssh 服务器执行 docker compose … run --rm --no-deps backend python -m app.bootstrap status" >&2
-               echo "   取 fingerprint 并人工核对迁移内容后，workflow_dispatch：action=migrate release_id=$TARGET expect_state=<fingerprint>" >&2 ;;
+               echo "   下一步：按 docs/runbooks/deploy-rollback.md §7，用该 staged 发布目录取 bootstrap status 的 fingerprint" >&2
+               echo "   （提示里的命令不可省略参数，runbook 有完整展开）；人工核对迁移内容后 workflow_dispatch：" >&2
+               echo "   action=migrate release_id=$TARGET expect_state=<fingerprint>" >&2 ;;
             5) echo "⛔ 启动/reload/探活失败：已按统一策略处理（恢复上一发布或保留现场）。查看服务器 state/accepted-releases.log 与容器日志。" >&2 ;;
             6) echo "⛔ 迁移 DDL 失败：未做自动回滚/downgrade；DDL 前状态已持久化在 $BASE/state/migrate/，按 docs/runbooks/deploy-rollback.md 人工处置。" >&2 ;;
             *) echo "⛔ 部署脚本 harness 错误（exit $RC）；未改动运行状态或状态未知，先核对服务器再重试。" >&2 ;;
@@ -322,18 +323,25 @@ jobs:
           exit "$RC"
 
       # 部署成功后给已部署 commit 打 deploy/ tag（issue #211）：回滚目标单一视图。
-      # 仅 auto（新代码上线）打 tag；手动 rollback/redeploy/migrate 不重复打。
+      # auto（新代码上线）与 migrate 都打：migrate 的目标发布通常来自一次停在 exit 4 的
+      # 自动部署，那次没走到本步骤；只认 auto 会让标签停在迁移前的 commit，与
+      # docs/reference/versioning.md §3「deploy/* 标示当前在跑的镜像对应的 commit」相矛盾。
+      # rollback/redeploy 刻意不打：目标是既有的已部署发布，其标签已存在，
+      # 再按当天日期打一次只会给同一 SHA 造出第二个标签。
       - name: Tag deployed commit
-        if: env.MODE == 'auto'
+        if: env.MODE == 'auto' || env.MODE == 'migrate'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="deploy/$(date -u +%Y%m%d)-${HEAD_SHA:0:7}"
+          # 手动模式没有来源 CI run（HEAD_SHA 为空），改用 release_id 的 sha7 段；
+          # 两种模式都先解析成完整 SHA，标签名仍取前 7 位，与既有命名一致。
+          SHA="$(git rev-parse --verify "${HEAD_SHA:-${RELEASE_ID%%-*}}^{commit}")"
+          TAG="deploy/$(date -u +%Y%m%d)-${SHA:0:7}"
           if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
             echo "tag $TAG 已存在于 origin，跳过"
           else
-            git tag "$TAG" "$HEAD_SHA"
+            git tag "$TAG" "$SHA"
             git push origin "refs/tags/$TAG"
             echo "已打部署 tag: $TAG"
           fi

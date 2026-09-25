@@ -11,8 +11,8 @@
 services:
   # --------------------------------------------------------------------------
   # 后端服务：FastAPI + Uvicorn（2 workers，nav_sync 定时任务经 MySQL GET_LOCK 互斥）
-  # 容器启动时经 docker-entrypoint.sh 一次性执行 alembic upgrade head
-  #（worker 启动前完成，避免多 worker 并发迁移竞态，issue #104）
+  # 容器启动不跑迁移：entrypoint 仅透传，lifespan 只做只读 bootstrap check，DB 非 ready 即拒绝启动
+  #（DDL 由显式授权的 `python -m app.bootstrap prepare` 执行；#537 前曾在 entrypoint 内迁移，见 #104）
   # --------------------------------------------------------------------------
   backend:
     image: ${BACKEND_IMAGE_REF:?BACKEND_IMAGE_REF 未设置，请在 .env 中指定后端镜像}

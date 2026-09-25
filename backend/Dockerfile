@@ -81,9 +81,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# 启动命令：经 docker-entrypoint.sh 先一次性执行 alembic upgrade head 再启动 uvicorn。
-# 迁移在 worker 启动前完成，避免 --workers 2 下多 worker 并发迁移竞态（issue #104）；
-# entrypoint 带命令分流，`docker run ... python -m alembic current` 等非启动命令原样透传。
+# 启动命令：docker-entrypoint.sh 仅 `exec "$@"` 透传，不跑迁移或初始化。
+# 应用 lifespan 只调 `app.bootstrap.check()`（只读），DB 状态非 ready 即拒绝启动；DDL 仅由显式授权的
+# `python -m app.bootstrap prepare --expect-state <fingerprint>` 执行（生产走 deploy.yml 的 migrate 动作；
+# 自动部署 preflight 发现待迁移即 exit 4、不激活）。历史：#104 曾在 entrypoint 内先跑 alembic upgrade head
+# 以避免 --workers 2 的并发迁移竞态，#537 改为显式初始化入口后移除，互斥由 prepare 的 MySQL 命名锁承担。
 # --host 0.0.0.0 允许外部访问
 # --workers 2：多 worker 下 nav_sync 定时任务经 MySQL GET_LOCK 互斥，不会重复执行
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from app.constants.share_change_events import CASH_EFFECT_EVENT_TYPES
 from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.share_change_event import ShareChangeEvent
@@ -31,7 +32,7 @@ def compute_cumulative_profits(
     """按显式快照日返回平台产品、产品市场、平台三粒度累计收益。
 
     基金 = D 日市值 + confirmed 卖出实际净额 - confirmed 买入含费支出
-           + confirmed 平台/子事件现金变动（ex_date <= D）。
+           + confirmed 平台/子事件现金腿（仅现金分红/强制调整，ex_date <= D）。
     CASH = D 日现金 - confirmed CASH 腿净流入 - 基金事件已到账现金。
     CASH 自身调整、手动重估留在现金损益；在途不产生独立收益。
 
@@ -83,6 +84,8 @@ def compute_cumulative_profits(
         ).filter(
             ShareChangeEvent.portfolio_code == portfolio_code,
             ShareChangeEvent.status == "confirmed",
+            # 现金腿口径与 snapshot_service 同源：未知 event_type 的非零 cash_change 不入账。
+            ShareChangeEvent.event_type.in_(CASH_EFFECT_EVENT_TYPES),
             # 基金级父记录已持汇总值，只取平台/子记录，防父子双计。
             ShareChangeEvent.platform_code.isnot(None),
             ShareChangeEvent.product_code != "CASH",

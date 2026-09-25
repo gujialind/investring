@@ -83,5 +83,5 @@ python3 scripts/release.py tag v0.1.1 --pr 123 # 4. 阶段二：以发布 PR #12
   ```
 
   前置链：发布包过 `release_bundle.py verify` 同一判据 → 远程 `v0.1.1` git 标签已指向包内 SHA（先完成 §4 阶段二）→ 该 SHA 存在可信成功的 main push CI run → 包的 `run_id` 属于这些成功 run。执行判定以注册表实况为准：目标标签已指向同一 digest 时幂等成功；指向不同 digest 时拒绝——**不通过重建/重部署「补」语义标签**。
-* `deploy/YYYYMMDD-SHORTSHA` git 标签机制不变（auto 部署成功后打，回滚目标单一视图；与语义版本正交，推进时机见 §3）。
-* **手动 `workflow_dispatch`** 不再接受任意镜像 tag：操作类型显式三选一 `redeploy` / `rollback` / `migrate`，目标是服务器已保留的发布 id（`<sha7>-<run>.<attempt>`，见服务器 `state/accepted-releases.log`），格式严格校验；`migrate` 还须提供服务器 `bootstrap status` 输出的 64 位 DB 状态指纹作为显式迁移授权（锁内重验，失败处置见[部署回滚 runbook](../runbooks/deploy-rollback.md)）。
+* `deploy/YYYYMMDD-SHORTSHA` git 标签：`auto` 与手动 `migrate` 成功后打（回滚目标单一视图；与语义版本正交，推进时机见 §3）。`migrate` 必须补打——它的目标发布通常来自一次停在 exit 4 的自动部署，那次没走到打标签步骤，只认 `auto` 会让标签停在迁移前的 commit，与 §3「标签标示当前在跑的镜像对应的 commit」相矛盾。`redeploy` / `rollback` 不补打：目标是既有的已部署发布，标签已存在，再按当天日期打一次只会给同一 SHA 造出第二个标签。手动模式没有来源 CI run（`HEAD_SHA` 为空），标签 SHA 取自 release-id 的 sha7 段并解析为完整 SHA。
+* **手动 `workflow_dispatch`** 不再接受任意镜像 tag：操作类型显式三选一 `redeploy` / `rollback` / `migrate`，目标是服务器已保留的发布 id（`<sha7>-<run>.<attempt>`，见服务器 `state/accepted-releases.log`），格式严格校验；`migrate` 还须提供服务器 `bootstrap status` 输出的 64 位 DB 状态指纹作为显式迁移授权（锁内重验）。取指纹、核对迁移内容、dispatch 与成功判据见[部署回滚 runbook §7](../runbooks/deploy-rollback.md#7-待迁移发布的上线流程)，失败处置见同文 §4。

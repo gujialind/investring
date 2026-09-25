@@ -35,6 +35,7 @@ from app.constants.audit_actions import (
     ACTION_GENERATE, ACTION_RECALCULATE, ACTION_DELETE, ACTION_CASCADE_UNCONFIRM,
     RESOURCE_SNAPSHOT, RESOURCE_SHARE_CHANGE_EVENT,
 )
+from app.constants.share_change_events import CASH_EFFECT_EVENT_TYPES
 from app.models.manual_market_value import ManualMarketValue
 from app.utils.quantize import quantize_nav, quantize_shares
 
@@ -1266,7 +1267,7 @@ def _generate_portfolio_position(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "confirmed",
         ShareChangeEvent.platform_code.isnot(None),
-        ShareChangeEvent.event_type.in_(("cash_dividend", "forced_adjustment")),
+        ShareChangeEvent.event_type.in_(CASH_EFFECT_EVENT_TYPES),
         ShareChangeEvent.cash_effective_date >= start_apply_date,
         ShareChangeEvent.cash_effective_date <= target_date,
         ShareChangeEvent.cash_change != 0,
