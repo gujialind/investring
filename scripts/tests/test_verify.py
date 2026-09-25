@@ -226,6 +226,71 @@ def test_contract_cannot_generate_or_accept_shell_commands(verify, repo):
     assert not (root / ".cache").exists()
 
 
+def write_requirements(root, *lines):
+    path = root / "backend/requirements.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_env_check_passes_only_when_every_pin_matches(verify, repo, monkeypatch):
+    root, _ = repo
+    write_requirements(root, "fastapi==0.141.1", "pytest==9.1.1")
+    monkeypatch.setattr(verify, "version", lambda name: {"fastapi": "0.141.1", "pytest": "9.1.1"}[name])
+    result = verify.run_check(root, "env", [], "HEAD")
+    assert result["status"] == "pass" and result["drift"] == [] and result["pinned"] == 2
+    assert "reason" not in result
+    assert json.loads(Path(result["result_file"]).read_text()) == result
+
+
+def test_env_check_reports_mismatched_and_missing_packages(verify, repo, monkeypatch):
+    root, _ = repo
+    write_requirements(root, "fastapi==0.141.1", "akshare==1.18.96")
+
+    def fake_version(name):
+        if name == "fastapi":
+            return "0.109.0"
+        raise verify.PackageNotFoundError(name)
+
+    monkeypatch.setattr(verify, "version", fake_version)
+    result = verify.run_check(root, "env", [], "HEAD")
+    assert result["status"] == "fail"
+    assert result["drift"] == [
+        {"package": "akshare", "required": "1.18.96", "installed": None},
+        {"package": "fastapi", "required": "0.141.1", "installed": "0.109.0"},
+    ]
+    assert "2 of 2 pinned packages mismatch" in result["reason"]
+    assert "uv pip install --python" in result["reason"] and "-r backend/requirements.txt" in result["reason"]
+
+
+def test_env_pins_cover_extras_comments_and_canonical_names(verify, repo, monkeypatch):
+    root, _ = repo
+    write_requirements(root, "# header", "", "Uvicorn[standard]==0.53.0",
+                       "python-jose[cryptography]==3.5.0  # issue #252", "some-lib>=1.0")
+    seen = []
+
+    def fake_version(name):
+        seen.append(name)
+        return {"uvicorn": "0.53.0", "python-jose": "3.5.0"}.get(name)
+
+    monkeypatch.setattr(verify, "version", fake_version)
+    result = verify.run_check(root, "env", [], "HEAD")
+    assert result["pinned"] == 2
+    assert result["drift"] == []
+    assert sorted(seen) == ["python-jose", "uvicorn"]
+
+
+def test_env_check_accepts_no_arguments_and_exits_by_status(verify, repo, monkeypatch, capsys):
+    root, _ = repo
+    write_requirements(root, "fastapi==0.141.1")
+    monkeypatch.setattr(verify, "version", lambda name: "0.141.1")
+    monkeypatch.setattr(verify, "ROOT", root)
+    assert verify.main(["run", "env", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "pass"
+    with pytest.raises(ValueError, match="no forwarded arguments"):
+        verify.run_check(root, "env", ["--install"], "HEAD")
+
+
 def test_check_arguments_are_forwarded_as_argv(verify, repo):
     root, _ = repo
     arguments = ["--backend-port", "18001", "--", "--grep", "literal; text"]

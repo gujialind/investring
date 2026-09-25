@@ -1,9 +1,11 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
+from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -13,7 +15,8 @@ import ci_gate
 from local_stack import owned_process
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKS = ("contract", "e2e", "visual")
+CHECKS = ("contract", "e2e", "visual", "env")
+PIN_LINE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^]]*\])?==([A-Za-z0-9._-]+)$")
 _CHECK_CODE = """
 import runpy, sys, traceback
 from pathlib import Path
@@ -97,7 +100,62 @@ def commands_for(root: Path, check: str, arguments):
     return [[sys.executable, str(root / "scripts/local_stack.py"), check, *arguments]]
 
 
+def canonical_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirements_pins(root: Path):
+    pins = {}
+    for line in (root / "backend/requirements.txt").read_text(encoding="utf-8").splitlines():
+        match = PIN_LINE.match(line.split("#", 1)[0].strip())
+        if match:
+            pins[canonical_name(match.group(1))] = match.group(2)
+    return pins
+
+
+def installed_version(name: str):
+    for candidate in (name, name.replace("-", "_")):
+        try:
+            return version(candidate)
+        except PackageNotFoundError:
+            continue
+    return None
+
+
+def run_env_check(root: Path, arguments):
+    if arguments:
+        raise ValueError("env takes no forwarded arguments; it only checks and never installs")
+    parent = root / ".cache/verification"
+    parent.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix="env-", dir=parent))
+    pins = requirements_pins(root)
+    drift = [
+        {"package": name, "required": required, "installed": installed}
+        for name, required in sorted(pins.items())
+        if (installed := installed_version(name)) != required
+    ]
+    result = {
+        "kind": "result", "check": "env", "status": "fail" if drift else "pass",
+        "scope": "This interpreter's installed distributions vs backend/requirements.txt pins",
+        "environment": {"executable": sys.executable, "python_version": sys.version.split()[0]},
+        "pinned": len(pins), "drift": drift,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "result_file": str(directory / "result.json"),
+        "limitations": "Checks declared pins only; unpinned transitive dependencies are issue #314's scope and invisible here.",
+    }
+    if drift:
+        result["reason"] = (
+            f"{len(drift)} of {len(pins)} pinned packages mismatch; sync with: "
+            f"uv pip install --python {sys.executable} -r backend/requirements.txt"
+        )
+    Path(result["result_file"]).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
 def run_check(root: Path, check: str, arguments, base: str):
+    if check == "env":
+        return run_env_check(root, arguments)
     commands = commands_for(root, check, arguments)
     before = snapshot(root, base)
     parent = root / ".cache/verification"
