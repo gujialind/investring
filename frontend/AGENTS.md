@@ -36,6 +36,8 @@
 
 等价于 `npm run lint` + `npx tsc --noEmit` + `npm run test` + `npm run build`；构建期强制 0 error。
 
+依赖安装口径（#577）：**本地前端安装命令 = `npm ci`**，与 `ci.yml` / `e2e-stack.yml` 的 `Install dependencies` 步骤字面一致——lock 的 `resolved` 全部指向 `registry.npmjs.org`，防复发守门在 `scripts/tests/test_lock_registry.py`（外来 host 与 CI 安装步骤形态都会红）。`verify-frontend.sh` 内部的 `npm ci --allow-remote=all` 只是「本机 npm registry 配成镜像」时的兼容（npm ≥12 会把 lock 里的 npmjs tarball 视为 remote 而拒拉），不是标准安装命令，CI 不带该 flag。
+
 ## 3. 单元测试（Vitest，issue #253）
 
 ```bash
