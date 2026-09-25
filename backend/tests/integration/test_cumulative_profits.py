@@ -435,6 +435,20 @@ def test_cash_own_adjustment_and_manual_revaluation_remain_profit(
         }
 
 
+def test_unknown_event_type_cash_change_never_enters_either_leg(test_db, portfolio):
+    # event_type 是自由字符串、创建期无白名单，动现金的类型由 CASH_EFFECT_EVENT_TYPES
+    # 正向声明。未知类型带非零 cash_change 若照单全收，会同时把基金收益 +7、
+    # 现金腿 -7，两个粒度一起错（与 snapshot_service 现金腿口径必须一致）。
+    _position(test_db, portfolio, EX, "100")
+    _position(test_db, portfolio, EX, "50", product="CASH", market="")
+    _snapshot(test_db, portfolio, EX)
+    _event(test_db, portfolio, "7", event_type="legacy_manual_note")
+    assert _rows(_compute(test_db, portfolio, EX)) == {
+        (FUND, MARKET, A): (Decimal("100"), Decimal("100")),
+        ("CASH", "", A): (Decimal("50"), Decimal("50")),
+    }
+
+
 def test_decimal_precision_and_rollups_never_independently_round(test_db, portfolio, monkeypatch):
     for platform in (C, A, B):
         _trade(test_db, portfolio, "buy", "10000000000", platform=platform)
