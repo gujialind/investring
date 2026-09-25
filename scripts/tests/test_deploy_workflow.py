@@ -5,7 +5,8 @@ CD 重写后的不变量，逐条变成可执行判据；每条判据配反例�
   1. CD 不再构建/推送镜像（build-push/login-action 不得回流）；
   2. workflow_run 的 event=='push' 守卫（#456 教训）不被删；
   3. 来源验证走 API 按 run+attempt 核对仓库/workflow/event/SHA/结论，不只信事件载荷；
-  4. 发布包用 gh run download --attempt 消费，且过 release_bundle verify 同一判据；
+  4. 发布包经 gh run download 按 run 下载（不得用 runner 不存在的 --attempt），
+     过 release_bundle verify 同一判据，并以「包身份 ↔ release-id 互证」钉住 attempt；
   5. 记录快照 → 祖先判据 → 锁内 --expect-accepted 重验的旧任务拒绝链完整；
   6. SSH 主机指纹强制（known_hosts + StrictHostKeyChecking=yes，拒绝 appleboy 回流）；
   7. 手动 inputs 只经 env 映射进入 shell（注入卫生）且格式严格校验；
@@ -59,11 +60,16 @@ def assert_source_verification(text, source=SOURCE):
 
 def assert_bundle_consumption(text, source=SOURCE):
     sec = section(text, "- name: 下载并校验发布包", "- name: 配置 SSH")
-    assert 'gh run download "$CI_RUN_ID" --attempt "$CI_RUN_ATTEMPT"' in sec, \
-        f"{source}: 必须按 attempt 下载对应发布包"
+    assert 'gh run download "$CI_RUN_ID"' in sec, f"{source}: 必须按经验证的 run ID 下载发布包"
+    assert "--attempt" not in sec, \
+        f"{source}: gh run download 无 --attempt（2026-09-25 生产 CD 实证 unknown flag 致红）"
     assert "--name release-bundle" in sec, f"{source}: artifact 名不符"
     assert 'release_bundle.py verify --bundle-dir bundle --sha "$HEAD_SHA"' in sec, \
         f"{source}: 必须复用 release_bundle verify 同一判据"
+    # attempt 绑定靠互证：包身份 rid（sha/run/attempt）必须与目标 release-id 比对并拒绝不一致
+    assert 'rid = f"{b[\'git\'][\'sha\'][:7]}-{b[\'build\'][\'run_id\']}.{b[\'build\'][\'run_attempt\']}"' in sec, \
+        f"{source}: 缺少包身份 rid 构造（attempt 绑定的唯一执行点）"
+    assert "if rid != sys.argv[1]:" in sec, f"{source}: 包身份 ↔ release-id 互证被移除"
 
 
 def assert_ancestry_chain(text, source=SOURCE):
@@ -187,6 +193,12 @@ MUTATIONS = [
     # 发布包校验被跳过（直接信任 artifact 内容）
     (_mutate('python3 scripts/release_bundle.py verify --bundle-dir bundle --sha "$HEAD_SHA"',
              "true"), assert_bundle_consumption),
+    # 误以为 gh 支持按 attempt 下载（runner 实际无该标志，生产 CD 会直接红）
+    (_mutate('gh run download "$CI_RUN_ID" --name release-bundle --dir bundle',
+             'gh run download "$CI_RUN_ID" --attempt "$CI_RUN_ATTEMPT" \\\n'
+             '               --name release-bundle --dir bundle'), assert_bundle_consumption),
+    # 包身份互证被拆掉（错误 attempt 的包不再现形——attempt 绑定失去唯一执行点）
+    (_mutate("if rid != sys.argv[1]:", "if False:"), assert_bundle_consumption),
     # 祖先判据被注释掉（旧任务晚到不再被拦）
     (_mutate("python3 scripts/deploy_ancestry.py", "true #"), assert_ancestry_chain),
     # 顶层权限被放宽

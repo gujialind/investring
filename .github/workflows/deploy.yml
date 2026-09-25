@@ -210,8 +210,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh run download "$CI_RUN_ID" --attempt "$CI_RUN_ATTEMPT" \
-            --name release-bundle --dir bundle
+          # gh run download 不支持按 attempt 选制品（2026-09-25 首次生产 CD 实证：
+          # 传入该参数直接 unknown flag 致红）。attempt 绑定不靠下载参数：
+          # 下面的「release-id ↔ 包身份互证」要求包内 git.sha/run_id/run_attempt
+          # 拼出的 rid 与目标 release-id 逐字一致，下到错误 attempt 的包必被拒绝。
+          gh run download "$CI_RUN_ID" --name release-bundle --dir bundle
           # 与 CI 生产侧同一判据（scripts/release_bundle.py verify），不抄第二份
           python3 scripts/release_bundle.py verify --bundle-dir bundle --sha "$HEAD_SHA"
           # release-id 与包身份互证（与服务器端 verify_bundle_identity 同一规则）
