@@ -118,6 +118,7 @@ commit）。
 | 0016 | `nav_sync_detail.job_id` 外键去重收敛（#434）：把同列对上的重复外键（生产库 `fk_nav_sync_detail_job_id` + `nav_sync_detail_ibfk_2` 并存）收敛到「恰好一条、名为 `fk_nav_sync_detail_job_id`」 | **刻意 no-op**（不把冗余外键加回来） | 无损：采纳型迁移，`upgrade()` 对全新库（`create_all` 已按模型显式名建出唯一一条）本就是 no-op。逆操作是把语义完全相同的冗余约束加回来，不恢复任何功能、只会把「按名 drop 只删掉一条、另一条继续强制外键语义」的陷阱重新埋回库里。⚠️ 生产库走「只多删冗余那条」分支（好的那条全程不碰），不产生 FK 空窗；只有「仅剩自动名 `*_ibfk_N`」的旧库才拆掉重建。两条外键规则不一致时 `upgrade()` 直接 `RuntimeError`（不静默挑一条），此时部署失败、DB 无变化 |
 | 0017 | `price_record.unit_price` 改为 NOT NULL（#580），先删除无单价行 | 仅恢复列可空 | **有损**：已删除的 NULL 单价行不能由 downgrade 恢复，须核对迁移清点记录并保留备份 |
 | 0018 | 恢复 6 张表 `product_code` NOT NULL（#537，修复 0006 的 MODIFY 剥离漂移）：两段式——先全量核查 NULL（任一违规即 `RuntimeError` 且零 DDL），再统一 `MODIFY ... NOT NULL` | 已实现（恢复可空） | 无损：仅放宽/收紧约束，不动数据。NULL 违规时诊断：逐表 `SELECT COUNT(*) FROM <表> WHERE product_code IS NULL`（涉及 portfolio_position / trade / price_record / manual_market_value / nav_sync_detail / share_change_event），人工核对来源并清理后重跑 |
+| 0019 | `share_change_event.cash_pay_date`（#522 现金分红到账日）+ 种子虚拟产品 `IN_TRANSIT_DIVIDEND` | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提：downgrade 先探测「存在非空 `cash_pay_date`」与「`IN_TRANSIT_DIVIDEND` 被外键引用」，任一命中即 `RuntimeError`，且拒绝发生在任何 DELETE/DROP 之前（形态不同于 0014/0015 的「跳过该表 + WARNING 继续」）。功能一旦被使用（录入过到账日，或已生成过在途持仓行）即不可回退，只能走前滚（§4.1）或 RDS 快照恢复；未使用的库（含 CI 的空库往返）完整可逆 |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 

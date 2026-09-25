@@ -110,7 +110,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-cumulative-profit"></a>
 ## 累计收益（全历史净流量口径）
 
-独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；页面与接口接入另由 #595 契约确定，未接入前不宣称占位已替换。只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`），固定批量查询、只读不 commit。
+独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；页面与接口接入另由 #595 契约确定，未接入前不宣称占位已替换。只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`；confirmed 交易缺 `actual_amount` 报 `INVALID_AMOUNT`——属存量数据不完整，见[错误码总表](#错误码总表)），固定批量查询、只读不 commit。
 
 - **基金（平台-产品键）**＝ D 日市值 ＋ confirmed 基金卖出腿实际到手（`actual_amount`）－ confirmed 基金买入腿含费支出 ＋ confirmed 平台/子记录事件现金净额（按 `ex_date` 应计）。强制调整的份额增减由市值体现，**不虚构本金投入抵消**；再投资/拆分/合并不另计外部投入、不重复分红。
 - **CASH**＝ D 日现金 － confirmed CASH 腿净流入 － 基金事件**已到账**现金（有效现金日 ≤ D，#522）；CASH 自身强制现金调整与手动重估差额留在现金损益、不伪装成本金；转移与买卖回款不再赚一次收益，基金与 CASH 不双计。在途（含分红在途）不产生独立收益。
@@ -259,7 +259,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `FORBIDDEN` | 403 | 权限门（非资源不存在）：`get_current_admin` 要求 `current_user.role == "admin"`，非 admin 访问 admin-only 端点即拒；改密端点非 admin 且 `target_code` 指向他人 | dependencies.py::get_current_admin; routers/auth.py::change_password |
 | `INSUFFICIENT_CASH` | 422 | 支出超过扣款平台实时可用现金（先量化 2 位再精确比较、无容差）：调仓买入按 `as_of` 校验（创建/PUT/确认共用，加回自身 CASH sell 腿——#493 起含 pending/confirmed，且只加回查询时点已计提的扣款，见「可用量口径」节；确认侧 `skip_available_check` 跳过）；赎回确认按确认日校验该平台可用现金（`skip_cash_check` 跳过）；现金转移按转出平台校验（#493 起按 `transfer_date` 时点） | services/trade_service.py::validate_buy_cash_with_addback; services/subscription_service.py::confirm_single_subscription |
 | `INSUFFICIENT_SHARES` | 422 | 卖出/赎回份额超过实时可用份额：调仓卖出（创建/PUT/确认共用 `validate_sell_shares_with_addback`，自身 pending 卖出份额加回防双重计数）；赎回创建按申请日投资人可用份额，赎回 PUT 按新份额（本条 pending 旧份额加回） | services/trade_service.py::validate_sell_shares_with_addback; services/subscription_service.py::create_subscription |
-| `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额） | services/trade_service.py::validate_buy_cash_with_addback; services/cash_transfer_service.py::create_cash_transfer |
+| `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额）。**另一类语义（#598 读侧）**：累计收益计算遇到 confirmed 交易 `actual_amount` 为 NULL 时同码拒绝——这是**存量数据不完整**而非入参非法（应用写路径恒写 `actual_amount`，只有库外写入/历史脏数据能命中），处置是修数据不是改入参；服务刻意不回退 `amount`、不伪装为零 | services/trade_service.py::validate_buy_cash_with_addback; services/cash_transfer_service.py::create_cash_transfer; services/cumulative_profit_service.py::compute_cumulative_profits |
 | `INVALID_CLASSIFICATION` | 422 | 资产分类维度字典新建/编辑形态非法：`dimension` 不在五维白名单；`code` 非全大写或不带该维度前缀（ASSET_/REGION_/STYLE_/SIZE_/SEG_）；asset_class 值却传 `applicable_asset_classes`、非 asset_class 值传 `dimension_rules` 或适用大类为空（新建/更新均须 ≥1）；`dimension_rules` 的维度或规则值越界；关联的适用大类不存在/不是 asset_class 维度值，或其规则矩阵无该维度行（无行 = 禁止） | services/asset_classification_service.py::create_classification; ::_validate_applicable_classes |
 | `INVALID_CONFIRM_DAYS` | 422 | 产品 `confirm_days` 非法（`validate_confirm_days`）：显式传 null、< 0，或场内（`CN_EXCHANGE`）不为 0。create 仅在显式传入时校验（未传按 market+is_qdii 推导）；update 对合并后终态**无条件**校验——即使本次没改该字段，存量脏值（NULL/负数）也会在任何 PUT 上被拦 | services/product_service.py::validate_confirm_days |
 | `INVALID_CREDENTIALS` | 401 | 登录：`code` 查无该投资人，或 `verify_password` 对 password_hash 校验不通过（两种情形同一分支、不区分用户是否存在），且账户进入时未被锁定、本次失败也未新触发锁定（锁定态一律 403 `ACCOUNT_LOCKED`） | routers/auth.py::login |

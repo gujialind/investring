@@ -221,6 +221,7 @@ SQLite 的 prepare 仅建模型/调度表与任务种子，**不跑 MySQL 历史
 - **采纳型迁移**（把早已存在的事实纳入管理，`upgrade()` 对已存在的库近乎 no-op）的 **downgrade 刻意 no-op、且不得 `raise`**：**0013**（四张日志表纳入 alembic）与 **0016**（`nav_sync_detail.job_id` 外键去重收敛）。no-op 的逆操作本身无物可还原，`raise NotImplementedError` 还会把 `ci.yml` 的 `alembic downgrade -1` 弄红。理由逐条写在各自 `downgrade()` 的注释里。
 - 现有不可逆迁移：**0006、0008**（含 DROP 列），回滚只能靠备份。
 - **部分条件下不可逆**：**0014**（日志/同步明细表 utf8mb3→utf8mb4）与 **0015**（全库 utf8mb4）的 downgrade 在目标表已含 4 字节字符时跳过该表并打 WARNING（反向转码必然失败，跳过优于半途而废），故对空库/无 4 字节数据的库仍是完整可逆迁移——CI 往返可过、不需要豁免。0015 的关系是 0014 → 0015（`down_revision = '0014'`）：0014 只转五张日志/同步明细表，0015 把库级默认与其余表一次转净，**0014 已在生产执行过、刻意不改**。
+- **条件性拒绝降级（零写入整体中止）**：**0019**（`share_change_event.cash_pay_date` + `IN_TRANSIT_DIVIDEND` 种子，#522）的 downgrade 先探测「存在非空 `cash_pay_date`」与「该产品被外键引用」，任一命中即 `RuntimeError`，且拒绝发生在任何 DELETE/DROP 之前——与 0014/0015 的「跳过 + 继续」不同，是整体中止，故功能一旦被使用即不可回退（走前滚或快照），未被使用的库（含 CI 空库往返）完整可逆。守门：`tests/unit/test_migration_0019.py` 逐表断言拒绝路径零写入。运维速查见[回滚手册的迁移可逆性表](../docs/runbooks/deploy-rollback.md#43-现有迁移可逆性速查downgrade-风险)。
 - 种子类 DML 写迁移时双方言（SQLite/MySQL）都要过——迁移文件头注释写清幂等设计。
 
 ## 6. 依赖
