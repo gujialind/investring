@@ -7,13 +7,13 @@ import { largestRemainderPercents } from "@/lib/utils";
  * 资产大类聚合（issue #128 字典驱动）：饼图图例与持仓分区头共用的单一计算入口。
  *
  * 大类口径：asset_class 维度字典（股票/债券/商品/现金）+ 在途 + 其他。
- * - IN_TRANSIT_BUY/SELL 抽出为独立「在途」伪大类，不与现金混合；
+ * - 买入/卖出/分红在途抽出为独立「在途」伪大类，不与现金混合；
  * - 基金/CASH 行按读侧派生的 asset_class_code 归大类（CASH 产品 → 现金）；
  * - 派生缺失或字典未收录的行并入「其他」伪大类兜底，不丢行。
  * 展示顺序与颜色由字典 sort_order 驱动；「在途」固定插现金后、「其他」垫底。
  */
 
-export const IN_TRANSIT_CODES = new Set(["IN_TRANSIT_BUY", "IN_TRANSIT_SELL"]);
+export const IN_TRANSIT_CODES = new Set(["IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "IN_TRANSIT_DIVIDEND"]);
 
 /** 伪大类稳定键（非字典维度值，前端固定附加） */
 export const PSEUDO_IN_TRANSIT_CODE = "__IN_TRANSIT__";

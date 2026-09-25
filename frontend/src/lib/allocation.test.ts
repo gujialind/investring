@@ -55,6 +55,9 @@ describe("categoryCodeOf", () => {
     expect(
       categoryCodeOf(makePosition({ product_code: "IN_TRANSIT_SELL" }))
     ).toBe(PSEUDO_IN_TRANSIT_CODE);
+    expect(
+      categoryCodeOf(makePosition({ product_code: "IN_TRANSIT_DIVIDEND", asset_class_code: "ASSET_CASH" }))
+    ).toBe(PSEUDO_IN_TRANSIT_CODE);
     expect(categoryCodeOf(makePosition({ asset_class_code: "ASSET_STOCK" }))).toBe("ASSET_STOCK");
     expect(categoryCodeOf(makePosition({ asset_class_code: null }))).toBe(PSEUDO_OTHER_CODE);
     expect(categoryCodeOf(makePosition({}))).toBe(PSEUDO_OTHER_CODE);
@@ -101,6 +104,20 @@ describe("buildAllocation", () => {
     ]);
     // 无持仓的大类（债券）不占位
     expect(items.find((i) => i.code === "ASSET_BOND")).toBeUndefined();
+  });
+
+  it("分红与买卖在途合并，不并入现金或其他，占比保留全部金额", () => {
+    const positions = [
+      makePosition({ product_code: "CASH", cash_amount: 700, asset_class_code: "ASSET_CASH" }),
+      makePosition({ product_code: "IN_TRANSIT_BUY", cash_amount: 100 }),
+      makePosition({ product_code: "IN_TRANSIT_SELL", cash_amount: 150 }),
+      makePosition({ product_code: "IN_TRANSIT_DIVIDEND", cash_amount: 50, asset_class_code: null }),
+    ];
+    const items = buildAllocation(positions, DICT);
+    expect(items.map((i) => i.code)).toEqual(["ASSET_CASH", PSEUDO_IN_TRANSIT_CODE]);
+    expect(items.map((i) => i.value)).toEqual([700, 300]);
+    expect(items.map((i) => i.percent)).toEqual([70, 30]);
+    expect(items[1].color).toBe(IN_TRANSIT_COLOR);
   });
 
   it("无现金大类时在途随字典序末尾追加", () => {

@@ -111,3 +111,31 @@ class TestBackwardCompat:
 
     def test_full_schema_is_json_serializable(self, full_schema):
         assert json.loads(json.dumps(full_schema, ensure_ascii=False)) == full_schema
+
+
+class TestShareEventCashPayDate:
+    @pytest.mark.parametrize("group_name", [None, "share-event"])
+    @pytest.mark.parametrize("command", ["create", "update"])
+    def test_optional_cash_pay_date_discovered_from_command(self, root, group_name, command):
+        schema = build_schema(root, group_name)
+        params = schema["commands"]["share-event"][command]["params"]
+        matches = [p for p in params if p.get("opt") == "--cash-pay-date"]
+        assert len(matches) == 1
+        option = matches[0]
+        # type 取自 click 的类型名，随依赖版本漂移（typer 0.26/click 8.5 报 TEXT，
+        # typer 0.27 内嵌 click 报 STR），故对齐同命令既有日期选项而非钉字面量
+        ex_date = next(p for p in params if p.get("opt") == "--ex-date")
+        assert option["type"] == ex_date["type"]
+        assert not option.get("required", False)
+        assert "default" not in option
+        assert "YYYY-MM-DD" in option["help"]
+        assert "非交易日" in option["help"]
+        assert not any("clear-cash-pay-date" in p.get("opt", "") for p in params)
+
+    def test_workflow_describes_cash_pay_date_default_and_clear(self, full_schema):
+        workflow = full_schema["workflows"]["份额变动事件"]
+        assert "--cash-pay-date" in workflow["steps"][0]
+        assert "默认除息日" in workflow["notes"]
+        assert "update 省略不改" in workflow["notes"]
+        assert '--json \'{"cash_pay_date":null}\'' in workflow["notes"]
+        assert "允许非交易日" in workflow["notes"]

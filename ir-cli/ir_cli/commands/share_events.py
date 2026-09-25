@@ -28,6 +28,7 @@ def create(
     event_type: Optional[str] = typer.Option(None, "--event-type", help="事件类型(必填)"),
     ex_date: Optional[str] = typer.Option(None, "--ex-date", help="除息日(YYYY-MM-DD)(必填)"),
     entitlement_date: Optional[str] = typer.Option(None, "--entitlement-date", help="权益登记日(YYYY-MM-DD)(必填)"),
+    cash_pay_date: Optional[str] = typer.Option(None, "--cash-pay-date", help="现金分红到账日(YYYY-MM-DD)，仅 cash_dividend；默认除息日，不早于除息日，允许非交易日"),
     product_code: Optional[str] = typer.Option(None, "--product-code", help="产品代码"),
     market: Optional[str] = typer.Option(None, "--market", help="市场类型"),
     platform_code: Optional[str] = typer.Option(None, "--platform-code", help="平台代码(平台级事件必填: cash_dividend/reinvest_dividend/forced_adjustment)"),
@@ -55,6 +56,7 @@ def create(
         event_type=event_type,
         ex_date=ex_date,
         entitlement_date=entitlement_date,
+        cash_pay_date=cash_pay_date,
         product_code=product_code,
         market=market,
         platform_code=platform_code,
@@ -87,6 +89,7 @@ def update(
     id: int = typer.Argument(..., help="事件ID"),
     ex_date: Optional[str] = typer.Option(None, "--ex-date", help="除息日"),
     entitlement_date: Optional[str] = typer.Option(None, "--entitlement-date", help="权益登记日"),
+    cash_pay_date: Optional[str] = typer.Option(None, "--cash-pay-date", help="现金分红到账日(YYYY-MM-DD)，仅 cash_dividend；不早于除息日，允许非交易日；省略不改，--json 显式 null 清空后按除息日到账"),
     div_cash: Optional[float] = typer.Option(None, "--div-cash", help="每股分红金额"),
     reinvest_nav: Optional[float] = typer.Option(None, "--reinvest-nav", help="再投资净值"),
     ratio: Optional[float] = typer.Option(None, "--ratio", help="比例"),
@@ -101,6 +104,7 @@ def update(
         json_body,
         ex_date=ex_date,
         entitlement_date=entitlement_date,
+        cash_pay_date=cash_pay_date,
         div_cash=div_cash,
         reinvest_nav=reinvest_nav,
         ratio=ratio,
@@ -129,7 +133,7 @@ def confirm(id: int = typer.Argument(..., help="事件ID")):
     result = client.post(f"/api/share-change-events/{id}/confirm")
     success(
         data=result["data"],
-        hints=["确认后需生成 ex_date 日快照才生效: ir snapshot generate --portfolio-code <code> --target-date <ex_date>"],
+        hints=["确认后需生成 ex_date 日快照: ir snapshot generate --portfolio-code <code> --target-date <ex_date>；现金分红按 cash_pay_date（未设则 ex_date）到账，此前计分红在途、不计可用现金；非交易日到账由下一交易日快照消费"],
     )
 
 

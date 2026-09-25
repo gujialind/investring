@@ -44,7 +44,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 - **估值滞后与确认间隔正交**：`nav_lag_days` 是 NOT NULL 独立列，不由产品类型/市场推导；只有 `confirm_days` 按 market + `is_qdii` 推导。`is_qdii` 只是展示标签、不参与取价分支。历史回填边界见 [backend 指南](../../backend/AGENTS.md) 的数据模型说明。
 - **一码多市场**：LOF 的场内/场外是两条独立产品记录，只给 product_code 时必须显式指定 market。
-- **虚拟产品**：`CASH`、`product_code="IN_TRANSIT_BUY"` / `product_code="IN_TRANSIT_SELL"` 与基金同构（`market=""`、`confirm_days=0`），不可直接交易，只由业务流程生成。
+- **虚拟产品**：`CASH`、`product_code="IN_TRANSIT_BUY"` / `product_code="IN_TRANSIT_SELL"` / `product_code="IN_TRANSIT_DIVIDEND"`（分红在途，#522）与基金同构（`market=""`、`confirm_days=0`），不可直接交易，只由业务流程生成；三类在途均为 `product_type="IN_TRANSIT"`，五维标签全 NULL。
 - **五维分类**：asset_class / region / style / size / segment 相互正交，必填/禁止关系由 DB 两张规则表驱动。分类仅在读侧派生、快照表无分类列；不得在写侧或快照链引入 asset_type 冗余（#128）。
 
 <a id="rule-cash"></a>
@@ -55,7 +55,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | 来源 | 记录 | 关联与生效 |
 | --- | --- | --- |
 | 申赎/调仓/转移 | trade 的 CASH 腿 | transfer_group 关联 |
-| 现金分红等事件 | share_change_event | cash_change，按 ex_date 生效 |
+| 现金分红等事件 | share_change_event | cash_change，按有效现金日（effective 日期）生效：现金分红取 cash_pay_date，NULL 回退 ex_date；其他事件仍取 ex_date |
 | 手动重估 | manual_market_value | 按日期绝对替换，不进 trade/event；高于当日交易/事件，作为后续增量基线；删除后须重算快照回退自然值 |
 
 下表中 T 为下单日、C 为基金确认日、A 为现金到账日。
@@ -71,7 +71,10 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **CASH 腿日期不变量**（#493）：任一 CASH 腿恒有 `trade_date <= confirm_date`（读侧可依赖的**数据不变量**；两日期同日或正常顺序偏离均为合法形态）。该不变量由申赎确认、调仓配对腿、跨平台转移**三处独立写入方**分别成立，**并无共用闸门**——调整日期校验规则须逐一排查三处（调仓侧闸门自身还有两处实现，见[调仓](#rule-trade)）。
 - **可用现金实时计算**：快照基线 + 增量；无快照则基线为 0、全量流水各计一次（#515）。流出 sell 的资金承诺锚定下单日 trade_date（pending/confirmed 均计）；流入 buy 须 confirmed 且 confirm_date ≤ T 才计。pending 卖出不增加可用现金，不足时须先卖后买两步操作（#70/#78）。自身扣款加回见[可用量口径](#可用量口径)。
 - **CASH 腿来源受限**：仅申赎、基金调仓配对、跨平台转移三条路径生成，均预置 transfer_group；该列 NOT NULL，REST 禁止直接创建 CASH 交易。
-- **在途资金**（#93，#493 起为单腿确认口径）：买入在途为 CASH sell 已 confirmed 且现金日 ≤ D、基金买入腿尚未在 D 生效（pending 或确认日 C > D）；卖出在途为基金 sell 已 confirmed 且 C ≤ D、CASH buy 尚未生效（pending 或到账日 A > D）。两腿均 confirmed 的跨期窗口与跨天现金转移规则保留；配对方向显式限定、cancelled 腿一律排除，金额按现金腿平台归属。两类在途每日独立计算、不继承前日，cash_amount 恒正，计入市值但不计入可用现金。
+- **事件现金生效**（#522）：只计 confirmed 平台级事件的 `cash_change`（不重复计基金级父记录），按表中有效现金日入 CASH。快照独立消费 `(前快照日, D]` 内的事件现金，不得复用按 `ex_date` 选出的份额事件窗口；可用现金增量的上下界及全量现金审计同取有效现金日。`as_of_date=None` 仍不设上限，无快照基线仍为 0，各笔流水只计一次。
+- **买卖在途资金**（#93，#493 起为单腿确认口径）：买入在途为 CASH sell 已 confirmed 且现金日 ≤ D、基金买入腿尚未在 D 生效（pending 或确认日 C > D）；卖出在途为基金 sell 已 confirmed 且 C ≤ D、CASH buy 尚未生效（pending 或到账日 A > D）。两腿均 confirmed 的跨期窗口与跨天现金转移规则保留；配对方向显式限定、cancelled 腿一律排除，金额按现金腿平台归属。两类在途每日独立计算、不继承前日，cash_amount 恒正，计入市值但不计入可用现金。
+- **分红在途**（#522）：对 confirmed 平台级现金分红，`ex_date <= D < cash_pay_date` 时，将该笔 `cash_change` 按事件平台归入 `product_code="IN_TRANSIT_DIVIDEND"`；与买卖在途共用每日绝对计算口径，不从前日余额递增或继承。计入组合市值及在途合计，不入 CASH、不计可用现金；到账日不再在途，现金窗口仅消费一次。NULL 或同日到账没有在途区间；计算不依赖 D 日仍持有基金，除息后清仓不能丢掉待到账分红。
+- **收益日期与现金日期分开**（#522）：基金分红收益仍按 `ex_date` 加回，现金日收益/累计收益的现金流基数按有效现金日纳入；到账只是分红在途转 CASH，不再确认分红收益，基金与现金不得双计。周末/节假日到账由下一交易日快照的 `(前快照日, D]` 窗口消费，现金收益基数使用同一窗口，不能只取 D 当日而制造虚假现金收益。
 - **快照现金行**按 `cash_amount IS NOT NULL` 判定（CHECK 保证与 shares 恰有其一），不看产品类型字符串，CASH 与在途均适用。**交易 CASH 腿**则按 `product_code == "CASH"` 判定；不能将两种数据对象的判据混用。
 - 市值 = Σ(场内份额 × 收盘价) + Σ(场外份额 × 净值) + Σ(现金行 cash_amount)；净值 `unit_price = total_value / total_shares`（4 位），在途合计另记 `portfolio_value_snapshot.in_transit_total`。
 
@@ -83,7 +86,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **前提**：confirm_date/ex_date ≤ 快照日的申赎/交易/事件均已确认，不存在影响该日的 pending 记录。
 - **生成前到期补确认**（#495）：生成依赖校验前自动确认「最新快照日 < confirm_date ≤ 目标日」的 pending 申赎（`auto_confirm_before_snapshot`），与生成后 `auto_confirm_after_snapshot`（按 apply_date 匹配）互补——当天补录（申请日 == 最新快照日、确认日 == 目标日）由此在 pending 校验前消化，否则其 confirm_date == 目标日会被 pending 校验阻断、而生成后 auto_confirm 只在快照落地后运行，死锁。confirm_date ≤ 最新快照日的历史/异常 pending 不在窗口，仍阻断、须人工处理（防静默漏记，与零快照守卫同族）。
 - **连续原则**：严格从最新快照日的下一交易日起连续生成，失败即停，不能跳日；单日生成只接受最新日重建或下一交易日。
-- **增量累加**：当日持仓/现金 = 前日基线 + 窗口内 confirmed 交易 + 事件增量 + manual_market_value 绝对覆盖。
+- **增量累加**：当日基金持仓/CASH = 前日基线 + 窗口内 confirmed 交易 + 事件增量 + manual_market_value 绝对覆盖。事件份额按 `ex_date`、现金按有效现金日分别选窗；三类在途按当日绝对计算、不继承前日，见[现金账本](#rule-cash)。
 - **严格取价**（#96/#178，#228 起泛化）：只由产品 nav_lag_days 决定取价日，0 取当日、N 取交易日历上前第 N 个交易日；缺指定日行情必须报 `MISSING_NAV`，不得回退。调仓确认始终取 T 日价格、按落库 confirm_days 决定间隔，与快照估值正交。
 - **删除必级联**：删某日及以后全部快照。按数据依赖回退：apply_date 落在区间的 confirmed 申赎、entitlement_date 落在区间的 confirmed 事件退回 pending；配对 CASH 腿删除，基金级父事件的子记录物理删除。交易依赖产品行情而非组合快照，**不级联**。单日删除任一笔回退失败，该次调用整体回滚（#203）；批量删除从最新日倒序、逐日提交，失败日回滚，但此前已成功删除的日期保留，不要求整个批次无变化。
 - **重算为单一事务**：先对整区间做行情完整性预校验，再逐交易日删旧、级联回退、重建、auto_confirm，全程不 commit；任一天重建失败即停，对外完整成功或无变化。每日 auto_confirm 处理到期 pending 申赎、事件、跨天现金转移，**不含调仓**（#493/#471）；被级联回退的记录由此重确认，日期键见后端指南的 `auto_confirm_after_snapshot` 说明。允许的单笔失败记 auto_confirm_failed 并继续，不能与需要整体回滚的失败混同。
@@ -103,6 +106,16 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 * **可用现金**的业务时点见[现金账本](#rule-cash)，两种实现入口及不可混用的边界见[后端核心服务](../../backend/AGENTS.md#13-核心服务)（`calculate_available_cash` / `compute_cash_balance`）。
 * **自身扣款加回**（#493，`validate_buy_cash_with_addback` 内）：校验买入支出时把**自身组内 CASH sell 腿**（pending/confirmed，买入扣款腿创建即 confirmed）的金额加回一次——它已在本时点的余额口径中被扣掉（快照基线或快照后增量），不加回会把合法确认误拒。**查询时点之后**的扣款（`trade_date > as_of`）尚未被计提，**不加回**；cancelled 腿不计入；扣款平台取自身腿的实际平台（跨平台买入不因日期前移而丢失）。
 * 卖出/赎回输入份额**先量化到 2 位再与可用份额精确比较**（无容差），超出报 `INSUFFICIENT_SHARES`；买入/转移金额同理先量化再与可用现金精确比较，不足报 `INSUFFICIENT_CASH`。`skip_available_check` 仅限 auto\_confirm 路径。
+
+<a id="rule-cumulative-profit"></a>
+## 累计收益（全历史净流量口径）
+
+独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；页面与接口接入另由 #595 契约确定，未接入前不宣称占位已替换。只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`；confirmed 交易缺 `actual_amount` 报 `INVALID_AMOUNT`——属存量数据不完整，见[错误码总表](#错误码总表)），固定批量查询、只读不 commit。
+
+- **基金（平台-产品键）**＝ D 日市值 ＋ confirmed 基金卖出腿实际到手（`actual_amount`）－ confirmed 基金买入腿含费支出 ＋ confirmed 平台/子记录事件现金净额（按 `ex_date` 应计）。强制调整的份额增减由市值体现，**不虚构本金投入抵消**；再投资/拆分/合并不另计外部投入、不重复分红。
+- **CASH**＝ D 日现金 － confirmed CASH 腿净流入 － 基金事件**已到账**现金（有效现金日 ≤ D，#522）；CASH 自身强制现金调整与手动重估差额留在现金损益、不伪装成本金；转移与买卖回款不再赚一次收益，基金与 CASH 不双计。在途（含分红在途）不产生独立收益。
+- **归属与边界**：收益归基金腿所在平台，不随现金到账平台搬迁；交易按 `confirm_date ≤ D`、pending/cancelled 与未来流水不入历史结果。历史键取「流水键 ∪ D 日持仓键」：清仓产品市值为零但保留累计收益，平台合计含该平台清仓历史，绝不回查旧快照复活持仓行；结果不受列表分页/筛选截断。
+- **三粒度严格相加**：平台-产品 →（产品, market）与平台两级汇总直接加总基础键的四位数值，不在汇总层另行舍入；量化只走统一入口（见[数值口径](#rule-precision)）。
 
 <a id="rule-subscription"></a>
 ## 申购赎回
@@ -163,10 +176,12 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 分红、拆合、送股、强制调整等外部事实只改变产品份额和现金，不改变组合份额或投资人份额。
 
 * **分红再投资**是唯一“金额 → 份额”的事件（#425）：先 `quantize_amount(基数份额 × div_cash)` 确定到分的红利金额，再除以再投资净值并量化份额到 2 位，与现金分红及基金公司台账同口径；跳过中间金额量化可能跨舍入边界差 0.01 份。拆分/合并/送股仅为“份额 × 比例”。
-* **确认时才计算变动量**（#424）：自动计算型事件在 pending 时 shares_change / shares_after / cash_change 为 NULL，读取方不得当 0 展示。确认从权益登记日快照回写基数份额；现金分红经 cash_change 入现金账本，再投资只增加成分基金份额。
+* **确认时才计算变动量**（#424）：自动计算型事件在 pending 时 shares_change / shares_after / cash_change 为 NULL，读取方不得当 0 展示。确认从权益登记日快照回写基数份额；现金分红确认 `cash_change` 金额、按有效现金日入现金账本（此前按下文规则计分红在途），再投资只增加成分基金份额。
 * **分级**：基金级（`share_split`/`share_merge`/`bonus_share`，`platform_code` 空，确认时在 `event.market` 内按平台自动拆子记录）；平台级（`cash_dividend`/`reinvest_dividend`/`forced_adjustment`，每个有持仓 `(market, 平台)` 各录 1 条）。两类事件均以 `event.market` 为边界（#461）：LOF 一码多市场时另一市场的持仓不参与计算与覆盖校验，两市场须分别录入。
 
 * 日期约束：`ex_date > entitlement_date` 且均为交易日；`ex_date` 须晚于最新快照日。平台级未全覆盖该 market 下有持仓平台默认阻断（`PLATFORM_NOT_COVERED`），`force_cover=true` 降为 warning。
+* **现金分红到账日**（#522）：可空 `cash_pay_date` 只允许 `event_type="cash_dividend"` 设非空值，其他类型（含再投资、强制调整）非空报 `INVALID_PARAM`。到账日须满足 `cash_pay_date >= ex_date`，早于除息日报 `INVALID_DATE_ORDER`；**允许非交易日**，不滚动或改写用户录入日。创建省略/NULL 保持旧行为，即按除息日到账；更新省略不改、显式 NULL 清空，按合并后终值校验（仅改除息日也须检查保留的到账日）。`confirmed` 事件仍禁止修改，回退仍保护 `ex_date` 及之后快照，不因尚未到账放宽。份额变化仍按 `ex_date` 应用，现金与在途消费见[现金账本](#rule-cash)。
+* **历史兼容与降级边界**（#522）：存量 `cash_pay_date` 保持 NULL，不自动修复历史快照。降级前只要存在任一非 NULL `cash_pay_date`（含同日到账、任何状态），或任一指向分红在途产品的外键引用，即必须拒绝；不得为删种子删除、清零或改写账本行（即使金额为 0 也不能删除）。仅在新字段与产品均未使用时删除分红在途种子与日期列。
 
 * 输入校验（#279，创建/更新/确认三路径同口径）：`forced_adjustment` 必须至少一项（`shares_change`/`cash_change`）非空，否则 `EMPTY_ADJUSTMENT`；现金型产品（`product_type` 为 CASH/IN_TRANSIT）不接受份额变动（结构型事件无条件拒、其余类型显式 `shares_change` 拒，`SHARES_CHANGE_ON_CASH_PRODUCT`）。
 
@@ -204,7 +219,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * **快照保护**（#493 起为**组级**口径）：unconfirm/cancel/delete/update 时，**组内任一腿**的会计生效日（`confirm_date`，缺省 `trade_date`）及之后已有该组合快照 → `SNAPSHOT_DEPENDENCY`（`details.from_date` = 需删除的起始日）；申赎仍按自身确认日（事件按 `ex_date`）。confirm 侧保护**有效基金确认日 C**（C 及之后有快照即拒）；买入待校正的扣款腿则保护其扣款日。
 
-* 非交易日操作 → `NON_TRADING_DAY`。
+* 要求交易日的业务日期落在非交易日 → `NON_TRADING_DAY`（事件权益登记日/除息日使用各自专用码）；现金分红 `cash_pay_date` 允许非交易日，见[交易日例外](#rule-trading-day)。
 
 * 快照生成对 CASH `cash_amount < 0` 硬阻断 → `NEGATIVE_CASH`。
 
@@ -244,11 +259,11 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `FORBIDDEN` | 403 | 权限门（非资源不存在）：`get_current_admin` 要求 `current_user.role == "admin"`，非 admin 访问 admin-only 端点即拒；改密端点非 admin 且 `target_code` 指向他人 | dependencies.py::get_current_admin; routers/auth.py::change_password |
 | `INSUFFICIENT_CASH` | 422 | 支出超过扣款平台实时可用现金（先量化 2 位再精确比较、无容差）：调仓买入按 `as_of` 校验（创建/PUT/确认共用，加回自身 CASH sell 腿——#493 起含 pending/confirmed，且只加回查询时点已计提的扣款，见「可用量口径」节；确认侧 `skip_available_check` 跳过）；赎回确认按确认日校验该平台可用现金（`skip_cash_check` 跳过）；现金转移按转出平台校验（#493 起按 `transfer_date` 时点） | services/trade_service.py::validate_buy_cash_with_addback; services/subscription_service.py::confirm_single_subscription |
 | `INSUFFICIENT_SHARES` | 422 | 卖出/赎回份额超过实时可用份额：调仓卖出（创建/PUT/确认共用 `validate_sell_shares_with_addback`，自身 pending 卖出份额加回防双重计数）；赎回创建按申请日投资人可用份额，赎回 PUT 按新份额（本条 pending 旧份额加回） | services/trade_service.py::validate_sell_shares_with_addback; services/subscription_service.py::create_subscription |
-| `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额） | services/trade_service.py::validate_buy_cash_with_addback; services/cash_transfer_service.py::create_cash_transfer |
+| `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额）。**另一类语义（#598 读侧）**：累计收益计算遇到 confirmed 交易 `actual_amount` 为 NULL 时同码拒绝——这是**存量数据不完整**而非入参非法（应用写路径恒写 `actual_amount`，只有库外写入/历史脏数据能命中），处置是修数据不是改入参；服务刻意不回退 `amount`、不伪装为零 | services/trade_service.py::validate_buy_cash_with_addback; services/cash_transfer_service.py::create_cash_transfer; services/cumulative_profit_service.py::compute_cumulative_profits |
 | `INVALID_CLASSIFICATION` | 422 | 资产分类维度字典新建/编辑形态非法：`dimension` 不在五维白名单；`code` 非全大写或不带该维度前缀（ASSET_/REGION_/STYLE_/SIZE_/SEG_）；asset_class 值却传 `applicable_asset_classes`、非 asset_class 值传 `dimension_rules` 或适用大类为空（新建/更新均须 ≥1）；`dimension_rules` 的维度或规则值越界；关联的适用大类不存在/不是 asset_class 维度值，或其规则矩阵无该维度行（无行 = 禁止） | services/asset_classification_service.py::create_classification; ::_validate_applicable_classes |
 | `INVALID_CONFIRM_DAYS` | 422 | 产品 `confirm_days` 非法（`validate_confirm_days`）：显式传 null、< 0，或场内（`CN_EXCHANGE`）不为 0。create 仅在显式传入时校验（未传按 market+is_qdii 推导）；update 对合并后终态**无条件**校验——即使本次没改该字段，存量脏值（NULL/负数）也会在任何 PUT 上被拦 | services/product_service.py::validate_confirm_days |
 | `INVALID_CREDENTIALS` | 401 | 登录：`code` 查无该投资人，或 `verify_password` 对 password_hash 校验不通过（两种情形同一分支、不区分用户是否存在），且账户进入时未被锁定、本次失败也未新触发锁定（锁定态一律 403 `ACCOUNT_LOCKED`） | routers/auth.py::login |
-| `INVALID_DATE_ORDER` | 422 | 份额变动事件 `ex_date <= entitlement_date`（除息日必须严格晚于权益登记日）；创建与 PUT 改日期（按合并后生效值重跑）共用 `_validate_event_dates`。**调仓 CASH 腿日期闸门（#493）**：确认日 C 早于下单日 T、到账日 A 早于基金确认日 C（见[调仓](#rule-trade)的配对 CASH 腿日期不变量）——确认/预览共用 `resolve_cash_leg_plan`，PUT 修正 confirmed 卖出的到账日同口径 | services/share_change_event_service.py::_validate_event_dates; services/trade_service.py::resolve_cash_leg_plan; ::_update_confirmed_sell_arrival_date |
+| `INVALID_DATE_ORDER` | 422 | 份额变动事件 `ex_date <= entitlement_date`（除息日必须严格晚于权益登记日），或现金分红的非空 `cash_pay_date < ex_date`（#522，到账日不能早于除息日）；创建与 PUT 改日期（按合并后生效值重跑）共用 `_validate_event_dates`（权益登记日/除息日）与 `_validate_cash_pay_date`（分红到账日）。**调仓 CASH 腿日期闸门（#493）**：确认日 C 早于下单日 T、到账日 A 早于基金确认日 C（见[调仓](#rule-trade)的配对 CASH 腿日期不变量）——确认/预览共用 `resolve_cash_leg_plan`，PUT 修正 confirmed 卖出的到账日同口径 | services/share_change_event_service.py::_validate_event_dates; ::_validate_cash_pay_date; services/trade_service.py::resolve_cash_leg_plan; ::_update_confirmed_sell_arrival_date |
 | `INVALID_DATE_RANGE` | 422 | 区间查询同一组日期参数 start > end：调仓列表 trade_date 组与 confirm_date 组、申赎列表 apply_date 组与 confirm_date 组、快照历史 start/end（两参可选，均传才比）、净值覆盖 `get_nav_coverage` start/end（两参必填、无 None 短路）、事件列表 ex_date_start/ex_date_end（唯一在 router 内直接抛 `BusinessError` 的站点） | services/trade_service.py::list_trades; routers/share_change_events.py::get_share_change_events |
 | `INVALID_DIMENSION_TAGS` | 422 | 产品五维标签校验（`validate_dimension_tags`）四层任一不过：维度值不存在或 `dimension` 与字段不匹配；值 `is_active=False`（create 全查，update 只查实际变化字段）；`asset_class_code` 为空却填了其余维度；大类规则矩阵 required 维度缺失、或无规则行（= forbidden）的维度有值；所选值未在 `asset_dimension_applicability` 关联该 asset_class | services/product_service.py::validate_dimension_tags |
 | `INVALID_DISPLAY_CONFIG` | 422 | 组合 `display_config`（持仓明细二级分组覆盖）非法：不是 dict；key 不是字典中 `dimension=asset_class` 的维度值（不校验 is_active）；value 未在该大类的 `asset_class_dimension_rule` 登记（无规则行的大类如 ASSET_CASH 任何配置均拒）。create 恒校验；update 仅在非 UNSET 哨兵时校验，null/{} 归一为清空、不触发校验 | services/portfolio_service.py::validate_display_config |
@@ -257,7 +272,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `INVALID_MARKET` | 422 | PUT 产品时 `market` **值实际变化**且新值不在枚举（CN_EXCHANGE/CN_OTC/HK_MUTUAL）；守卫在系统虚拟产品保护（`SYSTEM_PRODUCT_PROTECTED`）之后。create 路径不校验 market 枚举（虚拟产品 `market=""` 由此可落库） | services/product_service.py::_validate_identity_change |
 | `INVALID_NAV_LAG_DAYS` | 422 | 产品 `nav_lag_days` 非法（`validate_nav_lag_days`）：为 null（NOT NULL 列的「清除」语义一并拒）、< 0，或场内（`CN_EXCHANGE`）不为 0。create 恒校验（默认 0）；update 按 market + nav_lag_days 合并终态**无条件**校验，故 CN_OTC→CN_EXCHANGE 迁移残留 lag>0、或存量脏值在任何 PUT 上都会被拦 | services/product_service.py::validate_nav_lag_days |
 | `INVALID_OLD_PASSWORD` | 400 | 改密时 `verify_password(old_password, hash)` 不通过；仅在「非 admin，或 admin 改自己密码」这条必须验旧密码的分支触发（admin 改他人密码不校验旧密码）。未传 old_password 是 400 `OLD_PASSWORD_REQUIRED`，非本码 | routers/auth.py::change_password |
-| `INVALID_PARAM` | 422 | **更新端点的显式 null 收口**（通用收口 `null_guard.reject_explicit_nulls`，#573；#579 起全仓口径统一——投资人 / 产品 / 资产分类 / 申赎 / 调仓 / 份额事件六个服务与 `platforms` / `data_sources` / `portfolios` 三个路由均已接入）：PUT 语义是「不传 = 不动」，除显式声明的清除型字段（申赎 `notes`、投资人 `phone`/`email`、分类 `description`、产品五个维度标签、平台 `platform_type`、组合 `description`/`display_config`、调仓 `notes`、份额事件八个可空数值/备注字段）外任一字段显式传 null 一律拒绝——防落库脏数据（如 investor.role / product.is_qdii 落 NULL 后响应模型 500、该行 GET 恒 500）与静默改写（产品 `market: null` 静默 no-op、分类 `dimension_rules: null` 静默清空规则）。**专用码优先**：产品 `product_type: null` 走 `INVALID_PRODUCT_TYPE`（身份守卫先于通用收口，同体还能回到 `SYSTEM_PRODUCT_PROTECTED` / `PENDING_TRANSACTIONS_EXIST`）；资产分类侧收口排在适用关系校验之前，会抢占 `INVALID_CLASSIFICATION` / `DIMENSION_RULE_CONFLICT`（代价换「拒绝即零写入」）。申赎侧另有字段与 `sub_type` 错位——申购传 `shares`、赎回传 `amount`。**#579 路由侧同码**：`platforms` 的 `name: null` 此前直落 setattr → IntegrityError 500，现 422（`platform_type` 是清除型 allow，null = 清除类型）；`data_sources` 的 `api_key` / `is_enabled` 显式 null 此前静默跳过并谎报「配置已更新」（零写入），现 422，无写入路径（未提供 / 空串）message 如实报「未变更」，未知数据源 404 先于收口。**#579 服务侧同码**：`trades` 数值/日期字段显式 null 此前被 `_dec()` 归为「未提供」静默 no-op（`fee` 无法经 null 清零），现 422、`fee` 清零改显式传 0（收口排在状态守卫之后，`CANNOT_MODIFY_CONFIRMED` / `INVALID_STATUS` / `CASH_TRADE_FORBIDDEN` 等专用码优先）；`share_change_events` 的 `ex_date`/`entitlement_date` 是 NOT NULL 列，显式 null 此前直落 setattr → IntegrityError 500，现 422（收口排在 confirmed 阻断之后）；`portfolios` 的 `name`/`auto_snapshot_enabled` 显式 null 此前被 `is not None` 静默跳过（恒 no-op），现 422，`description` 转为清除型（null = 清空，哨兵区分「不传」）。**#493 调仓侧同码**：confirmed 卖出 PUT `cash_confirm_date: null`（不传即保持原值）；**pending** 交易（买或卖）传 `cash_confirm_date`（买入扣款日固定 T、卖出到账日在确认时录入） | services/null_guard.py::reject_explicit_nulls; services/subscription_service.py::update_subscription; services/trade_service.py::_update_confirmed_sell_arrival_date; ::update_trade |
+| `INVALID_PARAM` | 422 | **更新端点的显式 null 收口**（通用收口 `null_guard.reject_explicit_nulls`，#573；#579 起全仓口径统一——投资人 / 产品 / 资产分类 / 申赎 / 调仓 / 份额事件六个服务与 `platforms` / `data_sources` / `portfolios` 三个路由均已接入）：PUT 语义是「不传 = 不动」，除显式声明的清除型字段（申赎 `notes`、投资人 `phone`/`email`、分类 `description`、产品五个维度标签、平台 `platform_type`、组合 `description`/`display_config`、调仓 `notes`、份额事件可空数值/备注字段及 `cash_pay_date`）外任一字段显式传 null 一律拒绝——防落库脏数据（如 investor.role / product.is_qdii 落 NULL 后响应模型 500、该行 GET 恒 500）与静默改写（产品 `market: null` 静默 no-op、分类 `dimension_rules: null` 静默清空规则）。**专用码优先**：产品 `product_type: null` 走 `INVALID_PRODUCT_TYPE`（身份守卫先于通用收口，同体还能回到 `SYSTEM_PRODUCT_PROTECTED` / `PENDING_TRANSACTIONS_EXIST`）；资产分类侧收口排在适用关系校验之前，会抢占 `INVALID_CLASSIFICATION` / `DIMENSION_RULE_CONFLICT`（代价换「拒绝即零写入」）。申赎侧另有字段与 `sub_type` 错位——申购传 `shares`、赎回传 `amount`。**#579 路由侧同码**：`platforms` 的 `name: null` 此前直落 setattr → IntegrityError 500，现 422（`platform_type` 是清除型 allow，null = 清除类型）；`data_sources` 的 `api_key` / `is_enabled` 显式 null 此前静默跳过并谎报「配置已更新」（零写入），现 422，无写入路径（未提供 / 空串）message 如实报「未变更」，未知数据源 404 先于收口。**#579 服务侧同码**：`trades` 数值/日期字段显式 null 此前被 `_dec()` 归为「未提供」静默 no-op（`fee` 无法经 null 清零），现 422、`fee` 清零改显式传 0（收口排在状态守卫之后，`CANNOT_MODIFY_CONFIRMED` / `INVALID_STATUS` / `CASH_TRADE_FORBIDDEN` 等专用码优先）；`share_change_events` 的 `ex_date`/`entitlement_date` 是 NOT NULL 列，显式 null 此前直落 setattr → IntegrityError 500，现 422（收口排在 confirmed 阻断之后）；`portfolios` 的 `name`/`auto_snapshot_enabled` 显式 null 此前被 `is not None` 静默跳过（恒 no-op），现 422，`description` 转为清除型（null = 清空，哨兵区分「不传」）。**#493 调仓侧同码**：confirmed 卖出 PUT `cash_confirm_date: null`（不传即保持原值）；**pending** 交易（买或卖）传 `cash_confirm_date`（买入扣款日固定 T、卖出到账日在确认时录入）。**#522 事件侧同码**：非现金分红事件传非空 `cash_pay_date`，创建与更新按合并后终值拒绝；现金分红的 `cash_pay_date: null` 是显式允许的清空，不适用通用拒绝 | services/null_guard.py::reject_explicit_nulls; services/subscription_service.py::update_subscription; services/trade_service.py::_update_confirmed_sell_arrival_date; ::update_trade; services/share_change_event_service.py::_validate_cash_pay_date |
 | `INVALID_PRODUCT_TYPE` | 422 | `product_type` 不在枚举（ETF/OEF/LOF/CASH/IN_TRANSIT）（`validate_product_type`）：create 恒校验；update 仅在 product_type **实际变化**时校验（前端编辑恒带该字段，显式传原值不进门禁） | services/product_service.py::validate_product_type |
 | `INVALID_SHARES` | 422 | 份额输入为空或量化到 2 位后 <= 0：赎回创建（`shares` 为 None/≤0，以及量化后再判 ≤0）、赎回 PUT 改 `shares`；调仓卖出侧 `validate_sell_shares_with_addback`（`new_shares` 为 None，或量化后 ≤0），由卖出 create / update（shares 或 trade_date 变动时）/ confirm 三条路径共用 | services/trade_service.py::validate_sell_shares_with_addback; services/subscription_service.py::create_subscription |
 | `INVALID_STATUS` | 422 | 三态生命周期状态门（[生命周期](#rule-lifecycle)）的通用拒绝码：confirm 与确认预览要求 `status == "pending"`（申赎/调仓/事件；调仓 preview 与 confirm 两处由 router 抛 `HTTPException` 422，事件 preview 由 service 抛同码 `BusinessError`，#424）；cancel 要求 pending；unconfirm 要求 confirmed；PUT 拒绝 cancelled。申赎侧经子类 `InvalidStatusError`；事件 PUT 只拒 confirmed，cancelled 事件不拦（与调仓/申赎不对称） | services/subscription_service.py::InvalidStatusError; services/trade_service.py::update_trade |
@@ -301,7 +316,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `SNAPSHOT_REQUIRES_RECALCULATE` | 422 | 单日 generate 的「零快照失忆」守卫（#180）：组合无任何 `portfolio_value_snapshot`，且存在 `confirm_date < target_date` 的 confirmed 申赎或交易（`confirm_date` 为 NULL 的异常数据回退按 apply_date / trade_date 比较）——增量窗口无前序基线会退化为仅目标日，早期到账被静默漏掉，须改用 recalculate 从最早 `confirm_date` 逐日重建；目标日即最早到账日（`confirm_date == target_date`）不受影响 | services/snapshot_service.py::_validate_no_silent_history_gap |
 | `SYNC_FAILED` | 500 | `POST /trading-calendar/sync`：Tushare 接口报错（`TushareAPIError`）或任何其他异常导致同步失败，两分支均 500（Tushare 未配置走 503 `DATA_SOURCE_NOT_CONFIGURED`，不落本码） | routers/trading_calendar.py::sync_trading_calendar |
 | `TASK_NOT_FOUND` | 404 | `run_task` 的派发表守卫（#406）：`task_code` 不在 `_TASK_DISPATCH` 覆盖的四个任务码（`nav_sync` / `snapshot_generate` / `trading_calendar_sync` / `log_cleanup`）内，`details.available_tasks` 回传可选集；**不建执行记录**——没执行过的任务不该有执行历史。经 `POST /system/tasks/{code}/run` 时通常由 router 的前置校验（查 `scheduled_task`）先命中，本码覆盖「任务表有行但派发表未覆盖」的漂移 | services/task_runner.py::run_task |
-| `SYSTEM_PRODUCT_PROTECTED` | 422 | `update_product` 的身份字段守卫：产品 code ∈ (CASH, IN_TRANSIT_BUY, IN_TRANSIT_SELL)，且本次更新**实际改变** `product_type` 或 `market` 的值（显式传原值不进门禁）；这两个字段以外的编辑不受本码限制 | services/product_service.py::_validate_identity_change |
+| `SYSTEM_PRODUCT_PROTECTED` | 422 | `update_product` 的身份字段守卫：产品 code ∈ (CASH, IN_TRANSIT_BUY, IN_TRANSIT_SELL, IN_TRANSIT_DIVIDEND)，且本次更新**实际改变** `product_type` 或 `market` 的值（显式传原值不进门禁）；这两个字段以外的编辑不受本码限制 | services/product_service.py::_validate_identity_change |
 | `TRANSFER_NOT_FOUND` | 404 | `confirm_cash_transfer`：按 (portfolio_code, transfer_group) 查不到 `product_code=CASH` 且 `status=pending` 的腿——组不存在或组内两腿已全部 confirmed（`NotFoundError` → 404） | services/cash_transfer_service.py::confirm_cash_transfer |
 | `TRANSFER_NOT_READY` | 422 | `confirm_cash_transfer`：存在 pending CASH 腿，但其生效确认日（首条腿的 `confirm_date`，为空则取该腿 `trade_date` 的下一交易日）晚于今天——跨天转移尚未到账日，不允许提前确认（[现金转移的非对称状态](#rule-trade)） | services/cash_transfer_service.py::confirm_cash_transfer |
 | `VALIDATION_FAILED` | 422（router 包装 ValueError）；逐日条目形态为 200 | 两形态同名：① generate / recalculate / generate-next 端点把下游 ValueError 翻成 422——组合不存在或非 active（`_validate_portfolio`）、目标日非交易日、依赖校验有 failed 项（纯 price_data 缺失走 `MISSING_NAV`、不落本码）、重算整区间静态预校验失败；② recalculate 逐日循环里 `validate_snapshot_dependencies` 出现 failed 项时写入 `results[].errors` 的 code（响应 200，随后 break、整体 rollback） | routers/snapshots.py::generate_snapshot; services/snapshot_service.py::recalculate_snapshots |
@@ -322,7 +337,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-trading-day"></a>
 ## 交易日
 
-所有交易操作（申购、赎回、调仓、现金进出、事件日期）仅允许在交易日进行，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`；[test_trading_day.py](../../backend/tests/integration/test_trading_day.py) 的 `TestClosedWeekCalendar` / `TestClosedWeekWrites` 显式构造工作日闭市、连续长假和缺失记录，并验证写入口拒绝时无业务字段残留。
+交易操作（申购、赎回、调仓、现金进出、事件权益登记日与除息日）原则上仅允许交易日，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。**唯一新增例外为现金分红 `cash_pay_date`（#522）**：允许非交易日，按实际到账日生效，由下一交易日快照窗口消费；不扩展到事件 `ex_date` / `entitlement_date`、调仓到账日或其他业务日期，快照本身仍只在交易日生成。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`；[test_trading_day.py](../../backend/tests/integration/test_trading_day.py) 的 `TestClosedWeekCalendar` / `TestClosedWeekWrites` 显式构造工作日闭市、连续长假和缺失记录，并验证写入口拒绝时无业务字段残留。
 
 **日历不足一律抛错，禁止回退（#591）**：需要第 N 个前/后交易日而日历覆盖不够（**含部分耗尽**——`days=3` 只剩 1 个可解析也抛）时，抛错版 `get_next_trading_day` / `get_prev_trading_day` 抛 `CALENDAR_NOT_SYNCED`（422，`details` 带 `requested_days` / `resolved_days`），**绝不**回退返回入参本身、也**绝不**用自然日加减伪造日期。快照取价日 `_prev_trading_day` 同口径：前序开市日不足即抛 `CALENDAR_NOT_SYNCED`，**不**改成 `target_date - lag 自然日`——那会把编造的取价日写进估值（静默错价），与「取不到即由调用方报 `MISSING_NAV`」的既定意图冲突。两码边界不得互串：**日历解析不出取价日 → `CALENDAR_NOT_SYNCED`；解析得出但该日无 `PriceRecord` → `MISSING_NAV`**。
 
@@ -353,4 +368,4 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 5. 幂等性缓存（`idempotency_cache`）24 小时过期，批量调仓用 `Idempotency-Key`。
 6. 分类信息只从 positions API 读侧派生（#128）：快照表无分类列，不要在写侧/快照链路重新引入 asset\_type 冗余；判断现金行用 `cash_amount IS NOT NULL`，不用产品类型字符串。产品维度标签改动走 product create/update（service 层矩阵校验），不直改 DB。
 7. 传递依赖不写进 `backend/requirements.txt` 就等于没钉（#314，fastapi 的 starlette 曾长期浮动）；且 fastapi ≥0.141 改了 `app.routes` 结构，会让遍历路由的鉴权门禁（#256）静默空通过（#306）——升 fastapi/starlette 必须连带复核这道门禁是否还在真扫描。
-8. 更新端点（PUT）语义是「不传 = 不动」，**显式传 null 一律 422 `INVALID_PARAM`**（通用收口 `services/null_guard.py::reject_explicit_nulls`，#573；#579 起全仓口径统一——投资人 / 产品 / 资产分类 / 申赎 / 调仓 / 份额事件六个服务与 `platforms` / `data_sources` / `portfolios` 三个路由均已接入，不再有「null = 未提供」端点）——清除型字段（申赎 `notes`、投资人 `phone`/`email`、分类 `description`、产品维度标签、平台 `platform_type`、组合 `description`/`display_config`、调仓 `notes`、份额事件可空数值/备注字段）在各自调用点用 `allow` 显式声明放行，专用校验器字段（产品 `product_type` → `INVALID_PRODUCT_TYPE`、`confirm_days`/`nav_lag_days`、调仓 `cash_confirm_date` → #493 专用拒绝）保留各自错误码，故收口应排在专用校验之后（资产分类侧为「拒绝即零写入」刻意前置，会抢占 `INVALID_CLASSIFICATION` / `DIMENSION_RULE_CONFLICT`；调仓侧排在状态守卫之后、份额事件侧排在 confirmed 阻断之后，专用状态码优先）。新增更新字段时不要放行 null：可空列会落 NULL，响应模型字段不接受 None 时该行此后 GET 恒 500（不可自愈）；`dimension_rules` 这类全量替换字段的 null 更会静默清空。
+8. 更新端点（PUT）语义是「不传 = 不动」，**显式传 null 一律 422 `INVALID_PARAM`**（通用收口 `services/null_guard.py::reject_explicit_nulls`，#573；#579 起全仓口径统一——投资人 / 产品 / 资产分类 / 申赎 / 调仓 / 份额事件六个服务与 `platforms` / `data_sources` / `portfolios` 三个路由均已接入，不再有「null = 未提供」端点）——清除型字段（申赎 `notes`、投资人 `phone`/`email`、分类 `description`、产品维度标签、平台 `platform_type`、组合 `description`/`display_config`、调仓 `notes`、份额事件可空数值/备注字段及 `cash_pay_date`）在各自调用点用 `allow` 显式声明放行，专用校验器字段（产品 `product_type` → `INVALID_PRODUCT_TYPE`、`confirm_days`/`nav_lag_days`、调仓 `cash_confirm_date` → #493 专用拒绝）保留各自错误码，故收口应排在专用校验之后（资产分类侧为「拒绝即零写入」刻意前置，会抢占 `INVALID_CLASSIFICATION` / `DIMENSION_RULE_CONFLICT`；调仓侧排在状态守卫之后、份额事件侧排在 confirmed 阻断之后，专用状态码优先）。新增更新字段时不要放行 null：可空列会落 NULL，响应模型字段不接受 None 时该行此后 GET 恒 500（不可自愈）；`dimension_rules` 这类全量替换字段的 null 更会静默清空。

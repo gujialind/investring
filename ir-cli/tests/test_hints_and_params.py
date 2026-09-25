@@ -111,12 +111,13 @@ class _StubClient:
     def __init__(self):
         self.calls = []
         self.writes = []
+        self.response_data = {"available_cash": 100.0}
 
     def get(self, path, params=None):
         self.calls.append((path, params))
-        return {"data": {"available_cash": 100.0}}
+        return {"data": self.response_data}
 
-    def post(self, path, json_data=None):
+    def post(self, path, json_data=None, params=None):
         self.writes.append(("POST", path, json_data))
         return {"data": json_data or {}}
 
@@ -317,3 +318,120 @@ class TestProductCreateConfirmDays:
         assert result.exit_code == 0, result.stdout
         _, _, body = stub_client.writes[0]
         assert body["confirm_days"] == 2
+
+
+SHARE_EVENT_CREATE_BODY = {
+    "portfolio_code": "P1", "product_code": "F001", "market": "CN_OTC",
+    "platform_code": "PF1", "event_type": "cash_dividend",
+    "ex_date": "2026-06-05", "entitlement_date": "2026-06-04", "div_cash": 0.05,
+}
+SHARE_EVENT_CREATE_ARGS = [
+    "share-event", "create", "--portfolio-code", "P1", "--product-code", "F001",
+    "--market", "CN_OTC", "--platform-code", "PF1", "--event-type", "cash_dividend",
+    "--ex-date", "2026-06-05", "--entitlement-date", "2026-06-04", "--div-cash", "0.05",
+]
+
+
+class TestShareEventCashPayDate:
+    """#522：只透传到账日，不在 CLI 推算默认值或复制后端业务日期校验。"""
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    @pytest.mark.parametrize("via_json", [False, True])
+    @pytest.mark.parametrize("pay_date", ["2026-06-05", "2026-06-06", "2026-06-08"])
+    def test_cash_pay_date_in_request_body(self, stub_client, command, via_json, pay_date):
+        body = dict(SHARE_EVENT_CREATE_BODY) if command == "create" else {}
+        body["cash_pay_date"] = pay_date
+        args = list(SHARE_EVENT_CREATE_ARGS) if command == "create" else ["share-event", "update", "42"]
+        if via_json:
+            args += ["--json", json.dumps(body)]
+        else:
+            args += ["--cash-pay-date", pay_date]
+        result = _runner().invoke(app, args)
+        assert result.exit_code == 0, result.stdout
+        path = "/api/share-change-events" + ("/42" if command == "update" else "")
+        assert stub_client.writes == [("POST" if command == "create" else "PUT", path, body)]
+        assert json.loads(result.stdout)["data"]["cash_pay_date"] == pay_date
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    @pytest.mark.parametrize("via_json", [False, True])
+    @pytest.mark.parametrize("bad_date", [
+        "not-a-date", "2026/06/06", "2026-02-30", "20260606", "2026-W23-6",
+    ])
+    def test_invalid_date_rejected_before_request(self, stub_client, command, via_json, bad_date):
+        args = list(SHARE_EVENT_CREATE_ARGS) if command == "create" else ["share-event", "update", "42"]
+        if via_json:
+            body = dict(SHARE_EVENT_CREATE_BODY) if command == "create" else {}
+            args += ["--json", json.dumps({**body, "cash_pay_date": bad_date})]
+        else:
+            args += ["--cash-pay-date", bad_date]
+        result = _runner().invoke(app, args)
+        assert result.exit_code == 1
+        doc = json.loads(result.stdout)
+        assert doc["error"]["code"] == "VALIDATION_ERROR"
+        assert "cash_pay_date" in doc["error"]["message"]
+        assert "YYYY-MM-DD" in doc["error"]["message"]
+        assert stub_client.writes == []
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    def test_json_null_preserved_and_overrides_option(self, stub_client, command):
+        body = dict(SHARE_EVENT_CREATE_BODY) if command == "create" else {}
+        body["cash_pay_date"] = None
+        args = ["share-event", command] + (["42"] if command == "update" else [])
+        result = _runner().invoke(app, args + [
+            "--cash-pay-date", "2026-06-08", "--json", json.dumps(body),
+        ])
+        assert result.exit_code == 0, result.stdout
+        assert stub_client.writes[0][2] == body
+        assert "cash_pay_date" in stub_client.writes[0][2]
+        assert json.loads(result.stdout)["data"]["cash_pay_date"] is None
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    @pytest.mark.parametrize("via_json", [False, True])
+    def test_omission_does_not_fill_date(self, stub_client, command, via_json):
+        body = dict(SHARE_EVENT_CREATE_BODY) if command == "create" else {"notes": "仅改备注"}
+        args = list(SHARE_EVENT_CREATE_ARGS) if command == "create" else [
+            "share-event", "update", "42", "--notes", "仅改备注",
+        ]
+        if via_json:
+            args += ["--json", json.dumps(body)]
+        result = _runner().invoke(app, args)
+        assert result.exit_code == 0, result.stdout
+        assert stub_client.writes[0][2] == body
+        assert "cash_pay_date" not in stub_client.writes[0][2]
+
+    @pytest.mark.parametrize("command", ["list", "get"])
+    @pytest.mark.parametrize("date_fields", [{}, {"cash_pay_date": None}, {"cash_pay_date": "2026-06-06"}])
+    def test_read_returns_date_unchanged(self, stub_client, command, date_fields):
+        event = {"id": 42, "ex_date": "2026-06-05", "status": "confirmed", **date_fields}
+        stub_client.response_data = [event] if command == "list" else event
+        args = ["share-event", command] + (["42"] if command == "get" else [])
+        result = _runner().invoke(app, args)
+        assert result.exit_code == 0, result.stdout
+        assert json.loads(result.stdout)["data"] == stub_client.response_data
+        path = "/api/share-change-events" + ("/42" if command == "get" else "")
+        assert stub_client.calls[0][0] == path
+
+    def test_list_can_select_cash_pay_date(self, stub_client):
+        stub_client.response_data = [{"id": 42, "cash_pay_date": "2026-06-06", "notes": "备注"}]
+        result = _runner().invoke(app, ["share-event", "list", "--fields", "id,cash_pay_date"])
+        assert result.exit_code == 0, result.stdout
+        assert json.loads(result.stdout)["data"] == [{"id": 42, "cash_pay_date": "2026-06-06"}]
+
+    def test_confirm_hint_distinguishes_cash_arrival(self, stub_client):
+        result = _runner().invoke(app, ["share-event", "confirm", "42"])
+        assert result.exit_code == 0, result.stdout
+        hint = json.loads(result.stdout)["hints"][0]
+        assert "cash_pay_date" in hint
+        assert "不计可用现金" in hint
+        assert "下一交易日快照消费" in hint
+
+    @pytest.mark.parametrize("field", ["ex_date", "entitlement_date", "cash_pay_date"])
+    @pytest.mark.parametrize("bad_date", ["20260604", "2026-W23-4"])
+    def test_shared_date_validation_requires_calendar_date(self, stub_client, field, bad_date):
+        body = {**SHARE_EVENT_CREATE_BODY, field: bad_date}
+        result = _runner().invoke(app, ["share-event", "create", "--json", json.dumps(body)])
+        assert result.exit_code == 1
+        doc = json.loads(result.stdout)
+        assert doc["error"]["code"] == "VALIDATION_ERROR"
+        assert field in doc["error"]["message"]
+        assert stub_client.writes == []

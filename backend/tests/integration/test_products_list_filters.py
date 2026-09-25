@@ -99,7 +99,7 @@ class TestProductListAttrFilter:
         assert all(i["confirm_days"] == 0 for i in items)
         codes = [i["code"] for i in items]
         assert "510300.SH" in codes
-        for virtual_code in ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL"):
+        for virtual_code in ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "IN_TRANSIT_DIVIDEND"):
             assert virtual_code not in codes
 
         resp_all = client.get(
@@ -107,7 +107,7 @@ class TestProductListAttrFilter:
         )
         assert resp_all.status_code == 200
         codes_all = [i["code"] for i in resp_all.json()["items"]]
-        for seed_code in ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "510300.SH"):
+        for seed_code in ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "IN_TRANSIT_DIVIDEND", "510300.SH"):
             assert seed_code in codes_all
 
     def test_nav_lag_days_filter(self, client, admin_headers, test_db):
@@ -223,10 +223,10 @@ class TestProductListVirtualFilter:
     """虚拟产品排除（issue #327）：product_type ∈ {CASH, IN_TRANSIT} 的虚拟产品默认不出现在列表，
     include_virtual=true 显式包含；排除发生在服务端过滤（分页 total 随之变化，非客户端剔除）。"""
 
-    VIRTUAL_CODES = ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL")
+    VIRTUAL_CODES = ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "IN_TRANSIT_DIVIDEND")
 
     def test_default_excludes_virtual(self, client, admin_headers):
-        """无参默认：三个系统虚拟产品不在列、真实种子在列，total 为排除后口径"""
+        """无参默认：系统虚拟产品不在列、真实种子在列，total 为排除后口径"""
         resp = client.get("/api/products?page_size=100", headers=admin_headers)
         assert resp.status_code == 200
         data = resp.json()

@@ -762,7 +762,7 @@ ir trade update <ID> --cash-confirm-date YYYY-MM-DD [--notes <备注>]
 
 #### `ir share-event list`
 
-获取事件列表。
+获取事件列表。默认原样输出响应字段，含可空 `cash_pay_date`；可用 `--fields id,ex_date,cash_pay_date` 筛选输出。
 
 ```bash
 ir share-event list [--portfolio-code <组合>] [--page N] [--page-size N] [--all]
@@ -777,7 +777,7 @@ ir share-event create \
   --portfolio-code <组合> --product-code <产品> --market <市场> \
   --event-type <事件类型> \
   --ex-date YYYY-MM-DD --entitlement-date YYYY-MM-DD \
-  [--platform-code <平台>] \
+  [--platform-code <平台>] [--cash-pay-date YYYY-MM-DD] \
   [--entitlement-shares N] [--shares-before N] [--shares-change N] [--shares-after N] \
   [--ratio N] [--div-cash N] [--reinvest-nav N] [--cash-change N] \
   [--event-source <来源>] [--notes <备注>] [--force-cover]
@@ -791,6 +791,7 @@ ir share-event create \
 | `--event-type` | 是 | 事件类型（见下表） |
 | `--ex-date` | 是 | 除息日/应用日（**必须是交易日**，且 > 权益登记日） |
 | `--entitlement-date` | 是 | 权益登记日（基数日，**必须是交易日**） |
+| `--cash-pay-date` | 否 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend` 可设；须不早于除息日，允许非交易日；省略或 JSON `null` 时按除息日到账 |
 | `--platform-code` | 视类型 | 平台级事件（cash_dividend/reinvest_dividend/forced_adjustment）必填 |
 | `--entitlement-shares` | 否 | 权益登记日份额 |
 | `--shares-before` | 否 | 变动前份额 |
@@ -817,7 +818,7 @@ ir share-event create \
 
 #### `ir share-event get`
 
-查看事件详情。
+查看事件详情，原样输出 `cash_pay_date`；未设置时保留 `null`，不将默认除息日填回响应字段。
 
 ```bash
 ir share-event get <ID>
@@ -829,8 +830,13 @@ ir share-event get <ID>
 
 ```bash
 ir share-event update <ID> [--ex-date YYYY-MM-DD] [--entitlement-shares N] [--ratio N] \
-  [--div-cash N] [--reinvest-nav N] [--cash-change N] [--notes <备注>]
+  [--div-cash N] [--reinvest-nav N] [--cash-change N] [--cash-pay-date YYYY-MM-DD] [--notes <备注>]
+
+# 清空到账日，恢复按除息日到账
+ir share-event update <ID> --json '{"cash_pay_date":null}'
 ```
+
+> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。清空沿用 `--json` 显式 `null`，没有专用清空选项。已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
 
 #### `ir share-event delete`
 
@@ -1593,18 +1599,26 @@ ir trade update 2 --cash-confirm-date 2025-01-13
 ### 5.2 分红处理
 
 ```bash
-# 1. 创建现金分红事件
+# 1. 创建现金分红事件：周五除息，周六到账（允许非交易日）
 ir share-event create --portfolio-code PORT001 --product-code 000051.OF --market CN_OTC \
-  --event-type cash_dividend \
-  --ex-date 2025-06-15 --entitlement-date 2025-06-13 \
-  --div-cash 500 --entitlement-shares 33333.33
+  --event-type cash_dividend --platform-code ALIPAY \
+  --ex-date 2026-06-05 --entitlement-date 2026-06-04 --cash-pay-date 2026-06-06 \
+  --div-cash 0.05 --entitlement-shares 10000
 
-# 2. 生成权益登记日的快照（如果还没有）
-ir snapshot generate --portfolio-code PORT001 --target-date 2025-06-13
+# 2. 生成权益登记日的快照（如果还没有；须与已有快照连续）
+ir snapshot generate --portfolio-code PORT001 --target-date 2026-06-04
 
 # 3. 确认分红事件
 ir share-event confirm 1
+
+# 4. 生成除息日快照：红利计入分红在途，尚不可用
+ir snapshot generate --portfolio-code PORT001 --target-date 2026-06-05
+
+# 5. 推进到下一交易日：消费周末到账，分红在途转为 CASH
+ir snapshot generate-next --portfolio-code PORT001
 ```
+
+`--cash-pay-date` 可选，格式为 YYYY-MM-DD；创建省略或 JSON `null` 时默认除息日到账。更新时省略不改，清空用 `ir share-event update <ID> --json '{"cash_pay_date":null}'`（须在未确认状态，已确认先按快照保护规则取消确认）。到账只改变现金可用时间，不再确认一次分红收益；业务口径见[份额变动事件](../docs/reference/business-constraints.md#rule-event)与[现金账本](../docs/reference/business-constraints.md#rule-cash)。
 
 ### 5.3 日常运维
 
@@ -1688,7 +1702,7 @@ ir schema
 
 ## 7. 注意事项
 
-1. **交易日历依赖**：申购、赎回、交易、份额变动事件的日期必须是交易日。请先确保已通过 `ir system calendar-sync` 同步了当年的交易日历。
+1. **交易日历依赖**：申购、赎回、交易及份额事件的权益登记日/除息日必须是交易日。**现金分红的 `--cash-pay-date` 是例外**：允许非交易日，周末/节假日到账在下一交易日快照窗口消费，不为到账日生成非交易日快照；调仓到账日仍须为交易日。请先确保已通过 `ir system calendar-sync` 同步了当年的交易日历。
 
 2. **净值数据依赖**：交易确认和快照生成依赖 `PriceRecord` 中的净值数据。请先通过 `ir market sync` 或 `ir market sync-history` 同步产品净值。
 
