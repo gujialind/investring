@@ -122,7 +122,10 @@ class TestShareEventCashPayDate:
         matches = [p for p in params if p.get("opt") == "--cash-pay-date"]
         assert len(matches) == 1
         option = matches[0]
-        assert option["type"] == "TEXT"
+        # type 取自 click 的类型名，随依赖版本漂移（typer 0.26/click 8.5 报 TEXT，
+        # typer 0.27 内嵌 click 报 STR），故对齐同命令既有日期选项而非钉字面量
+        ex_date = next(p for p in params if p.get("opt") == "--ex-date")
+        assert option["type"] == ex_date["type"]
         assert not option.get("required", False)
         assert "default" not in option
         assert "YYYY-MM-DD" in option["help"]
