@@ -369,24 +369,18 @@ KNOWN_MANUAL_ONLY = {
     # 手册登记了、实现没有（或已改名）——多为近期重构后手册未跟随
     "ir investor create": {"--role": "手册 4.2 登记 --role（默认 viewer），实现 create 未开放，仅 update 有"},
     "ir investor update": {"--password": "手册用法行写 --password <新密码>，实现 update 无密码选项（改密码走 ir auth change-password）"},
-    "ir investor delete": {"--yes": "手册登记 --yes，实现为交互式确认，无该选项"},
-    "ir portfolio close": {"--yes": "手册登记 --yes，实现为交互式确认，无该选项"},
     "ir share-event create": {
         "--event-source": "手册 4.7 登记 --event-source，实现未开放",
         "--shares-after": "手册登记 --shares-after，实现已改名 --shares-change",
         "--shares-before": "手册登记 --shares-before，实现已改名 --entitlement-shares",
     },
-    "ir share-event delete": {"--yes": "手册用法行写 [--yes]，实现 delete 只有 id 位置参数、无该选项；与同类 delete 同形态（代码内亦无任何交互式确认实现）"},
     "ir share-event update": {"--entitlement-shares": "手册 4.7 update 登记 --entitlement-shares（属 create），实现 update 无此选项"},
     "ir snapshot recalculate": {"--force": "手册登记 --force，实现改为 --async/--wait/--poll-interval 异步重算"},
-    "ir snapshot delete": {"--yes": "手册 4.11 登记 --yes，实现为交互式确认（仅 delete-bulk 有 --yes）"},
     "ir product create": {"--data-source": "手册 4.9 登记 --data-source，实现 create 未开放"},
     "ir product update": {
         "--data-source": "手册 4.9 登记 --data-source，实现 update 未开放",
         "--no-qdii": "手册写 --is-qdii/--no-qdii 双开关，实现只注册 --is-qdii",
     },
-    "ir product delete": {"--yes": "手册登记 --yes，实现为交互式确认，无该选项"},
-    "ir platform delete": {"--yes": "手册登记 --yes，实现为交互式确认，无该选项"},
     "ir sub confirm": {
         "--confirm-date": "手册 4.5 登记 --confirm-date，实现 confirm 只有 --quiet + id（确认日由后端推定）",
         "--unit-price": "手册 4.5 登记 --unit-price，实现 confirm 未开放（净值由后端取 T 日）",
