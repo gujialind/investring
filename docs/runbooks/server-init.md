@@ -71,6 +71,11 @@
   （digest 化 `images.env` 同包保留），目录约定见 `server_deploy.sh` 头部注释与
   [deploy-rollback runbook](deploy-rollback.md)。secrets 配置见部署文档。
 - RDS 白名单添加服务器内网 IP；应用经内网连接，不做公网直连。
+- **首次数据库初始化须显式授权**：空库自动部署会以 exit 4 停止，未写库、未激活。
+  从失败部署日志取得已 staged 的 release-id（此时尚无 accepted 记录），按
+  [初始化与迁移流程](deploy-rollback.md#5-自动化配合deployyml--server_deploysh)
+  使用目标发布、同一 `.env` 账号取 `bootstrap status` 指纹，核对后以
+  `workflow_dispatch action=migrate release_id=<ID> expect_state=<fingerprint>` 继续。
 
 ## 8. 安全自查清单
 

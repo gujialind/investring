@@ -163,6 +163,7 @@ def _prepare_lock(connection, settings):
             connection.commit()
             yield
         finally:
+            # 仅清理未提交事务；MySQL DDL 的隐式提交不会被此 rollback 撤销。
             connection.rollback()
             if not connection.invalidated:
                 connection.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": name})

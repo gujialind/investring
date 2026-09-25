@@ -251,7 +251,7 @@ jobs:
           annotate_only: true
 
   # MySQL 门禁：覆盖 SQLite 测不出的方言差异（VARCHAR 长度、DECIMAL 截断、
-  # 隐式排序、排序规则等），并验证生产启动顺序（create_all → alembic upgrade head）
+  # 隐式排序、排序规则等），并验证部署期显式 prepare 顺序（create_all → alembic upgrade head）
   backend-test-mysql:
     name: "Backend Tests (MySQL)"
     needs: changes
@@ -305,7 +305,7 @@ jobs:
       # 与 test_migration_0015.py 变红。
       #
       # 注：`CREATE DATABASE` 的库级设置只决定**将来**建表的默认值，不会改动已存在的表；
-      # 且新库路径下 `create_all`（main.py import 期）在迁移之前跑，故模型层另有
+      # 且新库路径下 `create_all`（bootstrap prepare 阶段）在迁移之前跑，故模型层另有
       # app/models/base.py 的钩子确保每张表自带 CHARSET，不单纯依赖这里。
       #
       # 最小权限测试账号（#539 第二单元）：pytest 会话开头就是一次 drop_all，用 root 连接
@@ -392,7 +392,7 @@ jobs:
           pip install -r backend/requirements.txt
 
       # openapi.json 漂移门禁：改 router/schema 忘记重新导出时 exit 1
-      # （隔离子进程在独立临时 SQLite 内执行 create_all + init_scheduled_tasks，不继承业务配置）
+      # 隔离子进程仅导入 app 并生成 OpenAPI，不连接数据库、不继承业务配置
       - name: Check openapi.json drift
         run: python backend/check_openapi.py
 

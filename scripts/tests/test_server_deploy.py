@@ -54,7 +54,7 @@ def respond(resp):
     if resp.get("json") is not None:
         out = json.dumps(resp["json"], sort_keys=True) + "\n"
     rc = resp.get("rc", 0)
-    done(rc, out, "" if rc == 0 else "fake bootstrap failure\n")
+    done(rc, out, resp.get("stderr", "" if rc == 0 else "fake bootstrap failure\n"))
 
 def release_of(args):
     if "--project-directory" in args:
@@ -377,12 +377,43 @@ def test_migration_required_stops_before_any_db_write(server, make_release):
     assert not server.accepted()
 
 
-def test_unknown_probe_error_stops(server, make_release):
+@pytest.mark.parametrize("mode", ["deploy", "migrate"])
+@pytest.mark.parametrize("payload", [None, {"state": "error", "reason": "OperationalError"}])
+def test_unknown_probe_error_keeps_private_diagnostics(server, make_release, mode, payload):
     rel = make_release()
-    server.set_bootstrap("status", {"rc": 1, "json": None})
+    extra = ("--expect-state", LIVE_FP) if mode == "migrate" else ()
+    previous_logs = {}
+    for attempt in range(2):
+        detail = f"connection failure {attempt}: password=private-test-value\n"
+        server.set_bootstrap("status", {"rc": 1, "json": payload, "stderr": detail})
+        proc = deploy(server, rel, mode=mode, extra=extra)
+        assert proc.returncode == 4
+        logs = set((server.base / "state").glob("bootstrap-*.log"))
+        new_logs = logs - previous_logs.keys()
+        assert len(new_logs) == 1
+        diagnostic = new_logs.pop()
+        assert str(diagnostic) in proc.stderr
+        assert diagnostic.stat().st_mode & 0o777 == 0o600
+        assert diagnostic.read_text() == f"\nrelease={rel.id} bootstrap status\n{detail}"
+        assert detail.strip() not in proc.stdout + proc.stderr
+        assert server.current_id() is None
+        assert not server.calls_for(rel.id, "up") and not server.calls_for(rel.id, "prepare")
+        assert not server.accepted()
+        for path, content in previous_logs.items():
+            assert path.read_text() == content
+        previous_logs[diagnostic] = diagnostic.read_text()
+
+
+def test_probe_stderr_does_not_corrupt_ready_json(server, make_release):
+    rel = make_release()
+    detail = "compose progress on stderr\n"
+    server.set_bootstrap("status", {"rc": 0, "json": status_json(), "stderr": detail})
     proc = deploy(server, rel)
-    assert proc.returncode == 4 and "探测失败" in proc.stderr
-    assert server.current_id() is None and not server.calls_for(rel.id, "up")
+    assert proc.returncode == 0, proc.stderr
+    assert server.current_id() == rel.id and server.kinds() == ["auto"]
+    logs = list((server.base / "state").glob("bootstrap-*.log"))
+    assert len(logs) == 1 and detail in logs[0].read_text()
+    assert detail.strip() not in proc.stdout + proc.stderr
 
 
 @pytest.mark.parametrize("state,needle", [
@@ -463,19 +494,28 @@ def test_wget_probe_failure_restores_previous(server, make_release):
     assert server.kinds() == ["auto", "failed", "restored"]
 
 
-def test_restore_refused_when_previous_incompatible(server, make_release):
+@pytest.mark.parametrize("payload", [
+    {"rc": 0, "json": status_json("unknown_revision")},
+    {"rc": 1, "json": None, "stderr": "previous release connection failed\n"},
+])
+def test_restore_refused_when_previous_incompatible(server, make_release, payload):
     rel1 = make_release(run_id=55)
     assert deploy(server, rel1).returncode == 0
     rel2 = make_release(run_id=56)
     server.set_scenario_field("up_fail_ids", [rel2.id])
-    server.set_bootstrap("status", {"rc": 0, "json": status_json("unknown_revision")},
-                         release=rel1.id)                  # 上一发布对当前 DB 已不兼容
+    server.set_bootstrap("status", payload, release=rel1.id)
     up_calls_before = len(server.calls_for(rel1.id, "up"))
     proc = deploy(server, rel2, expect="55.1")
     assert proc.returncode == 5 and "不自动恢复" in proc.stderr
     assert server.current_id() == rel2.id                  # 不翻转，现场保留
     assert server.kinds() == ["auto", "failed"]
     assert len(server.calls_for(rel1.id, "up")) == up_calls_before   # 拒绝恢复未触碰上一发布栈
+    logs = list((server.base / "state").glob(f"bootstrap-deploy-{rel2.id}.*.log"))
+    assert len(logs) == 1 and str(logs[0]) in proc.stderr
+    content = logs[0].read_text()
+    assert f"release={rel2.id} bootstrap status" in content
+    assert f"release={rel1.id} bootstrap status" in content
+    assert payload.get("stderr", "") in content
 
 
 def test_restore_also_failing_keeps_both_scenes(server, make_release):
@@ -591,6 +631,24 @@ def test_migrate_prepare_failure_preserves_scene_without_rollback(server, make_r
     records = list((server.base / "state" / "migrate").glob("*.json"))
     assert len(records) == 1                               # DDL 前记录仍在，供人工恢复
     assert not server.accepted()
+
+
+def test_migrate_check_failure_keeps_diagnostics_without_rollback(server, make_release):
+    rel = make_release()
+    server.set_bootstrap("status", {"rc": 0, "json": status_json("migration_required")})
+    detail = "post-migration check connection failed\n"
+    server.set_bootstrap("check_after_prepare", {"rc": 2, "json": None, "stderr": detail})
+    proc = deploy(server, rel, mode="migrate", extra=("--expect-state", LIVE_FP))
+    assert proc.returncode == 6 and "不自动回退" in proc.stderr
+    logs = list((server.base / "state").glob("bootstrap-*.log"))
+    assert len(logs) == 1 and str(logs[0]) in proc.stderr
+    content = logs[0].read_text()
+    assert f"release={rel.id} bootstrap status" in content
+    assert f"release={rel.id} bootstrap check\n{detail}" in content
+    assert detail.strip() not in proc.stdout + proc.stderr
+    assert len(list((server.base / "state" / "migrate").glob("*.json"))) == 1
+    assert not server.calls_for(rel.id, "up")
+    assert server.current_id() is None and not server.accepted()
 
 
 def test_migrate_probe_failure_never_rolls_back_image(server, make_release):

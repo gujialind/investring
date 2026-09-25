@@ -117,7 +117,7 @@ jobs:
           rm -rf frontend/e2e
           git checkout "${{ github.event.pull_request.base.sha }}" -- frontend/e2e
 
-      # ---- 后端：建库 → 迁移 → seed → 启动（生产启动顺序：create_all 由 main.py import 期完成）----
+      # ---- 后端：建库 → bootstrap prepare → seed → 启动 ----
       - name: Setup Python 3.12
         uses: actions/setup-python@v7
         with:
@@ -138,8 +138,7 @@ jobs:
       # 建号。口令与用户名同值——这是每次 run 新建、只对 runner 回环暴露的一次性服务容器，
       # 不构成秘密（root 口令本就写在本 job 的 service 定义里）。权限清单以
       # scripts/tests/test_ci_mysql_account.py 的 REQUIRED_PRIVILEGES 为准，逐条对应本 job 的
-      # 真实用法：create_all + alembic upgrade head 建删表与索引（本步之后跑一遍，Start backend
-      # 时 main.py:30 的 import 期 create_all 与 :47 的 lifespan upgrade head 再各跑一遍），
+      # 真实用法：bootstrap prepare 显式执行 create_all + alembic upgrade head，Start backend 不重复 DDL。
       # ALTER 另覆盖迁移 0015 的 ALTER DATABASE，REFERENCES 是建外键时父表上的必需权限。
       # 本 job 没有 drop_all、也没有 downgrade，那份清单对它只是上界——与 backend-test-mysql
       # 共用一份、不分叉，是 #548 的决策（判据抄两份就必然漂移）。

@@ -153,11 +153,12 @@ def test_existing_out_dir_refuses_overwrite(make_bundle, tmp_path):
     (lambda r: r["bootstrap"].update(migration_fingerprint=""), "migration_fingerprint"),
     (lambda r: r["bootstrap"].update(expected_heads=[]), "expected_heads"),
 ])
-def test_build_rejects_bad_smoke_report(make_bundle, mutate, message):
+def test_build_rejects_bad_smoke_report(make_bundle, mutate, message, capsys):
     report = report_payload()
     mutate(report)
     rc, _, _ = make_bundle(report=report)
     assert rc == 2
+    assert message in capsys.readouterr().err
 
 
 def test_build_rejects_bad_arguments(make_bundle, tmp_path, root):

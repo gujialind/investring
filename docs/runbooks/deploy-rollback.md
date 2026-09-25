@@ -131,6 +131,7 @@ CD 不构建（消费 CI `image-smoke` 产出并经 `release_bundle.py verify` �
 - **激活后失败统一处理**（exit 5）：先落 `failed` 记录并打 `.deploy-failed` 现场标记；仅当**数据库未被本次动作改变**且上一发布对当前 DB 探出 `ready` 时，才恢复整包并重新三路探活（`restored`）；恢复条件不成立或恢复也失败时保留现场（`restore-failed`），不盲翻。DB 已迁移后禁止自动回退镜像。
 - **记录与旧任务拒绝**：`state/accepted-releases.log` 追加式（tsv：ts/kind/release/sha/run/attempt），手动回滚**不降级** auto 记录；`state/last-known-good` 仅在探活通过后推进。auto 部署在 workflow 侧验证主线祖先关系（`deploy_ancestry.py`，docs-only 提交推进 main 不误挡），并在锁内重读记录比对 `--expect-accepted` 快照——排队期间被更新任务插队的旧部署按 exit 3 拒绝。
 - **秘密与证书永不进发布链**：`.env` 与 `certbot/www` 由服务器人工维护，发布目录只建符号链接；CD 不复制、不回滚、不重建它们。清理或打标记失败不撤回已健康的部署（只警告）。
+- **探测诊断**：bootstrap status/check 的 Compose 与进程 stderr 保存在服务器 `state/bootstrap-<action>-<release-id>.*.log`，每次执行独立建文件（0600，仅部署用户可读写），按目标发布与子命令分段追加；探测失败消息引用路径，不把原文转发到 CI。经授权登录服务器查阅，分享前先脱敏；重试不覆盖旧日志，故障处理后由部署用户按需清理。
 
 自动化不证明的部分：`ready` 与指纹一致只覆盖 schema/迁移内容，不证明业务数据向后兼容；跨不可逆迁移（§4.3）的版本回退仍然只能人工前滚或走 RDS 快照。
 

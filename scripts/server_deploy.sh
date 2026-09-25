@@ -3,7 +3,7 @@
 # InvestRing 单用途生产部署脚本（issue #537 第四批 C/D）
 # ============================================================================
 # 只被 CD workflow 经 SSH 调用；服务器端仅依赖 bash/docker/compose/flock/
-# sha256sum/curl/awk/sed，不依赖 Python。所有决策输入（发布包、期望记录、
+# sha256sum/curl/awk/sed/mktemp，不依赖 Python。所有决策输入（发布包、期望记录、
 # 迁移授权指纹）都由调用方显式传入并在锁内重验——本脚本不猜、不回退到默认值。
 #
 # 目录约定（--base，默认 /opt/investring）：
@@ -78,6 +78,7 @@ RELEASES="$BASE/releases"
 LOCK="$STATE/deploy.lock"
 ACCEPTED_LOG="$STATE/accepted-releases.log"
 LKG="$STATE/last-known-good"
+BOOTSTRAP_LOG=""
 
 release_dir() { printf '%s/%s' "$RELEASES" "$1"; }
 
@@ -91,8 +92,9 @@ compose() {
 # 只取 stdout 中最后一行完整 JSON，滤掉 compose 自身的进度输出。
 bootstrap_json() {
     local dir="$1"; shift
+    printf '\nrelease=%s bootstrap %s\n' "$(basename "$dir")" "$*" >> "$BOOTSTRAP_LOG"
     compose "$dir" run --rm --no-deps -T backend python -m app.bootstrap "$@" \
-        2>/dev/null | grep -E '^\{.*\}$' | tail -1 || true
+        2>>"$BOOTSTRAP_LOG" | grep -E '^\{.*\}$' | tail -1 || true
 }
 
 json_field() { # 单行 JSON 的字符串字段提取；键带引号定界，避免子串误配
@@ -120,6 +122,9 @@ acquire_lock() {
     [ -n "$EXPECT_ACCEPTED" ] || die 2 "缺少 --expect-accepted（旧任务判据不可省略）"
     [ "$now" = "$EXPECT_ACCEPTED" ] \
         || die 3 "已接受发布记录已变化（期望 $EXPECT_ACCEPTED，实际 $now）；本任务是旧任务，拒绝执行"
+    # 原始 stderr 可能含敏感信息；mktemp 创建 0600 文件，不将内容转发到 CI。
+    BOOTSTRAP_LOG="$(mktemp "$STATE/bootstrap-$MODE-$RELEASE_ID.XXXXXX.log")" \
+        || die 2 "无法创建 bootstrap 诊断日志；停止部署"
 }
 
 verify_manifest() {
@@ -198,7 +203,7 @@ preflight_db() {
     local dir="$1" status state live_fp bundle_fp
     status="$(bootstrap_json "$dir" status)"
     if [ -z "$status" ]; then
-        die 4 "DB 状态探测失败（无输出）；未知状态不部署，请人工检查后重试"
+        die 4 "DB 状态探测失败（无输出）；未知状态不部署，请人工检查后重试。诊断日志: $BOOTSTRAP_LOG"
     fi
     state="$(json_field state "$status")"
     bundle_fp="$(sed -n 's/^ *"migration_fingerprint": "\([^"]*\)".*/\1/p' "$dir/bundle.json")"
@@ -210,7 +215,7 @@ preflight_db() {
         unknown_revision)
             die 4 "数据库含未知 alembic revision；禁止自动初始化/迁移/回退，按 runbook 人工决策" ;;
         *)
-            die 4 "DB 状态未知（state=${state:-<解析失败>}）；不部署。探测输出: $status" ;;
+            die 4 "DB 状态未知（state=${state:-<解析失败>}）；不部署。探测输出: $status。诊断日志: $BOOTSTRAP_LOG" ;;
     esac
     live_fp="$(json_field migration_fingerprint "$status")"
     [ "$live_fp" = "$bundle_fp" ] \
@@ -295,7 +300,7 @@ fail_after_activate() {
     local prev_state
     prev_state="$(json_field state "$(bootstrap_json "$prev_dir" status)")"
     if [ "$prev_state" != "ready" ]; then
-        warn "上一发布 $PREV_ID 对当前 DB 不兼容（state=${prev_state:-<探测失败>}）；不自动恢复，现场保留"
+        warn "上一发布 $PREV_ID 对当前 DB 不兼容（state=${prev_state:-<探测失败>}）；不自动恢复，现场保留。诊断日志: $BOOTSTRAP_LOG"
         exit 5
     fi
     warn "恢复上一发布: $PREV_ID"
@@ -412,15 +417,15 @@ case "$MODE" in
         pull_images "$local_dir"
         # 锁内重验授权：实际 DB 状态必须仍等于授权时声明的指纹（prepare 内还会再验一次）
         status_json="$(bootstrap_json "$local_dir" status)"
-        [ -n "$status_json" ] || die 4 "DB 状态探测失败；授权指纹无法重验，不执行 DDL"
+        [ -n "$status_json" ] || die 4 "DB 状态探测失败；授权指纹无法重验，不执行 DDL。诊断日志: $BOOTSTRAP_LOG"
         live_fp="$(json_field fingerprint "$status_json")"
         live_state="$(json_field state "$status_json")"
         [ "$live_fp" = "$EXPECT_STATE" ] \
-            || die 4 "DB 状态已变化（授权 $EXPECT_STATE ≠ 实际 ${live_fp:-<无>}）；请重新取 status 并重新授权"
+            || die 4 "DB 状态已变化（授权 $EXPECT_STATE ≠ 实际 ${live_fp:-<无>}）；请重新取 status 并重新授权。诊断日志: $BOOTSTRAP_LOG"
         case "$live_state" in
             ready) warn "DB 已是 ready；prepare 仍将执行（幂等），确认这是有意的重跑" ;;
             unknown_revision|error)
-                die 4 "state=$live_state；未知/错误状态禁止迁移，按 runbook 人工决策" ;;
+                die 4 "state=$live_state；未知/错误状态禁止迁移，按 runbook 人工决策。诊断日志: $BOOTSTRAP_LOG" ;;
         esac
         # DDL 开始前持久记录：部分失败时这是人工恢复的唯一可靠起点
         mkdir -p "$STATE/migrate"
@@ -441,7 +446,7 @@ case "$MODE" in
         fi
         if ! bootstrap_json "$local_dir" check | grep -q '"state": "ready"'; then
             DB_CHANGED=1
-            warn "迁移后 check 未达 ready；不自动回退，人工按 $record_file 处置"
+            warn "迁移后 check 未达 ready；不自动回退，人工按 $record_file 处置。诊断日志: $BOOTSTRAP_LOG"
             exit 6
         fi
         DB_CHANGED=1
