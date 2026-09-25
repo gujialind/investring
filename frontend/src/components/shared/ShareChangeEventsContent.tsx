@@ -618,16 +618,17 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                 <Table className={cn(isFetching && "opacity-50")}>
                   <TableHeader>
                     <TableRow>
-                      {/* 纯 CJK 列无拉丁最小宽度，窄表下会被压成一字宽竖排（#355 同族），nowrap 后溢出走横向滚动 */}
+                      {/* 纯 CJK 列无拉丁最小宽度，窄表（含空表仅表头）下会被压成一字宽竖排（#355 同族），
+                          表头统一 nowrap 后溢出走横向滚动 */}
                       <TableHead className="whitespace-nowrap">事件类型</TableHead>
-                      <TableHead>产品</TableHead>
-                      <TableHead>平台</TableHead>
-                      <TableHead>权益登记/除息日</TableHead>
+                      <TableHead className="whitespace-nowrap">产品</TableHead>
+                      <TableHead className="whitespace-nowrap">平台</TableHead>
+                      <TableHead className="whitespace-nowrap">权益登记/除息日</TableHead>
                       <TableHead className="whitespace-nowrap">现金到账日</TableHead>
-                      <TableHead className="number-cell">份额变化</TableHead>
-                      <TableHead className="number-cell">现金变化</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>操作</TableHead>
+                      <TableHead className="number-cell whitespace-nowrap">份额变化</TableHead>
+                      <TableHead className="number-cell whitespace-nowrap">现金变化</TableHead>
+                      <TableHead className="whitespace-nowrap">状态</TableHead>
+                      <TableHead className="whitespace-nowrap">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
