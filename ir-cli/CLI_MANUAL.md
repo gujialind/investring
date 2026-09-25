@@ -152,7 +152,7 @@ ir schema trade              # 仅输出指定命令组
 | `INVALID_CONFIRM_DAYS` | confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；返回 422 |
 | `DIMENSION_VALUE_IN_USE` | 维度值关联仍被产品引用，不可移除（`details.products` 列引用产品） |
 | `DIMENSION_RULE_CONFLICT` | 维度规则收紧与存量产品冲突（`details.products` 列冲突产品） |
-| `CONFIRM_REQUIRED` | 需要显式确认（如 `--yes`） |
+| `CONFIRM_REQUIRED` | 需要显式确认（当前仅 `ir snapshot delete-bulk` 产出：真删除需 `--yes`，可先 `--dry-run` 预览） |
 
 ### 3.4 数据类型说明
 
@@ -280,12 +280,8 @@ ir investor update <CODE> [--name <姓名>] [--role <角色>] [--phone <手机>]
 删除投资人。
 
 ```bash
-ir investor delete <CODE> [--yes]
+ir investor delete <CODE>
 ```
-
-| 参数 | 默认值 | 说明 |
-|------|:------:|------|
-| `--yes` | false | 跳过确认提示 |
 
 > **约束**：投资人仍持有份额（`InvestorHolding.shares > 0`）时禁止删除。
 
@@ -345,7 +341,7 @@ ir portfolio update <CODE> [--name <名称>] [--description <描述>] [--display
 关闭组合。
 
 ```bash
-ir portfolio close <CODE> [--yes]
+ir portfolio close <CODE>
 ```
 
 > **约束**：存在 pending 状态的申购/赎回或调仓交易时禁止关闭。
@@ -841,7 +837,7 @@ ir share-event update <ID> [--ex-date YYYY-MM-DD] [--entitlement-shares N] [--ra
 删除事件。
 
 ```bash
-ir share-event delete <ID> [--yes]
+ir share-event delete <ID>
 ```
 
 #### `ir share-event confirm`
@@ -1021,7 +1017,7 @@ ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [-
 删除产品。
 
 ```bash
-ir product delete <CODE> <MARKET> [--yes]
+ir product delete <CODE> <MARKET>
 ```
 
 ---
@@ -1065,7 +1061,7 @@ ir platform update <CODE> [--name <名称>] [--platform-type <类型>]
 删除平台。
 
 ```bash
-ir platform delete <CODE> [--yes]
+ir platform delete <CODE>
 ```
 
 ---
@@ -1155,7 +1151,7 @@ ir snapshot status <PORTFOLIO_CODE>
 删除指定日期的快照（包括持仓快照、净值快照、投资人持仓三类数据）。
 
 ```bash
-ir snapshot delete <PORTFOLIO_CODE> <SNAPSHOT_DATE> [--yes]
+ir snapshot delete <PORTFOLIO_CODE> <SNAPSHOT_DATE>
 ```
 
 #### `ir snapshot delete-bulk`
