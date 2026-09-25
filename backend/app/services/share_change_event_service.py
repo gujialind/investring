@@ -509,6 +509,17 @@ def _validate_event_dates(
         )
 
 
+def _validate_cash_pay_date(
+    event_type: str, ex_date: date, cash_pay_date: Optional[date]
+) -> None:
+    if cash_pay_date is None:
+        return
+    if event_type != "cash_dividend":
+        raise BusinessError("INVALID_PARAM", "仅现金分红可设置 cash_pay_date")
+    if cash_pay_date < ex_date:
+        raise BusinessError("INVALID_DATE_ORDER", "现金到账日不能早于除息日")
+
+
 def create_share_change_event(
     db: Session,
     *,
@@ -516,6 +527,7 @@ def create_share_change_event(
     event_type: str,
     ex_date: date,
     entitlement_date: date,
+    cash_pay_date: Optional[date] = None,
     product_code: Optional[str] = None,
     market: Optional[str] = None,
     platform_code: Optional[str] = None,
@@ -540,6 +552,7 @@ def create_share_change_event(
     if not product_code:
         raise BusinessError("PRODUCT_REQUIRED", "份额变动事件必须指定 product_code")
     _validate_event_dates(db, portfolio_code, ex_date, entitlement_date)
+    _validate_cash_pay_date(event_type, ex_date, cash_pay_date)
 
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
@@ -606,6 +619,7 @@ def create_share_change_event(
         event_type=event_type,
         ex_date=ex_date,
         entitlement_date=entitlement_date,
+        cash_pay_date=cash_pay_date,
         platform_code=platform_code,
         # 用户直填的份额类字段统一量化到 2 位（cash_change 是金额不量化）
         entitlement_shares=quantize_shares(entitlement_shares),
@@ -638,6 +652,7 @@ def create_share_change_event(
             "event_type": event_type,
             "ex_date": ex_date,
             "entitlement_date": entitlement_date,
+            "cash_pay_date": cash_pay_date,
             "platform_code": platform_code,
             "shares_change": new_event.shares_change,
             "cash_change": new_event.cash_change,
@@ -672,18 +687,21 @@ def update_share_change_event(
         updates,
         allow={
             "shares_before", "shares_change", "shares_after", "cash_change",
-            "div_cash", "reinvest_nav", "ratio", "notes",
+            "div_cash", "reinvest_nav", "ratio", "notes", "cash_pay_date",
         },
     )
 
+    effective_ex_date = updates.get("ex_date", event.ex_date)
     if updates.keys() & {"ex_date", "entitlement_date"}:
-        effective_ex_date = updates.get("ex_date", event.ex_date)
         effective_entitlement_date = updates.get(
             "entitlement_date", event.entitlement_date
         )
         _validate_event_dates(
             db, event.portfolio_code, effective_ex_date, effective_entitlement_date
         )
+    _validate_cash_pay_date(
+        event.event_type, effective_ex_date, updates.get("cash_pay_date", event.cash_pay_date)
+    )
 
     # issue #279：按合并后值校验（event_type/product_code 不可改，恒取事件现值），
     # 封死 PUT 改成双空或为现金型产品补填份额变动的绕过路径

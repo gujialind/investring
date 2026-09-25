@@ -7,6 +7,7 @@ export interface ShareChangeEvent {
   event_type: EventType;
   ex_date: string;
   entitlement_date: string;
+  cash_pay_date?: string | null;
   platform_code?: string;
   parent_event_id?: number;
   product_code?: string;
@@ -35,6 +36,7 @@ export interface ShareChangeEventCreate {
   event_type: EventType;
   ex_date: string;
   entitlement_date: string;
+  cash_pay_date?: string | null;
   platform_code?: string;
   parent_event_id?: number;
   product_code?: string;
@@ -56,6 +58,7 @@ export interface ShareChangeEventCreate {
 export interface ShareChangeEventUpdate {
   ex_date?: string;
   entitlement_date?: string;
+  cash_pay_date?: string | null;
   shares_before?: number;
   shares_change?: number;
   shares_after?: number;

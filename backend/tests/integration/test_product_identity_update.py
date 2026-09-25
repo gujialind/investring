@@ -78,11 +78,12 @@ class TestProductTypeUpdate:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_PRODUCT_TYPE"
 
-    def test_update_virtual_product_type_rejected(self, test_db):
-        """系统虚拟产品 CASH 禁改 product_type（service 层直测：market='' 无 REST 路径）"""
+    @pytest.mark.parametrize("code", ["CASH", "IN_TRANSIT_DIVIDEND"])
+    def test_update_virtual_product_type_rejected(self, test_db, code):
+        """系统虚拟产品禁改 product_type（market=''，service 层直测）。"""
         with pytest.raises(BusinessError) as exc:
             product_service.update_product(
-                test_db, code="CASH", market="",
+                test_db, code=code, market="",
                 updates={"product_type": "OEF"},
             )
         assert exc.value.code == "SYSTEM_PRODUCT_PROTECTED"
@@ -313,11 +314,12 @@ class TestMarketUpdate:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_MARKET"
 
-    def test_update_virtual_product_market_rejected(self, test_db):
+    @pytest.mark.parametrize("code", ["IN_TRANSIT_BUY", "IN_TRANSIT_DIVIDEND"])
+    def test_update_virtual_product_market_rejected(self, test_db, code):
         """系统虚拟产品禁改 market（service 层直测）"""
         with pytest.raises(BusinessError) as exc:
             product_service.update_product(
-                test_db, code="IN_TRANSIT_BUY", market="",
+                test_db, code=code, market="",
                 updates={"market": "CN_OTC"},
             )
         assert exc.value.code == "SYSTEM_PRODUCT_PROTECTED"

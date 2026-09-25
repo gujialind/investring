@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Loader2 } from "lucide-react";
-import { toDateOnly, parseDateOnly, formatMarketName, formatProductName } from "@/lib/utils";
+import { toDateOnly, parseDateOnly, formatDate, formatMarketName, formatProductName } from "@/lib/utils";
 import type { ShareChangeEvent, ShareChangeEventUpdate } from "@/types/share-change-event";
 import { EVENT_TYPE_LABELS } from "@/components/shared/event-confirm-dialog";
 
@@ -35,6 +35,7 @@ interface EventEditDialogProps {
 interface EditFormState {
   ex_date: string;
   entitlement_date: string;
+  cash_pay_date: string;
   shares_before: string;
   shares_change: string;
   shares_after: string;
@@ -51,6 +52,7 @@ function toForm(event: ShareChangeEvent): EditFormState {
   return {
     ex_date: event.ex_date,
     entitlement_date: event.entitlement_date,
+    cash_pay_date: event.cash_pay_date ?? "",
     shares_before: numToStr(event.shares_before),
     shares_change: numToStr(event.shares_change),
     shares_after: numToStr(event.shares_after),
@@ -94,12 +96,15 @@ export function EventEditDialog({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // 仅组装非空数字字段（后端 exclude_unset 语义，空串不入 payload 避免误清）；
-    // 两个日期恒带；notes 恒带（空串可清空备注）
+    // 登记/除息日期恒带；notes 恒带（空串可清空备注）
     const payload: ShareChangeEventUpdate = {
       ex_date: form.ex_date,
       entitlement_date: form.entitlement_date,
       notes: form.notes,
     };
+    if (event.event_type === "cash_dividend") {
+      payload.cash_pay_date = form.cash_pay_date || null;
+    }
     for (const field of NUM_FIELDS) {
       const raw = form[field].trim();
       if (raw !== "") payload[field] = parseFloat(raw);
@@ -164,6 +169,22 @@ export function EventEditDialog({
                 />
               </div>
             </div>
+
+            {event.event_type === "cash_dividend" && (
+              <div className="space-y-2" data-testid="cash-pay-date-field">
+                <Label htmlFor="edit_cash_pay_date">现金到账日（可选）</Label>
+                <DatePicker
+                  id="edit_cash_pay_date"
+                  date={parseDateOnly(form.cash_pay_date)}
+                  onSelect={(date) => setField({ cash_pay_date: toDateOnly(date) })}
+                  placeholder="默认除息日"
+                />
+                <p className="text-xs text-muted-foreground">
+                  有效到账日：{formatDate(form.cash_pay_date || form.ex_date)}
+                  {!form.cash_pay_date && "（默认除息日）"}。清空后按除息日到账；可选非交易日，不得早于除息日。
+                </p>
+              </div>
+            )}
 
             {/* 按事件类型渲染可编辑数值字段（镜像新建弹窗字段集） */}
             {(event.event_type === "cash_dividend" || event.event_type === "reinvest_dividend") && (

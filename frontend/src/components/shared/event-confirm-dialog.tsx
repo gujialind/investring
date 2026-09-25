@@ -58,7 +58,7 @@ export function EventConfirmDialog({
       open={open}
       onOpenChange={onOpenChange}
       title="确认份额变动事件"
-      description="请核对以下信息与预览值，确认后将生效"
+      description="请核对以下信息与预览值，确认后按对应日期生效"
       isLoading={isLoading || isFetching}
       error={error ? getErrorMessage(error, "预览请求失败") : null}
       onConfirm={onConfirm}
@@ -81,6 +81,19 @@ export function EventConfirmDialog({
           <InfoRow label="现金变化" value={formatCurrency(preview.cash_change)} />
           <InfoRow label="权益登记日" value={formatDate(event.entitlement_date)} />
           <InfoRow label="除息日" value={formatDate(event.ex_date)} />
+          {event.event_type === "cash_dividend" && (
+            <InfoRow
+              label="现金到账日"
+              value={
+                <>
+                  <span className="whitespace-nowrap">{formatDate(event.cash_pay_date ?? event.ex_date)}</span>
+                  {event.cash_pay_date == null && (
+                    <span className="ml-1 text-xs text-muted-foreground">（默认除息日）</span>
+                  )}
+                </>
+              }
+            />
+          )}
         </>
       )}
     </ConfirmInfoDialog>

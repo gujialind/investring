@@ -249,7 +249,8 @@ test.describe('移动端份额变动事件页（#276）', () => {
         .filter({ hasText: divEvent.product_code })
         .filter({ hasText: '现金分红' })
         .first();
-      await expect(divRow.getByText('--')).toHaveCount(2);
+      await expect(divRow.getByTestId('event-shares-change')).toHaveText('--');
+      await expect(divRow.getByTestId('event-cash-change')).toHaveText('--');
 
       // 确认弹窗：拉取 /preview 展示预期变动量（修复前这两个位置恒为 0.00 / ¥0.00）
       await row.locator('button[title="确认"]').click();

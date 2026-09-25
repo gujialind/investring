@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, Text, Numeric, Date, DateTime, Integer, ForeignKey, ForeignKeyConstraint, func
+from sqlalchemy import Column, String, Text, Numeric, Date, DateTime, Integer, ForeignKey, ForeignKeyConstraint, case, func
+from sqlalchemy.ext.hybrid import hybrid_property
 from app.models.base import Base
 
 
@@ -12,6 +13,7 @@ class ShareChangeEvent(Base):
     event_type = Column(String(30), nullable=False)
     ex_date = Column(Date, nullable=False)
     entitlement_date = Column(Date, nullable=False)
+    cash_pay_date = Column(Date, nullable=True)
     platform_code = Column(String(20), ForeignKey("platform.code"), nullable=True)
     parent_event_id = Column(Integer, ForeignKey("share_change_event.id"), nullable=True)
     event_source = Column(String(20), nullable=False)
@@ -29,6 +31,19 @@ class ShareChangeEvent(Base):
     notes = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     confirmed_at = Column(DateTime)
+
+    @hybrid_property
+    def cash_effective_date(self):
+        if self.event_type == "cash_dividend" and self.cash_pay_date:
+            return self.cash_pay_date
+        return self.ex_date
+
+    @cash_effective_date.expression
+    def cash_effective_date(cls):
+        return case(
+            (cls.event_type == "cash_dividend", func.coalesce(cls.cash_pay_date, cls.ex_date)),
+            else_=cls.ex_date,
+        )
 
     __table_args__ = (
         ForeignKeyConstraint(

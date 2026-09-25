@@ -265,7 +265,11 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
 
     // #343 双保险：基金级事件不渲染平台选择器，空串归一为 undefined 再提交
     //（后端 service 同口径归一，此处仅避免无效载荷）
-    submitCreate({ ...formData, platform_code: formData.platform_code || undefined });
+    submitCreate({
+      ...formData,
+      platform_code: formData.platform_code || undefined,
+      cash_pay_date: formData.event_type === "cash_dividend" ? formData.cash_pay_date : undefined,
+    });
   };
 
   // 筛选栏控件（visual-spec §9）：顺序 = 除息日区间 → 状态 → 事件类型 → 产品 → 平台；
@@ -388,9 +392,13 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                     <Label htmlFor="event_type">事件类型</Label>
                     <Select
                       value={formData.event_type}
-                      onValueChange={(value) => setFormData({ ...formData, event_type: value as EventType })}
+                      onValueChange={(value) => setFormData({
+                        ...formData,
+                        event_type: value as EventType,
+                        cash_pay_date: undefined,
+                      })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger id="event_type">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -460,6 +468,22 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                     />
                   </div>
                 </div>
+
+                {formData.event_type === "cash_dividend" && (
+                  <div className="space-y-2" data-testid="cash-pay-date-field">
+                    <Label htmlFor="cash_pay_date">现金到账日（可选）</Label>
+                    <DatePicker
+                      id="cash_pay_date"
+                      date={parseDateOnly(formData.cash_pay_date ?? "")}
+                      onSelect={(date) => setFormData({ ...formData, cash_pay_date: date ? toDateOnly(date) : undefined })}
+                      placeholder="默认除息日"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      有效到账日：{formatDate(formData.cash_pay_date ?? formData.ex_date)}
+                      {formData.cash_pay_date == null && "（默认除息日）"}。可选非交易日，不得早于除息日；到账前计入在途，不计可用现金。
+                    </p>
+                  </div>
+                )}
 
                 {/* 根据事件类型显示不同字段 */}
                 {(formData.event_type === "cash_dividend" || formData.event_type === "reinvest_dividend") && (
@@ -594,10 +618,12 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                 <Table className={cn(isFetching && "opacity-50")}>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>事件类型</TableHead>
+                      {/* 纯 CJK 列无拉丁最小宽度，窄表下会被压成一字宽竖排（#355 同族），nowrap 后溢出走横向滚动 */}
+                      <TableHead className="whitespace-nowrap">事件类型</TableHead>
                       <TableHead>产品</TableHead>
                       <TableHead>平台</TableHead>
                       <TableHead>权益登记/除息日</TableHead>
+                      <TableHead className="whitespace-nowrap">现金到账日</TableHead>
                       <TableHead className="number-cell">份额变化</TableHead>
                       <TableHead className="number-cell">现金变化</TableHead>
                       <TableHead>状态</TableHead>
@@ -607,7 +633,9 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                   <TableBody>
                     {events.map((event) => (
                       <TableRow key={event.id}>
-                        <TableCell>{EVENT_TYPE_LABELS[event.event_type] || event.event_type}</TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          {EVENT_TYPE_LABELS[event.event_type] || event.event_type}
+                        </TableCell>
                         <TableCell>
                           {event.product_code ? (
                             <ProductCell
@@ -635,14 +663,22 @@ export default function ShareChangeEventsContent({ basePath, variant = "desktop"
                             bottomValue={formatDate(event.ex_date)}
                           />
                         </TableCell>
-                        <TableCell className="number-cell">
+                        <TableCell data-testid="event-cash-pay-date">
+                          <div className="whitespace-nowrap text-sm" title="现金到账日">
+                            {formatDate(event.event_type === "cash_dividend" ? event.cash_pay_date ?? event.ex_date : "")}
+                          </div>
+                          {event.event_type === "cash_dividend" && event.cash_pay_date == null && (
+                            <div className="whitespace-nowrap text-xs text-muted-foreground">默认除息日</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="number-cell" data-testid="event-shares-change">
                           {/* #424：自动计算型事件 pending 阶段两列为 NULL（confirm 时才计算
                               落库），NULL 由 formatter 兜底为 `--`，不显示误导性的 0.00；
                               forced_adjustment 的用户直填值在 pending 行照常显示（#460 评审），
                               自动计算型的预览值在确认弹窗内展示 */}
                           {formatSharesUnit(event.shares_change)}
                         </TableCell>
-                        <TableCell className="number-cell">
+                        <TableCell className="number-cell" data-testid="event-cash-change">
                           {formatCurrency(event.cash_change)}
                         </TableCell>
                         <TableCell>

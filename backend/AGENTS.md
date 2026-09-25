@@ -59,7 +59,7 @@
 * **`subscription_service.py`**：定价见[申赎](../docs/reference/business-constraints.md#rule-subscription)，激活见[组合管理](../docs/reference/business-constraints.md#rule-portfolio)。unconfirm 重算期望 confirm_date 而非置 None，防 SQL NULL 比较漏过 pending 检查。
   - 不恢复申购 unconfirm 前的现金守卫（#203：曾阻断快照级联产生孤儿），消费点防线见[生命周期](../docs/reference/business-constraints.md#rule-lifecycle)；存量负现金经 status 的 negative_cash_platforms 暴露。
 
-其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现。其他服务职责读各文件 docstring。
+其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现；`cumulative_profit_service.py`（#598 三粒度累计收益，只读、无接口/页面接入，公式见[累计收益](../docs/reference/business-constraints.md#rule-cumulative-profit)，与持仓列表旧 `profit_loss` 并存不替换）。其他服务职责读各文件 docstring。
 
 * **精度入口 [quantize.py](app/utils/quantize.py)**：规则与产生点统一见[数值口径](../docs/reference/business-constraints.md#rule-precision)。守门为 `test_quantize.py::TestQuantizeNav` / `TestAmountToSharesTwoStepQuantization`、`test_snapshot_service.py::TestValueSnapshotFourDecimalRounding` 与 `test_trades_validation_preview.py::TestTradePreview` 的四位边界用例；它们区分 HALF_UP 与缺省 HALF_EVEN，不能换成非边界数字。`TestFinancialQuantizationGuard` 在六个核心财务模块默认禁止直接 `.quantize()` 与 `round()`——含属性形式（`builtins.round()`、其别名、`np.round()`、`Series.round()`，不白名单接收者）、模块级调用与嵌套/异步函数（#590 收紧：新增未登记函数直接舍入即失败，不再依赖「登记产生点」圈定禁止范围）；读侧统计舍入（float 序列化展示）仅按「文件 + 限定函数」登记豁免（例外清单以 `test_quantize.py::_FINANCIAL_ROUND_EXCEPTIONS` 台账为准，代码用字面相等断言钉死），豁免限**函数体**及其嵌套函数——装饰器与默认值在定义处的外层作用求值、不在豁免内，豁免也不扩大为整文件、不豁免 `.quantize()`；例外函数更名/迁移或其子树内不再有直接豁免调用时按过期例外失败，父与嵌套子同时登记按无效台账失败（内层恒被外层遮蔽），空扫描不得通过。**不覆盖的形态**（AST `Call` 匹配的固有逃逸面，由 `test_known_escape_forms_are_not_covered` 钉成可见契约、扩展守卫时该用例翻红迫使有意识更新）：`functools.partial(round, …)`、`map(round, xs)`、f-string `f"{v:.2f}"`。ORM 成本价保持 Decimal，理由见[审计载荷](../docs/reference/logging.md#logging-audit)。
 
@@ -84,14 +84,14 @@
 
 * `portfolio_position` 有 CHECK 约束：`shares` 与 `cash_amount` 二者恰有其一（净值型 vs 非净值型）。
 
-* `share_change_event` 双日期分级：`ex_date`（除息日，应用日）+ `entitlement_date`（权益登记日，基数日），要求 `ex_date > entitlement_date` 且均为交易日；`parent_event_id` 为基金级拆分子记录自引用。
+* `share_change_event` 日期分工：`ex_date`（除息日，份额应用日）+ `entitlement_date`（权益登记日，基数日），要求 `ex_date > entitlement_date` 且均为交易日；可空 `cash_pay_date` 仅供现金分红到账（#522，允许非交易日），省略/清空与生效规则见[事件正文](../docs/reference/business-constraints.md#rule-event)。`parent_event_id` 为基金级拆分子记录自引用。
 
 * 外键删除行为均为 **RESTRICT**，通过业务流程（关闭/停用）管理生命周期，保留历史数据。
 
 * **外键的约束名以模型 `ForeignKey(name=...)` 为规范名**（#434）：MySQL **不做**「同表同列对指向同一目标」的重复外键去重，两条语义相同的约束会同时生效。历史事故正是两条路径各建一条并存在生产库 `nav_sync_detail.job_id` 上——`create_all` 建未命名 FK、MySQL 自动命名成 `nav_sync_detail_ibfk_2`，迁移 0001 又用 `op.create_foreign_key('fk_nav_sync_detail_job_id', …)` 显式建了一条；0001 里那句包着 `try/except: pass`（为兼容 `create_all` 已建表的新库），把「同语义约束已存在」吞掉、没暴露成错误，于是生产（先建表、后跑迁移的历史顺序）两条都留下了。**危害不在冗余本身，而在后续迁移的静默前提失真**：按显式名 `DROP FOREIGN KEY` 只删掉一条，另一条继续强制外键语义，迁移作者会在「外键已解除」的错误前提下改列。故**新加外键一律显式 `name=`**，且与任何迁移里 `create_foreign_key` 用的名字一致；迁移 0001 已在所有环境执行过、**刻意不改**（改它会让「跑过旧 0001 的库」与「跑过新 0001 的库」落到不同状态），存量收敛交给迁移 0016。
   - **迁移 0016**（`down_revision = '0015'`）把 `nav_sync_detail.job_id` 收敛到「恰好一条、名为 `fk_nav_sync_detail_job_id`」，三条分支：已是目标态 → 空转（全新库路径 `create_all` 已按模型显式名建出唯一一条）；两条并存（生产现状）→ **只多删**冗余那条、好的那条全程不碰；只有自动名 `*_ibfk_N`（#433 之前建的旧库）→ 拆掉重建为显式名（避免各环境外键名长期分叉，也让 `0001.downgrade()` 在这些库上可用）。**downgrade 刻意 no-op**（与 0013 同型）：逆操作是把语义完全相同的冗余约束加回来，不恢复任何功能、只会把同一个陷阱重新埋进库，且 `ci.yml` 的 `alembic downgrade -1` 是真实路径、不能 raise。两条外键的 `ON DELETE`/`ON UPDATE` 规则不一致时**响亮失败**（`RuntimeError`）、绝不静默挑一条——误删一条外键 = 静默丢掉一层约束语义。全库另有只读哨兵：发现**别的**列对也重复时只打 WARNING、不自动处置（同列对重复本身不足以判定该保留哪条）。守门：`tests/unit/test_migration_0016.py`（`TARGET_FK` 与模型 `name=` 绑死、迁移冻结不 import 模型、纯字符串 DDL、SQLite no-op、MySQL 上三种起始态各自收敛且越界插入仍被拒）。
 
-* **虚拟产品**（#93）：除 `CASH`（生产为部署期种子落库）外，迁移 0006 另种子 `IN_TRANSIT_BUY` / `IN_TRANSIT_SELL`，与 CASH 同构（`market=""`、`product_type="IN_TRANSIT"`、`confirm_days=0`）；以 `product_code` 区分方向。维度标签（#128）：CASH 产品 `asset_class_code=ASSET_CASH`、其余四维 NULL；IN\_TRANSIT 五维全 NULL。
+* **虚拟产品**（#93/#522）：除 `CASH`（生产为部署期种子落库）外，迁移种子含 `IN_TRANSIT_BUY` / `IN_TRANSIT_SELL`（0006）及 `IN_TRANSIT_DIVIDEND`（#522），与 CASH 同构（`market=""`、`product_type="IN_TRANSIT"`、`confirm_days=0`）；以 `product_code` 区分买入/卖出/分红在途。维度标签（#128）：CASH 产品 `asset_class_code=ASSET_CASH`、其余四维 NULL；IN\_TRANSIT 五维全 NULL。计算与现金可用性见[现金账本](../docs/reference/business-constraints.md#rule-cash)。
 
 * `is_qdii` 已降级为**纯展示标签**、`nav_lag_days` 逐产品自设（业务语义见[产品规则](../docs/reference/business-constraints.md#rule-product)）。**回填口径**：迁移 `0012` 仅把场外 QDII 的 `nav_lag_days` 置 1，**港互认基金需由界面/CLI 手工设为 1**——运行期不按产品类型自动映射。
 
@@ -138,6 +138,7 @@ cd backend && pytest tests -q
   | --- | --- |
   | `snapshot_service.py`（生成/重算/级联回退） | `pytest tests/unit/test_snapshot_service.py tests/integration -q -k snapshot` |
   | `position_service.py`（可用现金/份额） | `pytest tests/unit/test_position_service.py tests/integration -q -k "position or in_transit or cash"` |
+  | `cumulative_profit_service.py`（累计收益读侧，#598） | `pytest tests/integration/test_cumulative_profits.py tests/unit/test_position_service.py -q` |
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | `cash_transfer_service.py`（跨天现金转移，两腿 Trade） | `pytest tests/integration/test_trades*.py tests/integration/test_cash_transfers*.py tests/integration/test_trade_cash_check.py -q` |
@@ -186,7 +187,7 @@ cd backend && pytest tests -q
 
 `tests/seed_base.py` 提供两个入口，改种子只改这一处：
 
-* **`seed_base_data(db)`**——基础数据：维度字典、适用关系、4 平台、9 产品（3 虚拟 + 6 业务）、交易日历（2025-01-01 起、终点滚动到 today + 1 年，见下）、draft 组合 `E2E_PORT`（零交易零快照）、ADMIN/admin@2026、VIEWER/viewer123。**三处消费**：pytest（conftest `_seed_base_data`）、CI E2E（`scripts/seed_e2e.py`）、本地 E2E（`scripts/run_e2e_backend.py`）。日历起点固定（存量测试大量依赖 2025 固定日期），终点以 `date.today() + 365 天` 滚动（#468），幂等守卫为**增量补尾**（表内有旧终点时从其后一天续写，不是表空才写）——本地复用库同样能延伸到新终点。
+* **`seed_base_data(db)`**——基础数据：维度字典、适用关系、4 平台、10 产品（4 虚拟 + 6 业务，含 #522 分红在途）、交易日历（2025-01-01 起、终点滚动到 today + 1 年，见下）、draft 组合 `E2E_PORT`（零交易零快照）、ADMIN/admin@2026、VIEWER/viewer123。**三处消费**：pytest（conftest `_seed_base_data`）、CI E2E（`scripts/seed_e2e.py`）、本地 E2E（`scripts/run_e2e_backend.py`）。日历起点固定（存量测试大量依赖 2025 固定日期），终点以 `date.today() + 365 天` 滚动（#468），幂等守卫为**增量补尾**（表内有旧终点时从其后一天续写，不是表空才写）——本地复用库同样能延伸到新终点。
 * **`seed_e2e_active(db)`**——E2E 专属活跃组合 `E2E_ACTIVE`（#354）。**仅两处 E2E 脚本在 `seed_base_data` 之后调用，不进 pytest session 种子**：其业务交易/申购/价格数据会泄漏进按「全局账本」精确断言的存量后端测试（`test_filter_by_status`/`test_sort_apply_date_desc`/`test_trades` 系列/价格 upsert 计数），且后端 pytest 本就不需要它。
 
 **前端 E2E 依赖两个组合的形态契约**（spec 经 `frontend/e2e/helpers.ts` 按 code 直达，缺组合或形态退化会硬失败，不再优雅 skip），勿删勿改形态：

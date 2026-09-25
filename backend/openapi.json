@@ -10679,6 +10679,18 @@
             "format": "date",
             "title": "Entitlement Date"
           },
+          "cash_pay_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Pay Date"
+          },
           "platform_code": {
             "anyOf": [
               {
@@ -10948,6 +10960,18 @@
             "format": "date",
             "title": "Entitlement Date"
           },
+          "cash_pay_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Pay Date"
+          },
           "platform_code": {
             "anyOf": [
               {
@@ -11198,6 +11222,18 @@
               }
             ],
             "title": "Entitlement Date"
+          },
+          "cash_pay_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Pay Date"
           },
           "shares_before": {
             "anyOf": [

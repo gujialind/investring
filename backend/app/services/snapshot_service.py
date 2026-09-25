@@ -40,6 +40,12 @@ from app.utils.quantize import quantize_nav, quantize_shares
 
 logger = logging.getLogger(__name__)
 
+IN_TRANSIT_PRODUCTS = {
+    "buy": "IN_TRANSIT_BUY",
+    "sell": "IN_TRANSIT_SELL",
+    "dividend": "IN_TRANSIT_DIVIDEND",
+}
+
 
 def _error_info(e: Exception) -> Dict[str, Any]:
     """异常 → 结构化错误条目（#305）：BusinessError 保留 code 与 details，
@@ -58,7 +64,7 @@ def _compute_in_transit_amounts(
     """绝对计算各平台各方向的在途资金金额。
 
     Returns: dict[(platform_code, direction)] = amount（正数）
-        direction: "buy" | "sell"
+        direction: "buy" | "sell" | "dividend"
 
     规则（#493 起为**单腿确认**口径，兼容两腿 confirmed 的历史窗口）：
 
@@ -71,6 +77,7 @@ def _compute_in_transit_amounts(
     ② 现金转移（cross_day）：CASH sell 已确认，CASH buy 仍 **pending**
        （#493 收紧：cancelled 不算在途，避免组内一腿 cancelled 被挂在途）。
     买入和卖出在途均为正数，金额按**现金腿平台**归属。
+    ③ 现金分红按 ex_date <= D < cash_pay_date 计在途，归属事件平台。
     """
     result: Dict[Tuple[str, str], Decimal] = {}
     CashLeg = aliased(Trade)
@@ -170,6 +177,21 @@ def _compute_in_transit_amounts(
             result[(platform_code, "buy")] = (
                 result.get((platform_code, "buy"), Decimal("0")) + Decimal(str(amount))
             )
+
+    dividend_transit = db.query(
+        ShareChangeEvent.platform_code,
+        func.sum(ShareChangeEvent.cash_change),
+    ).filter(
+        ShareChangeEvent.portfolio_code == portfolio_code,
+        ShareChangeEvent.event_type == "cash_dividend",
+        ShareChangeEvent.status == "confirmed",
+        ShareChangeEvent.platform_code.isnot(None),
+        ShareChangeEvent.ex_date <= snapshot_date,
+        ShareChangeEvent.cash_pay_date > snapshot_date,
+    ).group_by(ShareChangeEvent.platform_code).all()
+    for platform_code, amount in dividend_transit:
+        if amount and amount > 0:
+            result[(platform_code, "dividend")] = Decimal(str(amount))
 
     return result
 
@@ -1151,7 +1173,7 @@ def _generate_portfolio_position(
         
         for pos in prev_positions:
             # #93: IN_TRANSIT 行不继承（每日独立计算）
-            if pos.product_code in ("IN_TRANSIT_BUY", "IN_TRANSIT_SELL"):
+            if pos.product_code in IN_TRANSIT_PRODUCTS.values():
                 continue
             if pos.product_code == "CASH":
                 key = ("CASH", "", pos.platform_code)
@@ -1240,19 +1262,26 @@ def _generate_portfolio_position(
         ShareChangeEvent.platform_code.isnot(None),  # 跳过基金级父记录
     ).order_by(ShareChangeEvent.entitlement_date.asc()).all()
 
+    cash_events = db.query(ShareChangeEvent).filter(
+        ShareChangeEvent.portfolio_code == portfolio_code,
+        ShareChangeEvent.status == "confirmed",
+        ShareChangeEvent.platform_code.isnot(None),
+        ShareChangeEvent.event_type.in_(("cash_dividend", "forced_adjustment")),
+        ShareChangeEvent.cash_effective_date >= start_apply_date,
+        ShareChangeEvent.cash_effective_date <= target_date,
+        ShareChangeEvent.cash_change != 0,
+    ).all()
+    for event in cash_events:
+        cash_key = ("CASH", "", event.platform_code)
+        if cash_key not in positions:
+            positions[cash_key] = {"shares": None, "cash_amount": Decimal("0"), "cost_price": None}
+        positions[cash_key]["cash_amount"] += Decimal(str(event.cash_change))
+
     warnings: List[Dict[str, Any]] = []
 
     for event in confirmed_events:
-        if event.event_type in ("cash_dividend", "forced_adjustment"):
-            if event.cash_change:
-                cash_key = ("CASH", "", event.platform_code)
-                if cash_key not in positions:
-                    positions[cash_key] = {"shares": None, "cash_amount": Decimal("0"), "cost_price": None}
-                positions[cash_key]["cash_amount"] += Decimal(str(event.cash_change))
-            # issue #263：cash_dividend 恒有 shares_change=0（compute_event_fields），
-            # 跳过份额应用段；forced_adjustment 份额为用户直填，须落入下方份额应用段
-            if event.event_type == "cash_dividend":
-                continue
+        if event.event_type == "cash_dividend":
+            continue
 
         # 纯现金调整（无份额变动）不进份额应用段——如对 CASH 产品的合法现金修正
         # （#279 放行），其 fund_key 恰好命中现金行，若无此守卫会被现金行守卫误杀
@@ -1339,10 +1368,9 @@ def _generate_portfolio_position(
             if manual:
                 pos_data["cash_amount"] = Decimal(str(manual.market_value))
 
-    # #93: 计算在途资金，生成独立 IN_TRANSIT_BUY/IN_TRANSIT_SELL 行
     in_transit = _compute_in_transit_amounts(db, portfolio_code, target_date)
     for (platform_code, direction), amount in in_transit.items():
-        product_code = "IN_TRANSIT_BUY" if direction == "buy" else "IN_TRANSIT_SELL"
+        product_code = IN_TRANSIT_PRODUCTS[direction]
         key = (product_code, "", platform_code)
         positions[key] = {
             "shares": None,
@@ -1357,7 +1385,7 @@ def _generate_portfolio_position(
     for (product_code, market, platform_code), pos_data in positions.items():
         # 跳过零持仓（现金允许为0但不跳过，保留现金持仓记录）
         is_cash = pos_data["cash_amount"] is not None
-        is_in_transit = product_code in ("IN_TRANSIT_BUY", "IN_TRANSIT_SELL")
+        is_in_transit = product_code in IN_TRANSIT_PRODUCTS.values()
         if not is_cash:
             if pos_data["shares"] is not None and pos_data["shares"] <= 0 and (pos_data.get("cash_amount") or Decimal("0")) <= 0:
                 continue  # 跳过零持仓
@@ -1548,10 +1576,9 @@ def _generate_portfolio_value_snapshot(
         unit_price_change_pct = Decimal("0")
     
     # #93: 在途资金合计
-    IN_TRANSIT_CODES = {"IN_TRANSIT_BUY", "IN_TRANSIT_SELL"}
     in_transit_total = sum(
         Decimal(str(pos.cash_amount)) for pos in positions
-        if pos.product_code in IN_TRANSIT_CODES and pos.cash_amount
+        if pos.product_code in IN_TRANSIT_PRODUCTS.values() and pos.cash_amount
     )
 
     # #421：按列标度量化为 Decimal 而非 float()——审计载荷经 default=str 落保标度
@@ -2151,7 +2178,7 @@ def _check_price_data_completeness(
     
     for product_code, market in products_to_check:
         # #93: CASH 和 IN_TRANSIT 虚拟产品均无净值，跳过价格完整性校验
-        if product_code in ("CASH", "IN_TRANSIT_BUY", "IN_TRANSIT_SELL"):
+        if product_code == "CASH" or product_code in IN_TRANSIT_PRODUCTS.values():
             continue
 
         product = db.query(Product).filter(

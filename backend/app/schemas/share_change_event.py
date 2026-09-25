@@ -8,6 +8,7 @@ class ShareChangeEventBase(BaseModel):
     event_type: str  # cash_dividend/reinvest_dividend/share_split/share_merge/bonus_share/forced_adjustment
     ex_date: date
     entitlement_date: date
+    cash_pay_date: Optional[date] = None
     platform_code: Optional[str] = None
     parent_event_id: Optional[int] = None
     product_code: Optional[str] = None
@@ -35,6 +36,7 @@ class ShareChangeEventUpdate(BaseModel):
     # status 不开放直改：状态流转走 confirm/cancel/unconfirm 端点
     ex_date: Optional[date] = None
     entitlement_date: Optional[date] = None
+    cash_pay_date: Optional[date] = None
     shares_before: Optional[float] = None
     shares_change: Optional[float] = None
     shares_after: Optional[float] = None

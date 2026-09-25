@@ -52,7 +52,9 @@ def validate_body(body: dict) -> None:
             continue
         if isinstance(value, str) and any(key.endswith(suf) for suf in DATE_FIELDS):
             try:
-                date.fromisoformat(value)
+                # fromisoformat 也接受紧凑日期/周日期；CLI 契约只接受 YYYY-MM-DD。
+                if date.fromisoformat(value).isoformat() != value:
+                    raise ValueError
             except ValueError:
                 error("VALIDATION_ERROR", f"字段 {key} 日期格式非法: '{value}'，需为 YYYY-MM-DD")
         allowed = ENUMS.get(key)

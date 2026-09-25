@@ -41,7 +41,7 @@ def compute_cash_balance(
     显式计算 as_of_date 时的现金余额。
 
     源1：trade 表 confirmed CASH trades（confirm_date <= as_of_date）
-    源2：event 表 confirmed events（ex_date <= as_of_date, cash_change != 0）
+    源2：event 表 confirmed events（cash_effective_date <= as_of_date, cash_change != 0）
 
     不含 manual_market_value 覆盖。生产调用点只有手动重估的审计字段
     （update_cash_position 的 computed_value）；get_cash_value 仅测试与文档引用、
@@ -76,7 +76,8 @@ def compute_cash_balance(
     events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "confirmed",
-        ShareChangeEvent.ex_date <= as_of_date,
+        ShareChangeEvent.platform_code.isnot(None),
+        ShareChangeEvent.cash_effective_date <= as_of_date,
         ShareChangeEvent.cash_change.isnot(None),
         ShareChangeEvent.cash_change != 0,
     )
@@ -93,19 +94,19 @@ def compute_cash_balance(
 # 持仓读侧派生（issue #99）：daily_profit / 现金累计收益 / 分红加回
 #
 # 口径（路线 C：分红加回基金 + 事件计入现金基数，与评审推演一致）：
-# - 非现金行 profit_loss = 市值 − 份额×成本 + Σ 该产品/平台 confirmed 事件 cash_change
+# - 非现金行 profit_loss = 市值 − 份额×成本 + Σ 该产品/market/平台 confirmed 事件 cash_change
 #   （现金分红加回 = 复权口径；拆分/合并事件 cash_change=0 天然无影响）
 # - 非现金行 daily_profit = 当日市值 − 前一快照日市值 − 当日确认净买入额
 #   + 当日事件 cash_change（分红日加回对冲除权，daily=0）
 # - 现金行 profit_loss = 当前现金 − 现金基数（累计净存入 − 累计买入 + 累计卖出
 #   + 转移净额 + 事件净额），≈ 0，仅吸收手动调平/利息等未记账差额
 # - 现金行 daily_profit = 当日现金 − 前日现金 − 当日净流入（同基数五类流水按日过滤）
-# - IN_TRANSIT_BUY/SELL 行、组合首个快照日均无收益概念 → None
+# - 在途行、组合首个快照日均无收益概念 → None
 # 全部为批量查询 + 内存映射，禁止 N+1。
 # ---------------------------------------------------------------------------
 
 # 在途资金虚拟产品：无收益概念
-IN_TRANSIT_PRODUCT_CODES = ("IN_TRANSIT_BUY", "IN_TRANSIT_SELL")
+IN_TRANSIT_PRODUCT_CODES = ("IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "IN_TRANSIT_DIVIDEND")
 
 
 def _classify_transfer_group(transfer_group: str) -> str:
@@ -125,8 +126,8 @@ def _aggregate_position_flows(db: Session, items: Sequence[PortfolioPosition]) -
         （基金腿，按确认日分组）
       cash_flows: {(portfolio, platform): [(confirm_date, 分类, trade_type, 金额), ...]}
         （CASH 腿，confirm_date <= 行快照日上限）
-      event_rows: {(portfolio, product, platform): [(ex_date, cash_change), ...]}
-        （confirmed 且 cash_change != 0，ex_date <= 行快照日上限）
+      event_rows: {(portfolio, product, market, platform): [(ex_date, cash_change), ...]}
+      event_cash_flows: {(portfolio, platform): [(cash_effective_date, cash_change), ...]}
     """
     portfolio_codes = {p.portfolio_code for p in items}
     max_date = max(p.snapshot_date for p in items)
@@ -172,17 +173,21 @@ def _aggregate_position_flows(db: Session, items: Sequence[PortfolioPosition]) -
             trade_daily[key][confirm_date] = trade_daily[key].get(confirm_date, 0.0) + signed
 
     event_rows: dict = {}
+    event_cash_flows: dict = {}
     events = (
         db.query(
             ShareChangeEvent.portfolio_code,
             ShareChangeEvent.product_code,
+            ShareChangeEvent.market,
             ShareChangeEvent.platform_code,
             ShareChangeEvent.ex_date,
+            ShareChangeEvent.cash_effective_date,
             func.sum(ShareChangeEvent.cash_change),
         )
         .filter(
             ShareChangeEvent.portfolio_code.in_(portfolio_codes),
             ShareChangeEvent.status == "confirmed",
+            ShareChangeEvent.platform_code.isnot(None),
             ShareChangeEvent.cash_change.isnot(None),
             ShareChangeEvent.cash_change != 0,
             ShareChangeEvent.ex_date <= max_date,
@@ -190,18 +195,23 @@ def _aggregate_position_flows(db: Session, items: Sequence[PortfolioPosition]) -
         .group_by(
             ShareChangeEvent.portfolio_code,
             ShareChangeEvent.product_code,
+            ShareChangeEvent.market,
             ShareChangeEvent.platform_code,
             ShareChangeEvent.ex_date,
+            ShareChangeEvent.cash_effective_date,
         )
         .all()
     )
-    for pc, prod, plat, ex_date, cash_change in events:
-        event_rows.setdefault((pc, prod, plat), []).append((ex_date, float(cash_change)))
+    for pc, prod, market, plat, ex_date, cash_date, cash_change in events:
+        amount = float(cash_change)
+        event_rows.setdefault((pc, prod, market, plat), []).append((ex_date, amount))
+        event_cash_flows.setdefault((pc, plat), []).append((cash_date, amount))
 
     return {
         "trade_daily": trade_daily,
         "cash_flows": cash_flows,
         "event_rows": event_rows,
+        "event_cash_flows": event_cash_flows,
     }
 
 
@@ -285,12 +295,12 @@ def compute_daily_profits(
             ).get(d, 0.0)
             event_today = sum(
                 v for ex, v in event_rows.get(
-                    (p.portfolio_code, p.product_code, p.platform_code), []
+                    (p.portfolio_code, p.product_code, p.market, p.platform_code), []
                 ) if ex == d
             )
             result[key] = round(mv_now - mv_prev - net_buy + event_today, 4)
         else:
-            # 现金行：现金差 − 当日净流入（sub/rebal/转移/事件四类按日过滤）
+            # 事件到账窗口含闭市日，避免周末到账在下一张快照被误计为收益。
             cash_now = float(p.cash_amount or 0)
             cash_prev = float(prev_row.cash_amount or 0) if prev_row else 0.0
             inflow = 0.0
@@ -306,11 +316,9 @@ def compute_daily_profits(
                 else:  # transfer：双腿同组同日分别计入各自平台
                     inflow += amt if ttype == "buy" else -amt
             event_today = sum(
-                v
-                for (epc, _prod, eplat), entries in event_rows.items()
-                if epc == p.portfolio_code and eplat == p.platform_code
-                for ex, v in entries
-                if ex == d
+                v for cash_date, v in flows["event_cash_flows"].get(
+                    (p.portfolio_code, p.platform_code), []
+                ) if prev_date < cash_date <= d
             )
             inflow += event_today
             result[key] = round(cash_now - cash_prev - inflow, 4)
@@ -341,7 +349,7 @@ def compute_cash_cumulative_profits(
         return result
 
     cash_flows = flows["cash_flows"]
-    event_rows = flows["event_rows"]
+    event_cash_flows = flows["event_cash_flows"]
 
     for p in cash_items:
         key = (p.portfolio_code, p.product_code, p.market, p.platform_code)
@@ -362,11 +370,9 @@ def compute_cash_cumulative_profits(
             else:
                 transfer_net += amt if ttype == "buy" else -amt
         event_net = sum(
-            v
-            for (epc, _prod, eplat), entries in event_rows.items()
-            if epc == p.portfolio_code and eplat == p.platform_code
-            for ex, v in entries
-            if ex <= d
+            v for cash_date, v in event_cash_flows.get(
+                (p.portfolio_code, p.platform_code), []
+            ) if cash_date <= d
         )
         basis = net_deposit - buys + sells + transfer_net + event_net
         result[key] = round(float(p.cash_amount or 0) - basis, 4)
@@ -384,7 +390,7 @@ def compute_event_cash_addbacks(
     ``flows`` 由调用方经 ``compute_derived_fields`` 统一聚合后注入（issue #103）。
 
     返回 {(portfolio_code, product_code, market, platform_code): float}，
-    值为 confirmed 事件 cash_change 按 (产品, 平台) 聚合（ex_date <= 行快照日）。
+    值为 confirmed 事件 cash_change 按 (产品, market, 平台) 聚合（ex_date <= 行快照日）。
     拆分/合并事件 cash_change=0 天然无影响；无事件行不在返回中（调用方按 0 处理）。
     """
     result = {}
@@ -399,7 +405,7 @@ def compute_event_cash_addbacks(
         total = sum(
             v
             for ex, v in event_rows.get(
-                (p.portfolio_code, p.product_code, p.platform_code), []
+                (p.portfolio_code, p.product_code, p.market, p.platform_code), []
             )
             if ex <= p.snapshot_date
         )
@@ -587,12 +593,13 @@ def calculate_available_cash(
     after_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "confirmed",
-        ShareChangeEvent.ex_date > latest_date,
+        ShareChangeEvent.platform_code.isnot(None),
+        ShareChangeEvent.cash_effective_date > latest_date,
         ShareChangeEvent.cash_change.isnot(None),
         ShareChangeEvent.cash_change != 0,
     )
     if as_of_date is not None:
-        after_events = after_events.filter(ShareChangeEvent.ex_date <= as_of_date)
+        after_events = after_events.filter(ShareChangeEvent.cash_effective_date <= as_of_date)
     if platform_code:
         after_events = after_events.filter(ShareChangeEvent.platform_code == platform_code)
     for e in after_events.all():
@@ -615,7 +622,7 @@ def calculate_available_shares(
                 - SUM(confirmed卖出份额 WHERE 快照未生成)
                 + SUM(confirmed事件负向shares_change WHERE ex_date > 最新快照日 [≤ as_of])
 
-    事件增量口径（issue #277）：与现金侧 cash_change 增量同窗口——
+    事件份额增量按 ex_date 生效（现金分红到账另按 cash_effective_date）。
     只计平台级行（platform_code IS NOT NULL，基金级父记录持汇总值、防父子双计）；
     只计负向（正向变动入快照前保守低估，防事件被撤销后已放行的卖出成事实超卖）。
 
@@ -682,7 +689,7 @@ def calculate_available_shares(
         ):
             shares -= Decimal(t.shares) if t.shares else Decimal("0")
 
-    # 快照后 confirmed event 负向 shares_change（issue #277，与现金侧 cash_change 增量同窗口口径）
+    # 份额变动按除息日生效，不随分红到账日延后。
     event_query = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.product_code == product_code,
