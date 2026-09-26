@@ -81,6 +81,7 @@
 
 - 使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)。同目标、可共同验收的小改可合并，不要求一 issue 一 PR，不按行数或每日数量凑批。
 - 审查标准、分级处置与规模护栏见 [code-review](docs/reference/code-review.md)。CI 已强制的 lint、类型、构建、测试和契约漂移属 L1，审查不重复。
+- L2 审查由维护者发起、结论以 PR 评论留痕，PR 正文不写审查结论，见[合入条件](docs/reference/code-review.md#review-merge)（#633）。
 - **改 PR base 不触发 CI**：默认 opened/synchronize/reopened 不包含 edited；retarget 后须 close/reopen 或推新 commit 触发，不能等待空 checks 自行补齐（#377）。
 
 ### 3.4 commit 信息
