@@ -4894,6 +4894,102 @@
         }
       }
     },
+    "/api/positions/portfolio/{portfolio_code}/holdings/by-product": {
+      "get": {
+        "tags": [
+          "持仓管理"
+        ],
+        "summary": "Get Holdings By Product",
+        "description": "按产品聚合的持仓视图：跨平台合计 + 平台分布 + 维度元数据。\n\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
+        "operationId": "get_holdings_by_product_api_positions_portfolio__portfolio_code__holdings_by_product_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "portfolio_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldingsByProductResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/positions/portfolio/{portfolio_code}/holdings/by-platform": {
+      "get": {
+        "tags": [
+          "持仓管理"
+        ],
+        "summary": "Get Holdings By Platform",
+        "description": "按平台聚合的持仓视图：市值/现金余额/产品数/收益合计。\n\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
+        "operationId": "get_holdings_by_platform_api_positions_portfolio__portfolio_code__holdings_by_platform_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "portfolio_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldingsByPlatformResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/positions/{id}": {
       "get": {
         "tags": [
@@ -7778,6 +7874,493 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HoldingPlatformAggregate": {
+        "properties": {
+          "platform_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Code"
+          },
+          "platform_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Name"
+          },
+          "platform_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Type"
+          },
+          "market_value": {
+            "type": "number",
+            "title": "Market Value"
+          },
+          "cash_balance": {
+            "type": "number",
+            "title": "Cash Balance"
+          },
+          "product_count": {
+            "type": "integer",
+            "title": "Product Count"
+          },
+          "holding_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holding Profit"
+          },
+          "cumulative_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cumulative Profit"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "market_value",
+          "cash_balance",
+          "product_count"
+        ],
+        "title": "HoldingPlatformAggregate",
+        "description": "按平台聚合的持仓卡。\n\nmarket_value 含该平台现金与在途（现金行按 cash_amount 计）；\nproduct_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit\n为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
+      },
+      "HoldingProductAggregate": {
+        "properties": {
+          "product_code": {
+            "type": "string",
+            "title": "Product Code"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          },
+          "product_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Name"
+          },
+          "asset_class_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Class Code"
+          },
+          "asset_class_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Class Name"
+          },
+          "region_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Code"
+          },
+          "region_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Name"
+          },
+          "style_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Code"
+          },
+          "style_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Name"
+          },
+          "size_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Code"
+          },
+          "size_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Name"
+          },
+          "segment_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Code"
+          },
+          "segment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Name"
+          },
+          "market_value": {
+            "type": "number",
+            "title": "Market Value"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "shares": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares"
+          },
+          "cash_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Amount"
+          },
+          "holding_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holding Profit"
+          },
+          "holding_profit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holding Profit Percent"
+          },
+          "daily_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Profit"
+          },
+          "cumulative_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cumulative Profit"
+          },
+          "platforms": {
+            "items": {
+              "$ref": "#/components/schemas/HoldingProductPlatformSlice"
+            },
+            "type": "array",
+            "title": "Platforms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_code",
+          "market",
+          "market_value",
+          "platforms"
+        ],
+        "title": "HoldingProductAggregate",
+        "description": "按产品聚合的持仓卡（跨平台合计）。\n\n现金（CASH）：shares=None、cash_amount 为跨平台合计；market_value 为跨平台\n合计市值（现金行按 cash_amount 计，与快照行市值口径一致）。行级缺份额/成本时\nholding_profit / holding_profit_percent 整体为 None（不发布部分和）。\nratio 为占组合比（0–1 小数）；holding_profit_percent 为百分数（×100）。\ncumulative_profit 为 #598 全历史净流量口径，无市值快照时 None\n（前端按可空占位渲染）。"
+      },
+      "HoldingProductPlatformSlice": {
+        "properties": {
+          "platform_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Code"
+          },
+          "platform_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Name"
+          },
+          "market_value": {
+            "type": "number",
+            "title": "Market Value"
+          },
+          "shares": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares"
+          },
+          "cash_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Amount"
+          },
+          "holding_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holding Profit"
+          },
+          "cumulative_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cumulative Profit"
+          },
+          "ratio_in_product": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio In Product"
+          }
+        },
+        "type": "object",
+        "required": [
+          "market_value"
+        ],
+        "title": "HoldingProductPlatformSlice",
+        "description": "产品聚合内的平台分布切片（产品详情页平台分布卡数据源）。\n\nmarket_value 为该平台切片市值（现金切片按 cash_amount 计）；\nratio_in_product 为占产品比（0–1 小数）。"
+      },
+      "HoldingsByPlatformResponse": {
+        "properties": {
+          "portfolio_code": {
+            "type": "string",
+            "title": "Portfolio Code"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Date"
+          },
+          "total_market_value": {
+            "type": "number",
+            "title": "Total Market Value"
+          },
+          "platforms": {
+            "items": {
+              "$ref": "#/components/schemas/HoldingPlatformAggregate"
+            },
+            "type": "array",
+            "title": "Platforms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "portfolio_code",
+          "total_market_value",
+          "platforms"
+        ],
+        "title": "HoldingsByPlatformResponse"
+      },
+      "HoldingsByProductResponse": {
+        "properties": {
+          "portfolio_code": {
+            "type": "string",
+            "title": "Portfolio Code"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Date"
+          },
+          "total_market_value": {
+            "type": "number",
+            "title": "Total Market Value"
+          },
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/HoldingProductAggregate"
+            },
+            "type": "array",
+            "title": "Products"
+          }
+        },
+        "type": "object",
+        "required": [
+          "portfolio_code",
+          "total_market_value",
+          "products"
+        ],
+        "title": "HoldingsByProductResponse"
       },
       "InvestorCreate": {
         "properties": {
