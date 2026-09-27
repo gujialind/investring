@@ -496,7 +496,7 @@ jobs:
         working-directory: .
         run: |
           set -o pipefail
-          LCOV_SF_MIN=10
+          LCOV_SF_MIN=11
           test -s frontend/coverage/lcov.info \
             || { echo "::error::frontend/coverage/lcov.info 缺失或为空，增量门禁会静默空转"; exit 1; }
           grep -q '^SF:frontend/' frontend/coverage/lcov.info \

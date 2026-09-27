@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { E2E_ACTIVE, E2E_PORT, gotoPortfolioDetail } from './helpers';
+import { E2E_ACTIVE, E2E_PORT, authHeaders, gotoPortfolioDetail } from './helpers';
 
 /**
  * #595 组合详情页持仓明细双视图：「按产品 / 按平台」分段切换 + URL ?view= 持久化（D-7）。
@@ -9,6 +9,10 @@ import { E2E_ACTIVE, E2E_PORT, gotoPortfolioDetail } from './helpers';
  *   + 现金 + 连续 2 日快照 → 按产品视图有 1 张产品聚合卡 + 1 张现金聚合卡；
  *   按平台视图有 1 张华宝证券平台卡（1 只产品 · 现金）。
  * - E2E_PORT：draft 组合，无持仓 → 不渲染持仓明细区。
+ *   ⚠️ 草稿态不可作为全量套件断言前提：CI 按 project-major 顺序跑（全部 chromium
+ *   先于 mobile），trade-buy-amount-linkage 用例 7 经 API「申购+确认」会把共享
+ *   种子 E2E_PORT 置为活跃（#636 CI 截图实证），mobile 半区运行时它已不是 draft。
+ *   故 draft 用例自建组合取证（见该用例注释），不复用 E2E_PORT 的草稿态。
  * 断言为可见性与关系式，不硬绑定快照数字；两端共用组件，mobile project 同跑。
  */
 
@@ -90,8 +94,30 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await expect(page.getByRole('link', { name: '快照管理' })).toBeVisible();
   });
 
-  test('draft 组合不渲染持仓明细区', async ({ page }) => {
+  test('draft 组合不渲染持仓明细区', async ({ page }, testInfo) => {
+    // 自建 draft 组合而非复用种子 E2E_PORT 的草稿态：全量套件按 project-major 顺序
+    // 执行，chromium 半区的 trade-buy-amount-linkage 用例 7 会经 API「申购+确认」
+    // 激活共享种子 E2E_PORT，mobile 半区运行时它已是「活跃」（#636 CI 截图实证），
+    // 依赖全局种子的 draft 断言会在 mobile 半区必红。按 share-change-cash-pay-date
+    // 的自建组合模式造 fixture，code 区分 project/retry（组合无 DELETE 端点，残留
+    // 由每轮重建的 E2E 库吸收，属既有接受的定案）。
+    const code = `E595_${testInfo.project.name}_${testInfo.retry}`;
     await gotoPortfolioDetail(page, E2E_PORT);
+    const headers = await authHeaders(page);
+    const createResp = await page.request.post('/api/portfolios', {
+      data: { code, name: `draft 视图 ${code}` },
+      headers,
+    });
+    await expect(createResp, `创建 draft 组合失败 ${createResp.status()}`).toBeOK();
+
+    // gotoPortfolioDetail 的 code 刻意收窄为种子组合字面量，自建组合直导航 +
+    // 同款就绪信号（页头 h1 可见）
+    await page.goto(`/portfolio/${code}`);
+    await page
+      .getByRole('heading', { level: 1 })
+      .first()
+      .waitFor({ state: 'visible', timeout: 15_000 });
+
     await expect(page.getByText('组合尚未激活')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('holdings-view-tabs')).toHaveCount(0);
   });
