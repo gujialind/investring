@@ -60,16 +60,18 @@ function Metric({
 }
 
 /**
- * 组合绩效指标面板（issue #99）：6 项指标一行。
+ * 组合绩效指标面板（issue #99）：6 项指标。
  *
  * 近6月/近1年/近3年（历史不足窗口期时为 null → “--”）、MWR 年化、最大回撤、
  * 年化波动率。后端仍返回 1m/3m/ytd/twr 等字段，仅 UI 不展示。
+ * #595：桌面端宿主改为详情页右栏（360 固定），栅格收敛为 2 列——
+ * 原 lg:grid-cols-6 按视口判定，在窄栏内会把指标名挤成 CJK 竖排。
  */
 export default function PerformanceMetrics({ data, variant = "desktop" }: PerformanceMetricsProps) {
   const gridCls =
     variant === "mobile"
       ? "grid grid-cols-2 gap-2"
-      : "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3";
+      : "grid grid-cols-2 gap-3";
 
   return (
     <Card>

@@ -90,31 +90,35 @@ test.describe('DateRangePicker 矮视口回归（防 #161 复发）', () => {
 
 test.describe('持仓明细维度二级分组（防 #109 / #114 复发，#128 维度化）', () => {
   // 防 #109：同分组产品曾各自独立成卡、无分组级合计；
-  // 关系式断言（子分组头合计 = 名下各行市值之和），不硬绑定生产快照数字
+  // 关系式断言（子分组头合计 = 名下各卡市值之和），不硬绑定生产快照数字
   // V4 定稿 + #114 修正：分组 chip 始终位于产品名之上（与大类同名除外），
-  // chip 行合计恒显示（无论名下 1 行还是多行）；
+  // chip 行合计恒显示（无论名下 1 卡还是多卡）；
   // data-testid="asset-group-header" 挂在所有 chip 行上
   // #128：分组数据源从 asset_name 换成维度 name（股票→region、债券/商品→segment）
-  test('子分组头合计金额应等于名下各行市值之和（含单行分组）', async ({ page }) => {
+  // #595：卡片改为跨平台聚合卡（holding-product-card），分组契约不变
+  test('子分组头合计金额应等于名下各卡市值之和（含单卡分组）', async ({ page }) => {
     // E2E_ACTIVE 种子契约：2 日快照 + 510300.SH 持仓 → 持仓明细区必渲染（不再优雅 skip）。
-    // 移动端经 middleware 重定向到 /m 详情页，PositionSections 为双端共享组件，故本
+    // 移动端经 middleware 重定向到 /m 详情页，PortfolioHoldings 为双端共享组件，故本
     // 用例在 mobile project 同样真跑（旧 `href^="/portfolio/"` 定位曾使其在移动端恒 skip）。
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByText('持仓明细')).toBeVisible({ timeout: 10_000 });
 
     const headers = page.locator('[data-testid="asset-group-header"]');
+    // #595 起持仓聚合数据独立于首屏门加载：标题先渲染、数据后到——
+    // count() 无重试，先等首个 chip 可见再计数（防数据未回时的 0 计数竞态）
+    await expect(headers.first()).toBeVisible({ timeout: 10_000 });
     const headerCount = await headers.count();
     // 510300.SH=ASSET_STOCK 按 region 分组、组名与大类「股票」不同名 → 子分组 chip 必渲染
     expect(headerCount, 'E2E_ACTIVE 持仓应渲染出至少一个子分组头').toBeGreaterThanOrEqual(1);
 
-    // 金额均为「x,xxx.xx 元」格式，取文本内首个两位小数数字
+    // 卡内首个两位小数数字 = 市值大数字（行 1）；占比一位小数不匹配
     const firstAmount = (text: string) =>
       Number(text.replace(/\s+/g, ' ').match(/[\d,]+\.\d{2}/)?.[0].replace(/,/g, ''));
 
     for (let i = 0; i < headerCount; i++) {
       const header = headers.nth(i);
       const group = header.locator('xpath=ancestor::div[@data-testid="asset-group"]');
-      const cards = group.locator('[data-testid="position-card"]');
+      const cards = group.locator('[data-testid="holding-product-card"]');
       expect(await cards.count()).toBeGreaterThanOrEqual(1);
 
       const headerTotal = firstAmount(await header.innerText());

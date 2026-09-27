@@ -1,11 +1,11 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { ArrowLeft, ChevronRight, Settings2 } from "lucide-react";
+import { ArrowLeft, Settings2 } from "lucide-react";
 import Link from "next/link";
 import {
   usePortfolio,
@@ -24,17 +24,30 @@ import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
-import PositionSections from "@/components/shared/PositionSections";
+import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
+import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import { buildAllocation } from "@/lib/allocation";
+import { parseHoldingsView, type HoldingsView } from "@/types/holding";
 
 function MobilePortfolioDetailInner() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const code = params.code as string;
   const showInvestors = searchParams.get("tab") === "investors";
+  // 持仓明细视图（#595 D-7）：URL ?view=product|platform，默认 product（省略参数）
+  const view = parseHoldingsView(searchParams.get("view"));
+  const handleViewChange = (next: HoldingsView) => {
+    const sp = new URLSearchParams(searchParams.toString());
+    if (next === "product") sp.delete("view");
+    else sp.set("view", next);
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
 
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(code);
   const { data: snapshot, isLoading: snapshotLoading } = useLatestSnapshot(code);
@@ -95,15 +108,6 @@ function MobilePortfolioDetailInner() {
 
   const isDraft = portfolio.status === "draft";
   const allocation = buildAllocation(positions, assetClasses);
-
-  /* 页尾「管理」列表项（低频入口，替换旧 Quick Links） */
-  const manageLinks = [
-    { label: "持仓管理", href: `/m/portfolio/${code}/positions` },
-    { label: "申购赎回记录", href: `/m/portfolio/${code}/subscriptions` },
-    { label: "调仓交易记录", href: `/m/portfolio/${code}/trades` },
-    { label: "份额变动事件", href: `/m/portfolio/${code}/share-change-events` },
-    { label: "快照管理", href: `/m/portfolio/${code}/snapshots` },
-  ];
 
   return (
     <div className="space-y-4 p-4">
@@ -185,12 +189,15 @@ function MobilePortfolioDetailInner() {
                 </CardContent>
               </Card>
 
-              {/* 分类持仓分区（含在途资金独立卡片）；
+              {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
                   二级分组维度优先取组合级 display_config（issue #144） */}
-              <PositionSections
-                positions={positions}
+              <PortfolioHoldings
+                portfolioCode={code}
                 assetClasses={assetClasses}
                 displayConfig={portfolio.display_config}
+                view={view}
+                onViewChange={handleViewChange}
+                variant="mobile"
                 action={
                   isAdmin ? (
                     <Button
@@ -226,26 +233,8 @@ function MobilePortfolioDetailInner() {
             </>
           )}
 
-          {/* 页尾「管理」列表（替换旧 Quick Links） */}
-          <Card>
-            <CardContent className="p-0">
-              <h3 className="px-4 pb-1 pt-4 text-sm font-medium text-muted-foreground">
-                管理
-              </h3>
-              <div className="divide-y">
-                {manageLinks.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className="flex items-center justify-between px-4 py-3 text-sm"
-                  >
-                    {link.label}
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          {/* 页尾「管理」列表（#595 抽取共享卡，桌面端同卡） */}
+          <ManageLinksCard basePath="/m/portfolio" code={code} />
         </>
       )}
     </div>
@@ -253,7 +242,7 @@ function MobilePortfolioDetailInner() {
 }
 
 /**
- * 移动端组合详情页（issue #99）：与桌面同构单列 + 页尾管理列表。
+ * 移动端组合详情页（issue #99 单列同构；#595 持仓双视图 + ?view= 持久化 + 管理卡共享）。
  * useSearchParams 需包 Suspense 边界（Next 15 静态预渲染要求）。
  */
 export default function MobilePortfolioDetailPage() {

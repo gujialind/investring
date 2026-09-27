@@ -1,12 +1,12 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { ArrowLeft, RefreshCw, Settings2 } from "lucide-react";
+import { ArrowLeft, Settings2 } from "lucide-react";
 import Link from "next/link";
 import {
   usePortfolio,
@@ -25,12 +25,14 @@ import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
-import PositionSections from "@/components/shared/PositionSections";
+import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
+import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import { buildAllocation } from "@/lib/allocation";
 import { toDateOnly } from "@/lib/utils";
+import { parseHoldingsView, type HoldingsView } from "@/types/holding";
 
 /** 净值走势区间：近6月 / 近1年 / 近3年 / 成立以来 */
 type NavRange = "6m" | "1y" | "3y" | "all";
@@ -55,8 +57,19 @@ function rangeStartDate(range: NavRange): string | undefined {
 function PortfolioDetailInner() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const code = params.code as string;
   const showInvestors = searchParams.get("tab") === "investors";
+  // 持仓明细视图（#595 D-7）：URL ?view=product|platform，默认 product（省略参数）
+  const view = parseHoldingsView(searchParams.get("view"));
+  const handleViewChange = (next: HoldingsView) => {
+    const sp = new URLSearchParams(searchParams.toString());
+    if (next === "product") sp.delete("view");
+    else sp.set("view", next);
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
 
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(code);
   const { data: snapshot, isLoading: snapshotLoading } = useLatestSnapshot(code);
@@ -182,7 +195,7 @@ function PortfolioDetailInner() {
             totalShares={snapshot?.total_shares || 0}
           />
         ) : (
-          /* 单列五段（draft 时仅第 1 段，其余不渲染） */
+          /* 统计卡全宽 + 主体左右分栏（draft 时仅统计段） */
           <div className="space-y-4">
             {/* 1. 四项统计 + 最新快照日期小字 */}
             <div>
@@ -199,24 +212,20 @@ function PortfolioDetailInner() {
             </div>
 
             {!isDraft && (
-              <>
-                {/* 2. 资产分布（环形图 + 图例） */}
-                <Card>
-                  <CardContent className="pt-6">
-                    <h3 className="mb-4 text-[15px] font-semibold">资产分布</h3>
-                    <AssetAllocationPie items={allocation} />
-                  </CardContent>
-                </Card>
-
-                {/* 3. 分类持仓分区（含在途资金独立卡片）；
-                    二级分组维度优先取组合级 display_config（issue #144） */}
-                <PositionSections
-                  positions={positions}
-                  assetClasses={assetClasses}
-                  displayConfig={portfolio.display_config}
-                  action={
-                    isAdmin ? (
-                      <div className="flex gap-2">
+              /* 主体左右分栏（D1）：左=持仓明细双视图+管理入口，右栏 360 固定 */
+              <div className="flex items-start gap-6">
+                <div className="min-w-0 flex-1 space-y-4">
+                  {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
+                      二级分组维度优先取组合级 display_config（issue #144） */}
+                  <PortfolioHoldings
+                    portfolioCode={code}
+                    assetClasses={assetClasses}
+                    displayConfig={portfolio.display_config}
+                    view={view}
+                    onViewChange={handleViewChange}
+                    variant="desktop"
+                    action={
+                      isAdmin ? (
                         <Button
                           variant="outline"
                           size="sm"
@@ -225,57 +234,64 @@ function PortfolioDetailInner() {
                           <Settings2 className="mr-2 h-4 w-4" />
                           分组维度
                         </Button>
-                        <Link href={`/portfolio/${code}/positions`}>
-                          <Button variant="outline" size="sm">
-                            <RefreshCw className="mr-2 h-4 w-4" />
-                            管理持仓
-                          </Button>
-                        </Link>
-                      </div>
-                    ) : undefined
-                  }
-                />
-                <DisplayConfigDialog
-                  open={displayConfigOpen}
-                  onOpenChange={setDisplayConfigOpen}
-                  portfolioCode={code}
-                  currentConfig={portfolio.display_config}
-                />
+                      ) : undefined
+                    }
+                  />
+                  <DisplayConfigDialog
+                    open={displayConfigOpen}
+                    onOpenChange={setDisplayConfigOpen}
+                    portfolioCode={code}
+                    currentConfig={portfolio.display_config}
+                  />
 
-                {/* 4. 净值走势 + 区间 chips */}
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-[15px] font-semibold">净值走势</h3>
-                      <div className="flex gap-2">
-                        {NAV_RANGES.map((r) => (
-                          <button
-                            key={r.key}
-                            onClick={() => setNavRange(r.key)}
-                            className={`rounded-full px-3.5 py-1.5 text-[13px] transition-colors ${
-                              navRange === r.key
-                                ? "bg-primary font-semibold text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:bg-accent"
-                            }`}
-                          >
-                            {r.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    {navHistory.length > 0 ? (
-                      <NavCurve data={navHistory} initialNav={1.0} />
-                    ) : (
-                      <div className="flex h-[300px] items-center justify-center text-muted-foreground">
-                        该区间暂无净值数据
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                  {/* 管理入口（持仓管理/申赎赎回/调仓交易/份额事件/快照） */}
+                  <ManageLinksCard basePath="/portfolio" code={code} />
+                </div>
 
-                {/* 5. 绩效指标（6 项） */}
-                <PerformanceMetrics data={performance} variant="desktop" />
-              </>
+                <div className="w-[360px] shrink-0 space-y-4">
+                  {/* 资产分布（环形图 + 图例；右栏 360 强制竖排，防图例挤压竖排） */}
+                  <Card>
+                    <CardContent className="pt-6">
+                      <h3 className="mb-4 text-sm font-medium">资产分布</h3>
+                      <AssetAllocationPie items={allocation} forceColumn />
+                    </CardContent>
+                  </Card>
+
+                  {/* 净值走势 + 区间 chips（右栏窄：chips 不换行、溢出横滚） */}
+                  <Card>
+                    <CardContent className="pt-6">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
+                        <h3 className="shrink-0 text-sm font-medium">净值走势</h3>
+                        <div className="flex shrink-0 gap-2">
+                          {NAV_RANGES.map((r) => (
+                            <button
+                              key={r.key}
+                              onClick={() => setNavRange(r.key)}
+                              className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs transition-colors ${
+                                navRange === r.key
+                                  ? "bg-primary font-semibold text-primary-foreground"
+                                  : "bg-muted text-muted-foreground hover:bg-accent"
+                              }`}
+                            >
+                              {r.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {navHistory.length > 0 ? (
+                        <NavCurve data={navHistory} initialNav={1.0} />
+                      ) : (
+                        <div className="flex h-[300px] items-center justify-center text-muted-foreground">
+                          该区间暂无净值数据
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* 绩效指标（6 项） */}
+                  <PerformanceMetrics data={performance} variant="desktop" />
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -285,7 +301,7 @@ function PortfolioDetailInner() {
 }
 
 /**
- * 组合详情页（issue #99）：单列五段 + ?tab=investors 投资人视图。
+ * 组合详情页（issue #99 单列五段；#595 改为主体左右分栏 + 持仓双视图 + ?view= 持久化）。
  * useSearchParams 需包 Suspense 边界（Next 15 静态预渲染要求）。
  */
 export default function PortfolioDetailPage() {
