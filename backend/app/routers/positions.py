@@ -153,6 +153,7 @@ def get_positions(
 
 # ---------------------------------------------------------------------------
 # #595 组合详情页双视图聚合（读侧，service 装配 Decimal，此处 shaping 为 float）
+# 口径单一事实来源：holding_aggregation_service 模块 docstring
 # ---------------------------------------------------------------------------
 
 
@@ -205,12 +206,15 @@ def get_holdings_by_product(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """按产品聚合的持仓视图（#595 §5.1）：跨平台合计 + 平台分布 + 维度元数据。"""
+    """按产品聚合的持仓视图：跨平台合计 + 平台分布 + 维度元数据。
+
+    口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。
+    """
     result = aggregate_holdings_by_product(db, portfolio_code)
     return HoldingsByProductResponse(
         portfolio_code=result["portfolio_code"],
         snapshot_date=result["snapshot_date"],
-        total_market_value=_round4(result["total_market_value"]) or 0.0,
+        total_market_value=_round4(result["total_market_value"]),
         products=[_shape_product_aggregate(p) for p in result["products"]],
     )
 
@@ -224,19 +228,22 @@ def get_holdings_by_platform(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """按平台聚合的持仓视图（#595 §5.2）：市值/现金余额/产品数/收益合计。"""
+    """按平台聚合的持仓视图：市值/现金余额/产品数/收益合计。
+
+    口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。
+    """
     result = aggregate_holdings_by_platform(db, portfolio_code)
     return HoldingsByPlatformResponse(
         portfolio_code=result["portfolio_code"],
         snapshot_date=result["snapshot_date"],
-        total_market_value=_round4(result["total_market_value"]) or 0.0,
+        total_market_value=_round4(result["total_market_value"]),
         platforms=[
             HoldingPlatformAggregate(
                 platform_code=p["platform_code"],
                 platform_name=p["platform_name"],
                 platform_type=p["platform_type"],
                 market_value=_round4(p["market_value"]),
-                cash_balance=_round4(p["cash_balance"]) or 0.0,
+                cash_balance=_round4(p["cash_balance"]),
                 product_count=p["product_count"],
                 holding_profit=_round4(p["holding_profit"]),
                 cumulative_profit=_round4(p["cumulative_profit"]),

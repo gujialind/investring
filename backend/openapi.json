@@ -4900,7 +4900,7 @@
           "持仓管理"
         ],
         "summary": "Get Holdings By Product",
-        "description": "按产品聚合的持仓视图（#595 §5.1）：跨平台合计 + 平台分布 + 维度元数据。",
+        "description": "按产品聚合的持仓视图：跨平台合计 + 平台分布 + 维度元数据。\n\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
         "operationId": "get_holdings_by_product_api_positions_portfolio__portfolio_code__holdings_by_product_get",
         "security": [
           {
@@ -4948,7 +4948,7 @@
           "持仓管理"
         ],
         "summary": "Get Holdings By Platform",
-        "description": "按平台聚合的持仓视图（#595 §5.2）：市值/现金余额/产品数/收益合计。",
+        "description": "按平台聚合的持仓视图：市值/现金余额/产品数/收益合计。\n\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
         "operationId": "get_holdings_by_platform_api_positions_portfolio__portfolio_code__holdings_by_platform_get",
         "security": [
           {
@@ -7963,7 +7963,7 @@
           "product_count"
         ],
         "title": "HoldingPlatformAggregate",
-        "description": "按平台聚合的持仓卡（#595 §5.2）。\n\nmarket_value 含该平台现金与在途；product_count 只计非现金、非在途产品；\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
+        "description": "按平台聚合的持仓卡。\n\nmarket_value 含该平台现金与在途（现金行按 cash_amount 计）；\nproduct_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit\n为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
       },
       "HoldingProductAggregate": {
         "properties": {
@@ -8182,18 +8182,18 @@
               "$ref": "#/components/schemas/HoldingProductPlatformSlice"
             },
             "type": "array",
-            "title": "Platforms",
-            "default": []
+            "title": "Platforms"
           }
         },
         "type": "object",
         "required": [
           "product_code",
           "market",
-          "market_value"
+          "market_value",
+          "platforms"
         ],
         "title": "HoldingProductAggregate",
-        "description": "按产品聚合的持仓卡（跨平台合计，#595 §5.1）。\n\n现金（CASH）：shares=None、cash_amount 为跨平台合计；\ncumulative_profit 为 #598 全历史净流量口径，无市值快照时 None（前端可空占位，D-9）。"
+        "description": "按产品聚合的持仓卡（跨平台合计）。\n\n现金（CASH）：shares=None、cash_amount 为跨平台合计；market_value 为跨平台\n合计市值（现金行按 cash_amount 计，与快照行市值口径一致）。行级缺份额/成本时\nholding_profit / holding_profit_percent 整体为 None（不发布部分和）。\nratio 为占组合比（0–1 小数）；holding_profit_percent 为百分数（×100）。\ncumulative_profit 为 #598 全历史净流量口径，无市值快照时 None\n（前端按可空占位渲染）。"
       },
       "HoldingProductPlatformSlice": {
         "properties": {
@@ -8284,7 +8284,7 @@
           "market_value"
         ],
         "title": "HoldingProductPlatformSlice",
-        "description": "产品聚合内的平台分布切片（§4.2 平台分布卡数据源）。"
+        "description": "产品聚合内的平台分布切片（产品详情页平台分布卡数据源）。\n\nmarket_value 为该平台切片市值（现金切片按 cash_amount 计）；\nratio_in_product 为占产品比（0–1 小数）。"
       },
       "HoldingsByPlatformResponse": {
         "properties": {

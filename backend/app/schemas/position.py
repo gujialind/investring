@@ -84,7 +84,11 @@ class PaginatedPositionResponse(BaseModel):
 
 
 class HoldingProductPlatformSlice(BaseModel):
-    """产品聚合内的平台分布切片（§4.2 平台分布卡数据源）。"""
+    """产品聚合内的平台分布切片（产品详情页平台分布卡数据源）。
+
+    market_value 为该平台切片市值（现金切片按 cash_amount 计）；
+    ratio_in_product 为占产品比（0–1 小数）。
+    """
 
     platform_code: Optional[str] = None
     platform_name: Optional[str] = None
@@ -97,10 +101,14 @@ class HoldingProductPlatformSlice(BaseModel):
 
 
 class HoldingProductAggregate(BaseModel):
-    """按产品聚合的持仓卡（跨平台合计，#595 §5.1）。
+    """按产品聚合的持仓卡（跨平台合计）。
 
-    现金（CASH）：shares=None、cash_amount 为跨平台合计；
-    cumulative_profit 为 #598 全历史净流量口径，无市值快照时 None（前端可空占位，D-9）。
+    现金（CASH）：shares=None、cash_amount 为跨平台合计；market_value 为跨平台
+    合计市值（现金行按 cash_amount 计，与快照行市值口径一致）。行级缺份额/成本时
+    holding_profit / holding_profit_percent 整体为 None（不发布部分和）。
+    ratio 为占组合比（0–1 小数）；holding_profit_percent 为百分数（×100）。
+    cumulative_profit 为 #598 全历史净流量口径，无市值快照时 None
+    （前端按可空占位渲染）。
     """
 
     product_code: str
@@ -125,7 +133,7 @@ class HoldingProductAggregate(BaseModel):
     holding_profit_percent: Optional[float] = None
     daily_profit: Optional[float] = None
     cumulative_profit: Optional[float] = None
-    platforms: List[HoldingProductPlatformSlice] = []
+    platforms: List[HoldingProductPlatformSlice]
 
 
 class HoldingsByProductResponse(BaseModel):
@@ -136,9 +144,11 @@ class HoldingsByProductResponse(BaseModel):
 
 
 class HoldingPlatformAggregate(BaseModel):
-    """按平台聚合的持仓卡（#595 §5.2）。
+    """按平台聚合的持仓卡。
 
-    market_value 含该平台现金与在途；product_count 只计非现金、非在途产品；
+    market_value 含该平台现金与在途（现金行按 cash_amount 计）；
+    product_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit
+    为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。
     cumulative_profit 为 #598 平台粒度口径，无市值快照时 None。
     """
 

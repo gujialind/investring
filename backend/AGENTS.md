@@ -59,7 +59,7 @@
 * **`subscription_service.py`**：定价见[申赎](../docs/reference/business-constraints.md#rule-subscription)，激活见[组合管理](../docs/reference/business-constraints.md#rule-portfolio)。unconfirm 重算期望 confirm_date 而非置 None，防 SQL NULL 比较漏过 pending 检查。
   - 不恢复申购 unconfirm 前的现金守卫（#203：曾阻断快照级联产生孤儿），消费点防线见[生命周期](../docs/reference/business-constraints.md#rule-lifecycle)；存量负现金经 status 的 negative_cash_platforms 暴露。
 
-其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现；`cumulative_profit_service.py`（#598 三粒度累计收益，只读、无接口/页面接入，公式见[累计收益](../docs/reference/business-constraints.md#rule-cumulative-profit)，与持仓列表旧 `profit_loss` 并存不替换）。其他服务职责读各文件 docstring。
+其余模块中需记住的设计点：`snapshot_recalc_job.py`（#89 异步重算：复用 sync\_job 表 + 线程池，同类型单 active 锁，终态经 `GET /api/sync-jobs/{id}` 轮询）；`product_service.py::calculate_confirm_days` 为确认天数单一实现；`cumulative_profit_service.py`（#598 三粒度累计收益，只读，公式见[累计收益](../docs/reference/business-constraints.md#rule-cumulative-profit)，与持仓列表旧 `profit_loss` 并存不替换；经 #595 聚合端点 `holdings/by-product|by-platform` 接入，无当日市值快照时降级 None——改本服务会影响这两个端点）；`holding_aggregation_service.py`（#595 组合详情页双视图聚合，读侧，口径单一事实来源在其模块 docstring）。其他服务职责读各文件 docstring。
 
 * **精度入口 [quantize.py](app/utils/quantize.py)**：规则与产生点统一见[数值口径](../docs/reference/business-constraints.md#rule-precision)。守门为 `test_quantize.py::TestQuantizeNav` / `TestAmountToSharesTwoStepQuantization`、`test_snapshot_service.py::TestValueSnapshotFourDecimalRounding` 与 `test_trades_validation_preview.py::TestTradePreview` 的四位边界用例；它们区分 HALF_UP 与缺省 HALF_EVEN，不能换成非边界数字。`TestFinancialQuantizationGuard` 在六个核心财务模块默认禁止直接 `.quantize()` 与 `round()`——含属性形式（`builtins.round()`、其别名、`np.round()`、`Series.round()`，不白名单接收者）、模块级调用与嵌套/异步函数（#590 收紧：新增未登记函数直接舍入即失败，不再依赖「登记产生点」圈定禁止范围）；读侧统计舍入（float 序列化展示）仅按「文件 + 限定函数」登记豁免（例外清单以 `test_quantize.py::_FINANCIAL_ROUND_EXCEPTIONS` 台账为准，代码用字面相等断言钉死），豁免限**函数体**及其嵌套函数——装饰器与默认值在定义处的外层作用求值、不在豁免内，豁免也不扩大为整文件、不豁免 `.quantize()`；例外函数更名/迁移或其子树内不再有直接豁免调用时按过期例外失败，父与嵌套子同时登记按无效台账失败（内层恒被外层遮蔽），空扫描不得通过。**不覆盖的形态**（AST `Call` 匹配的固有逃逸面，由 `test_known_escape_forms_are_not_covered` 钉成可见契约、扩展守卫时该用例翻红迫使有意识更新）：`functools.partial(round, …)`、`map(round, xs)`、f-string `f"{v:.2f}"`。ORM 成本价保持 Decimal，理由见[审计载荷](../docs/reference/logging.md#logging-audit)。
 
@@ -138,7 +138,8 @@ cd backend && pytest tests -q
   | --- | --- |
   | `snapshot_service.py`（生成/重算/级联回退） | `pytest tests/unit/test_snapshot_service.py tests/integration -q -k snapshot` |
   | `position_service.py`（可用现金/份额） | `pytest tests/unit/test_position_service.py tests/integration -q -k "position or in_transit or cash"` |
-  | `cumulative_profit_service.py`（累计收益读侧，#598） | `pytest tests/integration/test_cumulative_profits.py tests/unit/test_position_service.py -q` |
+  | `cumulative_profit_service.py`（累计收益读侧，#598；消费方含 #595 聚合端点） | `pytest tests/integration/test_cumulative_profits.py tests/integration/test_holding_aggregation.py tests/unit/test_position_service.py -q` |
+  | `holding_aggregation_service.py`（#595 按产品/按平台聚合读侧） | `pytest tests/integration/test_holding_aggregation.py -q` |
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | `cash_transfer_service.py`（跨天现金转移，两腿 Trade） | `pytest tests/integration/test_trades*.py tests/integration/test_cash_transfers*.py tests/integration/test_trade_cash_check.py -q` |

@@ -1,7 +1,9 @@
-"""#595 步骤①：持仓聚合 API（组合详情页「按产品 / 按平台」双视图）。
+"""#595：持仓聚合 API（组合详情页「按产品 / 按平台」双视图）。
 
 覆盖：跨平台聚合与平台切片、现金聚合卡、在途计入总市值但不出卡、
-#598 累计收益三粒度接入与无市值快照降级、spec §6 过滤、双日 daily_profit、
+#598 累计收益三粒度接入与无市值快照降级（其余字段不受影响）、过滤规则、
+双日 daily_profit 跨平台求和、LOF 一码多市场独立成卡（#461）、行级缺成本
+时持有收益整体置 None、INVALID_AMOUNT 存量数据错误原样 422、
 空组合 / 未知组合 / viewer 读权限。
 """
 
@@ -185,10 +187,31 @@ class TestByProduct:
         test_db.commit()
         data = _by_product(client, admin_headers)
         assert data["total_market_value"] == 2280.0
+        f1 = next(p for p in data["products"] if p["product_code"] == F1)
+        assert f1["holding_profit"] == 30.0       # 持有收益不受降级影响
+        assert f1["ratio"] == 0.0789              # 占比不受降级影响
+        assert f1["daily_profit"] is None
         for p in data["products"]:
             assert p["cumulative_profit"] is None
             for s in p["platforms"]:
                 assert s["cumulative_profit"] is None
+
+    def test_invalid_amount_propagates_as_422(
+        self, client, admin_headers, test_db, base_portfolio
+    ):
+        """存量 confirmed 交易缺 actual_amount：累计收益不吞错，原样 422。"""
+        create_trade(
+            test_db, portfolio_code=PORT, product_code=F1, market=F1M,
+            platform_code=PA, trade_type="buy", status="confirmed",
+            trade_date=D1, confirm_date=D1, amount=100.0, actual_amount=None,
+        )
+        for path in ("by-product", "by-platform"):
+            resp = client.get(
+                f"/api/positions/portfolio/{PORT}/holdings/{path}",
+                headers=admin_headers,
+            )
+            assert resp.status_code == 422
+            assert resp.json()["detail"]["error"] == "INVALID_AMOUNT"
 
     def test_zero_value_and_zero_shares_filtered(self, client, admin_headers, test_db):
         create_portfolio(test_db, code="HAGG_Z", status="active")
@@ -213,23 +236,90 @@ class TestByProduct:
         assert data["products"] == []
         assert data["total_market_value"] == 100.0
 
+    def test_lof_one_code_multi_market_kept_separate(
+        self, client, admin_headers, test_db
+    ):
+        """LOF 一码多市场（#461）：两市场各自成卡，不跨市场聚合/摊派。"""
+        create_portfolio(test_db, code="HAGG_LOF", status="active")
+        create_platform(test_db, code="HAGG_LOF_PLAT")
+        create_product(test_db, code="HAGG_LOF_F", market="CN_OTC",
+                       name="LOF场外", product_type="LOF")
+        create_product(test_db, code="HAGG_LOF_F", market="CN_EXCHANGE",
+                       name="LOF场内", product_type="LOF")
+        create_position_snapshot(
+            test_db, "HAGG_LOF", "HAGG_LOF_F", "CN_OTC", snapshot_date=D1,
+            shares=100.0, cost_price=1.0, unit_price=1.0, market_value=100.0,
+            platform_code="HAGG_LOF_PLAT",
+        )
+        create_position_snapshot(
+            test_db, "HAGG_LOF", "HAGG_LOF_F", "CN_EXCHANGE", snapshot_date=D1,
+            shares=200.0, cost_price=2.0, unit_price=2.0, market_value=400.0,
+            platform_code="HAGG_LOF_PLAT",
+        )
+        data = _by_product(client, admin_headers, code="HAGG_LOF")
+        cards = {p["market"]: p for p in data["products"]}
+        assert set(cards) == {"CN_OTC", "CN_EXCHANGE"}  # 错误实现会合成一张卡
+        assert cards["CN_OTC"]["market_value"] == 100.0
+        assert cards["CN_EXCHANGE"]["market_value"] == 400.0
+        assert cards["CN_OTC"]["shares"] == 100.0
+        assert cards["CN_EXCHANGE"]["shares"] == 200.0
+        plat = _by_platform(client, admin_headers, code="HAGG_LOF")
+        assert plat["platforms"][0]["product_count"] == 2
+
+    def test_row_missing_cost_nones_profit(self, client, admin_headers, test_db):
+        """行级缺成本价：产品卡/切片/平台卡的持有收益整体置 None，不发布部分和。"""
+        create_portfolio(test_db, code="HAGG_NC", status="active")
+        create_platform(test_db, code="HAGG_NC_A")
+        create_platform(test_db, code="HAGG_NC_B")
+        create_product(test_db, code=F1, market=F1M)
+        create_position_snapshot(
+            test_db, "HAGG_NC", F1, F1M, snapshot_date=D1, shares=100.0,
+            cost_price=None, unit_price=1.2, market_value=120.0,
+            platform_code="HAGG_NC_A",
+        )
+        create_position_snapshot(
+            test_db, "HAGG_NC", F1, F1M, snapshot_date=D1, shares=50.0,
+            cost_price=1.0, unit_price=1.2, market_value=60.0,
+            platform_code="HAGG_NC_B",
+        )
+        data = _by_product(client, admin_headers, code="HAGG_NC")
+        f1 = data["products"][0]
+        assert f1["market_value"] == 180.0           # 市值仍完整合计
+        assert f1["shares"] == 150.0
+        assert f1["holding_profit"] is None          # 不发布只含 B 平台的部分和
+        assert f1["holding_profit_percent"] is None
+        slices = {s["platform_code"]: s for s in f1["platforms"]}
+        assert slices["HAGG_NC_A"]["holding_profit"] is None
+        assert slices["HAGG_NC_B"]["holding_profit"] == 10.0  # 60 − 50×1.0
+        plat = _by_platform(client, admin_headers, code="HAGG_NC")
+        plats = {p["platform_code"]: p for p in plat["platforms"]}
+        assert plats["HAGG_NC_A"]["holding_profit"] is None
+        assert plats["HAGG_NC_B"]["holding_profit"] == 10.0
+
     def test_daily_profit_aggregated_on_second_day(
         self, client, admin_headers, test_db
     ):
         create_portfolio(test_db, code="HAGG_D", status="active")
         create_platform(test_db, code="HAGG_D_PLAT")
+        create_platform(test_db, code="HAGG_D_PLAT2")
         create_product(test_db, code=F1, market=F1M)
-        for day, mv in ((D1, 100.0), (D2, 110.0)):
+        # 跨平台两行：「取首行代替求和」的实现过不了下面的合计断言
+        for day, mv1, mv2 in ((D1, 100.0, 50.0), (D2, 110.0, 55.0)):
             create_position_snapshot(
                 test_db, "HAGG_D", F1, F1M, snapshot_date=day, shares=100.0,
-                cost_price=1.0, unit_price=1.0, market_value=mv,
+                cost_price=1.0, unit_price=1.0, market_value=mv1,
                 platform_code="HAGG_D_PLAT",
+            )
+            create_position_snapshot(
+                test_db, "HAGG_D", F1, F1M, snapshot_date=day, shares=50.0,
+                cost_price=1.0, unit_price=1.0, market_value=mv2,
+                platform_code="HAGG_D_PLAT2",
             )
         data = _by_product(client, admin_headers, code="HAGG_D")
         assert data["snapshot_date"] == str(D2)
         f1 = data["products"][0]
-        assert f1["market_value"] == 110.0
-        assert f1["daily_profit"] == 10.0            # 110 − 100，D2 无确认净买入
+        assert f1["market_value"] == 165.0
+        assert f1["daily_profit"] == 15.0            # (110−100) + (55−50)
 
     def test_empty_portfolio_returns_empty(self, client, admin_headers, test_db):
         create_portfolio(test_db, code="HAGG_E", status="active")
@@ -259,6 +349,7 @@ class TestByPlatform:
 
         a = data["platforms"][0]
         assert a["platform_name"] == "平台A"
+        assert a["platform_type"] == "第三方平台"     # 与 platform 表映射一致
         assert a["market_value"] == 1720.0
         assert a["cash_balance"] == 1000.0
         assert a["product_count"] == 2               # 只计非现金非在途（F1、F2）
@@ -283,6 +374,8 @@ class TestByPlatform:
         ).delete()
         test_db.commit()
         data = _by_platform(client, admin_headers)
+        a = next(p for p in data["platforms"] if p["platform_code"] == PA)
+        assert a["holding_profit"] == -80.0          # 持有收益不受降级影响
         for p in data["platforms"]:
             assert p["cumulative_profit"] is None
             assert p["market_value"] > 0
