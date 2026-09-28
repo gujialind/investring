@@ -272,3 +272,37 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
     await expect(card).not.toContainText("0.0000");
   });
 });
+
+// #595 §4.5：现金市值更新 Dialog 验收
+test.describe("现金市值更新 Dialog", () => {
+  test("平台-产品详情页（现金）：操作行含市值更新按钮，点击打开 Dialog", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const actionRow = page.getByTestId("platform-product-action-row");
+    await expect(actionRow).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "转入" })).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "转出" })).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "市值更新" })).toBeVisible();
+
+    // 点击打开 Dialog
+    await actionRow.getByRole("button", { name: "市值更新" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
+    // 平台应预填 HBZQ
+    await expect(page.getByTestId("cash-platform")).toBeVisible();
+  });
+
+  test("Dialog 表单校验：空金额/未选平台提示错误", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await page.getByTestId("platform-product-action-row").getByRole("button", { name: "市值更新" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    // 清空平台选择后提交 → 应提示错误
+    // 注意：预填的平台无法通过 UI 清空（SearchablePlatformSelect 无 clear 按钮），
+    // 所以此测试验证金额校验
+    const amountInput = page.getByLabel("当前金额（元）");
+    await amountInput.fill("");
+    await page.getByRole("button", { name: "确认更新" }).click();
+    // HTML5 required 会阻止提交；验证 input 仍可见（Dialog 未关闭）
+    await expect(page.getByRole("dialog")).toBeVisible();
+  });
+});

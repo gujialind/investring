@@ -88,10 +88,10 @@ export function useUpdatePosition() {
   });
 }
 
-// 更新非净值资产（现金重估，写 manual_market_value 绝对替换）——PC/移动端持仓页共用
+// #595 §4.5：更新非净值资产（现金重估，写 manual_market_value 绝对替换）
+// 返回完整响应供调用方处理 warnings / requires_snapshot_regen
 export function useUpdateCashPosition(portfolioCode: string) {
   const queryClient = useQueryClient();
-  const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
     mutationFn: ({ amount, platformCode, updateDate }: {
@@ -101,18 +101,38 @@ export function useUpdateCashPosition(portfolioCode: string) {
     }) => positionApi.updateCashPosition(portfolioCode, amount, platformCode, updateDate),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [POSITION_QUERY_KEY, portfolioCode] });
-      addToast({
-        type: "success",
-        title: "更新成功",
-        message: "非净值资产金额已更新",
-      });
+    },
+  });
+}
+
+// #595 §4.5：查询现金手动覆盖记录
+export function useListCashOverrides(
+  portfolioCode: string,
+  params?: { platform_code?: string; start_date?: string; end_date?: string },
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: [POSITION_QUERY_KEY, portfolioCode, "cash-overrides", params],
+    queryFn: () => positionApi.listCashOverrides(portfolioCode, params),
+    enabled: enabled && !!portfolioCode,
+    staleTime: 10 * 1000,
+  });
+}
+
+// #595 §4.5：撤销现金手动覆盖
+export function useDeleteCashOverride(portfolioCode: string) {
+  const queryClient = useQueryClient();
+  const addToast = useUIStore((state) => state.addToast);
+
+  return useMutation({
+    mutationFn: ({ platformCode, updateDate }: { platformCode: string; updateDate: string }) =>
+      positionApi.deleteCashOverride(portfolioCode, platformCode, updateDate),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [POSITION_QUERY_KEY, portfolioCode] });
+      addToast({ type: "success", title: "已撤销", message: "覆盖记录已删除，回退到自然计算值" });
     },
     onError: (error: unknown) => {
-      addToast({
-        type: "error",
-        title: "更新失败",
-        message: getErrorMessage(error, "更新失败，请检查网络连接或联系管理员"),
-      });
+      addToast({ type: "error", title: "撤销失败", message: getErrorMessage(error, "请稍后重试") });
     },
   });
 }

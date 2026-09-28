@@ -120,3 +120,36 @@ test.describe("产品详情页", () => {
     ).toBeVisible();
   });
 });
+
+// #595 §4.5：现金产品详情页操作行为转入/转出 + 市值更新
+const CASH_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/CASH/CASH`;
+
+test.describe("现金产品详情页", () => {
+  test("操作行：转入/转出/市值更新（非买入/卖出/事件）", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const actionRow = page.getByTestId("product-action-row");
+    await expect(actionRow).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "转入" })).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "转出" })).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "市值更新" })).toBeVisible();
+    // 不应有买入/卖出/事件按钮
+    await expect(actionRow.getByRole("link", { name: "买入" })).not.toBeVisible();
+    await expect(actionRow.getByRole("link", { name: "卖出" })).not.toBeVisible();
+  });
+
+  test("市值更新按钮打开 Dialog", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await page.getByTestId("product-action-row").getByRole("button", { name: "市值更新" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
+  });
+
+  test("净值相关卡片不显示（现金无净值）", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await expect(page.getByTestId("product-overview-card")).toBeVisible();
+    // 净值走势/区间收益/历史净值卡片不应出现
+    await expect(page.getByTestId("product-curve-card")).not.toBeVisible();
+    await expect(page.getByTestId("product-returns-card")).not.toBeVisible();
+    await expect(page.getByTestId("product-history-card")).not.toBeVisible();
+  });
+});

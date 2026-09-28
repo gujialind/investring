@@ -13,6 +13,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
   formatCurrency,
   formatDate,
@@ -31,6 +32,7 @@ import { useNavAnalysis } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 
 /** 净值曲线区间 Tab（M3/D3：近1月/近3月/近6月/近1年，默认近6月） */
 const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
@@ -85,6 +87,10 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const product = holdings?.products.find(
     (p) => p.product_code === productCode && p.market === market
   );
+
+  // #595 §4.5：现金产品检测 + 市值更新 Dialog 状态
+  const isCash = productCode === CASH_PRODUCT_CODE;
+  const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
 
   const [range, setRange] = useState<NavAnalysisRange>("6m");
   const { data: analysis } = useNavAnalysis(productCode, market, range);
@@ -201,7 +207,20 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </Card>
   );
 
-  const actionRow = (
+  // #595 §4.5/D-10：现金产品操作行为转入/转出 + 市值更新
+  const actionRow = isCash ? (
+    <div className="flex gap-2" data-testid="product-action-row">
+      <Button asChild className="flex-1">
+        <Link href={tradesLink}>转入</Link>
+      </Button>
+      <Button asChild variant="outline" className="flex-1">
+        <Link href={tradesLink}>转出</Link>
+      </Button>
+      <Button variant="outline" className="flex-1" onClick={() => setIsCashUpdateOpen(true)}>
+        市值更新
+      </Button>
+    </div>
+  ) : (
     <div className="flex gap-2" data-testid="product-action-row">
       <Button asChild className="flex-1">
         <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
@@ -227,7 +246,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     />
   );
 
-  const curveCard = (
+  // 净值相关卡片仅非现金产品显示
+  const curveCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-curve-card">
       <h3 className="text-lg font-semibold">累计净值走势</h3>
       <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
@@ -254,7 +274,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
-  const returnsCard = (
+  const returnsCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-returns-card">
       <h3 className="text-lg font-semibold">区间收益率</h3>
       <div className="mt-3 grid grid-cols-3 gap-3">
@@ -273,7 +293,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
-  const historyCard = (
+  const historyCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-history-card">
       <h3 className="text-lg font-semibold">历史净值</h3>
       {historyItems.length === 0 ? (
@@ -413,6 +433,15 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
             {tradesCard}
           </div>
         </div>
+      )}
+
+      {/* #595 §4.5：现金市值更新 Dialog（仅现金产品使用） */}
+      {isCash && (
+        <CashMarketValueUpdateDialog
+          portfolioCode={portfolioCode}
+          open={isCashUpdateOpen}
+          onOpenChange={setIsCashUpdateOpen}
+        />
       )}
     </div>
   );

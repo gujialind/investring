@@ -6,6 +6,7 @@ export { ApiException, handleApiError, getErrorMessage, getBasePath } from "./cl
 export { authApi } from "./auth";
 export { investorApi } from "./investor";
 export { portfolioApi, positionApi } from "./portfolio";
+export type { CashPositionUpdateResponse, CashOverrideItem, CashOverrideListResponse } from "./portfolio";
 export { subscriptionApi } from "./subscription";
 export type { SubscriptionListParams } from "./subscription";
 export { tradeApi } from "./trade";

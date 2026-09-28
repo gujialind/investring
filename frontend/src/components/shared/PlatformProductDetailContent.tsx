@@ -12,6 +12,7 @@ import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
@@ -80,6 +81,8 @@ export default function PlatformProductDetailContent({
   const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
   const isCash = productCode === CASH_PRODUCT_CODE;
+  // #595 §4.5：现金市值更新 Dialog 状态
+  const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
 
   const { data: holdings, isLoading: holdingsLoading, isError: holdingsError, error: holdingsErr, refetch: refetchHoldings } =
     useHoldingsByProduct(portfolioCode);
@@ -203,6 +206,7 @@ export default function PlatformProductDetailContent({
     </Card>
   );
 
+  // #595 §4.5/D-10：现金产品操作行为转入/转出 + 市值更新
   const actionRow = isCash ? (
     <div className="flex gap-2" data-testid="platform-product-action-row">
       <Button asChild className="flex-1">
@@ -210,6 +214,9 @@ export default function PlatformProductDetailContent({
       </Button>
       <Button asChild variant="outline" className="flex-1">
         <Link href={tradesLink}>转出</Link>
+      </Button>
+      <Button variant="outline" className="flex-1" onClick={() => setIsCashUpdateOpen(true)}>
+        市值更新
       </Button>
     </div>
   ) : (
@@ -441,6 +448,16 @@ export default function PlatformProductDetailContent({
             {allPlatformsCard}
           </div>
         </div>
+      )}
+
+      {/* #595 §4.5：现金市值更新 Dialog（仅现金产品使用，预填本平台） */}
+      {isCash && (
+        <CashMarketValueUpdateDialog
+          portfolioCode={portfolioCode}
+          open={isCashUpdateOpen}
+          onOpenChange={setIsCashUpdateOpen}
+          defaultPlatformCode={platformCode}
+        />
       )}
     </div>
   );

@@ -12,6 +12,35 @@ import { Position, PositionCreate, PositionUpdate } from "@/types/position";
 import { HoldingsByProductResponse, HoldingsByPlatformResponse } from "@/types/holding";
 import { PaginatedResponse } from "@/types/common";
 
+// #595 §4.5：现金市值覆盖响应类型
+export interface CashPositionUpdateResponse {
+  success: boolean;
+  message: string;
+  portfolio_code: string;
+  platform_code: string;
+  cash_amount: number;
+  computed_value: number | null;
+  update_date: string;
+  requires_snapshot_regen: boolean;
+  warnings: string[];
+}
+
+export interface CashOverrideItem {
+  id: number;
+  platform_code: string;
+  platform_name: string;
+  update_date: string;
+  manual_value: number;
+  computed_value: number | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface CashOverrideListResponse {
+  items: CashOverrideItem[];
+  total: number;
+}
+
 export const portfolioApi = {
   list: (params?: { page?: number; page_size?: number; status?: string }) =>
     request<PaginatedResponse<Portfolio>>({ method: "GET", url: "/portfolios", params }),
@@ -86,11 +115,28 @@ export const positionApi = {
       url: `/positions/portfolio/${portfolioCode}/investor/${investorCode}/available-shares`,
     }),
 
+  // #595 §4.5：现金市值覆盖（写 manual_market_value，绝对替换）
   updateCashPosition: (portfolioCode: string, amount: number, platformCode: string, updateDate?: string) =>
-    request<{ success: boolean; message: string; portfolio_code: string; platform_code: string; cash_amount: number; update_date: string }>({
+    request<CashPositionUpdateResponse>({
       method: "POST",
       url: `/positions/portfolio/${portfolioCode}/cash-position`,
       data: { cash_amount: amount, platform_code: platformCode, update_date: updateDate },
+    }),
+
+  // #595 §4.5：查询现金手动覆盖记录
+  listCashOverrides: (portfolioCode: string, params?: { platform_code?: string; start_date?: string; end_date?: string }) =>
+    request<CashOverrideListResponse>({
+      method: "GET",
+      url: `/positions/portfolio/${portfolioCode}/cash-position`,
+      params,
+    }),
+
+  // #595 §4.5：撤销现金手动覆盖（回退自然值）
+  deleteCashOverride: (portfolioCode: string, platformCode: string, updateDate: string) =>
+    request<{ success: boolean; message: string }>({
+      method: "DELETE",
+      url: `/positions/portfolio/${portfolioCode}/cash-position`,
+      params: { platform_code: platformCode, update_date: updateDate },
     }),
 
   // #595 组合详情页双视图：按产品 / 按平台聚合
