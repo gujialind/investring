@@ -280,13 +280,27 @@ export default function PortfolioHoldings({
         <div className="py-8 text-center text-muted-foreground">暂无持仓记录</div>
       ) : (
         <div className={`pt-3 ${cardGridClass(variant)}`}>
-          {platforms.map((p, i) => (
-            <HoldingPlatformCard
-              key={p.platform_code ?? "unknown"}
-              platform={p}
-              percent={platformPercents[i] ?? 0}
-            />
-          ))}
+          {platforms.map((p, i) => {
+            const card = (
+              <HoldingPlatformCard
+                platform={p}
+                percent={platformPercents[i] ?? 0}
+              />
+            );
+            // S10：匿名平台（platform_code 为 NULL）不包 Link，避免残缺路由死链
+            if (!p.platform_code) {
+              return <div key="anonymous-platform">{card}</div>;
+            }
+            return (
+              <Link
+                key={p.platform_code}
+                href={`${basePath}/${portfolioCode}/platforms/${p.platform_code}`}
+                className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {card}
+              </Link>
+            );
+          })}
         </div>
       )}
     </div>

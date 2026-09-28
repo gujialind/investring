@@ -142,6 +142,7 @@ class TestByProduct:
         assert f1["platforms"][0]["shares"] == 100.0
         assert f1["platforms"][0]["holding_profit"] == 20.0
         assert f1["platforms"][0]["cumulative_profit"] == 20.0   # 120 − 100
+        assert f1["platforms"][0]["daily_profit"] is None         # 首日无日收益
         assert f1["platforms"][0]["ratio_in_product"] == 0.6667  # 120/180
         assert f1["platforms"][1]["cumulative_profit"] == 10.0   # 60 − 50
         assert f1["platforms"][1]["ratio_in_product"] == 0.3333
@@ -321,6 +322,10 @@ class TestByProduct:
         f1 = data["products"][0]
         assert f1["market_value"] == 165.0
         assert f1["daily_profit"] == 15.0            # (110−100) + (55−50)
+        # #595 步骤④：平台切片也需 daily_profit（精确派生，非估算）
+        slices = {s["platform_code"]: s for s in f1["platforms"]}
+        assert slices["HAGG_D_PLAT"]["daily_profit"] == 10.0   # 110−100
+        assert slices["HAGG_D_PLAT2"]["daily_profit"] == 5.0   # 55−50
 
     def test_empty_portfolio_returns_empty(self, client, admin_headers, test_db):
         create_portfolio(test_db, code="HAGG_E", status="active")

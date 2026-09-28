@@ -97,6 +97,7 @@ class HoldingProductPlatformSlice(BaseModel):
     cash_amount: Optional[float] = None
     holding_profit: Optional[float] = None
     cumulative_profit: Optional[float] = None
+    daily_profit: Optional[float] = None
     ratio_in_product: Optional[float] = None
 
 

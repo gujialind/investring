@@ -70,15 +70,21 @@ test.describe("产品详情页", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
-  test("平台分布：单平台一行、市值与占比", async ({ page }) => {
+  test("平台分布：单平台一行、市值与占比、行可点击进入平台-产品详情", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
-    const card = page.getByTestId("product-platform-card");
-    const rows = card.getByTestId("product-platform-row");
+    const card = page.getByTestId("platform-distribution-card");
+    const rows = card.getByTestId("platform-distribution-row");
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText("华宝证券");
     await expect(rows.first()).toContainText("15,000.00");
     await expect(rows.first()).toContainText("63,000.00");
     await expect(rows.first()).toContainText("100.0%");
+    // S7：行点击 → 平台-产品详情页（步骤④接线）
+    await rows.first().getByRole("link").click();
+    await page.waitForURL(/\/platforms\/HBZQ\/products\/510300\.SH/);
+    await expect(
+      page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
+    ).toBeVisible();
   });
 
   test("交易记录卡：该产品跨平台记录与查看全部链接", async ({ page }) => {
