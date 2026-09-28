@@ -72,6 +72,8 @@ test.describe("平台详情页", () => {
     await expect(rows.first()).toContainText("沪深300ETF");
     // 子行含现金到账/扣款标注
     await expect(rows.first()).toContainText(/现金/);
+    // R4-S1：CASH 孤儿行走 cashOrphanLabel（「现金 · 申赎确认」），与 TradesContent 同口径
+    await expect(rows.nth(2)).toContainText(/现金 · 申赎确认/);
     // Blocker 1 回归：pending 场外价格不应渲染成 0.0000
     await expect(card).not.toContainText("0.0000");
     await expect(card.getByRole("link", { name: "查看全部" })).toHaveAttribute(
@@ -262,8 +264,10 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
     await page.goto(`/portfolio/${code}/platforms/HBZQ`);
     const card = page.getByTestId("platform-trades-card");
     await expect(card).toBeVisible({ timeout: 10_000 });
-    // 正向断言：该行显示 "--"（formatNav(null) → "--"）
-    await expect(card).toContainText("--");
+    // R4-N1：锚到基金腿行断言价格位 "--"（formatNav(null) → "--"），
+    // 而非依赖孤儿 CASH 腿的份额占位（结对后子行不含份额/价格位）
+    const fundRow = card.getByTestId("platform-trade-row").filter({ hasText: "沪深300联接" }).first();
+    await expect(fundRow).toContainText("@ --");
     // 不应出现 0.0000
     await expect(card).not.toContainText("0.0000");
   });
