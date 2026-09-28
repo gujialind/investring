@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { E2E_ACTIVE, gotoPortfolioDetail } from "./helpers";
+import { test, expect, type Page, type TestInfo } from "@playwright/test";
+import { E2E_ACTIVE, gotoPortfolioDetail, authHeaders } from "./helpers";
 
 /**
  * #595 步骤④ 平台详情页（M4/D4）+ 平台-产品详情页（M5/D5），双端共享组件。
@@ -206,5 +206,62 @@ test.describe("平台-产品详情页", () => {
   test("未知产品 EmptyState", async ({ page }) => {
     await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/NONEXISTENT?market=CN_EXCHANGE`);
     await expect(page.getByText("未找到该平台产品持仓")).toBeVisible();
+  });
+});
+
+/**
+ * S1'：自建隔离组合造一笔场外（CN_OTC）pending 调仓（price=NULL），
+ * 正向断言平台交易卡该行显示 "--"（而非 "0.0000"）。
+ * 模式复用 portfolio-holdings-view.spec.ts 的 setupInTransitPortfolio。
+ */
+test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
+  test("场外 pending 调仓价格显示 -- 而非 0.0000", async ({ page }, testInfo) => {
+    const code = `E595P_${testInfo.project.name}_${testInfo.retry}`;
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const headers = await authHeaders(page);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const year = Number(today.slice(0, 4));
+    const calendars = await Promise.all(
+      [year - 1, year, year + 1].map(async (y) => {
+        const resp = await page.request.get(`/api/trading-calendar?year=${y}`, { headers });
+        await expect(resp).toBeOK();
+        return (await resp.json()) as { calendar_date: string; is_open: boolean }[];
+      }),
+    );
+    const days = calendars.flat().filter((d) => d.is_open).map((d) => d.calendar_date).sort();
+    const uptoToday = days.filter((d) => d <= today);
+    expect(uptoToday.length).toBeGreaterThanOrEqual(2);
+    const [apply, target] = uptoToday.slice(-2);
+
+    const post = async <T = unknown>(path: string, data?: unknown): Promise<T> => {
+      const resp = await page.request.post(path, { headers, data });
+      await expect(resp, `${path} ${resp.status()}`).toBeOK();
+      return resp.json();
+    };
+
+    await post("/api/portfolios", { code, name: `B1回归 ${code}` });
+    const sub = await post<{ id: number }>("/api/subscriptions", {
+      portfolio_code: code, investor_code: "ADMIN", platform_code: "HBZQ",
+      sub_type: "subscribe", amount: 100000, apply_date: apply,
+    });
+    await post(`/api/subscriptions/${sub.id}/confirm`);
+    // 场外 pending 买入：不传 price → 落库 NULL
+    await post("/api/trades", {
+      portfolio_code: code, product_code: "000300.OF", market: "CN_OTC",
+      platform_code: "HBZQ", trade_type: "buy", trade_date: target,
+      amount: 8200, fee: 0,
+    });
+    // 生成 T 日快照（含在途行，使平台聚合有数据；OTC confirm_days=1 不会被自动确认）
+    await post("/api/snapshots/generate", { portfolio_code: code, target_date: target });
+
+    // 直达平台详情页
+    await page.goto(`/portfolio/${code}/platforms/HBZQ`);
+    const card = page.getByTestId("platform-trades-card");
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    // 正向断言：该行显示 "--"（formatNav(null) → "--"）
+    await expect(card).toContainText("--");
+    // 不应出现 0.0000
+    await expect(card).not.toContainText("0.0000");
   });
 });

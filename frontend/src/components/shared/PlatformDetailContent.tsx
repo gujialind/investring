@@ -118,9 +118,6 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   const snapshotDate = productData?.snapshot_date ?? platformData?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?platform=${encodeURIComponent(platformCode)}`;
 
-  // 在途资金口径说明（概览市值含在途，明细不含——与组合详情页同裁决）
-  const inTransitValue = productData?.in_transit_market_value ?? 0;
-
   const overview = (
     <Card data-testid="platform-overview-card">
       <CardContent className="pt-4">
@@ -232,12 +229,6 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
               </Link>
             )}
           </div>
-          {/* S5：在途资金口径说明——概览市值含在途，明细卡片不含 */}
-          {inTransitValue > 0 && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              *持仓市值含在途资金 ¥{formatCurrency(inTransitValue).replace("¥", "")}，上方卡片不含在途
-            </p>
-          )}
         </>
       )}
     </section>

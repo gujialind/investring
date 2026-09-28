@@ -70,7 +70,7 @@ export default function PlatformDistributionCard({
                       {formatCurrency(slice.market_value)}
                     </div>
                     <div className="text-xs text-muted-foreground number-cell">
-                      {percents[i]?.toFixed(1) ?? "--"}%
+                      {percents[i].toFixed(1)}%
                     </div>
                   </div>
                 </div>

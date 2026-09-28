@@ -104,6 +104,7 @@ export default function PlatformProductDetailContent({
   });
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
   const historyTotal = historyQueries[0]?.data?.total ?? 0;
+  const historyError = historyQueries.some((q) => q.isError);
   const latestPrice = historyItems[0];
 
   const { data: tradesData, isError: tradesError } = useTradeList({
@@ -275,7 +276,9 @@ export default function PlatformProductDetailContent({
   const historyCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-history-card">
       <h3 className="text-lg font-semibold">历史净值</h3>
-      {historyItems.length === 0 ? (
+      {historyError ? (
+        <p className="mt-3 text-sm text-muted-foreground">净值加载失败</p>
+      ) : historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (
         <>
