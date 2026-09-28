@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildCardPercentMap,
   buildProductSections,
+  productCardKey,
   sumGroupPercent,
   OTHER_SECTION_NAME,
   UNCATEGORIZED_GROUP_NAME,
 } from "@/lib/holdings";
+import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import type { HoldingProductAggregate } from "@/types/holding";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 
@@ -133,12 +136,37 @@ describe("buildProductSections", () => {
 });
 
 describe("sumGroupPercent", () => {
-  it("按 ratio 求和转百分数，null 按 0 计", () => {
+  it("按行级占比求和（percentOf 注入，分区头取整由展示层负责）", () => {
+    const products = [makeProduct({}), makeProduct({}), makeProduct({})];
+    const percentOf = () => 33.4;
+    expect(sumGroupPercent(products, percentOf)).toBeCloseTo(100.2, 5);
+  });
+});
+
+describe("buildCardPercentMap", () => {
+  it("三行等值 → 33.4/33.3/33.3，加总恒 100.0（§4 反例）", () => {
     const products = [
-      makeProduct({ ratio: 0.224 }),
-      makeProduct({ ratio: 0.187 }),
-      makeProduct({ ratio: null }),
+      makeProduct({ product_code: "A", market_value: 100 }),
+      makeProduct({ product_code: "B", market_value: 100 }),
+      makeProduct({ product_code: "C", market_value: 100 }),
     ];
-    expect(sumGroupPercent(products)).toBeCloseTo(41.1, 5);
+    const map = buildCardPercentMap(products, 0);
+    expect(map.get(productCardKey(products[0]))).toBe(33.4);
+    expect([...map.values()].reduce((s, v) => s + v, 0)).toBeCloseTo(100.0, 5);
+    expect(new Set(map.values()).size).toBe(2); // 33.4 + 33.3 + 33.3
+  });
+
+  it("在途 >0 时参与同一行集，键为 PSEUDO_IN_TRANSIT_CODE；=0 时不产生在途行", () => {
+    const products = [makeProduct({ product_code: "A", market_value: 300 })];
+    const withTransit = buildCardPercentMap(products, 100);
+    expect(withTransit.get(PSEUDO_IN_TRANSIT_CODE)).toBe(25.0);
+    expect(withTransit.get(productCardKey(products[0]))).toBe(75.0);
+    const withoutTransit = buildCardPercentMap(products, 0);
+    expect(withoutTransit.has(PSEUDO_IN_TRANSIT_CODE)).toBe(false);
+    expect(withoutTransit.get(productCardKey(products[0]))).toBe(100.0);
+  });
+
+  it("空行集返回空 Map", () => {
+    expect(buildCardPercentMap([], 0).size).toBe(0);
   });
 });

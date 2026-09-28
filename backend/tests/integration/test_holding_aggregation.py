@@ -175,6 +175,7 @@ class TestByProduct:
         codes = {p["product_code"] for p in data["products"]}
         assert "IN_TRANSIT_BUY" not in codes
         assert data["total_market_value"] == 2280.0  # 含在途 300
+        assert data["in_transit_market_value"] == 300.0  # 单独发布，供前端在途聚合卡
 
     def test_cumulative_none_without_value_snapshot(
         self, client, admin_headers, test_db, base_portfolio
@@ -326,6 +327,7 @@ class TestByProduct:
         data = _by_product(client, admin_headers, code="HAGG_E")
         assert data["snapshot_date"] is None
         assert data["total_market_value"] == 0.0
+        assert data["in_transit_market_value"] == 0.0
         assert data["products"] == []
 
     def test_unknown_portfolio_404(self, client, admin_headers, test_db):

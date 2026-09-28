@@ -137,9 +137,17 @@ class HoldingProductAggregate(BaseModel):
 
 
 class HoldingsByProductResponse(BaseModel):
+    """按产品聚合的持仓视图响应。
+
+    total_market_value 含在途（在途计市值）；in_transit_market_value 为在途虚拟产品
+    市值合计（#595 评审决策：前端据此渲染在途聚合卡，与产品卡同一行级占比体系，
+    最大余数法加总恒 100.0%）；products 不含在途行（在途不出产品卡）。
+    """
+
     portfolio_code: str
     snapshot_date: Optional[date] = None
     total_market_value: float
+    in_transit_market_value: float
     products: List[HoldingProductAggregate]
 
 

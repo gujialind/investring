@@ -11,6 +11,8 @@
 import type { HoldingProductAggregate } from "@/types/holding";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 import { resolveSubDim, type SubDimension } from "@/lib/dimensions";
+import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
+import { largestRemainderPercents } from "@/lib/utils";
 
 export const UNCATEGORIZED_GROUP_NAME = "未分类";
 export const OTHER_SECTION_NAME = "其他";
@@ -104,7 +106,34 @@ export function buildProductSections(
   return sections;
 }
 
-/** 组/分区占比：名下产品 ratio 之和转百分数（后端 ratio 为 0-1 小数，含在途基数） */
-export function sumGroupPercent(products: HoldingProductAggregate[]): number {
-  return products.reduce((s, p) => s + (p.ratio ?? 0), 0) * 100;
+/** 产品卡稳定键（与 PortfolioHoldings 渲染 key 一致） */
+export function productCardKey(p: HoldingProductAggregate): string {
+  return `${p.product_code}-${p.market}`;
+}
+
+/**
+ * 行级占比（§4 最大余数法，加总恒 100.0%）：行集 = 产品聚合卡（含现金卡）+
+ * 在途聚合卡（市值 >0 时参与，#595 评审决策补回在途展示），全部行同一分配。
+ * 返回 产品卡键 → 占比百分数（如 62.4）的 Map；在途卡以 PSEUDO_IN_TRANSIT_CODE 为键。
+ */
+export function buildCardPercentMap(
+  products: HoldingProductAggregate[],
+  inTransitMarketValue: number
+): Map<string, number> {
+  const keys = products.map(productCardKey);
+  const amounts = products.map((p) => p.market_value);
+  if (inTransitMarketValue > 0) {
+    keys.push(PSEUDO_IN_TRANSIT_CODE);
+    amounts.push(inTransitMarketValue);
+  }
+  const percents = largestRemainderPercents(amounts);
+  return new Map(keys.map((key, i) => [key, percents[i]]));
+}
+
+/** 组/分区占比：名下产品卡行级占比之和（分区头/chip 由展示层取整，§4「加总后取整」） */
+export function sumGroupPercent(
+  products: HoldingProductAggregate[],
+  percentOf: (p: HoldingProductAggregate) => number
+): number {
+  return products.reduce((s, p) => s + percentOf(p), 0);
 }

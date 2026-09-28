@@ -15,6 +15,9 @@ import { largestRemainderPercents } from "@/lib/utils";
 
 export const IN_TRANSIT_CODES = new Set(["IN_TRANSIT_BUY", "IN_TRANSIT_SELL", "IN_TRANSIT_DIVIDEND"]);
 
+/** 现金虚拟产品键（部署期种子落库，#93）；与 IN_TRANSIT_CODES 同为 product_code 判据 */
+export const CASH_PRODUCT_CODE = "CASH";
+
 /** 伪大类稳定键（非字典维度值，前端固定附加） */
 export const PSEUDO_IN_TRANSIT_CODE = "__IN_TRANSIT__";
 export const PSEUDO_OTHER_CODE = "__OTHER__";

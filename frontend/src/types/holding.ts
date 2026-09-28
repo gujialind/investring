@@ -46,7 +46,10 @@ export interface HoldingProductAggregate {
 export interface HoldingsByProductResponse {
   portfolio_code: string;
   snapshot_date: string | null;
+  /** 含在途（在途计市值） */
   total_market_value: number;
+  /** 在途虚拟产品市值合计（#595 评审决策补回在途聚合卡；0 = 无在途） */
+  in_transit_market_value: number;
   products: HoldingProductAggregate[];
 }
 
