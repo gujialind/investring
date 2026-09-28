@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 import type { HoldingsView, HoldingProductAggregate } from "@/types/holding";
 import {
@@ -8,7 +9,7 @@ import {
   useHoldingsByProduct,
 } from "@/hooks/usePosition";
 import { assetClassColor, OTHER_COLOR } from "@/lib/colors";
-import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
+import { CASH_PRODUCT_CODE, PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import {
   buildCardPercentMap,
   buildProductSections,
@@ -24,6 +25,8 @@ import LoadingState from "./LoadingState";
 
 interface PortfolioHoldingsProps {
   portfolioCode: string;
+  /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio"（产品卡 → 产品详情页，#595 步骤③） */
+  basePath: string;
   /** asset_class 维度字典（分区顺序/颜色/二级分组维度驱动，issue #128） */
   assetClasses: AssetClassificationItem[];
   /** 组合级二级分组维度覆盖（issue #144，portfolio.display_config 契约原样传入） */
@@ -60,12 +63,15 @@ function ProductSections({
   percentOf,
   snapshotDate,
   variant,
+  productLinkPrefix,
 }: {
   sections: HoldingProductSection[];
   /** 行级占比查表（buildCardPercentMap 输出），§4 分区头 = 行占比加总后取整 */
   percentOf: (product: HoldingProductAggregate) => number;
   snapshotDate?: string | null;
   variant: "desktop" | "mobile";
+  /** 产品卡跳转前缀：`${basePath}/${portfolioCode}/product`；现金/在途卡不接线（步骤⑤/无详情） */
+  productLinkPrefix: string;
 }) {
   return (
     <>
@@ -133,14 +139,28 @@ function ProductSections({
                           : cardGridClass(variant)
                       }
                     >
-                      {g.products.map((p) => (
-                        <HoldingProductCard
-                          key={productCardKey(p)}
-                          product={p}
-                          percent={percentOf(p)}
-                          snapshotDate={snapshotDate}
-                        />
-                      ))}
+                      {g.products.map((p) => {
+                        const card = (
+                          <HoldingProductCard
+                            product={p}
+                            percent={percentOf(p)}
+                            snapshotDate={snapshotDate}
+                          />
+                        );
+                        // #595 步骤③：非现金产品卡点击 → 产品详情页；现金卡（步骤⑤）暂纯展示
+                        if (p.product_code === CASH_PRODUCT_CODE) {
+                          return <div key={productCardKey(p)}>{card}</div>;
+                        }
+                        return (
+                          <Link
+                            key={productCardKey(p)}
+                            href={`${productLinkPrefix}/${p.market}/${encodeURIComponent(p.product_code)}`}
+                            className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {card}
+                          </Link>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -162,6 +182,7 @@ function ProductSections({
  */
 export default function PortfolioHoldings({
   portfolioCode,
+  basePath,
   assetClasses,
   displayConfig,
   view,
@@ -241,6 +262,7 @@ export default function PortfolioHoldings({
               percentOf={percentOfProduct}
               snapshotDate={productData?.snapshot_date}
               variant={variant}
+              productLinkPrefix={`${basePath}/${portfolioCode}/product`}
             />
             {inTransitValue > 0 && (
               <div className={`mt-3 ${cardGridClass(variant)}`}>

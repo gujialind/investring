@@ -60,6 +60,9 @@ class TestNavHistoryPage:
         assert resp.status_code == 200
         body = resp.json()
         assert body["total"] == 14
+        # 信封回显 page/page_size（#637 L2 评审 S1，与全仓 Paginated*Response 对齐）
+        assert body["page"] == 1
+        assert body["page_size"] == 5
         items = body["items"]
         assert len(items) == 5
         dates = [item["price_date"] for item in items]
@@ -123,7 +126,7 @@ class TestNavHistoryPage:
             headers=viewer_headers,
         )
         assert resp.status_code == 200
-        assert resp.json() == {"items": [], "total": 0}
+        assert resp.json() == {"items": [], "total": 0, "page": 1, "page_size": 5}
 
 
 class TestNavAnalysis:
@@ -158,16 +161,17 @@ class TestNavAnalysis:
         )
         assert resp.status_code == 200
         returns = resp.json()["interval_returns"]
-        # 基准取「窗口起点当日或之后首条」：12-01 最新 4.15
-        # m1: 起点 11-01 → 基准 11-03(4.10) → 4.15/4.10-1 = 1.2195%
+        # 窗口锚点与 performance_service 组合级对齐（#637 L2 评审 S2）：
+        # 基准取「窗口起点当日或之后首条」；12-01 最新 4.15
+        # m1: 起点 11-01（-30d）→ 基准 11-03(4.10) → 4.15/4.10-1 = 1.2195%
         assert returns["m1"] == 1.2195
-        # m3: 起点 09-01 → 基准 09-01(4.00) → 3.7500%
-        assert returns["m3"] == 3.75
-        # m6: 起点 06-01 → 基准 06-03(3.85) → 7.7922%
+        # m3: 起点 09-02（-90d）→ 基准 10-08(4.05) → 2.4691%
+        assert returns["m3"] == 2.4691
+        # m6: 起点 06-01（-6 日历月）→ 基准 06-03(3.85) → 7.7922%
         assert returns["m6"] == 7.7922
-        # y1: 起点 2025-01-01 → 基准 01-02(3.60) → 15.2778%
+        # ytd: 起点 2025-01-01 → 基准 01-02(3.60) → 15.2778%
         assert returns["ytd"] == 15.2778
-        # y1: 起点 2024-12-01 → 基准 12-02(3.56) → 16.5730%
+        # y1: 起点 2024-12-01（-1 年）→ 基准 12-02(3.56) → 16.5730%
         assert returns["y1"] == 16.573
         # all: 首条 2024-11-01(3.50) → 18.5714%
         assert returns["all"] == 18.5714
@@ -175,7 +179,8 @@ class TestNavAnalysis:
     def test_short_history_returns_none_not_distorted(
         self, client, viewer_headers, test_db
     ):
-        """历史不足窗口期：各窗返回 None（退化为「成立以来」会虚高，口径同组合级）。"""
+        """固定长度窗口历史不足返 None；ytd 为变长窗口，全部历史落在本年时
+        从首条起算——本年新成立产品 ytd == all，不得占位（#637 L2 评审 S3）。"""
         _seed_nav(test_db, [
             (date(2025, 12, 20), "1.0000", "1.0000", None),
             (date(2025, 12, 22), "1.0100", "1.0100", "1.0000"),
@@ -191,8 +196,7 @@ class TestNavAnalysis:
         assert returns["m3"] is None
         assert returns["m6"] is None
         assert returns["y1"] is None
-        assert returns["ytd"] is None
-        # 成立以来 = 首条为基准，序列够两条即可算
+        assert returns["ytd"] == 1.0
         assert returns["all"] == 1.0
 
     def test_unknown_product_returns_empty(self, client, viewer_headers):

@@ -91,6 +91,13 @@ interface TradesContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
   basePath: string;
   variant?: "desktop" | "mobile";
+  /**
+   * #595 三级详情页操作行预填：来源页经 URL 传入（?product=<code>&market=<market>
+   * [&platform=<code>][&trade_type=buy|sell]），进入即带筛选，不再手选
+   */
+  initialProduct?: ProductSelection;
+  initialPlatform?: string;
+  initialTradeType?: string;
 }
 
 type ConfirmState =
@@ -133,16 +140,25 @@ function isDefaultTradeRange(range: DateRange | undefined): boolean {
  * 抽离自原 app/portfolio/[code]/trades/page.tsx，用 AlertDialog 替换原生 confirm/alert。
  * 桌面用表格；移动用可横向滚动表格（variant=mobile 时外层加 overflow-x-auto）。
  */
-export default function TradesContent({ basePath, variant = "desktop" }: TradesContentProps) {
+export default function TradesContent({
+  basePath,
+  variant = "desktop",
+  initialProduct,
+  initialPlatform,
+  initialTradeType,
+}: TradesContentProps) {
   const params = useParams();
   const code = params.code as string;
 
   // 筛选状态（#126 服务端筛选）：tradeRange 默认最近 1 年（决策⑤，惰性初始化避免每渲染重算）
+  // #595：initial* 仅作 useState 初值（一次性），用户进入后可自行清空/改选
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [tradeTypeFilter, setTradeTypeFilter] = useState<string | undefined>(undefined);
+  const [tradeTypeFilter, setTradeTypeFilter] = useState<string | undefined>(initialTradeType);
   // 产品多选筛选（#155）：undefined = 全部产品；元素为 {code, market}（market 可空串）
-  const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(undefined);
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(undefined);
+  const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(
+    initialProduct ? [initialProduct] : undefined
+  );
+  const [platformFilter, setPlatformFilter] = useState<string | undefined>(initialPlatform);
   const [tradeRange, setTradeRange] = useState<DateRange | undefined>(() => defaultTradeRange());
   const [confirmRange, setConfirmRange] = useState<DateRange | undefined>(undefined);
   const [page, setPage] = useState(1);

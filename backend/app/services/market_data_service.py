@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 import logging
 import math
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -74,11 +74,24 @@ def get_price_records(
 
 # --- #595 产品详情页净值数据（§5.3）：读侧统计，口径见各函数 docstring ---
 
-# 曲线区间 → 月数；六窗区间收益率的窗口与 performance_service 组合级口径同构
-#（近 N 月 = 最新日回溯 N 月、取窗口内首个记录为基准），但基序列是产品累计净值。
+# 曲线区间 → 日历月数（曲线画什么，前端区间 Tab 的直观语义）。
 _NAV_CURVE_RANGE_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
 # 曲线区间码 → 响应字段名（ProductIntervalReturns 的 m1/m3/m6/y1）
 _INTERVAL_FIELD_BY_RANGE = {"1m": "m1", "3m": "m3", "6m": "m6", "1y": "y1"}
+
+# 六窗区间收益率的窗口锚点：与 performance_service 组合级逐一对齐（#637 L2 评审
+# S2）——1m/3m 用 30/90 自然日（非日历月），6m/1y 用日历月/年。产品详情页与组合
+# 绩效卡的同名窗口因此语义一致，同名数字可互相印证。
+def _window_start(latest: date, field: str) -> date:
+    if field == "m1":
+        return latest - timedelta(days=30)
+    if field == "m3":
+        return latest - timedelta(days=90)
+    if field == "m6":
+        return latest - relativedelta(months=6)
+    if field == "y1":
+        return latest - relativedelta(years=1)
+    raise ValueError(f"未知窗口: {field}")
 
 
 def get_nav_history_page(
@@ -89,7 +102,7 @@ def get_nav_history_page(
     end_date: Optional[date] = None,
     page: int = 1,
     page_size: int = 5,
-) -> tuple:
+) -> Tuple[List[PriceRecord], int]:
     """历史净值分页（日期降序）：单位净值必有，累计净值/日涨跌可空照传。"""
     query = db.query(PriceRecord).filter(
         and_(
@@ -97,9 +110,9 @@ def get_nav_history_page(
             PriceRecord.market == market,
         )
     )
-    if start_date:
+    if start_date is not None:
         query = query.filter(PriceRecord.price_date >= start_date)
-    if end_date:
+    if end_date is not None:
         query = query.filter(PriceRecord.price_date <= end_date)
 
     total = query.count()
@@ -115,18 +128,26 @@ def get_nav_history_page(
 def _nav_interval_return(
     records: List[PriceRecord],
     start: date,
+    *,
+    clip_to_first: bool = False,
 ) -> Optional[float]:
     """区间收益率（百分数，4dp）：以 start 当日或之后首条记录为基准，至最新记录。
 
-    口径与 performance_service._period_return 同构（#595 spec §5.3 要求统一量化
-    口径）：历史未覆盖 start（产品数据不足窗口期）、基准与最新同日、基准累计
-    净值非正时返回 None，前端显示占位而非虚高数字。
+    基序算法与 performance_service._period_return 同构（#595 spec §5.3 要求统一
+    量化口径）：基准与最新同日、基准累计净值非正时返回 None，前端显示占位而非
+    虚高数字。历史未覆盖 start 时默认返回 None（固定长度窗口不足窗口期会虚高）；
+    ``clip_to_first=True`` 供变长窗口（ytd）使用——本年内的收益从本年首个有价日
+    起算天经地义，「窗口起点早于首条记录」不是不足而是全部历史（#637 L2 评审
+    S3：本年新成立产品的 ytd 不得显示占位）。
     """
     if len(records) < 2:
         return None
     if records[0].price_date > start:
-        return None
-    base = next((r for r in records if r.price_date >= start), None)
+        if not clip_to_first:
+            return None
+        base = records[0]
+    else:
+        base = next((r for r in records if r.price_date >= start), None)
     latest = records[-1]
     if base is None or base.price_date >= latest.price_date:
         return None
@@ -146,7 +167,7 @@ def get_nav_analysis(
 
     曲线只画累计净值非空的记录（场内 ETF 行情源常无累计净值，此时曲线为空、
     区间收益率为 None，由前端空态承接）；六窗与曲线取自同一升序序列，口径一致。
-    区间收益率含 None（历史不足窗口期），响应字段全部 Optional。
+    区间收益率含 None（固定长度窗口历史不足），响应字段全部 Optional。
     """
     records = (
         db.query(PriceRecord)
@@ -179,12 +200,14 @@ def get_nav_analysis(
         if r.price_date >= curve_start
     ]
 
-    for range_code_key, m in _NAV_CURVE_RANGE_MONTHS.items():
-        interval_returns[_INTERVAL_FIELD_BY_RANGE[range_code_key]] = (
-            _nav_interval_return(records, latest_date - relativedelta(months=m))
+    for range_code_key, field in _INTERVAL_FIELD_BY_RANGE.items():
+        interval_returns[field] = _nav_interval_return(
+            records, _window_start(latest_date, field)
         )
+    # ytd 是变长窗口：历史全部落在本年时从首条记录起算（clip_to_first），
+    # 本年新成立产品的「今年以来」== 「成立以来」，不得显示占位（#637 L2 评审 S3）
     interval_returns["ytd"] = _nav_interval_return(
-        records, date(latest_date.year, 1, 1)
+        records, date(latest_date.year, 1, 1), clip_to_first=True
     )
     # 成立以来 = 首条记录为基准
     interval_returns["all"] = _nav_interval_return(records, records[0].price_date)
