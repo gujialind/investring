@@ -11,7 +11,16 @@ export type { SubscriptionListParams } from "./subscription";
 export { tradeApi } from "./trade";
 export type { TradeListParams } from "./trade";
 export { productApi } from "./product";
-export type { PriceDataPoint, ProductListParams } from "./product";
+export type {
+  NavAnalysisRange,
+  NavCurvePoint,
+  NavHistoryItem,
+  NavHistoryPage,
+  PriceDataPoint,
+  ProductIntervalReturns,
+  ProductListParams,
+  ProductNavAnalysis,
+} from "./product";
 export { assetClassificationApi } from "./asset-classification";
 export { platformApi } from "./platform";
 export { systemApi } from "./system";

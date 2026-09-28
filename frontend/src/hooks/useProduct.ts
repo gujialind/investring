@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { productApi, getErrorMessage } from "@/lib/api";
-import type { ProductListParams } from "@/lib/api";
+import type { NavAnalysisRange, ProductListParams } from "@/lib/api";
 import { ProductCreate, ProductUpdate } from "@/types/product";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -184,5 +184,26 @@ export function useSyncProductHistory() {
         message: getErrorMessage(error, "请检查数据源配置"),
       });
     },
+  });
+}
+
+// --- #595 §5.3 产品详情页净值数据 hooks ---
+
+/**
+ * 区间累计净值曲线 + 六窗区间收益率；range 变化即换 key 重查。
+ * keepPreviousData：切 Tab 只换曲线，六窗数值取自全量序列与 range 无关，
+ * 重查期间不闪占位（#638 L2 S5）。
+ */
+export function useNavAnalysis(
+  code: string | undefined,
+  market: string | undefined,
+  range: NavAnalysisRange
+) {
+  return useQuery({
+    queryKey: [PRODUCT_QUERY_KEY, "nav-analysis", code, market, range],
+    queryFn: () => productApi.getNavAnalysis(code!, market!, range),
+    enabled: !!code && !!market,
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60 * 1000,
   });
 }

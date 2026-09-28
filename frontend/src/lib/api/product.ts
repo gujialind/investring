@@ -9,6 +9,47 @@ export interface PriceDataPoint {
   unit_price: number;
 }
 
+// --- #595 §5.3 产品详情页净值数据（步骤③-1 后端端点的前端契约） ---
+
+/** 历史净值行：单位净值必有；累计净值/日涨跌可空（场内 ETF 行情源常无累计净值）。 */
+export interface NavHistoryItem {
+  price_date: string;
+  unit_price: number;
+  accumulated_nav: number | null;
+  pct_change: number | null;
+}
+
+export interface NavHistoryPage {
+  items: NavHistoryItem[];
+  total: number;
+  /** 信封回显请求参数（#637 L2 评审 S1，与全仓分页信封对齐） */
+  page: number;
+  page_size: number;
+}
+
+/** 六窗区间收益率（百分数 4dp；历史不足窗口期为 null，前端显示占位）。 */
+export interface ProductIntervalReturns {
+  m1: number | null;
+  m3: number | null;
+  m6: number | null;
+  y1: number | null;
+  ytd: number | null;
+  all: number | null;
+}
+
+export interface NavCurvePoint {
+  date: string;
+  accumulated_nav: number;
+}
+
+export interface ProductNavAnalysis {
+  curve: NavCurvePoint[];
+  interval_returns: ProductIntervalReturns;
+}
+
+/** 净值曲线区间（与后端 nav-analysis 的 range 参数同码） */
+export type NavAnalysisRange = "1m" | "3m" | "6m" | "1y";
+
 /**
  * market 是后端必填路径参数：缺失时抛 ApiException 而不是拼出 `/products/CODE/` 这类
  * 带空段的畸形 URL（会得到令人困惑的 307/404/405）。
@@ -86,5 +127,25 @@ export const productApi = {
       method: "GET",
       url: `/market-data/products/${code}/${market}/price-data`,
       params,
+    }),
+
+  // #595 §5.3 产品详情页：历史净值分页（日期降序，首屏 5 行 + 查看更多）
+  getNavHistory: (
+    code: string,
+    market: string,
+    params?: { page?: number; page_size?: number; start_date?: string; end_date?: string }
+  ) =>
+    request<NavHistoryPage>({
+      method: "GET",
+      url: `/market-data/products/${code}/${market}/nav-history`,
+      params,
+    }),
+
+  // #595 §5.3 产品详情页：区间累计净值曲线 + 六窗区间收益率
+  getNavAnalysis: (code: string, market: string, range: NavAnalysisRange) =>
+    request<ProductNavAnalysis>({
+      method: "GET",
+      url: `/market-data/products/${code}/${market}/nav-analysis`,
+      params: { range },
     }),
 };

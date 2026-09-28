@@ -88,6 +88,8 @@ def get_nav_history_endpoint(
                 for r in items
             ],
             total=total,
+            page=page,
+            page_size=page_size,
         )
     except HTTPException:
         raise

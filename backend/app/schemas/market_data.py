@@ -31,10 +31,16 @@ class NavHistoryItem(BaseModel):
 
 
 class NavHistoryPage(BaseModel):
-    """历史净值分页（按日期降序）。"""
+    """历史净值分页（日期降序）。
+
+    信封字段与全仓 10 个 Paginated*Response 对齐（items/total/page/page_size，
+    #637 L2 评审 S1）：消费方读响应即可知道自己落在第几页，无需回记请求参数。
+    """
 
     items: List[NavHistoryItem]
     total: int
+    page: int
+    page_size: int
 
 
 class NavCurvePoint(BaseModel):

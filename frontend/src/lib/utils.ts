@@ -328,6 +328,36 @@ export function getSignedReturn(
   };
 }
 
+// ==================== 带符号金额 / 交易状态文案 ====================
+
+/**
+ * 带符号金额（概览指标行用，符号在 ¥ 前：+¥1,234.50 / -¥1,234.50）。
+ * 与 HoldingPlatformCard 的 sign+¥+abs 形态一致（#638 L2 S2：正负号不得分居 ¥ 两侧）。
+ */
+export function formatSignedCurrency(
+  num: number | string | undefined | null,
+  fallback: string = "--"
+): string {
+  if (num === undefined || num === null || num === "" || Number.isNaN(Number(num))) {
+    return fallback;
+  }
+  const n = Number(num);
+  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+  return `${sign}¥${formatNumber(Math.abs(n), 2, fallback)}`;
+}
+
+/** 交易状态文案单点（#638 L2 Blocker 同源收敛：未知状态原样回显，不再吞成「已取消」） */
+const TRADE_STATUS_LABELS: Record<string, string> = {
+  confirmed: "已确认",
+  pending: "待确认",
+  cancelled: "已取消",
+};
+
+export function getTradeStatusLabel(status: string | undefined | null): string {
+  if (!status) return "--";
+  return TRADE_STATUS_LABELS[status] ?? status;
+}
+
 // ==================== 市场/产品类型映射 ====================
 
 const MARKET_NAME_MAP: Record<string, string> = {

@@ -4,16 +4,9 @@ import { ChevronRight } from "lucide-react";
 import type { HoldingPlatformAggregate } from "@/types/holding";
 import {
   formatCurrency,
-  formatNumber,
+  formatSignedCurrency,
   getReturnColorClass,
 } from "@/lib/utils";
-
-/** 带符号货币（平台卡「持有收益 +¥1,780.00」形态，对齐 M2/D2 设计稿） */
-function formatSignedCurrency(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "--";
-  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-  return `${sign}¥${formatNumber(Math.abs(value))}`;
-}
 
 /**
  * #595 按平台视图的平台卡（M2/D2）：

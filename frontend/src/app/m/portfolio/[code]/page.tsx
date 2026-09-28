@@ -193,6 +193,7 @@ function MobilePortfolioDetailInner() {
                   二级分组维度优先取组合级 display_config（issue #144） */}
               <PortfolioHoldings
                 portfolioCode={code}
+                basePath="/m/portfolio"
                 assetClasses={assetClasses}
                 displayConfig={portfolio.display_config}
                 view={view}
