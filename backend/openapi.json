@@ -2587,6 +2587,202 @@
         }
       }
     },
+    "/api/market-data/products/{code}/{market}/nav-history": {
+      "get": {
+        "tags": [
+          "市场数据"
+        ],
+        "summary": "Get Nav History Endpoint",
+        "description": "历史净值分页（#595 §5.3）：日期降序，累计净值/日涨跌可空照传。",
+        "operationId": "get_nav_history_endpoint_api_market_data_products__code___market__nav_history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "market",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "开始日期",
+              "title": "Start Date"
+            },
+            "description": "开始日期"
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "结束日期",
+              "title": "End Date"
+            },
+            "description": "结束日期"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "页码",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "页码"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "每页条数（首屏 5 行）",
+              "default": 5,
+              "title": "Page Size"
+            },
+            "description": "每页条数（首屏 5 行）"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavHistoryPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/market-data/products/{code}/{market}/nav-analysis": {
+      "get": {
+        "tags": [
+          "市场数据"
+        ],
+        "summary": "Get Nav Analysis Endpoint",
+        "description": "产品净值分析（#595 §5.3）：区间累计净值曲线 + 六窗区间收益率（同一序列同口径）。",
+        "operationId": "get_nav_analysis_endpoint_api_market_data_products__code___market__nav_analysis_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "market",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "1m",
+                "3m",
+                "6m",
+                "1y"
+              ],
+              "type": "string",
+              "description": "曲线区间：近1月/近3月/近6月/近1年",
+              "title": "Range"
+            },
+            "description": "曲线区间：近1月/近3月/近6月/近1年"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductNavAnalysis"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/market-data/products/{code}/{market}/nav-coverage": {
       "get": {
         "tags": [
@@ -8674,6 +8870,90 @@
         ],
         "title": "LoginResponse"
       },
+      "NavCurvePoint": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "accumulated_nav": {
+            "type": "number",
+            "title": "Accumulated Nav"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "accumulated_nav"
+        ],
+        "title": "NavCurvePoint",
+        "description": "累计净值曲线点（仅含累计净值非空的记录）。"
+      },
+      "NavHistoryItem": {
+        "properties": {
+          "price_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Price Date"
+          },
+          "unit_price": {
+            "type": "number",
+            "title": "Unit Price"
+          },
+          "accumulated_nav": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accumulated Nav"
+          },
+          "pct_change": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pct Change"
+          }
+        },
+        "type": "object",
+        "required": [
+          "price_date",
+          "unit_price"
+        ],
+        "title": "NavHistoryItem",
+        "description": "历史净值行：单位净值必有；累计净值/日涨跌可空（场内 ETF 行情源常无累计净值）。"
+      },
+      "NavHistoryPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NavHistoryItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "NavHistoryPage",
+        "description": "历史净值分页（按日期降序）。"
+      },
       "NavHistoryRecord": {
         "properties": {
           "snapshot_date": {
@@ -10815,6 +11095,100 @@
           "product_type"
         ],
         "title": "ProductCreate"
+      },
+      "ProductIntervalReturns": {
+        "properties": {
+          "m1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "M1"
+          },
+          "m3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "M3"
+          },
+          "m6": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "M6"
+          },
+          "y1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y1"
+          },
+          "ytd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ytd"
+          },
+          "all": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "All"
+          }
+        },
+        "type": "object",
+        "title": "ProductIntervalReturns",
+        "description": "区间收益率（百分数，4dp）。历史不足窗口期返回 None，前端显示占位。"
+      },
+      "ProductNavAnalysis": {
+        "properties": {
+          "curve": {
+            "items": {
+              "$ref": "#/components/schemas/NavCurvePoint"
+            },
+            "type": "array",
+            "title": "Curve"
+          },
+          "interval_returns": {
+            "$ref": "#/components/schemas/ProductIntervalReturns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "curve",
+          "interval_returns"
+        ],
+        "title": "ProductNavAnalysis",
+        "description": "产品净值分析：所选区间累计净值曲线 + 六窗区间收益率（同一份序列算，口径一致）。"
       },
       "ProductResponse": {
         "properties": {

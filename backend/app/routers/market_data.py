@@ -1,15 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date
 from app.database import get_db
 from app.dependencies import get_current_user, get_current_admin
 from app.models.investor import Investor
-from app.schemas.market_data import PriceDataResponse, PriceDataSyncRequest
+from app.schemas.market_data import (
+    NavHistoryItem,
+    NavHistoryPage,
+    NavCurvePoint,
+    PriceDataResponse,
+    PriceDataSyncRequest,
+    ProductIntervalReturns,
+    ProductNavAnalysis,
+)
 from app.services.market_data_service import (
     get_price_records,
     get_latest_price,
     get_nav_coverage,
+    get_nav_analysis,
+    get_nav_history_page,
     sync_price_data,
 )
 from app.error_reporting import report_unexpected
@@ -43,6 +53,73 @@ def get_price_data(
     except Exception as e:
         report_unexpected(e, operation="get_price_data")
         raise HTTPException(status_code=500, detail=f"查询价格数据失败: {str(e)}")
+
+
+@router.get("/products/{code}/{market}/nav-history", response_model=NavHistoryPage)
+def get_nav_history_endpoint(
+    code: str,
+    market: str,
+    start_date: Optional[date] = Query(None, description="开始日期"),
+    end_date: Optional[date] = Query(None, description="结束日期"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(5, ge=1, le=100, description="每页条数（首屏 5 行）"),
+    db: Session = Depends(get_db),
+    current_user: Investor = Depends(get_current_user),
+):
+    """历史净值分页（#595 §5.3）：日期降序，累计净值/日涨跌可空照传。"""
+    try:
+        items, total = get_nav_history_page(
+            db, code, market,
+            start_date=start_date, end_date=end_date,
+            page=page, page_size=page_size,
+        )
+        return NavHistoryPage(
+            items=[
+                NavHistoryItem(
+                    price_date=r.price_date,
+                    unit_price=float(r.unit_price),
+                    accumulated_nav=(
+                        float(r.accumulated_nav) if r.accumulated_nav is not None else None
+                    ),
+                    pct_change=(
+                        float(r.pct_change) if r.pct_change is not None else None
+                    ),
+                )
+                for r in items
+            ],
+            total=total,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        report_unexpected(e, operation="get_nav_history")
+        raise HTTPException(status_code=500, detail=f"查询历史净值失败: {str(e)}")
+
+
+@router.get("/products/{code}/{market}/nav-analysis", response_model=ProductNavAnalysis)
+def get_nav_analysis_endpoint(
+    code: str,
+    market: str,
+    range_code: Literal["1m", "3m", "6m", "1y"] = Query(
+        ..., alias="range", description="曲线区间：近1月/近3月/近6月/近1年"
+    ),
+    db: Session = Depends(get_db),
+    current_user: Investor = Depends(get_current_user),
+):
+    """产品净值分析（#595 §5.3）：区间累计净值曲线 + 六窗区间收益率（同一序列同口径）。"""
+    try:
+        result = get_nav_analysis(db, code, market, range_code)
+        return ProductNavAnalysis(
+            curve=[NavCurvePoint(**p) for p in result["curve"]],
+            interval_returns=ProductIntervalReturns(
+                **result["interval_returns"]
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        report_unexpected(e, operation="get_nav_analysis")
+        raise HTTPException(status_code=500, detail=f"查询净值分析失败: {str(e)}")
 
 
 @router.get("/products/{code}/{market}/nav-coverage")
