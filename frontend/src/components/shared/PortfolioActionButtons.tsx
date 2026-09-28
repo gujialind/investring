@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Power, Plus, ArrowRightLeft, RefreshCw, Camera } from "lucide-react";
+import { Power, Plus, ArrowRightLeft } from "lucide-react";
 import Link from "next/link";
 
 interface PortfolioActionButtonsProps {
@@ -20,6 +20,8 @@ interface PortfolioActionButtonsProps {
  * 详情页不再提供「关闭组合」入口（关闭仅在列表页）；业务逻辑两端一致，
  * 仅布局与链接前缀通过 variant / basePath 区分。
  * 注：后端不提供删除组合能力（外键 RESTRICT，生命周期由关闭/重新激活管理），故无删除入口。
+ * #595：份额变动/快照管理等低频入口收敛到「管理」入口卡（ManageLinksCard），
+ * 操作区只保留高频动作（D1：页头仅 申购赎回 / 调仓）。
  */
 export default function PortfolioActionButtons({
   portfolioCode,
@@ -30,16 +32,6 @@ export default function PortfolioActionButtons({
   isActivatePending,
 }: PortfolioActionButtonsProps) {
   const cls = variant === "mobile" ? "w-full" : "";
-
-  // 快照管理入口仅 desktop 渲染（移动端在页尾「管理」列表，#351）
-  const snapshotEntry = variant === "desktop" ? (
-    <Link href={`${basePath}/${portfolioCode}/snapshots`}>
-      <Button variant="outline">
-        <Camera className="mr-2 h-4 w-4" />
-        快照管理
-      </Button>
-    </Link>
-  ) : null;
 
   if (status === "draft") {
     return (
@@ -69,32 +61,20 @@ export default function PortfolioActionButtons({
             {variant === "mobile" ? "调仓" : "调仓交易"}
           </Button>
         </Link>
-        {variant === "desktop" && (
-          <Link href={`${basePath}/${portfolioCode}/share-change-events`}>
-            <Button variant="outline">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              份额变动
-            </Button>
-          </Link>
-        )}
-        {snapshotEntry}
       </div>
     );
   }
 
   // closed
   return (
-    <>
-      <Button
-        variant="outline"
-        onClick={onActivateClick}
-        disabled={isActivatePending}
-        className={variant === "mobile" ? "col-span-2 w-full" : ""}
-      >
-        <Power className="mr-2 h-4 w-4 text-success" />
-        重新激活
-      </Button>
-      {snapshotEntry}
-    </>
+    <Button
+      variant="outline"
+      onClick={onActivateClick}
+      disabled={isActivatePending}
+      className={variant === "mobile" ? "col-span-2 w-full" : ""}
+    >
+      <Power className="mr-2 h-4 w-4 text-success" />
+      重新激活
+    </Button>
   );
 }

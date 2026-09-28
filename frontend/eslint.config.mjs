@@ -201,13 +201,10 @@ const eslintConfig = [
       "no-restricted-syntax": ["error", ...paletteColorSelectors],
     },
   },
-  // 临时（ratchet，只减不增）：存量 text-[Npx] 13 处，改动页面顺手收敛后从此清单移出。
+  // 临时（ratchet，只减不增）：存量 text-[Npx] 豁免，改动页面顺手收敛后从此清单移出。
+  // #595：portfolio/[code]/page.tsx 已收敛、PositionSections.tsx 已删除，双双移出。
   {
-    files: [
-      "src/app/portfolio/\\[code\\]/page.tsx",
-      "src/components/shared/PositionSections.tsx",
-      "src/components/layout/NotificationBell.tsx",
-    ],
+    files: ["src/components/layout/NotificationBell.tsx"],
     rules: {
       "no-restricted-syntax": ["error", ...paletteColorSelectors],
     },

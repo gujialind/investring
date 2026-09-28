@@ -9,6 +9,7 @@ import {
   PortfolioPerformance,
 } from "@/types/portfolio";
 import { Position, PositionCreate, PositionUpdate } from "@/types/position";
+import { HoldingsByProductResponse, HoldingsByPlatformResponse } from "@/types/holding";
 import { PaginatedResponse } from "@/types/common";
 
 export const portfolioApi = {
@@ -90,5 +91,18 @@ export const positionApi = {
       method: "POST",
       url: `/positions/portfolio/${portfolioCode}/cash-position`,
       data: { cash_amount: amount, platform_code: platformCode, update_date: updateDate },
+    }),
+
+  // #595 组合详情页双视图：按产品 / 按平台聚合
+  getHoldingsByProduct: (portfolioCode: string) =>
+    request<HoldingsByProductResponse>({
+      method: "GET",
+      url: `/positions/portfolio/${portfolioCode}/holdings/by-product`,
+    }),
+
+  getHoldingsByPlatform: (portfolioCode: string) =>
+    request<HoldingsByPlatformResponse>({
+      method: "GET",
+      url: `/positions/portfolio/${portfolioCode}/holdings/by-platform`,
     }),
 };

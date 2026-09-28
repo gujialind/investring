@@ -116,3 +116,22 @@ export function useUpdateCashPosition(portfolioCode: string) {
     },
   });
 }
+
+// #595 组合详情页双视图：按产品 / 按平台聚合持仓（当前视图惰性查询）
+export function useHoldingsByProduct(portfolioCode: string, enabled = true) {
+  return useQuery({
+    queryKey: [POSITION_QUERY_KEY, portfolioCode, "holdings", "by-product"],
+    queryFn: () => positionApi.getHoldingsByProduct(portfolioCode),
+    enabled: enabled && !!portfolioCode,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useHoldingsByPlatform(portfolioCode: string, enabled = true) {
+  return useQuery({
+    queryKey: [POSITION_QUERY_KEY, portfolioCode, "holdings", "by-platform"],
+    queryFn: () => positionApi.getHoldingsByPlatform(portfolioCode),
+    enabled: enabled && !!portfolioCode,
+    staleTime: 30 * 1000,
+  });
+}

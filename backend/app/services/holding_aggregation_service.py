@@ -9,7 +9,8 @@
   业务判据读取，不依赖该同写巧合）。
 - `total_market_value` 含在途（市值口径：在途计市值），产品卡/平台卡的占比基数
   同此；在途虚拟产品（product_type="IN_TRANSIT"）不出现为产品卡，但仍计入所属
-  平台市值。
+  平台市值；`in_transit_market_value` 单独发布在途合计，前端据其渲染在途聚合卡，
+  与产品卡同一占比体系（行级最大余数法，visual-spec §4）。
 - 持有收益与持仓列表同公式（精度路径不同：本层 Decimal，列表 float+round）：
   非现金行 = 市值 − 份额×成本价 + 事件现金加回；CASH 行取现金累计收益；
   当日收益、事件加回复用 `compute_derived_fields` 一次聚合（issue #103），
@@ -181,12 +182,17 @@ def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
             "portfolio_code": portfolio_code,
             "snapshot_date": None,
             "total_market_value": _ZERO,
+            "in_transit_market_value": _ZERO,
             "products": [],
         }
 
     total = sum((_row_value(r) for r in rows), _ZERO)
     meta = _load_product_meta(db, rows)
     transit_keys = meta["transit_keys"]
+    in_transit_total = sum(
+        (_row_value(r) for r in rows if (r.product_code, r.market) in transit_keys),
+        _ZERO,
+    )
     card_rows = [r for r in rows if (r.product_code, r.market) not in transit_keys]
     platform_names = _load_platform_names(db, card_rows)
     derived = compute_derived_fields(db, card_rows)
@@ -342,6 +348,7 @@ def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
         "portfolio_code": portfolio_code,
         "snapshot_date": snapshot_date,
         "total_market_value": total,
+        "in_transit_market_value": in_transit_total,
         "products": products,
     }
 

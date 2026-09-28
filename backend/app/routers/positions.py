@@ -215,6 +215,7 @@ def get_holdings_by_product(
         portfolio_code=result["portfolio_code"],
         snapshot_date=result["snapshot_date"],
         total_market_value=_round4(result["total_market_value"]),
+        in_transit_market_value=_round4(result["in_transit_market_value"]) or 0.0,
         products=[_shape_product_aggregate(p) for p in result["products"]],
     )
 

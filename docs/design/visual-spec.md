@@ -97,9 +97,7 @@
 | 范围 | 类型 | 理由 |
 |---|---|---|
 | `src/components/ui/**` | 永久 | shadcn 基件 vendor 源码（`min-w-[8rem]` 等为官方实现），保持与上游同步、降低升级摩擦；基件内部不视为业务违规 |
-| `src/app/portfolio/[code]/page.tsx` | 临时（ratchet） | 存量 `text-[15px]`×2、`text-[13px]`×1，改动该页时顺手收敛后移出 |
-| `src/components/shared/PositionSections.tsx` | 临时（ratchet） | 存量 `text-[11/13/15/17px]` 共 9 处，同上 |
-| `src/components/layout/NotificationBell.tsx` | 临时（ratchet） | 存量 `text-[10px]` 1 处，同上 |
+| `src/components/layout/NotificationBell.tsx` | 临时（ratchet） | 存量 `text-[10px]` 1 处，改动该组件时顺手收敛后移出 |
 | `src/lib/utils.test.ts` | 永久 | 单测需直测 `formatShares` 基础函数（`formatSharesUnit` 的内部实现），仅豁免 `no-restricted-imports` 门禁 |
 | `src/lib/logger.ts`、`src/lib/logger.test.ts` | 永久 | 前端日志基建（#407）：前者是全站 `console.*` 的唯一封装层，不豁免则该护栏无法实现；后者需对 console 方法做 spy 才能断言分级与生产剔除（同 `utils.test.ts` 形态），仅豁免 `no-console` |
 
@@ -165,7 +163,7 @@
 | 正文 | 14px / 400 / 1.6 | `text-sm` | 表格、表单、正文数值 |
 | 辅助 | 12px / 400 / 1.5 | `text-xs` | 标签、时间戳、secondary 信息 |
 
-配套规则：数值一律叠加 `number-cell`；**只允许上表四档**——`text-base` / `text-xl` / `text-3xl` 等中间档与 `text-[Npx]` 任意值均属违规（新增代码由 ESLint 拦截，见 §1.5；存量 13 处豁免登记在 §1.5，改动页面时顺手收敛，不强制一次性清零）。
+配套规则：数值一律叠加 `number-cell`；**只允许上表四档**——`text-base` / `text-xl` / `text-3xl` 等中间档与 `text-[Npx]` 任意值均属违规（新增代码由 ESLint 拦截，见 §1.5；存量 1 处豁免登记在 §1.5，改动页面时顺手收敛，不强制一次性清零）。
 
 **字体栈（现状登记，2026-08-29）**：未自定义，走 Tailwind 默认栈——正文 `font-sans`（system-ui 系）、数值 `number-cell` 内 `font-mono`（ui-monospace/SFMono 系）。`tabular-nums` 依赖字体自带等宽数字特性，系统栈下各平台字形有差异（Windows 回退 Segoe UI / Consolas）；中文环境数字渲染一致性**未实测**。如需跨平台严格对齐的金融报表观感，后续可评估引入统一数字字体，届时在此更新决策。
 
@@ -235,7 +233,8 @@
 - **金额**：带 `¥`、千分位、2 位小数；概览大字可用 `formatCompactCurrency` 的万/亿紧凑格式（`¥X.XX 万` / `¥X.XX 亿`），表格内不用紧凑格式。
 - **空值占位**：统一 `--`（各 format 函数 fallback），禁止 `N/A`、`null`、空字符串上屏；JSX 内禁止手写 `-`/`"--"` 字面量当占位——空值判断交回 format 函数（`null`/`undefined`/空串/`NaN` → fallback `--`），不要用 truthy 三元短路（真 0 会被误判为缺失，如 `fee=0` 应显示 `¥0.00`；#249 起 ESLint 拦截 JSX 内 `-`）。
 - **单位**：份额数值后带「份」（一律 `formatSharesUnit`，见 §3）、金额不重复写「元」（`¥` 已表意，例外见下条）；图表 tooltip 中金额可带「元」补语义。
-- **概览大字「数字 + 元」例外**（#249 登记，设计来源 #99/#114/#117）：概览大字与分区/分组合计允许 `formatNumber(...)` + 手写「元」后缀（适用清单：`PositionSections` 持仓金额卡/大类分区头合计/名目 chip 合计/在途合计、`PortfolioStatsCards` 统计卡），大字区「数字 + 元」比 `¥` 更紧凑、不与表格内 `¥` 争视觉层级。**边界**：仅覆盖上列概览大字与分区/分组合计；表格数值单元格、卡片小字明细（如 `PositionCard` 的份额/成本价/当前价）不在例外内，仍走 §3 format 函数。**规范与实现二选一**：若未来决定代码侧统一为 `formatCurrency`，须先撤回本条例外，不允许两者并存。
+- **概览大字「数字 + 元」例外**（#249 登记，设计来源 #99/#114/#117）：概览大字与分区/分组合计允许 `formatNumber(...)` + 手写「元」后缀（适用清单：`PortfolioHoldings` 大类分区头合计/维度 chip 合计、`PortfolioStatsCards` 统计卡），大字区「数字 + 元」比 `¥` 更紧凑、不与表格内 `¥` 争视觉层级。**边界**：仅覆盖上列概览大字与分区/分组合计；表格数值单元格、卡片小字明细不在例外内，仍走 §3 format 函数（收益列的无 `¥` 形态见下条 #595 例外）。**规范与实现二选一**：若未来决定代码侧统一为 `formatCurrency`，须先撤回本条例外，不允许两者并存。
+- **持仓卡片收益列无 `¥` / 平台卡现金段 0 位小数例外**（#595 登记，设计来源 D1/M1/D2/M2）：`HoldingProductCard` 累计收益/最新收益列按设计稿为纯数字带符号（`+980.00`，正负号展示层拼、数值走 `formatNumber` 系），同卡市值大数字仍带 `¥`；`HoldingPlatformCard`「N 只产品 · 现金」段按设计稿大额取 0 位小数（`¥40,000`），负现金为真实存量、不省略且符号内显。**边界**：仅覆盖上述两个卡片列；其余金额展示仍走 §3 format 函数（2 位小数带 `¥`）。**规范与实现二选一**：若未来改回带 `¥`/2 位小数，须先撤回本条例外。
 
 ## 13. 组件复用红线
 
@@ -276,7 +275,7 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 ## 18. 存量债与迁移策略
 
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
-- 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（13 处 / 3 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、`slate/gray` 中性类名、快照页原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
+- 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（1 处 / 1 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、`slate/gray` 中性类名、快照页原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
 - 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
 
 ---
@@ -311,3 +310,6 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 | 2026-09-10 | v1.x | §1.5 豁免清单登记 `src/lib/logger.ts` 与其单测（新 `no-console` 护栏的唯一豁免，永久）；同批任务管理页执行历史新增「触发方式」列——来源标识无状态语义，按 §1.3 末段取 `outline`/`neutral` badge，**不占 success/warning/destructive 状态色**（状态列已表达成功/失败） | #406 / #407 |
 | 2026-09-16 | v1.x | §12 日期惯例去掉 `formatDateTime` / `formatRelativeDate`（两 helper 全仓零调用，已随 #501 死代码清理删除；需要时按本节惯例补回并在此登记）。同批保留 `formatPercent` / `formatAmount4` / `formatCompactCurrency` / `getReturnBgClass` 四个零调用 helper——它们是 §1.1 / §3 表点名的口径载体，源码注释已写明保留依据与预期调用方 | #501 |
 | 2026-09-16 | v1.x | §8 结对行：①子行文案新增第三种「**现金待到账** · 平台名」并写明判据（子行须按**现金腿自身状态 + 生效日**判定，不可只看主行状态——调仓卖出确认时会建 `confirmed` 但到账日在未来的 CASH 腿，主行讲的是基金腿）；②登记子行**新增生效日内容格**与新的 `colSpan` 折叠形状（金额后 `colSpan={3}` → 生效日格 → `colSpan={2}`），与主行「交易/确认日期」列对齐 | #493 |
+| 2026-09-27 | v1.x | #595 持仓双视图落地：①`PositionSections`/`PositionCard` 由 `PortfolioHoldings`（按产品/按平台分段切换）+ `HoldingProductCard`/`HoldingPlatformCard` 取代，分组 V4 语义（分区头 → chip → 引导线）与「数字 + 元」例外适用清单同步改写；②§1.5 ratchet 豁免销账 2 文件（`portfolio/[code]/page.tsx` 顺手收敛、`PositionSections.tsx` 删除），`text-[Npx]` 存量 13 → 1 处；新组件字号全走 §5 四档（设计稿 15px 类就近收敛：标题 `text-lg font-semibold`、其余 `text-sm` 系） | #595 |
+| 2026-09-27 | v1.x | #595 L2 评审处置（#636）：①§12 新增「持仓卡片收益列无 `¥` / 平台卡现金段 0 位小数」例外（设计来源 D1/M1/D2/M2，负现金不省略），上条「数字 + 元」例外的边界句同步交叉引用；②在途资金以聚合卡回归组合详情页（评审决策，承接旧版独立在途卡）：产品视图行集 = 产品卡（含现金）+ 在途卡，平台视图行集 = 平台卡，行级占比一律最大余数法（§4），分区头 = 行占比加总后取整；③新组件 slate/gray 中性类名按 §18「顺手替换」收敛为语义 token，市值/占比右置大数字改 `number-cell`，row3 左对齐明细列（产品卡三列、平台卡持有收益）保留 `tabular-nums`——mono 字形更宽，窄卡会截断收益值（#636 目检实证），平台卡 row3 改 `flex-wrap` 整段换行；④产品卡栅格 minmax 360→350：引导线组内容宽少 14px，auto-fill 按 content-box 算列数，360 在 1440 档使两组列数分叉（722px→1 列 vs 736px→2 列），350 时两组同列数、单卡 355-372 仍在设计区间 ~358-372 | #595 |
+| 2026-09-27 | v1.x | #595 L2 评审处置（#636）：①§12 新增「持仓卡片收益列无 `¥` / 平台卡现金段 0 位小数」例外（设计来源 D1/M1/D2/M2，负现金不省略），上条「数字 + 元」例外的边界句同步交叉引用；②在途资金以聚合卡回归组合详情页（评审决策，承接旧版独立在途卡）：产品视图行集 = 产品卡（含现金）+ 在途卡，平台视图行集 = 平台卡，行级占比一律最大余数法（§4），分区头 = 行占比加总后取整；③新组件 slate/gray 中性类名按 §18「顺手替换」收敛为语义 token，右置数值改 `number-cell`（row3 左对齐三列保留 `tabular-nums` 对齐设计稿） | #595 |
