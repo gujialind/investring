@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
-import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
+import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
@@ -63,9 +63,10 @@ interface PlatformProductDetailContentProps {
 /**
  * #595 步骤④ 平台-产品详情页（M5/D5，双端共享）：
  * 概览卡（该平台切片市值/份额/收益/占产品比）→ 操作行（trades 平台+产品预填）→
- * 净值走势 + 区间收益率 + 历史净值 → 交易记录（该产品在该平台）→
- * 「查看该产品全部平台持仓」链接 → 产品详情页。
+ * 「查看该产品全部平台持仓」链接 → 净值走势 + 区间收益率 + 历史净值 → 交易记录 →
+ * 全部平台持仓卡（多平台时显示，当前平台行不可点）。
  * 数据源：holdings/by-product 行的 platforms 切片 + nav-analysis/nav-history + trades。
+ * 现金产品（CASH）隐藏净值相关卡片，操作行改为转入/转出。
  */
 export default function PlatformProductDetailContent({
   basePath,
@@ -80,7 +81,7 @@ export default function PlatformProductDetailContent({
   const isMobile = variant === "mobile";
   const isCash = productCode === CASH_PRODUCT_CODE;
 
-  const { data: holdings, isLoading: holdingsLoading, isError: holdingsError } =
+  const { data: holdings, isLoading: holdingsLoading, isError: holdingsError, error: holdingsErr, refetch: refetchHoldings } =
     useHoldingsByProduct(portfolioCode);
   const product = holdings?.products.find(
     (p) => p.product_code === productCode && p.market === market
@@ -91,19 +92,21 @@ export default function PlatformProductDetailContent({
   const { data: analysis } = useNavAnalysis(productCode, market, range);
 
   const [visiblePages, setVisiblePages] = useState(1);
+  // S1：现金产品无净值端点（market="" 会 404），非现金且 market 非空时才请求
   const historyQueries = useQueries({
     queries: Array.from({ length: visiblePages }, (_, i) => ({
       queryKey: ["products", "nav-history", productCode, market, i + 1, HISTORY_PAGE_SIZE],
       queryFn: () =>
         productApi.getNavHistory(productCode, market, { page: i + 1, page_size: HISTORY_PAGE_SIZE }),
       staleTime: 5 * 60 * 1000,
+      enabled: !isCash && !!market,
     })),
   });
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
   const historyTotal = historyQueries[0]?.data?.total ?? 0;
   const latestPrice = historyItems[0];
 
-  const { data: tradesData } = useTradeList({
+  const { data: tradesData, isError: tradesError } = useTradeList({
     portfolio_code: portfolioCode,
     product_code: productCode,
     market: market || undefined,
@@ -114,10 +117,23 @@ export default function PlatformProductDetailContent({
 
   if (holdingsLoading) return <LoadingState />;
   if (holdingsError) {
+    const msg = getErrorMessage(holdingsErr, "请刷新重试");
     return (
-      <div className="py-8 text-center text-muted-foreground">
-        加载失败，请刷新重试
+      <div className="py-8 text-center">
+        <p className="text-muted-foreground">加载失败：{msg}</p>
+        <Button variant="link" size="sm" onClick={() => refetchHoldings()}>
+          重试
+        </Button>
       </div>
+    );
+  }
+  // S4：market 缺失（非现金）单独提示，避免与「真的没有」混淆
+  if (!isCash && !market) {
+    return (
+      <EmptyState
+        message="缺少 market 参数"
+        description="请从产品详情页或平台详情页进入本平台-产品详情"
+      />
     );
   }
   if (!product || !slice) {
@@ -165,7 +181,7 @@ export default function PlatformProductDetailContent({
             </div>
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">累计收益</div>
+            <div className="text-sm text-muted-foreground">累计收益*</div>
             <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}>
               {formatSignedCurrency(slice.cumulative_profit)}
             </div>
@@ -179,6 +195,9 @@ export default function PlatformProductDetailContent({
             </div>
           </div>
         </div>
+        <p className="mt-2 text-xs text-warning">
+          *累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同
+        </p>
       </CardContent>
     </Card>
   );
@@ -209,7 +228,7 @@ export default function PlatformProductDetailContent({
   // 净值相关卡片仅非现金产品显示
   const curveCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-curve-card">
-      <h3 className="text-base font-semibold">累计净值走势</h3>
+      <h3 className="text-lg font-semibold">累计净值走势</h3>
       <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
         {NAV_RANGE_TABS.map((tab) => (
           <button
@@ -236,7 +255,7 @@ export default function PlatformProductDetailContent({
 
   const returnsCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-returns-card">
-      <h3 className="text-base font-semibold">区间收益率</h3>
+      <h3 className="text-lg font-semibold">区间收益率</h3>
       <div className="mt-3 grid grid-cols-3 gap-3">
         {RETURN_WINDOWS.map((w) => {
           const value = analysis?.interval_returns?.[w.field];
@@ -255,7 +274,7 @@ export default function PlatformProductDetailContent({
 
   const historyCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-history-card">
-      <h3 className="text-base font-semibold">历史净值</h3>
+      <h3 className="text-lg font-semibold">历史净值</h3>
       {historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (
@@ -305,12 +324,14 @@ export default function PlatformProductDetailContent({
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-trades-card">
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold">交易记录</h3>
+        <h3 className="text-lg font-semibold">交易记录</h3>
         <Link href={tradesLink} className="text-sm text-primary hover:underline">
           查看全部
         </Link>
       </div>
-      {(tradesData?.items ?? []).length === 0 ? (
+      {tradesError ? (
+        <p className="mt-3 text-sm text-muted-foreground">交易记录加载失败</p>
+      ) : (tradesData?.items ?? []).length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无交易记录</p>
       ) : (
         <ul className="mt-2">

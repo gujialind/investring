@@ -71,7 +71,7 @@ interface ProductDetailContentProps {
  * 区间收益率（六窗）→ 历史净值（首屏 5 行 + 查看更多）→ 交易记录（该产品跨平台）。
  * 数据源：holdings/by-product 行 + platforms 切片（#635）、nav-analysis/nav-history
  * （#637）、trades 列表 product_code+market 过滤（D-8 既有参数）。
- * 平台分布行点击 → 平台-产品详情页由步骤④接线，本步骤渲染为纯展示行。
+ * 平台分布行点击 → 平台-产品详情页（步骤④已接线，PlatformDistributionCard rowLinkPrefix）。
  */
 export default function ProductDetailContent({ basePath, variant }: ProductDetailContentProps) {
   const params = useParams();
@@ -225,7 +225,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
 
   const curveCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-curve-card">
-      <h3 className="text-base font-semibold">累计净值走势</h3>
+      <h3 className="text-lg font-semibold">累计净值走势</h3>
       <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
         {NAV_RANGE_TABS.map((tab) => (
           <button
@@ -252,7 +252,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
 
   const returnsCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-returns-card">
-      <h3 className="text-base font-semibold">区间收益率</h3>
+      <h3 className="text-lg font-semibold">区间收益率</h3>
       <div className="mt-3 grid grid-cols-3 gap-3">
         {RETURN_WINDOWS.map((w) => {
           const value = analysis?.interval_returns?.[w.field];
@@ -271,7 +271,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
 
   const historyCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-history-card">
-      <h3 className="text-base font-semibold">历史净值</h3>
+      <h3 className="text-lg font-semibold">历史净值</h3>
       {historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (
@@ -321,7 +321,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-trades-card">
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold">交易记录</h3>
+        <h3 className="text-lg font-semibold">交易记录</h3>
         <Link href={tradesLink} className="text-sm text-primary hover:underline">
           查看全部
         </Link>

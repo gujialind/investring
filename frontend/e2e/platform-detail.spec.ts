@@ -5,14 +5,18 @@ import { E2E_ACTIVE, gotoPortfolioDetail } from "./helpers";
  * #595 步骤④ 平台详情页（M4/D4）+ 平台-产品详情页（M5/D5），双端共享组件。
  *
  * 数据说明（种子契约，backend/tests/seed_base.py / seed_e2e.py）：
- * - E2E_ACTIVE：单平台 HBZQ（华宝证券）持有 510300.SH 15,000 份 + 现金余额。
- *   连续 2 日快照（D2=4.0000 / D3=4.2000）→ 市值 ¥63,000.00。
- *   2 笔交易：confirmed 买入 15,000@4.0（¥60,000）+ pending 买入 2,000@4.1（¥8,200）。
+ * - E2E_ACTIVE：单平台 HBZQ（华宝证券）持有 510300.SH 15,000 份 + 现金余额 ¥40,000。
+ *   连续 2 日快照（D2=4.0000 / D3=4.2000）→ 产品市值 ¥63,000.00，平台总市值 ¥103,000.00。
+ *   交易：confirmed 买入 15,000@4.0（¥60,000）+ pending 买入 2,000@4.1（¥8,200）+ 配对 CASH 腿。
+ *   平台级交易列表含 CASH 腿（紧凑流水卡逐行展示，与 TradesContent 结对展示不同）。
+ * - 多平台形态当前种子不可达（seed_e2e_active 只写 HBZQ），allPlatformsCard 与
+ *   「当前平台行不可点」分支在 API 层由后端 test_holding_aggregation.py HAGG_D 覆盖。
  * - 断言为可见性与关系式，不硬绑定快照日期；两端共用组件，mobile project 同跑。
  */
 
 const PLATFORM_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ`;
 const PLATFORM_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/510300.SH?market=CN_EXCHANGE`;
+const CASH_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/CASH?market=`;
 
 test.describe("平台详情页", () => {
   test("页头与概览卡：平台名、代码·类型、市值、指标行", async ({ page }) => {
@@ -56,13 +60,17 @@ test.describe("平台详情页", () => {
     ).toBeVisible();
   });
 
-  test("交易记录卡：该平台交易与查看全部链接", async ({ page }) => {
+  test("交易记录卡：该平台交易含 CASH 腿与查看全部链接", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
     const card = page.getByTestId("platform-trades-card");
     const rows = card.getByTestId("platform-trade-row");
     await expect(rows.first()).toBeVisible();
-    // 种子含买入 + 配对 CASH 卖出腿，首行可能是任一方向；断言至少有交易行
+    // 平台级交易列表含配对 CASH 腿（紧凑流水卡逐行展示），首行可能是买入或卖出
     await expect(rows.first()).toContainText(/买入|卖出/);
+    // S7：平台级交易含 CASH 腿，行数 > 纯基金腿数（2 笔买入 × 2 腿 + 1 首购 CASH = 5 行）
+    await expect(rows).toHaveCount(5);
+    // Blocker 1 回归：pending 场外价格不应渲染成 0.0000
+    await expect(card).not.toContainText("0.0000");
     await expect(card.getByRole("link", { name: "查看全部" })).toHaveAttribute(
       "href",
       new RegExp(`/trades\\?platform=HBZQ`)
@@ -79,6 +87,29 @@ test.describe("平台详情页", () => {
       page.getByRole("heading", { name: "华宝证券" })
     ).toBeVisible();
   });
+
+  test("现金切片页直达：无净值请求、概览显示现金余额", async ({ page }) => {
+    // S1/S7：现金页不应发 nav-history 请求（enabled guard），概览显示 "--" 份额
+    const navRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/nav-history") || req.url().includes("/nav-analysis")) {
+        navRequests.push(req.url());
+      }
+    });
+    await page.goto(CASH_PRODUCT_PATH);
+    await expect(
+      page.getByTestId("platform-product-overview-card")
+    ).toBeVisible();
+    // 现金页持有份额显示 "--"
+    await expect(page.getByTestId("platform-product-overview-card")).toContainText("--");
+    // S1：不应有 nav-history/nav-analysis 请求
+    expect(navRequests).toHaveLength(0);
+  });
+
+  test("未知平台 EmptyState", async ({ page }) => {
+    await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/NONEXISTENT`);
+    await expect(page.getByText("未找到该平台持仓")).toBeVisible();
+  });
 });
 
 test.describe("平台-产品详情页", () => {
@@ -94,16 +125,20 @@ test.describe("平台-产品详情页", () => {
     await expect(overview).toContainText("63,000.00");
     await expect(overview).toContainText("15,000.00");
     await expect(overview).toContainText("100.0%");
+    // S6：累计收益带 * 口径注记
+    await expect(overview).toContainText("累计收益*");
+    await expect(overview).toContainText("*累计收益含已卖出实现盈亏");
   });
 
-  test("操作行买入：trades 页平台+产品预填", async ({ page }) => {
+  test("操作行买入：trades 页平台+产品预填且过滤生效", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     await page.getByTestId("platform-product-action-row").getByRole("link", { name: "买入" }).click();
     await page.waitForURL(/\/trades\?/);
     expect(page.url()).toContain("product=510300.SH");
     expect(page.url()).toContain("platform=HBZQ");
     expect(page.url()).toContain("trade_type=buy");
-    await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 10_000 });
+    // S7：产品过滤后只剩 2 条基金腿（不含 CASH 腿）
+    await expect(page.locator("table tbody tr")).toHaveCount(2, { timeout: 10_000 });
   });
 
   test("净值曲线空态与六窗区间收益率占位", async ({ page }) => {
@@ -117,21 +152,27 @@ test.describe("平台-产品详情页", () => {
     }
   });
 
-  test("历史净值：两行降序、占位符", async ({ page }) => {
+  test("历史净值：两行降序、累计净值/日涨跌占位", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     const history = page.getByTestId("platform-product-history-card");
     const rows = history.getByTestId(/^platform-product-history-row/);
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toContainText("4.2000");
     await expect(rows.nth(1)).toContainText("4.0000");
+    // 累计净值与日涨跌夹具为 NULL → 占位 --
+    await expect(rows.nth(0).getByText("--").first()).toBeVisible();
+    // 无查看更多（仅 2 行 < page_size 5）
+    await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
-  test("交易记录卡：该产品在该平台的交易", async ({ page }) => {
+  test("交易记录卡：该产品在该平台的交易（不含 CASH 腿）", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     const card = page.getByTestId("platform-product-trades-card");
     const rows = card.getByTestId("platform-product-trade-row");
     await expect(rows.first()).toBeVisible();
-    await expect(rows.first()).toContainText(/买入|卖出/);
+    // 产品级过滤不含 CASH 腿，只有 2 条基金腿
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first()).toContainText("买入");
   });
 
   test("「查看该产品全部平台持仓」链接 → 产品详情页", async ({ page }) => {
@@ -154,5 +195,16 @@ test.describe("平台-产品详情页", () => {
     await expect(
       page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
     ).toBeVisible();
+  });
+
+  test("缺 market 参数的非现金产品 EmptyState", async ({ page }) => {
+    // S4：非现金产品缺 market 参数应提示缺少参数，而非「未找到」
+    await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/510300.SH`);
+    await expect(page.getByText("缺少 market 参数")).toBeVisible();
+  });
+
+  test("未知产品 EmptyState", async ({ page }) => {
+    await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/NONEXISTENT?market=CN_EXCHANGE`);
+    await expect(page.getByText("未找到该平台产品持仓")).toBeVisible();
   });
 });
