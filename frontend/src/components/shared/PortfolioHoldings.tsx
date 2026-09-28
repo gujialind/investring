@@ -281,11 +281,16 @@ export default function PortfolioHoldings({
       ) : (
         <div className={`pt-3 ${cardGridClass(variant)}`}>
           {platforms.map((p, i) => (
-            <HoldingPlatformCard
+            <Link
               key={p.platform_code ?? "unknown"}
-              platform={p}
-              percent={platformPercents[i] ?? 0}
-            />
+              href={`${basePath}/${portfolioCode}/platforms/${p.platform_code ?? ""}`}
+              className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <HoldingPlatformCard
+                platform={p}
+                percent={platformPercents[i] ?? 0}
+              />
+            </Link>
           ))}
         </div>
       )}

@@ -171,6 +171,7 @@ def _shape_product_slice(item: dict) -> HoldingProductPlatformSlice:
         cash_amount=_round4(item["cash_amount"]),
         holding_profit=_round4(item["holding_profit"]),
         cumulative_profit=_round4(item["cumulative_profit"]),
+        daily_profit=_round4(item["daily_profit"]),
         ratio_in_product=_round4(item["ratio_in_product"]),
     )
 

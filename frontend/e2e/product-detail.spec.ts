@@ -72,8 +72,8 @@ test.describe("产品详情页", () => {
 
   test("平台分布：单平台一行、市值与占比", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
-    const card = page.getByTestId("product-platform-card");
-    const rows = card.getByTestId("product-platform-row");
+    const card = page.getByTestId("platform-distribution-card");
+    const rows = card.getByTestId("platform-distribution-row");
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText("华宝证券");
     await expect(rows.first()).toContainText("15,000.00");

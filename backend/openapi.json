@@ -8463,6 +8463,17 @@
             ],
             "title": "Cumulative Profit"
           },
+          "daily_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Profit"
+          },
           "ratio_in_product": {
             "anyOf": [
               {

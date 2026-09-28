@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import PlatformDistributionCard from "./PlatformDistributionCard";
 import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
   formatCurrency,
   formatDate,
@@ -29,10 +31,7 @@ import {
 import { useHoldingsByProduct } from "@/hooks/usePosition";
 import { useNavAnalysis } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
-import { usePlatformList } from "@/hooks/usePlatform";
-import PlatformDistributionCard from "./PlatformDistributionCard";
 
-/** 净值曲线区间 Tab（M3/D3：近1月/近3月/近6月/近1年，默认近6月） */
 const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
   { key: "1m", label: "近1月" },
   { key: "3m", label: "近3月" },
@@ -40,7 +39,6 @@ const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
   { key: "1y", label: "近1年" },
 ];
 
-/** 六窗区间收益率展示序（label, 字段） */
 const RETURN_WINDOWS: { label: string; field: "m1" | "m3" | "m6" | "y1" | "ytd" | "all" }[] = [
   { label: "近1月", field: "m1" },
   { label: "近3月", field: "m3" },
@@ -51,46 +49,47 @@ const RETURN_WINDOWS: { label: string; field: "m1" | "m3" | "m6" | "y1" | "ytd" 
 ];
 
 const HISTORY_PAGE_SIZE = 5;
-
 const TRADE_TYPE_LABELS: Record<string, string> = { buy: "买入", sell: "卖出" };
 
-/** MM/DD 短日期（「最新收益(09/25)」标签，§12 注记；与持仓卡同一惯例） */
 function shortMmDd(dateStr: string): string {
   return dateStr.slice(5, 10).replace("-", "/");
 }
 
-interface ProductDetailContentProps {
-  /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
+interface PlatformProductDetailContentProps {
   basePath: string;
   variant: "desktop" | "mobile";
 }
 
 /**
- * #595 步骤③ 持仓产品详情页（M3/D3，双端共享）：
- * 概览卡 → 操作行（买入/卖出/事件，trades 产品预填）→ 平台分布 → 累计净值走势 →
- * 区间收益率（六窗）→ 历史净值（首屏 5 行 + 查看更多）→ 交易记录（该产品跨平台）。
- * 数据源：holdings/by-product 行 + platforms 切片（#635）、nav-analysis/nav-history
- * （#637）、trades 列表 product_code+market 过滤（D-8 既有参数）。
- * 平台分布行点击 → 平台-产品详情页由步骤④接线，本步骤渲染为纯展示行。
+ * #595 步骤④ 平台-产品详情页（M5/D5，双端共享）：
+ * 概览卡（该平台切片市值/份额/收益/占产品比）→ 操作行（trades 平台+产品预填）→
+ * 净值走势 + 区间收益率 + 历史净值 → 交易记录（该产品在该平台）→
+ * 「查看该产品全部平台持仓」链接 → 产品详情页。
+ * 数据源：holdings/by-product 行的 platforms 切片 + nav-analysis/nav-history + trades。
  */
-export default function ProductDetailContent({ basePath, variant }: ProductDetailContentProps) {
+export default function PlatformProductDetailContent({
+  basePath,
+  variant,
+}: PlatformProductDetailContentProps) {
   const params = useParams();
+  const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
+  const platformCode = params.platformCode as string;
   const productCode = params.productCode as string;
-  const market = params.market as string;
+  const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
+  const isCash = productCode === CASH_PRODUCT_CODE;
 
   const { data: holdings, isLoading: holdingsLoading, isError: holdingsError } =
     useHoldingsByProduct(portfolioCode);
   const product = holdings?.products.find(
     (p) => p.product_code === productCode && p.market === market
   );
+  const slice = product?.platforms.find((s) => s.platform_code === platformCode);
 
   const [range, setRange] = useState<NavAnalysisRange>("6m");
   const { data: analysis } = useNavAnalysis(productCode, market, range);
 
-  // 历史净值「首屏 5 行 + 查看更多」：按页并行查询后按页序拼接（keepPreviousData
-  // 的单页 hook 不适合追加式加载；页间数据由后端分页契约保证不重叠）
   const [visiblePages, setVisiblePages] = useState(1);
   const historyQueries = useQueries({
     queries: Array.from({ length: visiblePages }, (_, i) => ({
@@ -107,20 +106,13 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const { data: tradesData } = useTradeList({
     portfolio_code: portfolioCode,
     product_code: productCode,
-    market,
+    market: market || undefined,
+    platform_code: platformCode,
     page: 1,
     page_size: 5,
   });
-  const { data: platformsData } = usePlatformList({ page_size: 100 });
-  const platformNameMap = useMemo(
-    () => new Map((platformsData?.items ?? []).map((p) => [p.code, p.name])),
-    [platformsData]
-  );
 
-  if (holdingsLoading) {
-    return <LoadingState />;
-  }
-  // #638 L2 S1：请求失败不得渲染成「已清仓」空态（#214 惯例，同 PortfolioHoldings 文案）
+  if (holdingsLoading) return <LoadingState />;
   if (holdingsError) {
     return (
       <div className="py-8 text-center text-muted-foreground">
@@ -128,29 +120,30 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
       </div>
     );
   }
-  if (!product) {
+  if (!product || !slice) {
     return (
       <EmptyState
-        message="未找到该产品持仓"
-        description="产品可能已清仓或不属于当前组合（§6 过滤：已清仓产品不展示）"
+        message="未找到该平台产品持仓"
+        description="该产品可能不在当前平台持仓或不属于当前组合"
       />
     );
   }
 
   const snapshotDate = holdings?.snapshot_date;
-  const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}`;
+  const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}&platform=${encodeURIComponent(platformCode)}`;
+  const productDetailLink = `${basePath}/${portfolioCode}/product/${encodeURIComponent(market)}/${encodeURIComponent(productCode)}`;
 
   const overview = (
-    <Card data-testid="product-overview-card">
+    <Card data-testid="platform-product-overview-card">
       <CardContent className="pt-4">
         <div className="flex items-center justify-between text-sm text-muted-foreground">
           <span>持仓市值</span>
           <span>最新快照 {snapshotDate ? formatDate(snapshotDate) : "--"}</span>
         </div>
         <div className="mt-1 text-2xl font-semibold number-cell">
-          {formatCurrency(product.market_value)}
+          {formatCurrency(slice.market_value)}
         </div>
-        {latestPrice && (
+        {!isCash && latestPrice && (
           <div className="mt-1 text-sm text-muted-foreground">
             单位净值 {formatNav(latestPrice.unit_price)}
             {latestPrice.accumulated_nav !== null &&
@@ -162,43 +155,45 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           <div>
             <div className="text-sm text-muted-foreground">持有份额</div>
             <div className="text-sm font-medium tabular-nums">
-              {formatSharesUnit(product.shares)}
+              {isCash ? "--" : formatSharesUnit(slice.shares)}
             </div>
           </div>
           <div>
             <div className="text-sm text-muted-foreground">持有收益</div>
-            <div className={`flex flex-wrap items-baseline gap-x-1 text-sm font-medium tabular-nums ${getReturnColorClass(product.holding_profit)}`}>
-              <span>{formatSignedCurrency(product.holding_profit)}</span>
-              {product.holding_profit_percent !== null &&
-                product.holding_profit_percent !== undefined && (
-                  <span className="whitespace-nowrap">({formatReturnRate(product.holding_profit_percent)})</span>
-                )}
+            <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.holding_profit)}`}>
+              {formatSignedCurrency(slice.holding_profit)}
             </div>
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">累计收益*</div>
-            <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(product.cumulative_profit)}`}>
-              {formatSignedCurrency(product.cumulative_profit)}
+            <div className="text-sm text-muted-foreground">累计收益</div>
+            <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}>
+              {formatSignedCurrency(slice.cumulative_profit)}
             </div>
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">
-              最新收益{snapshotDate ? `(${shortMmDd(formatDate(snapshotDate))})` : ""}
-            </div>
-            <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(product.daily_profit)}`}>
-              {formatSignedCurrency(product.daily_profit)}
+            <div className="text-sm text-muted-foreground">占该产品比</div>
+            <div className="text-sm font-medium tabular-nums">
+              {slice.ratio_in_product !== null && slice.ratio_in_product !== undefined
+                ? `${(slice.ratio_in_product * 100).toFixed(1)}%`
+                : "--"}
             </div>
           </div>
         </div>
-        <p className="mt-2 text-xs text-warning">
-          *累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同
-        </p>
       </CardContent>
     </Card>
   );
 
-  const actionRow = (
-    <div className="flex gap-2" data-testid="product-action-row">
+  const actionRow = isCash ? (
+    <div className="flex gap-2" data-testid="platform-product-action-row">
+      <Button asChild className="flex-1">
+        <Link href={tradesLink}>转入</Link>
+      </Button>
+      <Button asChild variant="outline" className="flex-1">
+        <Link href={tradesLink}>转出</Link>
+      </Button>
+    </div>
+  ) : (
+    <div className="flex gap-2" data-testid="platform-product-action-row">
       <Button asChild className="flex-1">
         <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
       </Button>
@@ -211,20 +206,9 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </div>
   );
 
-  const platformCard = (
-    <PlatformDistributionCard
-      title="平台分布"
-      slices={product.platforms}
-      rowLinkPrefix={(slice) =>
-        slice.platform_code
-          ? `${basePath}/${portfolioCode}/platforms/${slice.platform_code}/products/${encodeURIComponent(productCode)}?market=${encodeURIComponent(market)}`
-          : undefined
-      }
-    />
-  );
-
-  const curveCard = (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="product-curve-card">
+  // 净值相关卡片仅非现金产品显示
+  const curveCard = !isCash && (
+    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-curve-card">
       <h3 className="text-base font-semibold">累计净值走势</h3>
       <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
         {NAV_RANGE_TABS.map((tab) => (
@@ -250,8 +234,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
-  const returnsCard = (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="product-returns-card">
+  const returnsCard = !isCash && (
+    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-returns-card">
       <h3 className="text-base font-semibold">区间收益率</h3>
       <div className="mt-3 grid grid-cols-3 gap-3">
         {RETURN_WINDOWS.map((w) => {
@@ -269,8 +253,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
-  const historyCard = (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="product-history-card">
+  const historyCard = !isCash && (
+    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-history-card">
       <h3 className="text-base font-semibold">历史净值</h3>
       {historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
@@ -288,7 +272,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
               return (
                 <li
                   key={item.price_date}
-                  data-testid="product-history-row"
+                  data-testid="platform-product-history-row"
                   className="grid grid-cols-4 border-t border-border py-1.5 text-sm tabular-nums"
                 >
                   <span className="whitespace-nowrap">{formatDate(item.price_date)}</span>
@@ -319,7 +303,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   );
 
   const tradesCard = (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="product-trades-card">
+    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-trades-card">
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold">交易记录</h3>
         <Link href={tradesLink} className="text-sm text-primary hover:underline">
@@ -333,7 +317,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           {(tradesData?.items ?? []).map((trade) => (
             <li
               key={trade.id}
-              data-testid="product-trade-row"
+              data-testid="platform-product-trade-row"
               className="flex items-center justify-between gap-2 border-t border-border py-2 first:border-t-0"
             >
               <div className="min-w-0">
@@ -344,10 +328,6 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                   />
                   <span className="truncate">
                     {TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type}
-                    {" · "}
-                    {trade.platform_code
-                      ? (platformNameMap.get(trade.platform_code) ?? trade.platform_code)
-                      : "--"}
                   </span>
                 </div>
                 <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
@@ -370,32 +350,60 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
+  // 「查看该产品全部平台持仓」— 非现金产品才有产品详情页
+  const allPlatformsLink = !isCash && product.platforms.length > 0 && (
+    <Link
+      href={productDetailLink}
+      className="text-sm text-primary hover:underline"
+      data-testid="view-all-platforms-link"
+    >
+      查看该产品全部平台持仓
+    </Link>
+  );
+
+  // 全部平台持仓卡（D5 右栏 / M5 底部）
+  const allPlatformsCard = !isCash && product.platforms.length > 1 && (
+    <PlatformDistributionCard
+      title="全部平台持仓"
+      slices={product.platforms}
+      rowLinkPrefix={(s) =>
+        s.platform_code && s.platform_code !== platformCode
+          ? `${basePath}/${portfolioCode}/platforms/${s.platform_code}/products/${encodeURIComponent(productCode)}?market=${encodeURIComponent(market)}`
+          : undefined
+      }
+      testId="platform-product-all-platforms-card"
+    />
+  );
+
   return (
     <div className={isMobile ? "space-y-3 p-3" : "space-y-4 p-6"}>
       <div className="flex items-center gap-2">
         <Button asChild variant="ghost" size="icon" aria-label="返回">
-          <Link href={`${basePath}/${portfolioCode}`}>
+          <Link href={`${basePath}/${portfolioCode}/platforms/${platformCode}`}>
             <ArrowLeft className="h-4 w-4" />
           </Link>
         </Button>
         <div>
-          <h1 className="text-lg font-semibold">{product.product_name || product.product_code}</h1>
+          <h1 className="text-lg font-semibold">
+            {slice.platform_name || platformCode} · {product.product_name || productCode}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {product.product_code} · {formatMarketName(product.market)}
+            {productCode}{market ? ` · ${formatMarketName(market)}` : ""}
           </p>
         </div>
       </div>
 
       {overview}
       {actionRow}
+      {allPlatformsLink && <div>{allPlatformsLink}</div>}
 
       {isMobile ? (
         <>
-          {platformCard}
           {curveCard}
           {returnsCard}
           {historyCard}
           {tradesCard}
+          {allPlatformsCard}
         </>
       ) : (
         <div className="grid grid-cols-[1fr_360px] gap-4">
@@ -405,8 +413,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
             {historyCard}
           </div>
           <div className="space-y-4">
-            {platformCard}
             {tradesCard}
+            {allPlatformsCard}
           </div>
         </div>
       )}

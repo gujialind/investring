@@ -273,6 +273,7 @@ def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
             "_profit_skipped": 0,
             "holding_profit": None,
             "cumulative_profit": cumulative_slice,
+            "daily_profit": None,
         })
         plat_slice["market_value"] += value
         if shares is not None:
@@ -285,6 +286,8 @@ def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
             plat_slice["holding_profit"] = (plat_slice["holding_profit"] or _ZERO) + (
                 profit if isinstance(profit, Decimal) else Decimal(str(profit))
             )
+        if daily is not None:
+            plat_slice["daily_profit"] = (plat_slice["daily_profit"] or 0.0) + daily
 
     products = []
     for key, agg in aggregates.items():

@@ -11,6 +11,7 @@ export interface HoldingProductPlatformSlice {
   cash_amount: number | null;
   holding_profit: number | null;
   cumulative_profit: number | null;
+  daily_profit: number | null;
   ratio_in_product: number | null;
 }
 
