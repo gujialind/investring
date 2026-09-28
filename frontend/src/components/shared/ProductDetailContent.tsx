@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -119,7 +119,6 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   if (holdingsLoading) {
     return <LoadingState />;
   }
-  // #638 L2 S1：请求失败不得渲染成「已清仓」空态（#214 惯例，同 PortfolioHoldings）
   // #638 L2 S1：请求失败不得渲染成「已清仓」空态（#214 惯例，同 PortfolioHoldings 文案）
   if (holdingsError) {
     return (
@@ -231,13 +230,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                 <div className="text-sm text-muted-foreground tabular-nums">
                   {formatSharesUnit(slice.shares)}
                 </div>
-                <div className="text-xs tabular-nums">
-                  <span className={getReturnColorClass(slice.holding_profit)}>
-                    持有 <span className="whitespace-nowrap">{formatSignedCurrency(slice.holding_profit)}</span>
+                <div className="flex flex-wrap gap-x-1 text-xs tabular-nums">
+                  <span className={`whitespace-nowrap ${getReturnColorClass(slice.holding_profit)}`}>
+                    持有 {formatSignedCurrency(slice.holding_profit)}
                   </span>
-                  <span className="text-muted-foreground">
-                    {" · 累计 "}
-                    <span className="whitespace-nowrap">{formatSignedCurrency(slice.cumulative_profit)}</span>
+                  <span className="whitespace-nowrap text-muted-foreground">
+                    · 累计 {formatSignedCurrency(slice.cumulative_profit)}
                   </span>
                 </div>
               </div>
@@ -252,7 +250,6 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                       : "--"}
                   </div>
                 </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
               </div>
             </li>
           ))}
@@ -329,7 +326,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                   data-testid="product-history-row"
                   className="grid grid-cols-4 border-t border-border py-1.5 text-sm tabular-nums"
                 >
-                  <span>{formatDate(item.price_date)}</span>
+                  <span className="whitespace-nowrap">{formatDate(item.price_date)}</span>
                   <span className="text-right">{formatNav(item.unit_price)}</span>
                   <span className="text-right">
                     {item.accumulated_nav !== null ? formatNav(item.accumulated_nav) : "--"}
@@ -388,7 +385,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                       : "--"}
                   </span>
                 </div>
-                <div className="text-xs text-muted-foreground tabular-nums">
+                <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
                   {trade.shares !== undefined && `${formatSharesUnit(trade.shares)} @ ${formatNav(trade.price)} · `}
                   {formatDate(trade.trade_date)}
                 </div>

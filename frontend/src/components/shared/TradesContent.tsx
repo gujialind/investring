@@ -43,7 +43,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, getTradeStatusLabel, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
@@ -164,7 +164,8 @@ export default function TradesContent({
   const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(
     normalizedInitialProduct ? [normalizedInitialProduct] : undefined
   );
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(initialPlatform);
+  // #638 L2 N3：platform 归一与 product/trade_type 同口径，空串视为未传
+  const [platformFilter, setPlatformFilter] = useState<string | undefined>(initialPlatform || undefined);
   const [tradeRange, setTradeRange] = useState<DateRange | undefined>(() => defaultTradeRange());
   const [confirmRange, setConfirmRange] = useState<DateRange | undefined>(undefined);
   const [page, setPage] = useState(1);
@@ -602,7 +603,7 @@ export default function TradesContent({
       </TableCell>
       <TableCell>
         <Badge variant={getStatusBadgeVariant(trade.status)}>
-          {trade.status === "confirmed" ? "已确认" : trade.status === "pending" ? "待确认" : "已取消"}
+          {getTradeStatusLabel(trade.status)}
         </Badge>
       </TableCell>
       <TableCell className="text-right">
