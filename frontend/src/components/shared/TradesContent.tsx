@@ -150,13 +150,19 @@ export default function TradesContent({
   const params = useParams();
   const code = params.code as string;
 
+  // #638 L2 S6 预填归一：products 参数是 (code, market) 精确匹配，缺 market 段宁可不筛
+  //（空串段 = 要求 market == ""，静默空列表）；trade_type 只认 Select 实际提供的 buy/sell。
+  const normalizedInitialProduct = initialProduct?.market ? initialProduct : undefined;
+  const normalizedInitialTradeType =
+    initialTradeType === "buy" || initialTradeType === "sell" ? initialTradeType : undefined;
+
   // 筛选状态（#126 服务端筛选）：tradeRange 默认最近 1 年（决策⑤，惰性初始化避免每渲染重算）
   // #595：initial* 仅作 useState 初值（一次性），用户进入后可自行清空/改选
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [tradeTypeFilter, setTradeTypeFilter] = useState<string | undefined>(initialTradeType);
+  const [tradeTypeFilter, setTradeTypeFilter] = useState<string | undefined>(normalizedInitialTradeType);
   // 产品多选筛选（#155）：undefined = 全部产品；元素为 {code, market}（market 可空串）
   const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(
-    initialProduct ? [initialProduct] : undefined
+    normalizedInitialProduct ? [normalizedInitialProduct] : undefined
   );
   const [platformFilter, setPlatformFilter] = useState<string | undefined>(initialPlatform);
   const [tradeRange, setTradeRange] = useState<DateRange | undefined>(() => defaultTradeRange());

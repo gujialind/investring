@@ -10,11 +10,13 @@ import {
   formatCompactCurrency,
   formatPercent,
   formatReturnRate,
+  formatSignedCurrency,
   largestRemainderPercents,
   getReturnColorClass,
   getReturnBgClass,
   getStatusBadgeVariant,
   getSignedReturn,
+  getTradeStatusLabel,
   getNumberCellClass,
   toDateOnly,
   parseDateOnly,
@@ -121,6 +123,24 @@ describe("formatPercent / formatReturnRate", () => {
   it("字符串输入走 parseFloat（接口原样透传的字符串数值）", () => {
     expect(formatPercent("0.0523")).toBe("+5.23%");
     expect(formatReturnRate("-1.23")).toBe("-1.23%");
+  });
+});
+
+describe("formatSignedCurrency / getTradeStatusLabel", () => {
+  it("符号在 ¥ 前，负数取绝对值", () => {
+    expect(formatSignedCurrency(1234.5)).toBe("+¥1,234.50");
+    expect(formatSignedCurrency(-1234.5)).toBe("-¥1,234.50");
+    expect(formatSignedCurrency(0)).toBe("¥0.00");
+    expect(formatSignedCurrency(null)).toBe("--");
+    expect(formatSignedCurrency("abc")).toBe("--");
+  });
+
+  it("交易状态文案单点映射，未知状态原样回显", () => {
+    expect(getTradeStatusLabel("confirmed")).toBe("已确认");
+    expect(getTradeStatusLabel("pending")).toBe("待确认");
+    expect(getTradeStatusLabel("cancelled")).toBe("已取消");
+    expect(getTradeStatusLabel("unknown_future")).toBe("unknown_future");
+    expect(getTradeStatusLabel(undefined)).toBe("--");
   });
 });
 

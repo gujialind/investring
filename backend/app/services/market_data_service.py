@@ -79,9 +79,13 @@ _NAV_CURVE_RANGE_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
 # 曲线区间码 → 响应字段名（ProductIntervalReturns 的 m1/m3/m6/y1）
 _INTERVAL_FIELD_BY_RANGE = {"1m": "m1", "3m": "m3", "6m": "m6", "1y": "y1"}
 
-# 六窗区间收益率的窗口锚点：与 performance_service 组合级逐一对齐（#637 L2 评审
-# S2）——1m/3m 用 30/90 自然日（非日历月），6m/1y 用日历月/年。产品详情页与组合
-# 绩效卡的同名窗口因此语义一致，同名数字可互相印证。
+
+# 六窗区间收益率的窗口锚点：1m/3m 用 30/90 自然日、6m/1y 用日历月/年，与
+# performance_service 组合级逐一对齐——产品详情页与组合绩效卡的四个固定窗口
+# 因此语义一致，同名数字可互相印证（#637 L2 S2）。
+# 注意曲线区间（_NAV_CURVE_RANGE_MONTHS）仍按日历月过滤，与同名窗口锚点不必相同
+# （评审 Nit1）；ytd 产品级 clip_to_first、组合级不 clip，分叉理由见 get_nav_analysis
+# （评审 S3 只落在产品级）——「与组合级一致」仅指 m1/m3/m6/y1 四窗。
 def _window_start(latest: date, field: str) -> date:
     if field == "m1":
         return latest - timedelta(days=30)
@@ -200,7 +204,7 @@ def get_nav_analysis(
         if r.price_date >= curve_start
     ]
 
-    for range_code_key, field in _INTERVAL_FIELD_BY_RANGE.items():
+    for field in _INTERVAL_FIELD_BY_RANGE.values():
         interval_returns[field] = _nav_interval_return(
             records, _window_start(latest_date, field)
         )

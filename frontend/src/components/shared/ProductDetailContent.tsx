@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
@@ -18,8 +18,13 @@ import {
   formatDate,
   formatMarketName,
   formatNav,
+  formatReturnRate,
   formatSharesUnit,
+  formatSignedCurrency,
   getReturnColorClass,
+  getSignedReturn,
+  getStatusBadgeVariant,
+  getTradeStatusLabel,
 } from "@/lib/utils";
 import { useHoldingsByProduct } from "@/hooks/usePosition";
 import { useNavAnalysis } from "@/hooks/useProduct";
@@ -46,41 +51,11 @@ const RETURN_WINDOWS: { label: string; field: "m1" | "m3" | "m6" | "y1" | "ytd" 
 
 const HISTORY_PAGE_SIZE = 5;
 
-/** 带符号百分数（区间收益率已是百分数，2dp；null 占位 --） */
-function formatSignedPercent(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "--";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
-}
-
-/** 带符号金额（概览指标用 ¥ 格式，区别于持仓卡收益列的无 ¥ 例外，§12） */
-function formatSignedCurrencyLocal(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "--";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${formatCurrency(value)}`;
-}
-
-/** 日涨跌（百分数 2dp，红涨绿跌；null 占位 --，§12：涨跌列不带 ¥） */
-function formatPctChange(value: number | null | undefined): { text: string; className: string } {
-  if (value === null || value === undefined) return { text: "--", className: "text-muted-foreground" };
-  const sign = value > 0 ? "+" : "";
-  return {
-    text: `${sign}${value.toFixed(2)}%`,
-    className: getReturnColorClass(value),
-  };
-}
-
 const TRADE_TYPE_LABELS: Record<string, string> = { buy: "买入", sell: "卖出" };
 
 /** MM/DD 短日期（「最新收益(09/25)」标签，§12 注记；与持仓卡同一惯例） */
 function shortMmDd(dateStr: string): string {
   return dateStr.slice(5, 10).replace("-", "/");
-}
-
-function tradeStatusLabel(status: string): string {
-  if (status === "confirmed") return "已确认";
-  if (status === "pending") return "待确认";
-  return "已取消";
 }
 
 interface ProductDetailContentProps {
@@ -104,7 +79,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const market = params.market as string;
   const isMobile = variant === "mobile";
 
-  const { data: holdings, isLoading: holdingsLoading } = useHoldingsByProduct(portfolioCode);
+  const { data: holdings, isLoading: holdingsLoading, isError: holdingsError } =
+    useHoldingsByProduct(portfolioCode);
   const product = holdings?.products.find(
     (p) => p.product_code === productCode && p.market === market
   );
@@ -135,12 +111,22 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     page_size: 5,
   });
   const { data: platformsData } = usePlatformList({ page_size: 100 });
-  const platformNameMap = new Map(
-    (platformsData?.items ?? []).map((p) => [p.code, p.name])
+  const platformNameMap = useMemo(
+    () => new Map((platformsData?.items ?? []).map((p) => [p.code, p.name])),
+    [platformsData]
   );
 
   if (holdingsLoading) {
     return <LoadingState />;
+  }
+  // #638 L2 S1：请求失败不得渲染成「已清仓」空态（#214 惯例，同 PortfolioHoldings）
+  // #638 L2 S1：请求失败不得渲染成「已清仓」空态（#214 惯例，同 PortfolioHoldings 文案）
+  if (holdingsError) {
+    return (
+      <div className="py-8 text-center text-muted-foreground">
+        加载失败，请刷新重试
+      </div>
+    );
   }
   if (!product) {
     return (
@@ -182,17 +168,17 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           <div>
             <div className="text-sm text-muted-foreground">持有收益</div>
             <div className={`flex flex-wrap items-baseline gap-x-1 text-sm font-medium tabular-nums ${getReturnColorClass(product.holding_profit)}`}>
-              <span>{formatSignedCurrencyLocal(product.holding_profit)}</span>
+              <span>{formatSignedCurrency(product.holding_profit)}</span>
               {product.holding_profit_percent !== null &&
                 product.holding_profit_percent !== undefined && (
-                  <span className="whitespace-nowrap">({formatSignedPercent(product.holding_profit_percent)})</span>
+                  <span className="whitespace-nowrap">({formatReturnRate(product.holding_profit_percent)})</span>
                 )}
             </div>
           </div>
           <div>
             <div className="text-sm text-muted-foreground">累计收益*</div>
             <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(product.cumulative_profit)}`}>
-              {formatSignedCurrencyLocal(product.cumulative_profit)}
+              {formatSignedCurrency(product.cumulative_profit)}
             </div>
           </div>
           <div>
@@ -200,12 +186,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
               最新收益{snapshotDate ? `(${shortMmDd(formatDate(snapshotDate))})` : ""}
             </div>
             <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(product.daily_profit)}`}>
-              {formatSignedCurrencyLocal(product.daily_profit)}
+              {formatSignedCurrency(product.daily_profit)}
             </div>
           </div>
         </div>
         <p className="mt-2 text-xs text-warning">
-          *累计收益含已卖出实现盈亏，该口径需后端补齐
+          *累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同
         </p>
       </CardContent>
     </Card>
@@ -247,11 +233,11 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                 </div>
                 <div className="text-xs tabular-nums">
                   <span className={getReturnColorClass(slice.holding_profit)}>
-                    持有 <span className="whitespace-nowrap">{formatSignedCurrencyLocal(slice.holding_profit)}</span>
+                    持有 <span className="whitespace-nowrap">{formatSignedCurrency(slice.holding_profit)}</span>
                   </span>
                   <span className="text-muted-foreground">
                     {" · 累计 "}
-                    <span className="whitespace-nowrap">{formatSignedCurrencyLocal(slice.cumulative_profit)}</span>
+                    <span className="whitespace-nowrap">{formatSignedCurrency(slice.cumulative_profit)}</span>
                   </span>
                 </div>
               </div>
@@ -278,13 +264,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const curveCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-curve-card">
       <h3 className="text-base font-semibold">累计净值走势</h3>
-      <div className="mt-2 flex gap-1" role="tablist" aria-label="净值区间">
+      <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
         {NAV_RANGE_TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
-            role="tab"
-            aria-selected={range === tab.key}
+            aria-pressed={range === tab.key}
             data-testid={`nav-range-${tab.key}`}
             className={`rounded-md px-3 py-1 text-sm ${
               range === tab.key
@@ -312,7 +297,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           return (
             <div key={w.field} data-testid={`return-${w.field}`}>
               <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(value)}`}>
-                {formatSignedPercent(value)}
+                {formatReturnRate(value)}
               </div>
               <div className="text-xs text-muted-foreground">{w.label}</div>
             </div>
@@ -337,7 +322,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           </div>
           <ul>
             {historyItems.map((item) => {
-              const pct = formatPctChange(item.pct_change);
+              const pct = getSignedReturn(item.pct_change);
               return (
                 <li
                   key={item.price_date}
@@ -349,7 +334,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                   <span className="text-right">
                     {item.accumulated_nav !== null ? formatNav(item.accumulated_nav) : "--"}
                   </span>
-                  <span className={`text-right ${pct.className}`}>{pct.text}</span>
+                  <span className={`text-right ${pct.colorClass}`}>{pct.text}</span>
                 </li>
               );
             })}
@@ -412,8 +397,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                 <span className="text-sm font-medium number-cell">
                   {formatCurrency(trade.amount)}
                 </span>
-                <Badge variant={trade.status === "confirmed" ? "neutral" : "outline"}>
-                  {tradeStatusLabel(trade.status)}
+                <Badge variant={getStatusBadgeVariant(trade.status)}>
+                  {getTradeStatusLabel(trade.status)}
                 </Badge>
               </div>
             </li>

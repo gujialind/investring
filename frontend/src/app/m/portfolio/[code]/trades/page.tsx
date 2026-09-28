@@ -11,11 +11,15 @@ function MobileTradesInner() {
   const market = searchParams.get("market");
   const platform = searchParams.get("platform");
   const tradeType = searchParams.get("trade_type");
+  const initialProduct = product ? { code: product, market: market ?? "" } : undefined;
   return (
+    // key 由预填值组成：initial* 是「一次性初值」契约，同路由仅 query 变化时
+    // 不重挂载会把上一个产品的筛选留在页面上（#638 L2 Nit3）
     <TradesContent
+      key={`${product}|${market}|${platform}|${tradeType}`}
       basePath="/m/portfolio"
       variant="mobile"
-      initialProduct={product ? { code: product, market: market ?? "" } : undefined}
+      initialProduct={initialProduct}
       initialPlatform={platform ?? undefined}
       initialTradeType={tradeType ?? undefined}
     />

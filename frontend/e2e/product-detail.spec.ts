@@ -41,7 +41,7 @@ test.describe("产品详情页", () => {
     const curve = page.getByTestId("product-curve-card");
     await expect(curve.getByRole("heading", { name: "累计净值走势" })).toBeVisible();
     // 默认近6月选中；ETF 夹具无累计净值 → 图表空态文案
-    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
     await expect(curve).toContainText("暂无净值数据");
 
     const returns = page.getByTestId("product-returns-card");
@@ -53,8 +53,8 @@ test.describe("产品详情页", () => {
   test("区间 Tab 切换", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
     await page.getByTestId("nav-range-1m").click();
-    await expect(page.getByTestId("nav-range-1m")).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-selected", "false");
+    await expect(page.getByTestId("nav-range-1m")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "false");
   });
 
   test("历史净值：日期降序两行、累计净值/日涨跌占位、无查看更多", async ({ page }) => {
