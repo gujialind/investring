@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta
 import logging
 import math
 from typing import List, Dict, Any, Optional
+from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
@@ -69,6 +70,126 @@ def get_price_records(
         query = query.limit(limit)
 
     return query.all()
+
+
+# --- #595 产品详情页净值数据（§5.3）：读侧统计，口径见各函数 docstring ---
+
+# 曲线区间 → 月数；六窗区间收益率的窗口与 performance_service 组合级口径同构
+#（近 N 月 = 最新日回溯 N 月、取窗口内首个记录为基准），但基序列是产品累计净值。
+_NAV_CURVE_RANGE_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
+# 曲线区间码 → 响应字段名（ProductIntervalReturns 的 m1/m3/m6/y1）
+_INTERVAL_FIELD_BY_RANGE = {"1m": "m1", "3m": "m3", "6m": "m6", "1y": "y1"}
+
+
+def get_nav_history_page(
+    db: Session,
+    product_code: str,
+    market: str,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    page: int = 1,
+    page_size: int = 5,
+) -> tuple:
+    """历史净值分页（日期降序）：单位净值必有，累计净值/日涨跌可空照传。"""
+    query = db.query(PriceRecord).filter(
+        and_(
+            PriceRecord.product_code == product_code,
+            PriceRecord.market == market,
+        )
+    )
+    if start_date:
+        query = query.filter(PriceRecord.price_date >= start_date)
+    if end_date:
+        query = query.filter(PriceRecord.price_date <= end_date)
+
+    total = query.count()
+    items = (
+        query.order_by(PriceRecord.price_date.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return items, total
+
+
+def _nav_interval_return(
+    records: List[PriceRecord],
+    start: date,
+) -> Optional[float]:
+    """区间收益率（百分数，4dp）：以 start 当日或之后首条记录为基准，至最新记录。
+
+    口径与 performance_service._period_return 同构（#595 spec §5.3 要求统一量化
+    口径）：历史未覆盖 start（产品数据不足窗口期）、基准与最新同日、基准累计
+    净值非正时返回 None，前端显示占位而非虚高数字。
+    """
+    if len(records) < 2:
+        return None
+    if records[0].price_date > start:
+        return None
+    base = next((r for r in records if r.price_date >= start), None)
+    latest = records[-1]
+    if base is None or base.price_date >= latest.price_date:
+        return None
+    base_nav = float(base.accumulated_nav)
+    if base_nav <= 0:
+        return None
+    return round((float(latest.accumulated_nav) / base_nav - 1) * 100, 4)
+
+
+def get_nav_analysis(
+    db: Session,
+    product_code: str,
+    market: str,
+    range_code: str,
+) -> dict:
+    """产品净值分析：所选区间累计净值曲线 + 六窗区间收益率。
+
+    曲线只画累计净值非空的记录（场内 ETF 行情源常无累计净值，此时曲线为空、
+    区间收益率为 None，由前端空态承接）；六窗与曲线取自同一升序序列，口径一致。
+    区间收益率含 None（历史不足窗口期），响应字段全部 Optional。
+    """
+    records = (
+        db.query(PriceRecord)
+        .filter(
+            and_(
+                PriceRecord.product_code == product_code,
+                PriceRecord.market == market,
+                PriceRecord.accumulated_nav.isnot(None),
+            )
+        )
+        .order_by(PriceRecord.price_date.asc())
+        .all()
+    )
+
+    curve: List[dict] = []
+    interval_returns: Dict[str, Optional[float]] = {
+        "m1": None, "m3": None, "m6": None,
+        "y1": None, "ytd": None, "all": None,
+    }
+    if not records:
+        return {"curve": curve, "interval_returns": interval_returns}
+
+    latest_date = records[-1].price_date
+
+    months = _NAV_CURVE_RANGE_MONTHS[range_code]
+    curve_start = latest_date - relativedelta(months=months)
+    curve = [
+        {"date": r.price_date, "accumulated_nav": float(r.accumulated_nav)}
+        for r in records
+        if r.price_date >= curve_start
+    ]
+
+    for range_code_key, m in _NAV_CURVE_RANGE_MONTHS.items():
+        interval_returns[_INTERVAL_FIELD_BY_RANGE[range_code_key]] = (
+            _nav_interval_return(records, latest_date - relativedelta(months=m))
+        )
+    interval_returns["ytd"] = _nav_interval_return(
+        records, date(latest_date.year, 1, 1)
+    )
+    # 成立以来 = 首条记录为基准
+    interval_returns["all"] = _nav_interval_return(records, records[0].price_date)
+
+    return {"curve": curve, "interval_returns": interval_returns}
 
 
 def get_latest_price(
