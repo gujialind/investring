@@ -8,7 +8,7 @@ import { E2E_ACTIVE, gotoPortfolioDetail, authHeaders } from "./helpers";
  * - E2E_ACTIVE：单平台 HBZQ（华宝证券）持有 510300.SH 15,000 份 + 现金余额 ¥40,000。
  *   连续 2 日快照（D2=4.0000 / D3=4.2000）→ 产品市值 ¥63,000.00，平台总市值 ¥103,000.00。
  *   交易：confirmed 买入 15,000@4.0（¥60,000）+ pending 买入 2,000@4.1（¥8,200）+ 配对 CASH 腿。
- *   平台级交易列表含 CASH 腿（紧凑流水卡逐行展示，与 TradesContent 结对展示不同）。
+ *   平台级交易列表经 groupTradeRows 结对展示（CASH 腿折叠为子行），2 对 + 1 孤儿 = 3 行。
  * - 多平台形态当前种子不可达（seed_e2e_active 只写 HBZQ），allPlatformsCard 与
  *   「当前平台行不可点」分支在 API 层由后端 test_holding_aggregation.py HAGG_D 覆盖。
  * - 断言为可见性与关系式，不硬绑定快照日期；两端共用组件，mobile project 同跑。
@@ -60,15 +60,18 @@ test.describe("平台详情页", () => {
     ).toBeVisible();
   });
 
-  test("交易记录卡：该平台交易含 CASH 腿与查看全部链接", async ({ page }) => {
+  test("交易记录卡：该平台交易结对展示与查看全部链接", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
     const card = page.getByTestId("platform-trades-card");
     const rows = card.getByTestId("platform-trade-row");
     await expect(rows.first()).toBeVisible();
-    // 平台级交易列表含配对 CASH 腿（紧凑流水卡逐行展示），首行可能是买入或卖出
-    await expect(rows.first()).toContainText(/买入|卖出/);
-    // S7：平台级交易含 CASH 腿，行数 > 纯基金腿数（2 笔买入 × 2 腿 + 1 首购 CASH = 5 行）
-    await expect(rows).toHaveCount(5);
+    // 结对展示：2 笔买入各配对 CASH 腿 + 1 笔申赎 CASH 孤儿 = 3 行
+    await expect(rows).toHaveCount(3);
+    // 首行为基金腿（买入 · 沪深300ETF），非 CASH 腿
+    await expect(rows.first()).toContainText("买入");
+    await expect(rows.first()).toContainText("沪深300ETF");
+    // 子行含现金到账/扣款标注
+    await expect(rows.first()).toContainText(/现金/);
     // Blocker 1 回归：pending 场外价格不应渲染成 0.0000
     await expect(card).not.toContainText("0.0000");
     await expect(card.getByRole("link", { name: "查看全部" })).toHaveAttribute(

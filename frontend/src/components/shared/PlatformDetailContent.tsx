@@ -13,6 +13,7 @@ import HoldingProductCard from "./HoldingProductCard";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import { getErrorMessage } from "@/lib/api";
+import { groupTradeRows, cashSubMeta, cashLegArrived } from "@/lib/tradePairs";
 import {
   formatCurrency,
   formatDate,
@@ -39,7 +40,7 @@ interface PlatformDetailContentProps {
  * 概览卡 → 操作行（买入/卖出/事件，trades 平台预填）→ 持仓明细（该平台产品卡 + 现金卡）→ 交易记录。
  * 数据源：holdings/by-product（按 platforms 含本平台过滤）+ holdings/by-platform（概览指标）+
  * trades 列表 platform_code 过滤。
- * 交易记录含配对 CASH 腿（与 TradesContent 结对展示不同——此处为紧凑流水卡，逐行展示）。
+ * 交易记录经 groupTradeRows 结对展示（CASH 腿折叠为子行，与 TradesContent 同口径）。
  */
 export default function PlatformDetailContent({ basePath, variant }: PlatformDetailContentProps) {
   const params = useParams();
@@ -234,6 +235,8 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
     </section>
   );
 
+  const tradeRows = groupTradeRows(tradesData?.items ?? []);
+
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-trades-card">
       <div className="flex items-center justify-between">
@@ -244,43 +247,90 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
       </div>
       {tradesError ? (
         <p className="mt-3 text-sm text-muted-foreground">交易记录加载失败</p>
-      ) : (tradesData?.items ?? []).length === 0 ? (
+      ) : tradeRows.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无交易记录</p>
       ) : (
         <ul className="mt-2">
-          {(tradesData?.items ?? []).map((trade) => (
-            <li
-              key={trade.id}
-              data-testid="platform-trade-row"
-              className="flex items-center justify-between gap-2 border-t border-border py-2 first:border-t-0"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 text-sm">
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
-                  />
-                  <span className="truncate">
-                    {TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type}
-                    {" · "}
-                    {trade.product_name ?? trade.product_code ?? "--"}
+          {tradeRows.map((row) => {
+            if (row.kind === "pair") {
+              const { main, sub } = row;
+              const meta = cashSubMeta(main, { arrived: cashLegArrived(sub) });
+              return (
+                <li key={main.id} data-testid="platform-trade-row" className="border-t border-border py-2 first:border-t-0">
+                  {/* 主行（基金腿） */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-sm">
+                        <span
+                          className="h-1.5 w-1.5 shrink-0 rounded-full"
+                          style={{ background: TRADE_DIRECTION_COLORS[main.trade_type === "buy" ? "buy" : "sell"] }}
+                        />
+                        <span className="truncate">
+                          {TRADE_TYPE_LABELS[main.trade_type] ?? main.trade_type}
+                          {" · "}
+                          {main.product_name ?? main.product_code ?? "--"}
+                        </span>
+                      </div>
+                      <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                        {main.shares !== undefined && `${formatSharesUnit(main.shares)} @ ${formatNav(main.price)} · `}
+                        {formatDate(main.trade_date)}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-0.5">
+                      <span className="text-sm font-medium number-cell">
+                        {formatCurrency(main.amount)}
+                      </span>
+                      <Badge variant={getStatusBadgeVariant(main.status)}>
+                        {getTradeStatusLabel(main.status)}
+                      </Badge>
+                    </div>
+                  </div>
+                  {/* 子行（配对现金腿） */}
+                  <div className="mt-1 flex items-center justify-between gap-2 pl-3">
+                    <span className="text-xs text-muted-foreground">
+                      {meta.label}{meta.sign === "+" ? ` +${formatCurrency(sub.amount ?? 0)}` : ` -${formatCurrency(sub.amount ?? 0)}`}
+                      {sub.confirm_date ? ` · ${formatDate(sub.confirm_date)}` : ""}
+                    </span>
+                  </div>
+                </li>
+              );
+            }
+            // single 行（孤儿或无配对）
+            const trade = row.trade;
+            return (
+              <li
+                key={trade.id}
+                data-testid="platform-trade-row"
+                className="flex items-center justify-between gap-2 border-t border-border py-2 first:border-t-0"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
+                    />
+                    <span className="truncate">
+                      {TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type}
+                      {" · "}
+                      {trade.product_name ?? trade.product_code ?? "--"}
+                    </span>
+                  </div>
+                  <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                    {trade.shares !== undefined && `${formatSharesUnit(trade.shares)} @ ${formatNav(trade.price)} · `}
+                    {formatDate(trade.trade_date)}
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-0.5">
+                  <span className="text-sm font-medium number-cell">
+                    {formatCurrency(trade.amount)}
                   </span>
+                  <Badge variant={getStatusBadgeVariant(trade.status)}>
+                    {getTradeStatusLabel(trade.status)}
+                  </Badge>
                 </div>
-                <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
-                  {trade.shares !== undefined && `${formatSharesUnit(trade.shares)} @ ${formatNav(trade.price)} · `}
-                  {formatDate(trade.trade_date)}
-                </div>
-              </div>
-              <div className="flex shrink-0 flex-col items-end gap-0.5">
-                <span className="text-sm font-medium number-cell">
-                  {formatCurrency(trade.amount)}
-                </span>
-                <Badge variant={getStatusBadgeVariant(trade.status)}>
-                  {getTradeStatusLabel(trade.status)}
-                </Badge>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
