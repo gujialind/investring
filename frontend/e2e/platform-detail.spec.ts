@@ -123,7 +123,15 @@ test.describe("平台详情页", () => {
 
   test("操作行事件：落事件录入页并开 Dialog，平台已预填（#646）", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
+    // #656 L2 S1：URL 参数与 trades 页同口径——列表也按平台筛选
+    const listReq = page.waitForRequest(
+      (r) =>
+        r.url().includes("/api/share-change-events") &&
+        r.url().includes("platform_code=HBZQ"),
+      { timeout: 10_000 },
+    );
     await page.getByTestId("platform-action-row").getByRole("link", { name: "事件" }).click();
+    await listReq;
     await page.waitForURL(/\/share-change-events\?/);
     expect(page.url()).toContain("platform=HBZQ");
     expect(page.url()).toContain("action=create");

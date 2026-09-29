@@ -146,8 +146,17 @@ test.describe("产品详情页", () => {
 
   test("操作行事件：落事件录入页并开 Dialog，产品已预填（#646）", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
-    await page.getByTestId("product-action-row").getByRole("link", { name: "事件" }).click();
+    // #656 L2 S1：URL 参数与 trades 页同口径——既预填录入表单也驱动列表筛选，
+    // 故事件列表请求应带 products=<code>|<market>（| 编码为 %7C，只断前缀）
+    const listReq = page.waitForRequest(
+      (r) =>
+        r.url().includes("/api/share-change-events") &&
+        r.url().includes("products=510300.SH"),
+      { timeout: 10_000 },
+    );
     // 原 href 是不带参数的裸 tradesLink（与「查看全部」相同），落到没有事件录入的调仓列表
+    await page.getByTestId("product-action-row").getByRole("link", { name: "事件" }).click();
+    await listReq;
     await page.waitForURL(/\/share-change-events\?/);
     expect(page.url()).toContain("product=510300.SH");
     expect(page.url()).toContain("market=CN_EXCHANGE");

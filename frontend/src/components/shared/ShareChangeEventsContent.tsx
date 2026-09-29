@@ -137,11 +137,17 @@ export default function ShareChangeEventsContent({
     notes: "",
   });
 
-  // 筛选状态（#274 服务端筛选）：除息日区间默认不带条件、展示全部事件（#346）
+  // 筛选状态（#274 服务端筛选）：除息日区间默认不带条件、展示全部事件（#346）。
+  // #656 L2 S1：URL 的 product/platform 与 trades 页同口径——既喂录入表单初值，
+  // 也喂列表筛选；否则同一组参数在两页含义分裂（trades 过滤、事件页不过滤）
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [eventTypeFilter, setEventTypeFilter] = useState<string | undefined>(undefined);
-  const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(undefined);
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(undefined);
+  const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(
+    normalizedInitialProduct ? [normalizedInitialProduct] : undefined
+  );
+  const [platformFilter, setPlatformFilter] = useState<string | undefined>(
+    initialPlatform || undefined
+  );
   const [exRange, setExRange] = useState<DateRange | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
