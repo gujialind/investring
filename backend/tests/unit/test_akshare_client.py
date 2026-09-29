@@ -231,6 +231,27 @@ class TestHkMutualNavParsing:
         assert [r["trade_date"] for r in rows] == ["20260914"]
         assert all(len(r["trade_date"]) == 8 and r["trade_date"].isdigit() for r in rows)
 
+    def test_compact_pdate_is_also_accepted(self, hk_pages):
+        """上游若给 YYYYMMDD（本模块的内部口径）也照常接受，不因收紧而丢数据。"""
+        hk_pages([[_hk_row("20260914", 10.55)]])
+
+        assert akshare_client.get_fund_hk_mutual(HK)[0]["trade_date"] == "20260914"
+
+    def test_non_numeric_nav_is_malformed_not_fatal(self, hk_pages):
+        """净值列错位成币种串时逐行拒绝，但同行的正常行不受牵连。"""
+        hk_pages([[_hk_row("2026-09-14", "元"), _hk_row("2026-09-15", 10.54)]])
+
+        rows = akshare_client.get_fund_hk_mutual(HK, "20260914", "20260915")
+
+        assert [r["trade_date"] for r in rows] == ["20260915"]
+
+    def test_rows_after_end_date_are_dropped_benignly(self, hk_pages, json_log_capture):
+        """晚于 end_date 的行是正常剔除，不算解析失败、不产生「无一行可解析」。"""
+        hk_pages([[_hk_row("2026-09-28", 10.45)]])
+
+        assert akshare_client.get_fund_hk_mutual(HK, "20260914", "20260922") == []
+        assert log_lines(json_log_capture) == []
+
 
 class TestHkMutualNavTransport:
     """信封、分页与线上参数形态。"""
@@ -265,6 +286,29 @@ class TestHkMutualNavTransport:
 
         assert len(rows) == 1768
         assert [c["pageindex"] for c in calls] == [0, 1]
+
+    def test_pagination_stops_at_total_count_even_on_full_pages(self, hk_pages):
+        """页数恰为整页倍数时靠 TotalCount 收敛，不能只会看短页。"""
+        pages = [[_hk_row("2026-09-14", 10.55)] * _HK_PAGE_SIZE for _ in range(3)]
+        calls = hk_pages(pages, total=_HK_PAGE_SIZE * 2)
+
+        rows = akshare_client.get_fund_hk_mutual(HK)
+
+        assert len(rows) == _HK_PAGE_SIZE * 2
+        assert [c["pageindex"] for c in calls] == [0, 1]
+
+    def test_valid_envelope_is_returned_verbatim(self, monkeypatch):
+        """`_hk_nav_request_page` 的正常出口本身也要有用例（其余用例打的是这个接缝）。"""
+        _payload_response(
+            monkeypatch,
+            {"Code": "1", "Message": "Ok", "Data": [_hk_row("2026-09-14", 10.55)],
+             "TotalCount": 1},
+        )
+
+        payload = _hk_nav_request_page(HK, 0, "2026-09-08", "2026-09-25")
+
+        assert payload["TotalCount"] == 1
+        assert payload["Data"][0]["PDATE"] == "2026-09-14"
 
     def test_page_cap_warns_instead_of_truncating_silently(self, hk_pages, json_log_capture):
         """取不完时响亮留 WARNING（truncated），不静默少给。"""
@@ -420,6 +464,31 @@ class TestCnAkshareRowsAreScreened:
 
         with pytest.raises(AkshareAPIError, match="无一行可解析"):
             akshare_client.get_fund_daily_exchange("510300", "20260914", "20260915")
+
+    def test_etf_bad_close_is_malformed_not_fatal(self, monkeypatch):
+        """收盘列坏掉时只拒该行，同批正常行照常返回。"""
+        monkeypatch.setattr(
+            "akshare.fund_etf_hist_em",
+            lambda **kw: _RowFrame([
+                {"日期": "2026-09-14", "收盘": "元", "开盘": 4.5, "涨跌幅": 0.1},
+                {"日期": "2026-09-15", "收盘": 4.6, "开盘": 4.5, "涨跌幅": 0.1},
+            ]),
+        )
+
+        rows = akshare_client.get_fund_daily_exchange("510300", "20260914", "20260915")
+
+        assert [r["trade_date"] for r in rows] == ["20260915"]
+
+    def test_etf_rows_after_end_date_are_dropped(self, monkeypatch):
+        """区间外剔除不计作解析失败——与港互认同一口径。"""
+        monkeypatch.setattr(
+            "akshare.fund_etf_hist_em",
+            lambda **kw: _RowFrame([
+                {"日期": "2026-09-28", "收盘": 4.6, "开盘": 4.5, "涨跌幅": 0.1},
+            ]),
+        )
+
+        assert akshare_client.get_fund_daily_exchange("510300", "20260914", "20260922") == []
 
     def test_etf_window_drop_is_not_counted_as_malformed(self, monkeypatch):
         """整批落在区间外 → 空集且不算解析失败（与港互认同一口径）。"""
