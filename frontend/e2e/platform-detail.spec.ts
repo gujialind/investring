@@ -5,6 +5,8 @@ import {
   authHeaders,
   dialogByTitle,
   pickCalendarDay,
+  platformTrigger,
+  productTrigger,
   toISODate,
 } from "./helpers";
 
@@ -106,6 +108,31 @@ test.describe("平台详情页", () => {
     await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 10_000 });
   });
 
+  test("操作行买入：跳转即开录入 Dialog，平台已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PATH);
+    await page.getByTestId("platform-action-row").getByRole("link", { name: "买入" }).click();
+    await page.waitForURL(/\/trades\?/);
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "提交交易");
+    await dlg.waitFor({ timeout: 10_000 });
+    // 交易平台回显「华宝证券 (HBZQ)」（平台列表未加载完时退化为 code，两者都含 HBZQ）
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+    // 平台级来源页没有产品上下文 → 产品保持未选（占位文案在），不拿筛选参数硬凑
+    await expect(productTrigger(dlg, "请选择产品")).toBeVisible();
+  });
+
+  test("操作行事件：落事件录入页并开 Dialog，平台已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PATH);
+    await page.getByTestId("platform-action-row").getByRole("link", { name: "事件" }).click();
+    await page.waitForURL(/\/share-change-events\?/);
+    expect(page.url()).toContain("platform=HBZQ");
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "新建份额变动事件");
+    await dlg.waitFor({ timeout: 10_000 });
+    // 默认事件类型 cash_dividend 属平台级 → 平台控件渲染且已预填
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+  });
+
   test("持仓明细：510300.SH 产品卡可点击进入平台-产品详情", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
     const holdings = page.getByTestId("platform-holdings-section");
@@ -204,6 +231,33 @@ test.describe("平台-产品详情页", () => {
     expect(page.url()).toContain("trade_type=buy");
     // S7：产品过滤后只剩 2 条基金腿（不含 CASH 腿）
     await expect(page.locator("table tbody tr")).toHaveCount(2, { timeout: 10_000 });
+  });
+
+  test("操作行买入：跳转即开录入 Dialog，平台+产品均已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await page.getByTestId("platform-product-action-row").getByRole("link", { name: "买入" }).click();
+    await page.waitForURL(/\/trades\?/);
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "提交交易");
+    await dlg.waitFor({ timeout: 10_000 });
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    await expect(productTrigger(dlg, "A股场内")).toBeVisible();
+    // 扣款平台按 #646 契约不预填（用户自选），仍显示占位/特殊项文案
+    await expect(platformTrigger(dlg, "同交易平台")).toBeVisible();
+  });
+
+  test("操作行事件：落事件录入页并开 Dialog，平台+产品均已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await page.getByTestId("platform-product-action-row").getByRole("link", { name: "事件" }).click();
+    await page.waitForURL(/\/share-change-events\?/);
+    expect(page.url()).toContain("product=510300.SH");
+    expect(page.url()).toContain("platform=HBZQ");
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "新建份额变动事件");
+    await dlg.waitFor({ timeout: 10_000 });
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
   });
 
   test("净值曲线空态与六窗区间收益率占位", async ({ page }) => {

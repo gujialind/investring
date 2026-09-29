@@ -77,6 +77,15 @@ interface ShareChangeEventsContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
   basePath: string;
   variant?: "desktop" | "mobile";
+  /**
+   * #646 三级详情页「事件」按钮预填：来源页经 URL 传入
+   * （`?product=<code>&market=<market>[&platform=<code>][&action=create]`）。
+   * 只作 useState 初值（一次性），用户进入后可自行改选。
+   */
+  initialProduct?: ProductSelection;
+  initialPlatform?: string;
+  /** `action=create` = 录入意图：挂载即打开录入 Dialog 并按上面的参数预填表单 */
+  initialAction?: string;
 }
 
 const PLATFORM_LEVEL_TYPES: EventType[] = ["cash_dividend", "reinvest_dividend", "forced_adjustment"];
@@ -93,20 +102,33 @@ const STATUS_LABELS: Record<string, string> = {
  * 抽离自原 app/portfolio/[code]/share-change-events/page.tsx；
  * 移动端同步继承 #274 的筛选/分页/取消确认能力。
  */
-export default function ShareChangeEventsContent({ basePath, variant = "desktop" }: ShareChangeEventsContentProps) {
+export default function ShareChangeEventsContent({
+  basePath,
+  variant = "desktop",
+  initialProduct,
+  initialPlatform,
+  initialAction,
+}: ShareChangeEventsContentProps) {
   const params = useParams();
   const code = params.code as string;
   const addToast = useUIStore((state) => state.addToast);
 
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  // #646：预填归一与 TradesContent 同口径——product 是 (code, market) 精确匹配，
+  // 缺 market 段宁可不填（空串段会静默匹配不上）；action 只认 create，其它值不开弹窗
+  const normalizedInitialProduct = initialProduct?.market ? initialProduct : undefined;
+  const createIntent = initialAction === "create";
+
+  // #646：录入意图下挂载即开 Dialog（受控 open）；一次性语义由 page 的 key 重挂载保证
+  const [isDialogOpen, setIsDialogOpen] = useState(createIntent);
   const [formData, setFormData] = useState<ShareChangeEventCreate>({
     portfolio_code: code,
+    // 默认类型属 PLATFORM_LEVEL_TYPES，平台控件会渲染，来源页平台预填可回显
     event_type: "cash_dividend",
     ex_date: toDateOnly(new Date()),
     entitlement_date: toDateOnly(new Date()),
-    platform_code: "",
-    product_code: "",
-    market: "",
+    platform_code: createIntent ? initialPlatform || "" : "",
+    product_code: createIntent ? normalizedInitialProduct?.code ?? "" : "",
+    market: createIntent ? normalizedInitialProduct?.market ?? "" : "",
     div_cash: 0,
     reinvest_nav: 0,
     ratio: 0,
