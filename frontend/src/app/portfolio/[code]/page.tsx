@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,12 +14,10 @@ import {
   usePortfolioInvestors,
   usePositionList,
   useActivatePortfolio,
-  useNavHistory,
   usePortfolioPerformance,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
-import NavCurve from "@/components/charts/NavCurve";
 import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
@@ -30,29 +28,9 @@ import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
 import { buildAllocation } from "@/lib/allocation";
-import { toDateOnly } from "@/lib/utils";
 import { parseHoldingsView, type HoldingsView } from "@/types/holding";
-
-/** 净值走势区间：近6月 / 近1年 / 近3年 / 成立以来 */
-type NavRange = "6m" | "1y" | "3y" | "all";
-
-const NAV_RANGES: { key: NavRange; label: string }[] = [
-  { key: "6m", label: "近6个月" },
-  { key: "1y", label: "近1年" },
-  { key: "3y", label: "近3年" },
-  { key: "all", label: "成立以来" },
-];
-
-/** 区间起点（原生 Date 计算，不引入日期库）；all → undefined（全量） */
-function rangeStartDate(range: NavRange): string | undefined {
-  if (range === "all") return undefined;
-  const d = new Date();
-  if (range === "6m") d.setMonth(d.getMonth() - 6);
-  else if (range === "1y") d.setFullYear(d.getFullYear() - 1);
-  else d.setFullYear(d.getFullYear() - 3);
-  return toDateOnly(d);
-}
 
 function PortfolioDetailInner() {
   const params = useParams();
@@ -85,14 +63,6 @@ function PortfolioDetailInner() {
     useAssetClassifications("asset_class");
   const activatePortfolio = useActivatePortfolio();
   const { isAdmin } = useRoleCheck();
-
-  // 净值走势区间切换（issue #99）：start_date 按选中区间计算，「成立以来」全量
-  const [navRange, setNavRange] = useState<NavRange>("all");
-  const navParams = useMemo(() => {
-    const start = rangeStartDate(navRange);
-    return start ? { start_date: start } : undefined;
-  }, [navRange]);
-  const { data: navHistoryData } = useNavHistory(code, navParams);
 
   // 绩效指标（后端计算）：draft 组合无快照，不请求
   const isDraftStatus = portfolio?.status === "draft";
@@ -138,9 +108,6 @@ function PortfolioDetailInner() {
 
   const isDraft = portfolio.status === "draft";
   const allocation = buildAllocation(positions, assetClasses);
-  const navHistory = (navHistoryData || [])
-    .filter((r) => r.unit_price !== null)
-    .map((r) => ({ date: r.snapshot_date, nav: r.unit_price as number }));
 
   return (
     <MainLayout>
@@ -258,36 +225,8 @@ function PortfolioDetailInner() {
                     </CardContent>
                   </Card>
 
-                  {/* 净值走势 + 区间 chips（右栏窄：chips 不换行、溢出横滚） */}
-                  <Card>
-                    <CardContent className="pt-6">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
-                        <h3 className="shrink-0 text-sm font-medium">净值走势</h3>
-                        <div className="flex shrink-0 gap-2">
-                          {NAV_RANGES.map((r) => (
-                            <button
-                              key={r.key}
-                              onClick={() => setNavRange(r.key)}
-                              className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs transition-colors ${
-                                navRange === r.key
-                                  ? "bg-primary font-semibold text-primary-foreground"
-                                  : "bg-muted text-muted-foreground hover:bg-accent"
-                              }`}
-                            >
-                              {r.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      {navHistory.length > 0 ? (
-                        <NavCurve data={navHistory} initialNav={1.0} />
-                      ) : (
-                        <div className="flex h-[300px] items-center justify-center text-muted-foreground">
-                          该区间暂无净值数据
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  {/* #649 起双端共享组件（右栏窄：区间 chips 溢出横滚） */}
+                  <PortfolioNavTrendCard code={code} variant="desktop" />
 
                   {/* 绩效指标（6 项） */}
                   <PerformanceMetrics data={performance} variant="desktop" />

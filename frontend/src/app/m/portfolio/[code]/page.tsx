@@ -13,12 +13,10 @@ import {
   usePositionList,
   usePortfolioInvestors,
   useActivatePortfolio,
-  useNavHistory,
   usePortfolioPerformance,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
-import NavCurve from "@/components/charts/NavCurve";
 import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
@@ -26,6 +24,7 @@ import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
 import ManageLinksCard from "@/components/shared/ManageLinksCard";
+import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
@@ -63,12 +62,6 @@ function MobilePortfolioDetailInner() {
   });
   const activatePortfolio = useActivatePortfolio();
   const { isAdmin } = useRoleCheck();
-
-  // 净值走势用历史序列（与桌面统一 NavCurve，移动端高度 200）
-  const { data: navHistoryData } = useNavHistory(code);
-  const navHistory = (navHistoryData || [])
-    .filter((r) => r.unit_price !== null)
-    .map((r) => ({ date: r.snapshot_date, nav: r.unit_price as number }));
 
   // 绩效指标：draft 组合无快照，不请求
   const isDraftStatus = portfolio?.status === "draft";
@@ -219,15 +212,9 @@ function MobilePortfolioDetailInner() {
                 currentConfig={portfolio.display_config}
               />
 
-              {/* NAV Chart */}
-              {navHistory.length > 0 && (
-                <Card>
-                  <CardContent className="p-4">
-                    <h3 className="mb-3 text-sm font-medium">净值走势</h3>
-                    <NavCurve data={navHistory} height={200} initialNav={1.0} />
-                  </CardContent>
-                </Card>
-              )}
+              {/* #649 起双端共享组件：移动端同得 4 个区间 chips；空数据不再整卡
+                  不渲染，改为卡恒在 + 卡内空态（与桌面一致） */}
+              <PortfolioNavTrendCard code={code} variant="mobile" />
 
               {/* 绩效指标（紧凑两列） */}
               <PerformanceMetrics data={performance} variant="mobile" />
