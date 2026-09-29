@@ -194,8 +194,8 @@ test.describe('弹窗内 DatePicker（防 #191 复发）', () => {
     await page.goto(page.url().replace(/\/share-change-events.*$/, '/positions'));
 
     // 持仓页：现金修正 + 平台间现金转移（桌面 positions 页两个 Dialog 触发器；
-    // R-7：移动端 positions 子页无现金转移入口，移动端现金转移经产品详情页 Dialog，
-    // 已由 platform-detail.spec.ts 双端覆盖）
+    // R-7：移动端 positions 子页无现金转移入口，移动端现金转移经产品详情页 Dialog——
+    // 「转入/转出打开现金转移 Dialog 且按方向预填本平台」用例双端覆盖）
     // 「更新现金市值」触发器是纯图标按钮（data-testid="cash-update-trigger"，#382 起
     // 不按 lucide 类名定位）；现金市值 Dialog 双端共享 CashMarketValueUpdateDialog
     if (isMobile) {

@@ -1,5 +1,11 @@
-import { test, expect, type Page, type TestInfo } from "@playwright/test";
-import { E2E_ACTIVE, gotoPortfolioDetail, authHeaders } from "./helpers";
+import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
+import {
+  E2E_ACTIVE,
+  gotoPortfolioDetail,
+  authHeaders,
+  openPopover,
+  settlePopovers,
+} from "./helpers";
 
 /**
  * #595 步骤④ 平台详情页（M4/D4）+ 平台-产品详情页（M5/D5），双端共享组件。
@@ -17,6 +23,55 @@ import { E2E_ACTIVE, gotoPortfolioDetail, authHeaders } from "./helpers";
 const PLATFORM_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ`;
 const PLATFORM_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/510300.SH?market=CN_EXCHANGE`;
 const CASH_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/CASH?market=`;
+
+/**
+ * 拉交易日历返回 ≤ 今天的全部交易日（升序，#468 口径：交易日经 /api/trading-calendar
+ * 取，不写死、不假设周末）。Blocker 1 回归与现金市值写入共用。
+ */
+async function tradingDaysUptoToday(page: Page): Promise<string[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const year = Number(today.slice(0, 4));
+  const headers = await authHeaders(page);
+  const calendars = await Promise.all(
+    [year - 1, year, year + 1].map(async (y) => {
+      const resp = await page.request.get(`/api/trading-calendar?year=${y}`, { headers });
+      await expect(resp).toBeOK();
+      return (await resp.json()) as { calendar_date: string; is_open: boolean }[];
+    }),
+  );
+  return calendars
+    .flat()
+    .filter((d) => d.is_open && d.calendar_date <= today)
+    .map((d) => d.calendar_date)
+    .sort();
+}
+
+/** Dialog 内 DatePicker 触发按钮（占位文案或已选日期，同 datepicker-in-dialog pickerTrigger 口径） */
+function dialogDateTrigger(scope: Locator): Locator {
+  return scope
+    .getByRole("dialog")
+    .locator("button")
+    .filter({ hasText: /选择日期|\d{4}-\d{2}-\d{2}/ })
+    .first();
+}
+
+/**
+ * 在日历弹层点选 targetISO（与 trade-in-transit.spec.ts pickDay 同口径：目标日
+ * 与今天最多相差数天，data-day 不在当前月时按月翻一次；选日即关弹层）。
+ */
+async function pickDialogDay(page: Page, trigger: Locator, targetISO: string): Promise<void> {
+  if ((await trigger.textContent())?.trim() === targetISO) return;
+  await openPopover(page, trigger, page.locator("button.rdp-day_button").first());
+  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
+  // 显式上界，与全局 use.actionTimeout（#551 §2）同值；留字面值防预算随配置漂移
+  if ((await day.count()) === 0) {
+    const dir = targetISO > new Date().toISOString().slice(0, 10) ? "next" : "previous";
+    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
+  }
+  await day.click({ timeout: 10_000 });
+  await expect(trigger).toHaveText(targetISO);
+  await settlePopovers(page); // 选日即关弹层（#542），收干净再让调用方操作下一控件
+}
 
 test.describe("平台详情页", () => {
   test("页头与概览卡：平台名、代码·类型、市值、指标行", async ({ page }) => {
@@ -225,17 +280,7 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     const headers = await authHeaders(page);
 
-    const today = new Date().toISOString().slice(0, 10);
-    const year = Number(today.slice(0, 4));
-    const calendars = await Promise.all(
-      [year - 1, year, year + 1].map(async (y) => {
-        const resp = await page.request.get(`/api/trading-calendar?year=${y}`, { headers });
-        await expect(resp).toBeOK();
-        return (await resp.json()) as { calendar_date: string; is_open: boolean }[];
-      }),
-    );
-    const days = calendars.flat().filter((d) => d.is_open).map((d) => d.calendar_date).sort();
-    const uptoToday = days.filter((d) => d <= today);
+    const uptoToday = await tradingDaysUptoToday(page);
     expect(uptoToday.length).toBeGreaterThanOrEqual(2);
     const [apply, target] = uptoToday.slice(-2);
 
@@ -291,7 +336,7 @@ test.describe("现金市值更新 Dialog", () => {
     await expect(page.getByLabel("平台")).toContainText("华宝证券 (HBZQ)");
   });
 
-  test("Dialog 表单校验与成功反馈（B-5 死分支回归）", async ({ page }) => {
+  test("表单校验、成功反馈、写入日请求体锚定与撤销两段式", async ({ page }) => {
     await page.goto(CASH_PRODUCT_PATH);
     await page.getByTestId("platform-product-action-row").getByRole("button", { name: "市值更新" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -304,17 +349,50 @@ test.describe("现金市值更新 Dialog", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByTestId("toast-card").getByText("现金市值已更新")).not.toBeVisible();
 
+    // T-1：写入日锚定最近交易日——周末/节假日直接提交会撞后端 NON_TRADING_DAY
+    // 把 CI 烧红（#468 口径：交易日经 /api/trading-calendar 取，不写死不假设周末）
+    const target = (await tradingDaysUptoToday(page)).at(-1)!;
+    const today = new Date().toISOString().slice(0, 10);
+    if (target !== today) {
+      await pickDialogDay(page, dialogDateTrigger(page.getByRole("dialog")), target);
+    }
+
+    // T-2：R-1 回归锚在请求体——POST 的 update_date 必须非空且等于预期写入日。
+    // 仅断言面板覆盖块（下一条）在同时钟环境锁不住时钟错开，请求体才是真网
+    const postReq = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().includes("cash-position"),
+    );
     // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）。
     // R-3：锚点取无条件出的成功 toast，而非绑在恒真 requires_snapshot_regen 上的 Alert 分支
     await amountInput.fill("40000");
     await page.getByRole("button", { name: "确认更新" }).click();
+    const postBody = JSON.parse((await postReq).postData() ?? "{}") as { update_date?: string };
+    expect(postBody.update_date).toBe(target);
+
+    // B-2/B-5 网：写完面板必须当场见覆盖记录块
     await expect(
       page.getByTestId("toast-card").getByText("现金市值已更新")
     ).toBeVisible({ timeout: 10_000 });
-
-    // R-1 回归：不选日期直接提交，写入日与面板匹配日同取客户端今天——
-    // 覆盖记录块必须当场出现（时钟错开实现下该断言会红）
     await expect(page.getByText("当日已有覆盖记录")).toBeVisible({ timeout: 10_000 });
+
+    // T-3：撤销覆盖两段式（B-8）——取消不发 DELETE，确认才删；目标记录就在屏上
+    let deleteCount = 0;
+    page.on("request", (r) => {
+      if (r.method() === "DELETE") deleteCount += 1;
+    });
+    const undoBtn = page.getByRole("button", { name: "撤销覆盖" });
+    const confirmDialog = page.getByRole("alertdialog");
+    await undoBtn.click();
+    await expect(confirmDialog.getByText("撤销现金覆盖")).toBeVisible();
+    await confirmDialog.getByRole("button", { name: "取消" }).click();
+    expect(deleteCount).toBe(0);
+    await expect(page.getByText("当日已有覆盖记录")).toBeVisible(); // 记录未删
+    await undoBtn.click();
+    await confirmDialog.getByRole("button", { name: "确认撤销" }).click();
+    await expect(
+      page.getByTestId("toast-card").getByText("已撤销")
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("当日已有覆盖记录")).not.toBeVisible();
   });
 
   test("转入/转出打开现金转移 Dialog 且按方向预填本平台", async ({ page }) => {

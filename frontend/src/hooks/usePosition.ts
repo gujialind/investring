@@ -130,10 +130,17 @@ export function useDeleteCashOverride(portfolioCode: string) {
   return useMutation({
     mutationFn: ({ platformCode, updateDate }: { platformCode: string; updateDate: string }) =>
       positionApi.deleteCashOverride(portfolioCode, platformCode, updateDate),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: [POSITION_QUERY_KEY, portfolioCode] });
-      // R-6：与覆盖写入侧口径一致——回退值同样需重新生成快照才在持仓生效
-      addToast({ type: "success", title: "已撤销", message: "覆盖记录已删除，回退到自然计算值；需重新生成快照后持仓生效" });
+      // R-6/T-5：requires_snapshot_regen 由后端真算（仅当 value_date ≤ 最新快照日才需重算），
+      // 仅此时提示重算；未入快照的日期撤销即生效，不作过度告警
+      addToast({
+        type: "success",
+        title: "已撤销",
+        message: result.requires_snapshot_regen
+          ? "覆盖记录已删除，回退到自然计算值；需重新生成快照后持仓生效"
+          : "覆盖记录已删除，回退到自然计算值",
+      });
     },
     onError: (error: unknown) => {
       addToast({ type: "error", title: "撤销失败", message: getErrorMessage(error, "请稍后重试") });

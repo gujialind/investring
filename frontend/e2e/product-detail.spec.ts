@@ -119,6 +119,12 @@ test.describe("产品详情页", () => {
       page.getByRole("heading", { name: "沪深300ETF" })
     ).toBeVisible();
   });
+
+  test("缺 market 参数的非现金产品 EmptyState（R-4）", async ({ page }) => {
+    // R-4：market 迁移为 query 后可缺，参数问题须与「未找到持仓」区分（同平台-产品页 S4 形态）
+    await page.goto(`/portfolio/${E2E_ACTIVE}/product/510300.SH`);
+    await expect(page.getByText("缺少 market 参数")).toBeVisible();
+  });
 });
 
 // #595 §4.5：现金产品详情页操作行为转入/转出 + 市值更新
@@ -163,12 +169,6 @@ test.describe("现金产品详情页", () => {
     await page.getByTestId("product-action-row").getByRole("button", { name: "市值更新" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
-  });
-
-  test("缺 market 参数的非现金产品 EmptyState（R-4）", async ({ page }) => {
-    // R-4：market 迁移为 query 后可缺，参数问题须与「未找到持仓」区分（同平台-产品页 S4 形态）
-    await page.goto(`/portfolio/${E2E_ACTIVE}/product/510300.SH`);
-    await expect(page.getByText("缺少 market 参数")).toBeVisible();
   });
 
   test("净值相关卡片不显示（现金无净值）", async ({ page }) => {
