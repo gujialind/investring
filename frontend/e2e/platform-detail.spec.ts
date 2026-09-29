@@ -175,6 +175,18 @@ test.describe("平台详情页", () => {
     await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/NONEXISTENT`);
     await expect(page.getByText("未找到该平台持仓")).toBeVisible();
   });
+
+  test("在途脚注负向：本平台最新快照日无在途时不出现（#641）", async ({ page }) => {
+    // E2E_ACTIVE 的 HBZQ 最新快照（D3）无在途行（D4 的 pending 买入尚未进快照）
+    // → 平台级 in_transit_market_value == 0.0，脚注不渲染。
+    // 防 B2 换形态复现：恒渲染或借组合级数字都会让本用例红。
+    // 归属本 describe（#654 L2 S1）：用例跑的是平台详情页，此前误放在
+    // 「平台-产品详情页」分组下，按分组筛平台页回归会漏掉它
+    await page.goto(PLATFORM_PATH);
+    const holdings = page.getByTestId("platform-holdings-section");
+    await expect(holdings).toBeVisible();
+    await expect(page.getByTestId("platform-in-transit-note")).toHaveCount(0);
+  });
 });
 
 test.describe("平台-产品详情页", () => {
@@ -262,16 +274,6 @@ test.describe("平台-产品详情页", () => {
     ).toBeVisible();
   });
 
-  test("在途脚注负向：本平台最新快照日无在途时不出现（#641）", async ({ page }) => {
-    // E2E_ACTIVE 的 HBZQ 最新快照（D3）无在途行（D4 的 pending 买入尚未进快照）
-    // → 平台级 in_transit_market_value == 0.0，脚注不渲染。
-    // 防 B2 换形态复现：恒渲染或借组合级数字都会让本用例红
-    await page.goto(PLATFORM_PATH);
-    const holdings = page.getByTestId("platform-holdings-section");
-    await expect(holdings).toBeVisible();
-    await expect(holdings).not.toContainText("持仓市值含在途资金");
-  });
-
   test("缺 market 参数的非现金产品 EmptyState", async ({ page }) => {
     // S4：非现金产品缺 market 参数应提示缺少参数，而非「未找到」
     await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/510300.SH`);
@@ -332,10 +334,11 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
     await expect(card).not.toContainText("0.0000");
 
     // #641 正向：本平台有买入在途 8200（pending 场外买入的 CASH 腿已扣、基金腿未生效）
-    // → 持仓明细区出现口径脚注，数字为本平台卡的 in_transit_market_value
-    const holdings = page.getByTestId("platform-holdings-section");
-    await expect(holdings).toContainText("持仓市值含在途资金");
-    await expect(holdings).toContainText("8,200.00");
+    // → 持仓明细区出现口径脚注，数字为本平台卡的 in_transit_market_value。
+    // 按脚注元素断言（#654 L2 S2）：整段 toContainText 在明细区出现同值金额时会变松
+    const note = page.getByTestId("platform-in-transit-note");
+    await expect(note).toContainText("持仓市值含在途资金");
+    await expect(note).toContainText("8,200.00");
   });
 });
 

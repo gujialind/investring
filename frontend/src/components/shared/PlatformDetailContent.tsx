@@ -236,9 +236,10 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
               </Link>
             )}
           </div>
-          {/* S5/#641：在途资金口径说明——概览市值含在途，明细卡片不含 */}
+          {/* S5/#641：在途资金口径说明——概览市值含在途，明细卡片不含。
+              testid 供 E2E 按元素断言（#654 L2 S2：整段 toContainText 将来可能变松） */}
           {inTransitValue > 0 && (
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p data-testid="platform-in-transit-note" className="mt-2 text-xs text-muted-foreground">
               *持仓市值含在途资金 ¥{formatCurrency(inTransitValue).replace("¥", "")}，上方卡片不含在途
             </p>
           )}
