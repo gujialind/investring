@@ -186,7 +186,7 @@ test.describe("平台-产品详情页", () => {
     // 单平台时该链接仍存在（指向产品详情页）
     await expect(link).toBeVisible();
     await link.click();
-    await page.waitForURL(/\/product\/CN_EXCHANGE\/510300\.SH/);
+    await page.waitForURL(/\/product\/510300\.SH/);
     await expect(
       page.getByRole("heading", { name: "沪深300ETF" })
     ).toBeVisible();
@@ -287,22 +287,49 @@ test.describe("现金市值更新 Dialog", () => {
     await actionRow.getByRole("button", { name: "市值更新" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
-    // 平台应预填 HBZQ
-    await expect(page.getByTestId("cash-platform")).toBeVisible();
+    // 平台应预填 HBZQ（N-2：id 是组件显式 API，data-testid 为 platform-trigger 不适用）
+    await expect(page.locator("button#cash-platform")).toContainText("华宝证券 (HBZQ)");
   });
 
-  test("Dialog 表单校验：空金额/未选平台提示错误", async ({ page }) => {
+  test("Dialog 表单校验与成功反馈（B-5 死分支回归）", async ({ page }) => {
     await page.goto(CASH_PRODUCT_PATH);
     await page.getByTestId("platform-product-action-row").getByRole("button", { name: "市值更新" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // 清空平台选择后提交 → 应提示错误
-    // 注意：预填的平台无法通过 UI 清空（SearchablePlatformSelect 无 clear 按钮），
-    // 所以此测试验证金额校验
+    // S-2：空金额提交——HTML5 required 阻止表单提交，Dialog 不关闭且无成功反馈。
+    // 预填平台无法经 UI 清空（SearchablePlatformSelect 无 clear 按钮），故只覆盖金额校验。
     const amountInput = page.getByLabel("当前金额（元）");
     await amountInput.fill("");
     await page.getByRole("button", { name: "确认更新" }).click();
-    // HTML5 required 会阻止提交；验证 input 仍可见（Dialog 未关闭）
     await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByText(/覆盖已写入/)).not.toBeVisible();
+
+    // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）
+    await amountInput.fill("40000");
+    await page.getByRole("button", { name: "确认更新" }).click();
+    await expect(
+      page.getByText(/覆盖已写入，需重新生成快照/)
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("转入/转出打开现金转移 Dialog 且按方向预填本平台", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const actionRow = page.getByTestId("platform-product-action-row");
+    const triggers = page.getByRole("dialog").getByTestId("platform-trigger");
+
+    // 转出：from 预填 HBZQ，to 留空
+    await actionRow.getByRole("button", { name: "转出" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "平台间现金转移" })).toBeVisible();
+    await expect(triggers.nth(0)).toContainText("华宝证券 (HBZQ)");
+    await expect(triggers.nth(1)).toContainText("选择转入平台");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+
+    // 转入：to 预填 HBZQ，from 留空
+    await actionRow.getByRole("button", { name: "转入" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(triggers.nth(0)).toContainText("选择转出平台");
+    await expect(triggers.nth(1)).toContainText("华宝证券 (HBZQ)");
   });
 });

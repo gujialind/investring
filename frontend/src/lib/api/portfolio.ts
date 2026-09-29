@@ -25,12 +25,14 @@ export interface CashPositionUpdateResponse {
   warnings: string[];
 }
 
+// #595 §4.5：现金手动覆盖记录项（与后端 list_manual_cash_overrides 返回逐键对齐：
+// value_date/market_value；后端无 platform_name，展示用平台名由调用方经平台列表映射）
 export interface CashOverrideItem {
   id: number;
+  portfolio_code: string;
   platform_code: string;
-  platform_name: string;
-  update_date: string;
-  manual_value: number;
+  value_date: string;
+  market_value: number;
   computed_value: number | null;
   created_by: string | null;
   created_at: string;

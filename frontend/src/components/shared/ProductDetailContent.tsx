@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +33,7 @@ import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 import PlatformDistributionCard from "./PlatformDistributionCard";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
+import CashTransferDialog from "./dialogs/CashTransferDialog";
 
 /** 净值曲线区间 Tab（M3/D3：近1月/近3月/近6月/近1年，默认近6月） */
 const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
@@ -69,28 +70,36 @@ interface ProductDetailContentProps {
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享）：
- * 概览卡 → 操作行（买入/卖出/事件，trades 产品预填）→ 平台分布 → 累计净值走势 →
- * 区间收益率（六窗）→ 历史净值（首屏 5 行 + 查看更多）→ 交易记录（该产品跨平台）。
+ * 概览卡 → 操作行（非现金：买入/卖出/事件，trades 产品预填；现金：转入/转出 + 市值更新）→
+ * 平台分布 → 累计净值走势 → 区间收益率（六窗）→ 历史净值（首屏 5 行 + 查看更多）→
+ * 交易记录（该产品跨平台）。
  * 数据源：holdings/by-product 行 + platforms 切片（#635）、nav-analysis/nav-history
  * （#637）、trades 列表 product_code+market 过滤（D-8 既有参数）。
+ * 路由 /portfolio/{code}/product/{productCode}，market 维度走 ?market= searchParams
+ * （步骤⑤：现金 market="" 无 path 段可表达，与平台-产品页形态对齐）。
  * 平台分布行点击 → 平台-产品详情页（步骤④已接线，PlatformDistributionCard rowLinkPrefix）。
+ * 现金产品（CASH）隐藏净值相关卡片，转入/转出打开现金转移 Dialog（聚合视角无平台上下文，
+ * from/to 由用户选择），市值更新打开 CashMarketValueUpdateDialog。
  */
 export default function ProductDetailContent({ basePath, variant }: ProductDetailContentProps) {
   const params = useParams();
+  const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
   const productCode = params.productCode as string;
-  const market = params.market as string;
+  const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
+  const isCash = productCode === CASH_PRODUCT_CODE;
+
+  // #595 §4.5/D-10：现金操作 Dialog 状态
+  const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
+  const [isCashTransferOpen, setIsCashTransferOpen] = useState(false);
 
   const { data: holdings, isLoading: holdingsLoading, isError: holdingsError, error: holdingsErr, refetch: refetchHoldings } =
     useHoldingsByProduct(portfolioCode);
+  // 现金 market="" 无 path 段可表达：isCash 时以 productCode 单键匹配，忽略 market 维度
   const product = holdings?.products.find(
-    (p) => p.product_code === productCode && p.market === market
+    (p) => p.product_code === productCode && (isCash || p.market === market)
   );
-
-  // #595 §4.5：现金产品检测 + 市值更新 Dialog 状态
-  const isCash = productCode === CASH_PRODUCT_CODE;
-  const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
 
   const [range, setRange] = useState<NavAnalysisRange>("6m");
   const { data: analysis } = useNavAnalysis(productCode, market, range);
@@ -98,12 +107,14 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   // 历史净值「首屏 5 行 + 查看更多」：按页并行查询后按页序拼接（keepPreviousData
   // 的单页 hook 不适合追加式加载；页间数据由后端分页契约保证不重叠）
   const [visiblePages, setVisiblePages] = useState(1);
+  // S5/S1：现金产品无净值端点（market="" 会 404），非现金且 market 非空时才请求
   const historyQueries = useQueries({
     queries: Array.from({ length: visiblePages }, (_, i) => ({
       queryKey: ["products", "nav-history", productCode, market, i + 1, HISTORY_PAGE_SIZE],
       queryFn: () =>
         productApi.getNavHistory(productCode, market, { page: i + 1, page_size: HISTORY_PAGE_SIZE }),
       staleTime: 5 * 60 * 1000,
+      enabled: !isCash && !!market,
     })),
   });
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
@@ -207,14 +218,16 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </Card>
   );
 
-  // #595 §4.5/D-10：现金产品操作行为转入/转出 + 市值更新
+  // #595 §4.5/D-10：现金产品操作行为转入/转出 + 市值更新。
+  // 转入/转出打开现金转移 Dialog（平台间 from→to 两腿显式落账；聚合视角无平台上下文，
+  // from/to 均由用户选择），不走 trades 的 buy/sell（REST 禁止直接创建 CASH 交易）
   const actionRow = isCash ? (
     <div className="flex gap-2" data-testid="product-action-row">
-      <Button asChild className="flex-1">
-        <Link href={tradesLink}>转入</Link>
+      <Button className="flex-1" onClick={() => setIsCashTransferOpen(true)}>
+        转入
       </Button>
-      <Button asChild variant="outline" className="flex-1">
-        <Link href={tradesLink}>转出</Link>
+      <Button variant="outline" className="flex-1" onClick={() => setIsCashTransferOpen(true)}>
+        转出
       </Button>
       <Button variant="outline" className="flex-1" onClick={() => setIsCashUpdateOpen(true)}>
         市值更新
@@ -441,6 +454,16 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           portfolioCode={portfolioCode}
           open={isCashUpdateOpen}
           onOpenChange={setIsCashUpdateOpen}
+        />
+      )}
+
+      {/* #595 §4.5/D-10：现金转移 Dialog（仅现金产品使用；聚合视角无平台上下文，
+          from/to 由用户选择，「转入」「转出」同一入口） */}
+      {isCash && (
+        <CashTransferDialog
+          portfolioCode={portfolioCode}
+          open={isCashTransferOpen}
+          onOpenChange={setIsCashTransferOpen}
         />
       )}
     </div>

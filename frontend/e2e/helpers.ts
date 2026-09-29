@@ -36,16 +36,16 @@ export function portfolioPath(code: PortfolioCode, sub?: PortfolioSub): string {
 
 /**
  * 各子页客户端渲染信号：等到其可见再返回，避免首帧空判（列表/表单为客户端 fetch）。
- * positions 信号「更新非净值资产」为桌面专属——移动端 positions 是独立实现
+ * positions 信号「更新现金市值」为桌面专属——移动端 positions 是独立实现
  * （m/positions/page.tsx，触发器为纯图标 cash-update-trigger），移动端调用方须用
  * portfolioPath 自行 goto 并等 cash-update-trigger（见 platform-select-search
- * 「移动端：更新非净值资产与筛选面板的平台选择框可搜索」用例）。
+ * 「移动端：更新现金市值与筛选面板的平台选择框可搜索」用例）。
  */
 const SUBPAGE_READY: Record<PortfolioSub, (page: Page) => Locator> = {
   trades: (page) => page.getByRole('button', { name: '提交交易' }).first(),
   snapshots: (page) => page.getByRole('button', { name: '追平至日期' }),
   subscriptions: (page) => page.getByRole('button', { name: /提交申请|首次申购激活/ }).first(),
-  positions: (page) => page.getByRole('button', { name: '更新非净值资产' }),
+  positions: (page) => page.getByRole('button', { name: '更新现金市值' }),
   'share-change-events': (page) => page.getByRole('button', { name: '新建事件' }),
 };
 

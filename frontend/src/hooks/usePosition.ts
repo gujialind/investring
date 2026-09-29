@@ -88,8 +88,11 @@ export function useUpdatePosition() {
   });
 }
 
-// #595 §4.5：更新非净值资产（现金重估，写 manual_market_value 绝对替换）
-// 返回完整响应供调用方处理 warnings / requires_snapshot_regen
+// #595 §4.5：更新现金市值（现金重估，写 manual_market_value 绝对替换）
+// 返回完整响应供调用方处理 warnings / requires_snapshot_regen。
+// 注意：本 hook 只在 onSuccess 做缓存失效，不内置错误 toast——调用方必须自带
+// onError 反馈（当前唯一调用方 CashMarketValueUpdateDialog 已自带）；新增第二个
+// 调用点时切勿遗漏，否则失败会静默。
 export function useUpdateCashPosition(portfolioCode: string) {
   const queryClient = useQueryClient();
 

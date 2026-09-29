@@ -9,7 +9,7 @@ import {
   useHoldingsByProduct,
 } from "@/hooks/usePosition";
 import { assetClassColor, OTHER_COLOR } from "@/lib/colors";
-import { CASH_PRODUCT_CODE, PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
+import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import {
   buildCardPercentMap,
   buildProductSections,
@@ -70,7 +70,7 @@ function ProductSections({
   percentOf: (product: HoldingProductAggregate) => number;
   snapshotDate?: string | null;
   variant: "desktop" | "mobile";
-  /** 产品卡跳转前缀：`${basePath}/${portfolioCode}/product`；现金/在途卡不接线（步骤⑤/无详情） */
+  /** 产品卡跳转前缀：`${basePath}/${portfolioCode}/product`（market 走 ?market=，现金卡步骤⑤已接线） */
   productLinkPrefix: string;
 }) {
   return (
@@ -147,14 +147,12 @@ function ProductSections({
                             snapshotDate={snapshotDate}
                           />
                         );
-                        // #595 步骤③：非现金产品卡点击 → 产品详情页；现金卡（步骤⑤）暂纯展示
-                        if (p.product_code === CASH_PRODUCT_CODE) {
-                          return <div key={productCardKey(p)}>{card}</div>;
-                        }
+                        // #595 步骤③/⑤：产品卡点击 → 产品详情页；
+                        // market 走 ?market=（步骤⑤起），现金 market="" 与平台-产品页现金形态一致
                         return (
                           <Link
                             key={productCardKey(p)}
-                            href={`${productLinkPrefix}/${p.market}/${encodeURIComponent(p.product_code)}`}
+                            href={`${productLinkPrefix}/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
                             className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             {card}
