@@ -12,6 +12,8 @@ import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
+import CashTransferDialog from "./dialogs/CashTransferDialog";
 import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
@@ -80,6 +82,12 @@ export default function PlatformProductDetailContent({
   const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
   const isCash = productCode === CASH_PRODUCT_CODE;
+  // #595 §4.5/D-10：现金操作 Dialog 状态（transfer 含方向：转出 = 本平台为 from，转入 = 本平台为 to）
+  const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
+  const [cashTransfer, setCashTransfer] = useState<{ open: boolean; direction: "in" | "out" }>({
+    open: false,
+    direction: "out",
+  });
 
   const { data: holdings, isLoading: holdingsLoading, isError: holdingsError, error: holdingsErr, refetch: refetchHoldings } =
     useHoldingsByProduct(portfolioCode);
@@ -148,7 +156,8 @@ export default function PlatformProductDetailContent({
 
   const snapshotDate = holdings?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}&platform=${encodeURIComponent(platformCode)}`;
-  const productDetailLink = `${basePath}/${portfolioCode}/product/${encodeURIComponent(market)}/${encodeURIComponent(productCode)}`;
+  // 产品详情页路由（步骤⑤起 market 走 ?market= searchParams，与平台-产品页形态对齐）
+  const productDetailLink = `${basePath}/${portfolioCode}/product/${encodeURIComponent(productCode)}?market=${encodeURIComponent(market)}`;
 
   const overview = (
     <Card data-testid="platform-product-overview-card">
@@ -203,13 +212,26 @@ export default function PlatformProductDetailContent({
     </Card>
   );
 
+  // #595 §4.5/D-10：现金产品操作行为转入/转出 + 市值更新。
+  // 转入/转出打开现金转移 Dialog（预填本平台 + 方向：转出 from=本平台、转入 to=本平台，
+  // 两腿显式落账），不走 trades 的 buy/sell（REST 禁止直接创建 CASH 交易）
   const actionRow = isCash ? (
     <div className="flex gap-2" data-testid="platform-product-action-row">
-      <Button asChild className="flex-1">
-        <Link href={tradesLink}>转入</Link>
+      <Button
+        className="flex-1"
+        onClick={() => setCashTransfer({ open: true, direction: "in" })}
+      >
+        转入
       </Button>
-      <Button asChild variant="outline" className="flex-1">
-        <Link href={tradesLink}>转出</Link>
+      <Button
+        variant="outline"
+        className="flex-1"
+        onClick={() => setCashTransfer({ open: true, direction: "out" })}
+      >
+        转出
+      </Button>
+      <Button variant="outline" className="flex-1" onClick={() => setIsCashUpdateOpen(true)}>
+        市值更新
       </Button>
     </div>
   ) : (
@@ -374,8 +396,9 @@ export default function PlatformProductDetailContent({
     </section>
   );
 
-  // 「查看该产品全部平台持仓」— 非现金产品才有产品详情页
-  const allPlatformsLink = !isCash && product.platforms.length > 0 && (
+  // 「查看该产品全部平台持仓」— R-5：现金产品详情页自 B-6 迁移后同样可达（?market= 形态），
+  // 不再屏蔽现金侧，保证平台-产品页 → 产品详情页三级跳转链在现金也闭合
+  const allPlatformsLink = product.platforms.length > 0 && (
     <Link
       href={productDetailLink}
       className="text-sm text-primary hover:underline"
@@ -385,8 +408,8 @@ export default function PlatformProductDetailContent({
     </Link>
   );
 
-  // 全部平台持仓卡（D5 右栏 / M5 底部）
-  const allPlatformsCard = !isCash && product.platforms.length > 1 && (
+  // 全部平台持仓卡（D5 右栏 / M5 底部）；现金同样展示（各平台现金切片经 rowLinkPrefix 互跳）
+  const allPlatformsCard = product.platforms.length > 1 && (
     <PlatformDistributionCard
       title="全部平台持仓"
       slices={product.platforms}
@@ -441,6 +464,27 @@ export default function PlatformProductDetailContent({
             {allPlatformsCard}
           </div>
         </div>
+      )}
+
+      {/* #595 §4.5：现金市值更新 Dialog（仅现金产品使用，预填本平台） */}
+      {isCash && (
+        <CashMarketValueUpdateDialog
+          portfolioCode={portfolioCode}
+          open={isCashUpdateOpen}
+          onOpenChange={setIsCashUpdateOpen}
+          defaultPlatformCode={platformCode}
+        />
+      )}
+
+      {/* #595 §4.5/D-10：现金转移 Dialog（预填本平台 + 方向） */}
+      {isCash && (
+        <CashTransferDialog
+          portfolioCode={portfolioCode}
+          open={cashTransfer.open}
+          onOpenChange={(open) => setCashTransfer((s) => ({ ...s, open }))}
+          contextPlatformCode={platformCode}
+          direction={cashTransfer.direction}
+        />
       )}
     </div>
   );

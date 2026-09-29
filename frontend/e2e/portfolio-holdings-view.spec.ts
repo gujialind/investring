@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
-import { E2E_ACTIVE, E2E_PORT, authHeaders, gotoPortfolioDetail } from './helpers';
+import { E2E_ACTIVE, E2E_PORT, authHeaders, gotoPortfolioDetail, toISODate } from './helpers';
 
 /**
  * #595 组合详情页持仓明细双视图：「按产品 / 按平台」分段切换 + URL ?view= 持久化（D-7）。
@@ -32,7 +32,10 @@ async function setupInTransitPortfolio(page: Page, testInfo: TestInfo): Promise<
 
   // 交易日锚定经 /api/trading-calendar（#468）：apply = 最近交易日的前一交易日，
   // 申购确认日 = 最近交易日 T（T+1）；pending 买入 trade_date = T，T 日快照含在途行。
-  const today = new Date().toISOString().slice(0, 10);
+  // 本地口径（helpers.toISODate），与组件侧 toDateOnly() 同一时钟：**不用
+  // toISOString().slice(0,10)**——它按 UTC 切日，本机 TZ=UTC+8 的 00:00–07:59
+  // 会让上界比页面少一天（#640 S-2，与 U-2 同根因）
+  const today = toISODate(new Date());
   const year = Number(today.slice(0, 4));
   const calendars = await Promise.all(
     [year - 1, year, year + 1].map(async (y) => {

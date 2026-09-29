@@ -46,12 +46,14 @@ import {
   openFilterPanelIfMobile,
   openPopover,
   openSubmitTradeDialog,
+  pickCalendarDay,
   platformOption,
   platformPopover,
   productOption,
   productPopover,
   settlePopovers,
   toastByTitle,
+  toISODate,
   type PortfolioCode,
 } from './helpers';
 
@@ -76,13 +78,6 @@ const TRANSFER_AMOUNT = 5000;
  * 卖出确认取 D+2 净值 1.6000（2000 份 → 3200 元）。改这里必须同步改种子。
  */
 const NAV: Record<'D' | 'D1' | 'D2', string> = { D: '1.5000', D1: '1.5500', D2: '1.6000' };
-
-/** 本地日期 → yyyy-MM-dd（避免 toISOString 的 UTC 时移） */
-function toISODate(d: Date): string {
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
-}
 
 /** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
 async function nearestTradingDay(page: Page, headers: { Authorization: string }): Promise<string> {
@@ -294,32 +289,6 @@ async function openCalendar(page: Page, trigger: Locator): Promise<void> {
 }
 
 /**
- * 在 DatePicker 弹层内把触发按钮的值设为 targetISO（三个日期 helper 共用）。
- *
- * 「目标日 == 控件当前值」时直接跳过、不开弹层：少一次浮层开合即少一处 #524 竞态面。
- * #542 之前这一跳过是**正确性前提**——react-day-picker@10 单选（`calendar.tsx` 未传
- * `required`）把「点已选日」当成取消选择（`useSingle`: `!required && isSameDay →
- * onSelect(undefined)`），而当时 `date-picker.tsx` 只在 newDate 非空时才关弹层，结果是
- * 值被清空、弹层还开着（CI 2026-09-16 实踩：目标 D 恰为表单默认值 today）。#542 已改为
- * 「点任何日都关弹层、toggle-off 不回传调用方」，清空唯一入口是 X 按钮，故这里的跳过
- * 只剩效率意义。目标日与 today 最多相差 4 个交易日，日历默认展示当前月（或已选日所在月），
- * 故 `data-day` 不在当前月时按月翻一次。
- */
-async function pickDay(page: Page, trigger: Locator, targetISO: string): Promise<void> {
-  if ((await trigger.textContent())?.trim() === targetISO) return;
-  await openCalendar(page, trigger);
-  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
-  // 显式上界，与全局 `use.actionTimeout`（#551 §2）同值；留字面值是为了这条预算不随配置漂移。
-  if ((await day.count()) === 0) {
-    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
-    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
-  }
-  await day.click({ timeout: 10_000 });
-  await expect(trigger).toHaveText(targetISO);
-  await settlePopovers(page); // 选日即关弹层（#542），收干净再让调用方点下一个控件
-}
-
-/**
  * 经「单日生成」弹窗生成 targetISO 的快照（预检验证 → 确认生成）。
  * 与 datepicker-in-dialog.spec.ts 同口径：目标日与 today 相差至多 3 天，
  * 日历默认展示当前月，必要时按月翻一次。
@@ -330,7 +299,7 @@ async function generateSnapshot(page: Page, targetISO: string): Promise<void> {
   await dlg.waitFor({ timeout: 10_000 });
 
   const trigger = dlg.locator('button').filter({ hasText: /选择日期|\d{4}-\d{2}-\d{2}/ }).first();
-  await pickDay(page, trigger, targetISO);
+  await pickCalendarDay(page, trigger, targetISO);
 
   await dlg.getByRole('button', { name: '预检验证' }).click();
   // #524：toast 由接口返回后的 onSuccess 发出，故「15s 内没看到成功 toast」既可能是
@@ -412,12 +381,12 @@ async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promise<void
  * 故 `data-day` 不在当前月时按月翻一次（与 `generateSnapshot` / `pickArrivalDate` 同口径）。
  */
 async function selectTradeDate(page: Page, dlg: Locator, targetISO: string): Promise<void> {
-  await pickDay(page, dlg.locator('button#trade_date'), targetISO);
+  await pickCalendarDay(page, dlg.locator('button#trade_date'), targetISO);
 }
 
 /** 确认弹窗内改选到账日期（DatePicker id=cash_confirm_date，与后端 query 同名） */
 async function pickArrivalDate(page: Page, dlg: Locator, targetISO: string): Promise<void> {
-  await pickDay(page, dlg.locator('button#cash_confirm_date'), targetISO);
+  await pickCalendarDay(page, dlg.locator('button#cash_confirm_date'), targetISO);
 }
 
 /**

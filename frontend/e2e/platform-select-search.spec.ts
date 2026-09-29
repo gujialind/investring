@@ -11,7 +11,7 @@
  *   - 申赎/调仓/事件表单的平台原生 <select required> 被自定义组件替换后，
  *     空平台提交须被前端手动校验拦截（#209/#216）；
  *   - 接入点冒烟（#217）：share-change-events 条件渲染、申赎筛选栏、
- *     PC 持仓「更新非净值资产」。
+ *     PC 持仓「更新现金市值」。
  *
  * 定位器契约（#217）：组件侧 data-testid（platform-trigger / platform-option /
  * platform-special-option / platform-empty / cash-update-trigger / toast-card），平台
@@ -93,7 +93,7 @@ async function gotoSubscriptionsPage(page: Page): Promise<void> {
   await gotoPortfolioSubpage(page, E2E_PORT, 'subscriptions');
 }
 
-/** 进入 E2E_PORT 持仓页（渲染信号「更新非净值资产」为桌面专属；移动端 positions 是独立实现，见 helpers SUBPAGE_READY 注） */
+/** 进入 E2E_PORT 持仓页（渲染信号「更新现金市值」为桌面专属；移动端 positions 是独立实现，见 helpers SUBPAGE_READY 注） */
 async function gotoPositionsPage(page: Page): Promise<void> {
   await gotoPortfolioSubpage(page, E2E_PORT, 'positions');
 }
@@ -284,7 +284,9 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
   // ---- 用例 6：现金转移互斥——对方已选平台在列表中可见但禁用 ----
   test('现金转移：对方已选平台可见但禁用，点击不生效', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '移动端无现金转移功能');
+    // R-7：移动端 positions 子页无现金转移入口（移动现金转移经产品详情页 Dialog），
+    // 故此处仅桌面；互斥断言即本用例自身，勿声称他处已覆盖（T-4）
+    test.skip(testInfo.project.name === 'mobile', '移动端 positions 子页无现金转移入口');
     const errors = collectPageErrors(page);
     await gotoPositionsPage(page);
     await page.getByRole('button', { name: '现金转移' }).click();
@@ -316,17 +318,17 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
   });
 
   // ---- 用例 7：移动端平台选择框可搜索（m-positions 弹窗 + trades 移动筛选面板）----
-  test('移动端：更新非净值资产与筛选面板的平台选择框可搜索', async ({ page }, testInfo) => {
+  test('移动端：更新现金市值与筛选面板的平台选择框可搜索', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '仅移动端项目');
     const errors = collectPageErrors(page);
 
-    // /m/portfolio/{code}/positions → 「更新非净值资产」（纯图标触发器）→ 平台搜索点选
+    // /m/portfolio/{code}/positions → 「更新现金市值」（纯图标触发器）→ 平台搜索点选
     await page.goto(portfolioPath(E2E_PORT, 'positions'));
     await expect(page).toHaveURL(/\/m\/portfolio\//);
     const refreshTrigger = page.getByTestId('cash-update-trigger');
     await refreshTrigger.waitFor({ timeout: 15_000 });
     await refreshTrigger.click();
-    const dlg = dialogByTitle(page, '更新非净值资产');
+    const dlg = dialogByTitle(page, '更新现金市值');
     await dlg.waitFor();
     const popover = await openPlatformPopover(page, dlg, '请选择平台');
     const { keyword } = await firstPlatformOption(popover);
@@ -499,13 +501,13 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // ---- 用例 13（#217 冒烟）：PC 持仓页「更新非净值资产」平台选择框（移动端同控件由用例 7 覆盖）----
-  test('持仓页「更新非净值资产」平台选择框可搜索点选', async ({ page }, testInfo) => {
+  // ---- 用例 13（#217 冒烟）：PC 持仓页「更新现金市值」平台选择框（移动端同控件由用例 7 覆盖）----
+  test('持仓页「更新现金市值」平台选择框可搜索点选', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name === 'mobile', '移动端同控件已由移动端用例覆盖');
     const errors = collectPageErrors(page);
     await gotoPositionsPage(page);
-    await page.getByRole('button', { name: '更新非净值资产' }).click();
-    const dlg = dialogByTitle(page, '更新非净值资产');
+    await page.getByRole('button', { name: '更新现金市值' }).click();
+    const dlg = dialogByTitle(page, '更新现金市值');
     await dlg.waitFor();
 
     // 平台选择框：搜索 → 过滤 → 点选 → 触发按钮回显 name (code)（不提交，取消关闭）

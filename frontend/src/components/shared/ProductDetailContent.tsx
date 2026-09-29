@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
   formatCurrency,
   formatDate,
@@ -31,6 +32,8 @@ import { useNavAnalysis } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
+import CashTransferDialog from "./dialogs/CashTransferDialog";
 
 /** 净值曲线区间 Tab（M3/D3：近1月/近3月/近6月/近1年，默认近6月） */
 const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
@@ -67,23 +70,37 @@ interface ProductDetailContentProps {
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享）：
- * 概览卡 → 操作行（买入/卖出/事件，trades 产品预填）→ 平台分布 → 累计净值走势 →
- * 区间收益率（六窗）→ 历史净值（首屏 5 行 + 查看更多）→ 交易记录（该产品跨平台）。
+ * 概览卡 → 操作行（非现金：买入/卖出/事件，trades 产品预填；现金：转入/转出 + 市值更新）→
+ * 平台分布 → 累计净值走势 → 区间收益率（六窗）→ 历史净值（首屏 5 行 + 查看更多）→
+ * 交易记录（该产品跨平台）。
  * 数据源：holdings/by-product 行 + platforms 切片（#635）、nav-analysis/nav-history
  * （#637）、trades 列表 product_code+market 过滤（D-8 既有参数）。
+ * 路由 /portfolio/{code}/product/{productCode}，market 维度走 ?market= searchParams
+ * （步骤⑤：现金 market="" 无 path 段可表达，与平台-产品页形态对齐）。
  * 平台分布行点击 → 平台-产品详情页（步骤④已接线，PlatformDistributionCard rowLinkPrefix）。
+ * 现金产品（CASH）隐藏净值相关卡片，转入/转出打开现金转移 Dialog（聚合视角无平台上下文，
+ * from/to 由用户选择），市值更新打开 CashMarketValueUpdateDialog。
  */
 export default function ProductDetailContent({ basePath, variant }: ProductDetailContentProps) {
   const params = useParams();
+  const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
   const productCode = params.productCode as string;
-  const market = params.market as string;
+  const isCash = productCode === CASH_PRODUCT_CODE;
+  // R-8：现金归一 market=""——手改 ?market=CN_OTC 不得把净值请求与交易过滤带偏；
+  // 非现金仍以 query 为准（缺失守卫见下方 EmptyState）
+  const market = isCash ? "" : (searchParams.get("market") ?? "");
   const isMobile = variant === "mobile";
+
+  // #595 §4.5/D-10：现金操作 Dialog 状态
+  const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
+  const [isCashTransferOpen, setIsCashTransferOpen] = useState(false);
 
   const { data: holdings, isLoading: holdingsLoading, isError: holdingsError, error: holdingsErr, refetch: refetchHoldings } =
     useHoldingsByProduct(portfolioCode);
+  // 现金 market="" 无 path 段可表达：isCash 时以 productCode 单键匹配，忽略 market 维度
   const product = holdings?.products.find(
-    (p) => p.product_code === productCode && p.market === market
+    (p) => p.product_code === productCode && (isCash || p.market === market)
   );
 
   const [range, setRange] = useState<NavAnalysisRange>("6m");
@@ -92,12 +109,14 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   // 历史净值「首屏 5 行 + 查看更多」：按页并行查询后按页序拼接（keepPreviousData
   // 的单页 hook 不适合追加式加载；页间数据由后端分页契约保证不重叠）
   const [visiblePages, setVisiblePages] = useState(1);
+  // S5/S1：现金产品无净值端点（market="" 会 404），非现金且 market 非空时才请求
   const historyQueries = useQueries({
     queries: Array.from({ length: visiblePages }, (_, i) => ({
       queryKey: ["products", "nav-history", productCode, market, i + 1, HISTORY_PAGE_SIZE],
       queryFn: () =>
         productApi.getNavHistory(productCode, market, { page: i + 1, page_size: HISTORY_PAGE_SIZE }),
       staleTime: 5 * 60 * 1000,
+      enabled: !isCash && !!market,
     })),
   });
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
@@ -107,7 +126,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const { data: tradesData } = useTradeList({
     portfolio_code: portfolioCode,
     product_code: productCode,
-    market,
+    market: market || undefined,
     page: 1,
     page_size: 5,
   });
@@ -130,6 +149,15 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           重试
         </Button>
       </div>
+    );
+  }
+  // R-4：非现金缺 market 单独提示（与平台-产品详情页 S4 同形态），避免把参数问题说成数据问题
+  if (!isCash && !market) {
+    return (
+      <EmptyState
+        message="缺少 market 参数"
+        description="请从组合持仓或平台分布进入产品详情页"
+      />
     );
   }
   if (!product) {
@@ -201,7 +229,22 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </Card>
   );
 
-  const actionRow = (
+  // #595 §4.5/D-10：现金产品操作行为转入/转出 + 市值更新。
+  // 转入/转出打开现金转移 Dialog（平台间 from→to 两腿显式落账；聚合视角无平台上下文，
+  // from/to 均由用户选择），不走 trades 的 buy/sell（REST 禁止直接创建 CASH 交易）
+  const actionRow = isCash ? (
+    <div className="flex gap-2" data-testid="product-action-row">
+      <Button className="flex-1" onClick={() => setIsCashTransferOpen(true)}>
+        转入
+      </Button>
+      <Button variant="outline" className="flex-1" onClick={() => setIsCashTransferOpen(true)}>
+        转出
+      </Button>
+      <Button variant="outline" className="flex-1" onClick={() => setIsCashUpdateOpen(true)}>
+        市值更新
+      </Button>
+    </div>
+  ) : (
     <div className="flex gap-2" data-testid="product-action-row">
       <Button asChild className="flex-1">
         <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
@@ -227,7 +270,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     />
   );
 
-  const curveCard = (
+  // 净值相关卡片仅非现金产品显示
+  const curveCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-curve-card">
       <h3 className="text-lg font-semibold">累计净值走势</h3>
       <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
@@ -254,7 +298,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
-  const returnsCard = (
+  const returnsCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-returns-card">
       <h3 className="text-lg font-semibold">区间收益率</h3>
       <div className="mt-3 grid grid-cols-3 gap-3">
@@ -273,7 +317,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     </section>
   );
 
-  const historyCard = (
+  const historyCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-history-card">
       <h3 className="text-lg font-semibold">历史净值</h3>
       {historyItems.length === 0 ? (
@@ -413,6 +457,25 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
             {tradesCard}
           </div>
         </div>
+      )}
+
+      {/* #595 §4.5：现金市值更新 Dialog（仅现金产品使用） */}
+      {isCash && (
+        <CashMarketValueUpdateDialog
+          portfolioCode={portfolioCode}
+          open={isCashUpdateOpen}
+          onOpenChange={setIsCashUpdateOpen}
+        />
+      )}
+
+      {/* #595 §4.5/D-10：现金转移 Dialog（仅现金产品使用；聚合视角无平台上下文，
+          from/to 由用户选择，「转入」「转出」同一入口） */}
+      {isCash && (
+        <CashTransferDialog
+          portfolioCode={portfolioCode}
+          open={isCashTransferOpen}
+          onOpenChange={setIsCashTransferOpen}
+        />
       )}
     </div>
   );

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
 import MainLayout from "@/components/layout/MainLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,13 +27,13 @@ import {
 import { formatCurrency, formatSharesUnit, formatNav, formatReturnRate, getReturnColorClass, toDateOnly } from "@/lib/utils";
 import { Plus, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { platformApi, ApiException } from "@/lib/api";
+import { ApiException } from "@/lib/api";
 import { useUIStore } from "@/stores/uiStore";
-import { usePositionList, useUpdateCashPosition } from "@/hooks/usePosition";
+import { usePositionList } from "@/hooks/usePosition";
 import { useCreateTrade } from "@/hooks/useTrade";
-import { useCreateCashTransfer } from "@/hooks/useCashTransfer";
+import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
-import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
+import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,11 +44,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DatePicker } from "@/components/ui/date-picker";
 import type { Position } from "@/types/position";
-import type { Platform } from "@/types/platform";
 import type { TradeCreate } from "@/types/trade";
-import { parseDateOnly } from "@/lib/utils";
 
 export default function PositionsPage() {
   const params = useParams();
@@ -68,27 +64,12 @@ export default function PositionsPage() {
     price: "",
   });
 
-  // 非净值资产更新相关状态
+  // #595 §4.5：现金市值更新 Dialog 开关
   const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
-  const [cashAmount, setCashAmount] = useState("");
-  const [selectedPlatform, setSelectedPlatform] = useState("");
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
 
   // 现金转移相关状态
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isTransferListOpen, setIsTransferListOpen] = useState(false);
-  const [transferFrom, setTransferFrom] = useState("");
-  const [transferTo, setTransferTo] = useState("");
-  const [transferAmount, setTransferAmount] = useState("");
-  const [transferDate, setTransferDate] = useState(toDateOnly(new Date()));
-  const [transferCrossDay, setTransferCrossDay] = useState(false);
-
-  // 获取平台列表
-  const { data: platformsData } = useQuery({
-    queryKey: ["platforms"],
-    queryFn: () => platformApi.list({ page_size: 100 }),
-  });
-  const platforms: Platform[] = platformsData?.items || [];
 
   const totalMarketValue = positions.reduce((sum, p) => sum + (p.market_value || 0), 0);
   const totalCost = positions.reduce((sum, p) => sum + ((p.shares || 0) * (p.cost_price || 0)), 0);
@@ -102,59 +83,6 @@ export default function PositionsPage() {
   const resetTradeForm = () => {
     setIsDialogOpen(false);
     setFormData({ product_code: "", shares: "", amount: "", price: "" });
-  };
-
-  // 更新非净值资产走统一 hook（与移动端持仓页共用）
-  const updateCashPosition = useUpdateCashPosition(code);
-
-  const handleCashUpdateSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!cashAmount || parseFloat(cashAmount) < 0) {
-      addToast({
-        type: "error",
-        title: "输入错误",
-        message: "请输入有效的金额",
-      });
-      return;
-    }
-    
-    if (!selectedPlatform) {
-      addToast({
-        type: "error",
-        title: "输入错误",
-        message: "请选择平台",
-      });
-      return;
-    }
-
-    updateCashPosition.mutate(
-      {
-        amount: parseFloat(cashAmount),
-        platformCode: selectedPlatform,
-        updateDate: selectedDate ? toDateOnly(selectedDate) : undefined,
-      },
-      {
-        onSuccess: () => {
-          setIsCashUpdateOpen(false);
-          setCashAmount("");
-          setSelectedPlatform("");
-          setSelectedDate(undefined);
-        },
-      }
-    );
-  };
-
-  // 现金转移走统一 hook
-  const createCashTransfer = useCreateCashTransfer(code);
-
-  const resetTransferForm = () => {
-    setIsTransferOpen(false);
-    setTransferFrom("");
-    setTransferTo("");
-    setTransferAmount("");
-    setTransferDate(toDateOnly(new Date()));
-    setTransferCrossDay(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -237,7 +165,7 @@ export default function PositionsPage() {
             </Button>
             <Button variant="outline" onClick={() => setIsCashUpdateOpen(true)}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              更新非净值资产
+              更新现金市值
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
@@ -330,164 +258,19 @@ export default function PositionsPage() {
             </DialogContent>
           </Dialog>
 
-          {/* 非净值资产更新对话框 */}
-          <Dialog open={isCashUpdateOpen} onOpenChange={setIsCashUpdateOpen} modal={false}>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle>更新非净值资产</DialogTitle>
-                <DialogDescription>
-                  更新现金等非净值型资产的当前金额
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleCashUpdateSubmit}>
-                <div className="space-y-4 py-4">
-                  {/* 平台选择 */}
-                  <div className="space-y-2">
-                    <Label htmlFor="platform">平台</Label>
-                    <SearchablePlatformSelect
-                      platforms={platforms}
-                      value={selectedPlatform || null}
-                      onChange={(v) => setSelectedPlatform(v ?? "")}
-                      placeholder="请选择平台"
-                      id="platform"
-                    />
-                  </div>
+          {/* #595 §4.5：现金市值更新共享 Dialog */}
+          <CashMarketValueUpdateDialog
+            portfolioCode={code}
+            open={isCashUpdateOpen}
+            onOpenChange={setIsCashUpdateOpen}
+          />
 
-                  {/* 日期选择 */}
-                  <div className="space-y-2">
-                    <Label>更新日期（可选，默认为今天）</Label>
-                    <DatePicker
-                      date={selectedDate}
-                      onSelect={setSelectedDate}
-                      placeholder="选择日期"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      提示：只能选择交易日，非交易日将无法更新
-                    </p>
-                  </div>
-
-                  {/* 金额输入 */}
-                  <div className="space-y-2">
-                    <Label htmlFor="cash_amount">当前金额（元）</Label>
-                    <Input
-                      id="cash_amount"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={cashAmount}
-                      onChange={(e) => setCashAmount(e.target.value)}
-                      placeholder="请输入当前现金金额"
-                      required
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsCashUpdateOpen(false)}>
-                    取消
-                  </Button>
-                  <Button type="submit" disabled={updateCashPosition.isPending}>
-                    {updateCashPosition.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    确认更新
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
-
-          {/* 现金转移对话框 */}
-          <Dialog open={isTransferOpen} onOpenChange={setIsTransferOpen} modal={false}>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle>平台间现金转移</DialogTitle>
-                <DialogDescription>
-                  将现金从一个平台转移到另一个平台
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                if (!transferFrom || !transferTo || transferFrom === transferTo) {
-                  addToast({ type: "error", title: "输入错误", message: "请选择不同的转出和转入平台" });
-                  return;
-                }
-                if (!transferAmount || parseFloat(transferAmount) <= 0) {
-                  addToast({ type: "error", title: "输入错误", message: "请输入有效的转移金额" });
-                  return;
-                }
-              createCashTransfer.mutate(
-                {
-                  from_platform: transferFrom,
-                  to_platform: transferTo,
-                  amount: parseFloat(transferAmount),
-                  cross_day: transferCrossDay,
-                  transfer_date: transferDate,
-                },
-                { onSuccess: resetTransferForm }
-              );
-              }}>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label>转出平台</Label>
-                    <SearchablePlatformSelect
-                      platforms={platforms}
-                      value={transferFrom || null}
-                      onChange={(v) => setTransferFrom(v ?? "")}
-                      placeholder="选择转出平台"
-                      isOptionDisabled={(p) => p.code === transferTo}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>转入平台</Label>
-                    <SearchablePlatformSelect
-                      platforms={platforms}
-                      value={transferTo || null}
-                      onChange={(v) => setTransferTo(v ?? "")}
-                      placeholder="选择转入平台"
-                      isOptionDisabled={(p) => p.code === transferFrom}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="transfer_amount">转移金额（元）</Label>
-                    <Input
-                      id="transfer_amount"
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      value={transferAmount}
-                      onChange={(e) => setTransferAmount(e.target.value)}
-                      placeholder="请输入转移金额"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>转移日期</Label>
-                    <DatePicker
-                      date={parseDateOnly(transferDate)}
-                      onSelect={(date) => setTransferDate(toDateOnly(date))}
-                    />
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="cross_day"
-                      checked={transferCrossDay}
-                      onChange={(e) => setTransferCrossDay(e.target.checked)}
-                      className="h-4 w-4"
-                    />
-                    <Label htmlFor="cross_day" className="text-sm">
-                      跨天到账（T+1 确认，适用于银行转账等场景）
-                    </Label>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsTransferOpen(false)}>取消</Button>
-                  <Button type="submit" disabled={createCashTransfer.isPending}>
-                    {createCashTransfer.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    确认转移
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
+          {/* 现金转移对话框（步骤⑤起收敛为共享组件 CashTransferDialog） */}
+          <CashTransferDialog
+            portfolioCode={code}
+            open={isTransferOpen}
+            onOpenChange={setIsTransferOpen}
+          />
           </div>
         </div>
 

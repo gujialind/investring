@@ -35,10 +35,11 @@ import {
   dialogByTitle,
   openPopover,
   openSubmitTradeDialog,
+  pickCalendarDay,
   pickFirstPlatformOption,
   pickFirstProduct,
   platformPopover,
-  settlePopovers,
+  toISODate,
 } from './helpers';
 
 /** 选中首个交易平台（无平台数据优雅 skip），返回所选平台 code。
@@ -53,13 +54,6 @@ async function pickFirstPlatform(page: Page, dlg: Locator): Promise<string> {
 const actualInput = (dlg: Locator) => dlg.getByLabel('实际支付金额（含费，元）');
 const netInput = (dlg: Locator) => dlg.getByLabel('净投入金额（扣费后，元）');
 const feeInput = (dlg: Locator) => dlg.getByLabel('手续费（元）');
-
-/** 本地日期 → ISO 字符串（避免 toISOString 的 UTC 时移） */
-function toISODate(d: Date): string {
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
-}
 
 /**
  * 取「today 起最近一个交易日」（含 today）：查当年日历，当年尚无开市日则回看
@@ -81,29 +75,6 @@ async function nearestTradingDay(
     if (open.length > 0) return open[open.length - 1];
   }
   throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
-}
-
-/**
- * 经交易日期 DatePicker 显式选日（表单默认 today，非交易日须改选）。
- * 目标与 today 相差至多 2 天，日历默认展示选中月，必要时按月翻一次。
- */
-async function selectTradeDate(
-  page: Page,
-  dlg: Locator,
-  targetISO: string,
-): Promise<void> {
-  const trigger = dlg.locator('button#trade_date');
-  // 首个日期格作「弹层已开」锚点：与数据量无关，不会把 #524 的吞点击写成硬性等待失败
-  await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
-  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
-  // 显式上界，与全局 `use.actionTimeout`（#551 §2）同值；留字面值是为了这条预算不随配置漂移。
-  if ((await day.count()) === 0) {
-    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
-    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
-  }
-  await day.click({ timeout: 10_000 });
-  await expect(trigger).toHaveText(targetISO);
-  await settlePopovers(page); // 选日即关弹层，收干净再让调用方点下一个控件
 }
 
 /**
@@ -306,7 +277,8 @@ test.describe('买入金额双字段联动（#193）', () => {
     // 锚定「today 起最近一个交易日」（#468）：周末/非交易日改选该日而非 skip
     const tradeDate = await nearestTradingDay(page, headers);
     if (tradeDate !== toISODate(new Date())) {
-      await selectTradeDate(page, dlg, tradeDate);
+      // 选日走 helpers.pickCalendarDay（#640 S-2 收敛：此处原为第 5 份 ISO 口径拷贝）
+      await pickCalendarDay(page, dlg.locator('button#trade_date'), tradeDate);
     }
     await purgePendingSameBuys(page, headers, portfolioCode, product.code, product.market, platformCode, tradeDate);
     await injectCashViaSubscription(page, headers, portfolioCode, platformCode, tradeDate);

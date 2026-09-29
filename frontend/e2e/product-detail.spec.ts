@@ -13,7 +13,7 @@ import { E2E_ACTIVE, gotoPortfolioDetail } from "./helpers";
  * - 断言为可见性与关系式，不硬绑定快照日期；两端共用组件，mobile project 同跑。
  */
 
-const PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/CN_EXCHANGE/510300.SH`;
+const PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/510300.SH?market=CN_EXCHANGE`;
 
 test.describe("产品详情页", () => {
   test("页头与概览卡：产品名、代码·市场、市值、份额与收益", async ({ page }) => {
@@ -114,9 +114,69 @@ test.describe("产品详情页", () => {
   test("从组合详情产品卡点击进入（深链起点）", async ({ page }) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await page.getByRole("link", { name: /沪深300ETF/ }).first().click();
-    await page.waitForURL(/\/product\/CN_EXCHANGE\/510300\.SH/);
+    await page.waitForURL(/\/product\/510300\.SH/);
     await expect(
       page.getByRole("heading", { name: "沪深300ETF" })
     ).toBeVisible();
+  });
+
+  test("缺 market 参数的非现金产品 EmptyState（R-4）", async ({ page }) => {
+    // R-4：market 迁移为 query 后可缺，参数问题须与「未找到持仓」区分（同平台-产品页 S4 形态）
+    await page.goto(`/portfolio/${E2E_ACTIVE}/product/510300.SH`);
+    await expect(page.getByText("缺少 market 参数")).toBeVisible();
+  });
+});
+
+// #595 §4.5：现金产品详情页操作行为转入/转出 + 市值更新
+// B-6 方案 B：路由迁移为 /product/[productCode]?market=，CASH 产品以空 market 表示
+const CASH_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/CASH?market=`;
+
+test.describe("现金产品详情页", () => {
+  test("操作行：转入/转出/市值更新（非买入/卖出/事件）", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const actionRow = page.getByTestId("product-action-row");
+    await expect(actionRow).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "转入" })).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "转出" })).toBeVisible();
+    await expect(actionRow.getByRole("button", { name: "市值更新" })).toBeVisible();
+    // 不应有买入/卖出/事件按钮
+    await expect(actionRow.getByRole("link", { name: "买入" })).not.toBeVisible();
+    await expect(actionRow.getByRole("link", { name: "卖出" })).not.toBeVisible();
+  });
+
+  test("操作行：转入/转出打开现金转移 Dialog（聚合视角无平台预填）", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const actionRow = page.getByTestId("product-action-row");
+    // 转入：打开 Dialog，转出/转入平台均显示 placeholder（聚合视角无平台上下文）
+    await actionRow.getByRole("button", { name: "转入" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "平台间现金转移" })).toBeVisible();
+    await expect(dialog.getByText("选择转出平台")).toBeVisible();
+    await expect(dialog.getByText("选择转入平台")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    // 转出：同样打开 Dialog（聚合视角两按钮同入口，无方向预填）
+    await actionRow.getByRole("button", { name: "转出" }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "平台间现金转移" })).toBeVisible();
+    await expect(dialog.getByText("选择转出平台")).toBeVisible();
+    await expect(dialog.getByText("选择转入平台")).toBeVisible();
+  });
+
+  test("市值更新按钮打开 Dialog", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await page.getByTestId("product-action-row").getByRole("button", { name: "市值更新" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
+  });
+
+  test("净值相关卡片不显示（现金无净值）", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await expect(page.getByTestId("product-overview-card")).toBeVisible();
+    // 净值走势/区间收益/历史净值卡片不应出现
+    await expect(page.getByTestId("product-curve-card")).not.toBeVisible();
+    await expect(page.getByTestId("product-returns-card")).not.toBeVisible();
+    await expect(page.getByTestId("product-history-card")).not.toBeVisible();
   });
 });
