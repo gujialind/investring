@@ -1,5 +1,5 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
-import { ApiError } from "@/types/common";
+import { ApiError, ApiValidationError } from "@/types/common";
 import { useAuthStore } from "@/stores/authStore";
 
 /**
@@ -77,11 +77,11 @@ export class ApiException extends Error {
  * FastAPI RequestValidationError 的 detail 是数组：[{loc, msg, type}, ...]（#643）。
  * 拼成字段级可读文案（loc 末段作字段名）。
  */
-function formatValidationDetail(detail: unknown[]): string {
+function formatValidationDetail(detail: ApiValidationError[]): string {
   const parts = detail
-    .map((item) => {
-      const entry = item as { loc?: unknown; msg?: unknown } | null;
-      const loc = Array.isArray(entry?.loc) ? (entry.loc as unknown[]) : [];
+    .map((entry) => {
+      // 载荷来自网络（系统边界），字段可能缺失或形态漂移：退化到能用的部分，不抛新错
+      const loc = Array.isArray(entry?.loc) ? entry.loc : [];
       const field = loc.length > 0 ? String(loc[loc.length - 1]) : "";
       const msg = typeof entry?.msg === "string" ? entry.msg : "";
       if (field && msg) return `${field}: ${msg}`;
