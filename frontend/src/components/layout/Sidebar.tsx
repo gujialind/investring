@@ -4,39 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/lib/utils";
-import {
-  LayoutDashboard,
-  Users,
-  Briefcase,
-  Package,
-  Building2,
-  Settings,
-  PlayCircle,
-  Tags,
-} from "lucide-react";
-
-const adminNavItems = [
-  { href: "/dashboard", label: "首页", icon: LayoutDashboard },
-  { href: "/investors", label: "投资人", icon: Users },
-  { href: "/portfolio", label: "组合", icon: Briefcase },
-  { href: "/products", label: "产品", icon: Package },
-  { href: "/platforms", label: "平台", icon: Building2 },
-  { href: "/asset-classifications", label: "分类", icon: Tags },
-  // 注：日志页（/settings/logs）尚未实现，实现后再恢复导航项（避免死链 404）
-  { href: "/settings/tasks", label: "任务", icon: PlayCircle },
-  { href: "/settings", label: "设置", icon: Settings },
-];
-
-const viewerNavItems = [
-  { href: "/dashboard", label: "首页", icon: LayoutDashboard },
-  { href: "/portfolio", label: "组合", icon: Briefcase },
-];
+import { navItemsForRole } from "@/components/shared/navItems";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuthStore();
 
-  const navItems = user?.role === "admin" ? adminNavItems : viewerNavItems;
+  // 桌面宽屏出全部导航项（含不进移动底部 Tab 的平台/分类/任务，#650 单源派生）
+  const navItems = navItemsForRole(user?.role);
 
   return (
     <aside className="hidden lg:block w-64 border-r bg-background">

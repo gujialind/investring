@@ -6,7 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
 import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
-import MobileNav from "./MobileNav";
+import BottomNav from "@/components/shared/BottomNav";
 
 export default function MainLayout({
   children,
@@ -56,7 +56,7 @@ export default function MainLayout({
           {children}
         </main>
       </div>
-      <MobileNav />
+      <BottomNav basePath="/" />
     </div>
   );
 }

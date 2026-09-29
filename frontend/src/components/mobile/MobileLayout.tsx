@@ -1,18 +1,13 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import BottomNav from "./BottomNav";
+import BottomNav from "@/components/shared/BottomNav";
+import { mobileTabPaths } from "@/components/shared/navItems";
 import { cn } from "@/lib/utils";
 
-// 一级 Tab 页（BottomNav 导航项对应页面，精确匹配）
-// viewer 的导航项是其子集，无需按角色区分——BottomNav 内部已按角色出项
-const TOP_LEVEL_PATHS = new Set([
-  "/m/dashboard",
-  "/m/investors",
-  "/m/portfolio",
-  "/m/products",
-  "/m/settings",
-]);
+// 一级 Tab 页（底部导航项对应页面）；viewer 的导航项是其子集，无需按角色区分——
+// BottomNav 内部已按角色出项。路径集合由导航单源派生（#650），不再手抄一份
+const TOP_LEVEL_PATHS = new Set(mobileTabPaths("/m"));
 
 export default function MobileLayout({
   children,
@@ -26,7 +21,7 @@ export default function MobileLayout({
   return (
     <div className={cn("min-h-screen bg-background", showNav && "pb-16")}>
       <main className="p-4">{children}</main>
-      {showNav && <BottomNav />}
+      {showNav && <BottomNav basePath="/m" />}
     </div>
   );
 }
