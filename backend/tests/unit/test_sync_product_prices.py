@@ -371,11 +371,12 @@ class TestHkMutualNavFailureIsLoud:
     def test_parsed_nav_lands_without_absurd_magnitude(
         self, mock_fetch, test_db: Session
     ):
-        """错位量级（ESEQID 3.4e11）绝不允许进 price_record。
+        """取数契约里的 7 天净值逐日落库，且写入的量级说得通。
 
-        本次故障没写脏数据纯属侥幸：旧代码的日期过滤器恰好在 `float(单位净值)` 之前
-        把行剔除。若两句换个次序，09-12 之后的每个港互认净值都会是 342652919208。
-        所以这里既逐日核对数值，也给量级封顶。
+        打桩点在 `get_fund_hk_mutual` 之后，所以这条管的是**写入侧**，不是解析侧：
+        键序又变了由 `test_reads_by_key_with_real_upstream_shape` 拦。背景仍值得留——
+        本次没写脏数据纯属侥幸，旧代码的日期过滤器恰好在 `float(单位净值)` 之前把行
+        剔除；两句换个次序，09-12 之后的每个港互认净值都会是 342652919208。
         """
         mock_fetch.return_value = [
             {"trade_date": td, "unit_price": nav, "accumulated_nav": None}
@@ -392,7 +393,7 @@ class TestHkMutualNavFailureIsLoud:
         ).all()
         assert {r.price_date.isoformat().replace("-", ""): float(r.unit_price)
                 for r in written} == _HK_WINDOW_NAV
-        assert all(float(r.unit_price) < 100 for r in written), "出现错位量级即键序又变了"
+        assert all(float(r.unit_price) < 100 for r in written), "写入侧未拦住异常量级"
         assert all(r.unit_price is not None for r in written)
 
     @patch("app.services.akshare_client.get_fund_hk_mutual")

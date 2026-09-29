@@ -267,9 +267,11 @@ def get_fund_daily_exchange(
         sd = start_date or "19900101"
         ed = end_date or "20500101"
         df = ak.fund_etf_hist_em(symbol=code, period="daily", start_date=sd, end_date=ed, adjust="")
-        # 上游是逗号分隔 kline 串，列语义由我们自行声明的 fields2=f51..f61 钉住，
-        # 不存在港互认那种键序漂移；无 k 线时 akshare 显式返回空 DF，那里的「空」是
-        # 设计好的合法答复，不得当作失败。故只按行校验，不套用零行判据。
+        # kline 是逗号分隔的位置串，akshare 按它自己请求的 fields2 顺序贴列名——顺序
+        # 由调用侧锁定，不受东财响应键序带动，故不存在港互认那种键序漂移。这条路径
+        # 剩下的判据只是「空怎么读」：带区间的空良性（停市、假日、新基金尚未成交），
+        # 不带下界的全历史空判故障——实测有效代码恒有行（510300 全历史 3487 条），
+        # 只有无效代码才返回空 DF（999999 为 0 条）。那种空读成成功就是 #651 换了个市场。
         upstream_rows = len(df)
         usable: List[Tuple[str, float, float, float]] = []
         malformed: List[str] = []
@@ -405,6 +407,10 @@ def _fetch_hk_nav_rows(
     collected: List[Dict[str, Any]] = []
     page_index = 0
     while True:
+        if page_index:
+            # `_retry` 只在每次「尝试」前限流一次，分页后一次尝试要打多页；不在页间
+            # 补睡，`akshare_rate_interval` 就被稀释成 1/页数。全历史实测 2 页，代价 +1s。
+            _rate_limit_sleep()
         payload = _hk_nav_request_page(hkfcode, page_index, date1, date2)
         page_rows = payload["Data"]
         collected.extend(page_rows)

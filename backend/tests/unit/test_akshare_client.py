@@ -297,6 +297,25 @@ class TestHkMutualNavTransport:
         assert len(rows) == _HK_PAGE_SIZE * 2
         assert [c["pageindex"] for c in calls] == [0, 1]
 
+    def test_each_extra_page_is_rate_limited(self, hk_pages, monkeypatch):
+        """分页把一次尝试变成多次出网：页间必须限流，否则 `akshare_rate_interval`
+        被稀释成 1/页数。
+        """
+        sleeps = []
+        monkeypatch.setattr(akshare_client, "_rate_limit_sleep", lambda: sleeps.append(1))
+        hk_pages(
+            [
+                [_hk_row("2026-09-14", 10.55)] * _HK_PAGE_SIZE,
+                [_hk_row("2026-09-13", 10.56)] * 20,
+            ],
+            total=_HK_PAGE_SIZE + 20,
+        )
+
+        akshare_client.get_fund_hk_mutual(HK)
+
+        # 2 页 → `_retry` 尝试前 1 次 + 第 2 页前 1 次
+        assert len(sleeps) == 2
+
     def test_valid_envelope_is_returned_verbatim(self, monkeypatch):
         """`_hk_nav_request_page` 的正常出口本身也要有用例（其余用例打的是这个接缝）。"""
         _payload_response(
@@ -401,9 +420,9 @@ class _RowFrame:
 class TestCnAkshareRowsAreScreened:
     """CN_OTC / CN_EXCHANGE 套用同一行级判据（akshare 的 CN 路径也是位置重命名）。
 
-    差别要讲清：ETF 的 klines 是逗号分隔串、**无键名可取**，列语义由我们自行声明的
-    fields2 钉住，键序漂移结构性不可能；且它无数据时显式返回空 DF，那个「空」是设计
-    好的合法答复。故两条都只按行校验，绝不把「结果为空」当失败。
+    差别要讲清：ETF 的 klines 是逗号分隔串，列顺序由 akshare 自己请求的 fields2 锁定，
+    键序漂移结构性不可能。所以这两条只按行校验，外加港互认那条全历史判据——「带区间的
+    空」良性，「不带下界却一行都没有」判故障（实测有效代码恒有行，只有无效代码才空）。
     """
 
     def test_otc_misbound_date_column_raises_instead_of_empty(self, monkeypatch, json_log_capture):
@@ -448,11 +467,22 @@ class TestCnAkshareRowsAreScreened:
             {"trade_date": "20260914", "unit_nav": 1.0, "accum_nav": None}
         ]
 
-    def test_etf_empty_frame_is_benign(self, monkeypatch):
-        """akshare 无 k 线时显式返回空 DF——那是设计好的答复，不是故障。"""
+    def test_etf_windowed_empty_is_benign(self, monkeypatch):
+        """带区间无 k 线时 akshare 返回空 DF——停市、假日都长这样，不是故障。"""
         monkeypatch.setattr("akshare.fund_etf_hist_em", lambda **kw: _RowFrame([]))
 
         assert akshare_client.get_fund_daily_exchange("510300", "20260914", "20260915") == []
+
+    def test_etf_unwindowed_empty_raises(self, monkeypatch, json_log_capture):
+        """全历史一行都没有不可能是良性的：实测有效代码恒有行（510300 为 3487 条），
+        只有无效代码才返回空 DF（999999 为 0 条）。放行就是 #651 的静默换到 CN 侧。
+        """
+        monkeypatch.setattr("akshare.fund_etf_hist_em", lambda **kw: _RowFrame([]))
+
+        with pytest.raises(AkshareAPIError, match="全历史区间未返回任何净值行"):
+            akshare_client.get_fund_daily_exchange("510300")
+
+        only_log_line(json_log_capture, level="ERROR", operation="fetch_fund_daily_exchange")
 
     def test_etf_unparseable_dates_raise(self, monkeypatch):
         monkeypatch.setattr(
