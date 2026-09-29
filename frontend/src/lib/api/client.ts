@@ -113,14 +113,17 @@ export function handleApiError(error: unknown): ApiException {
     // 后端存在三种 detail 形态：结构化 {error, message, details}、裸字符串
     // （HTTPException(detail="...")）与校验失败数组 [{loc, msg, type}, ...]（#643）
     if (Array.isArray(detail)) {
-      const message =
-        formatValidationDetail(detail) || axiosError.message || "请求失败";
+      // 能拿到 detail 数组即说明有响应，无需再回 axios 原文（#655 L2 S2）
+      const message = formatValidationDetail(detail) || "请求失败";
       return new ApiException("VALIDATION_ERROR", message, status);
     }
     const code =
       (detail && typeof detail === "object" && detail.error) || "UNKNOWN_ERROR";
+    // 有响应但 detail 解析不出（对象无 message 等异常形态）→ 本地化兜底文案；
+    // 仅无响应（网络/超时错误）才回 axios 原文，避免裸 HTTP 文案上桌（#655 L2 S2）
     const message =
-      detailMessage(detail) || axiosError.message || "请求失败";
+      detailMessage(detail) ||
+      (axiosError.response ? "请求失败" : axiosError.message || "请求失败");
     return new ApiException(
       code,
       message,
@@ -154,10 +157,12 @@ export function getErrorMessage(error: unknown, fallback = "操作失败"): stri
   // `instanceof Error` 分支会把裸 HTTP 文案（"Request failed with status
   // code 422"）当用户消息返回——正是 #643 文案裸奔的根因之一
   if (axios.isAxiosError(error)) {
+    const detail = (error.response?.data as ApiError | undefined)?.detail;
+    // 有响应但 detail 解析不出（空数组、对象无 message 等异常形态）→ 调用方 fallback；
+    // 仅无响应（网络/超时错误）才回 axios 原文（#655 L2 S2）
     return (
-      detailMessage((error.response?.data as ApiError | undefined)?.detail) ||
-      error.message ||
-      fallback
+      detailMessage(detail) ||
+      (error.response ? fallback : error.message || fallback)
     );
   }
   if (error instanceof Error && error.message) return error.message;

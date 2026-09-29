@@ -59,6 +59,28 @@ describe("handleApiError", () => {
     );
     expect(result.message).toBe("amount: 确保此值大于等于 0; platform_code: 字段必填");
   });
+
+  it("校验条目缺 loc / 缺 msg → 退化到可用部分，不抛错（#655 L2 S1）", () => {
+    expect(handleApiError(axiosErrorWithDetail([{ msg: "字段必填" }])).message).toBe(
+      "字段必填"
+    );
+    expect(
+      handleApiError(axiosErrorWithDetail([{ loc: ["body", "amount"] }])).message
+    ).toBe("amount");
+  });
+
+  it("空校验数组 → VALIDATION_ERROR + 「请求失败」，不露裸 HTTP 文案（#655 L2 S1）", () => {
+    const result = handleApiError(axiosErrorWithDetail([]));
+    expect(result.code).toBe("VALIDATION_ERROR");
+    expect(result.message).toBe("请求失败");
+  });
+
+  it("有响应但 detail 解析不出 → 「请求失败」；无响应 → axios 原文（#655 L2 S2）", () => {
+    expect(handleApiError(axiosErrorWithDetail({})).message).toBe("请求失败");
+    const network = new Error("Network Error") as AxiosError;
+    network.isAxiosError = true;
+    expect(handleApiError(network).message).toBe("Network Error");
+  });
 });
 
 describe("getErrorMessage", () => {
@@ -85,6 +107,17 @@ describe("getErrorMessage", () => {
     expect(getErrorMessage({ response: { data: {} } }, "请检查输入")).toBe(
       "请检查输入"
     );
+  });
+
+  it("有响应但 detail 解析不出 → 调用方 fallback，不露裸 HTTP 文案（#655 L2 S2）", () => {
+    expect(getErrorMessage(axiosErrorWithDetail([]), "请刷新重试")).toBe("请刷新重试");
+    expect(getErrorMessage(axiosErrorWithDetail({}), "请刷新重试")).toBe("请刷新重试");
+  });
+
+  it("无响应（网络错误）→ axios 原文而非 fallback（#655 L2 S2）", () => {
+    const network = new Error("Network Error") as AxiosError;
+    network.isAxiosError = true;
+    expect(getErrorMessage(network, "请刷新重试")).toBe("Network Error");
   });
 });
 
