@@ -66,12 +66,16 @@ async function lastNonTradingDayUptoToday(page: Page): Promise<string> {
 }
 
 /**
- * Dialog 内 DatePicker 触发按钮（占位文案或已选日期，同 datepicker-in-dialog pickerTrigger 口径）。
+ * Dialog 内 DatePicker 触发按钮。锚点取控件 id（`CashMarketValueUpdateDialog` 的
+ * `id="cash-update-date"` + `<Label htmlFor>`），与 `#trade_date` / `#cash_confirm_date`
+ * 同形（#640 N-2）。此前靠文案正则 `/选择日期|\d{4}-\d{2}-\d{2}/` + `.first()`，
+ * 无主标签（Label 无 htmlFor）才是只能用正则的原因；补 id 后正则退役——
+ * 「已存在覆盖」状态下新增改日用例时，文案正则可能一次命中多个 button 而静默取错。
  * scope 必须是 `dialogByTitle` 的结果——**不能**在已取得的 dialog 上再套一层
  * `getByRole("dialog")`：弹层内没有第二个 dialog，那样恒为 0 命中（#640 T-1 未落地的根因）。
  */
 function dialogDateTrigger(dlg: Locator): Locator {
-  return dlg.locator("button").filter({ hasText: /选择日期|\d{4}-\d{2}-\d{2}/ }).first();
+  return dlg.locator("button#cash-update-date");
 }
 
 test.describe("平台详情页", () => {

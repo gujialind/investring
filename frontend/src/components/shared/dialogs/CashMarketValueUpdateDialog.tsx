@@ -197,8 +197,9 @@ export default function CashMarketValueUpdateDialog({
 
           {/* Date picker */}
           <div className="space-y-2">
-            <Label>更新日期</Label>
+            <Label htmlFor="cash-update-date">更新日期</Label>
             <DatePicker
+              id="cash-update-date"
               date={selectedDate}
               onSelect={(d) => {
                 setSelectedDate(d);

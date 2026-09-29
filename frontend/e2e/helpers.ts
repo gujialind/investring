@@ -138,16 +138,20 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 }
 
 // ===========================================================================
-// 日历选日共享交互（#640 U-4）
+// 日历选日共享交互（#640 U-4/S-2）
 //
 // 抽自 platform-detail 的 pickDialogDay 与 trade-in-transit 的 pickDay——两份逐行同形，
-// 漂移出来的正是多套一层 getByRole('dialog') 的那份（#640 T-1 因此从未真正执行过）。
-// 与 datepicker-in-dialog / share-change-cash-pay-date 的差别：那两处按「当月某日」
-// （data-day$="-18"）定位，本函数按完整 ISO 日定位，供「交易日锚定」类用例使用。
+// 漂移出来的正是多套一层 getByRole('dialog') 的那份（#640 T-1 因此从未真正执行过）；
+// 第四轮再消掉 trade-buy-amount-linkage 的 selectTradeDate（同形、只少那条跳过守卫）。
+// 刻意未并的两处见 frontend/AGENTS.md §4 的台账：share-change-cash-pay-date 的 pickDay
+// 同为 ISO 口径但翻页基准取控件当前值、点击前额外断言 toBeEnabled；datepicker-in-dialog
+// 按「当月某日」（data-day$="-18"）定位，不属本函数口径。
 // ===========================================================================
 
 /** 本地日期 → yyyy-MM-dd（**不用 toISOString**：它按 UTC 切日，与组件侧 `toDateOnly()`
- *  的本地口径错开，本机 TZ=UTC+8 的开发者在 00:00–07:59 跑必红，#640 U-2） */
+ *  的本地口径错开，本机 TZ=UTC+8 的开发者在 00:00–07:59 跑必红，#640 U-2/S-2。
+ *  e2e 侧的同形本地拷贝已全部改为导入本函数，CI 容器是 UTC、测不到这类错开，
+ *  新增 spec 别再复制一份「看起来一样」的本地实现） */
 export function toISODate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');

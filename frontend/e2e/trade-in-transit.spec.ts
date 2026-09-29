@@ -53,6 +53,7 @@ import {
   productPopover,
   settlePopovers,
   toastByTitle,
+  toISODate,
   type PortfolioCode,
 } from './helpers';
 
@@ -77,13 +78,6 @@ const TRANSFER_AMOUNT = 5000;
  * 卖出确认取 D+2 净值 1.6000（2000 份 → 3200 元）。改这里必须同步改种子。
  */
 const NAV: Record<'D' | 'D1' | 'D2', string> = { D: '1.5000', D1: '1.5500', D2: '1.6000' };
-
-/** 本地日期 → yyyy-MM-dd（避免 toISOString 的 UTC 时移） */
-function toISODate(d: Date): string {
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
-}
 
 /** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
 async function nearestTradingDay(page: Page, headers: { Authorization: string }): Promise<string> {
