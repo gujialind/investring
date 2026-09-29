@@ -120,6 +120,11 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   const snapshotDate = productData?.snapshot_date ?? platformData?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?platform=${encodeURIComponent(platformCode)}`;
 
+  // 在途资金口径披露（#641 恢复首轮 S5）：概览市值含本平台在途、下方持仓明细
+  // 不含——数字取本平台平台卡的 in_transit_market_value，不得借组合级字段
+  //（PR #639 B2 教训：组合级的数会把 A 平台的在途写到 B 平台名下）
+  const inTransitValue = platform.in_transit_market_value ?? 0;
+
   const overview = (
     <Card data-testid="platform-overview-card">
       <CardContent className="pt-4">
@@ -231,6 +236,12 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
               </Link>
             )}
           </div>
+          {/* S5/#641：在途资金口径说明——概览市值含在途，明细卡片不含 */}
+          {inTransitValue > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              *持仓市值含在途资金 ¥{formatCurrency(inTransitValue).replace("¥", "")}，上方卡片不含在途
+            </p>
+          )}
         </>
       )}
     </section>

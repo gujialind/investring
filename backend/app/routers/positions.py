@@ -246,6 +246,7 @@ def get_holdings_by_platform(
                 platform_type=p["platform_type"],
                 market_value=_round4(p["market_value"]),
                 cash_balance=_round4(p["cash_balance"]),
+                in_transit_market_value=_round4(p["in_transit_market_value"]) or 0.0,
                 product_count=p["product_count"],
                 holding_profit=_round4(p["holding_profit"]),
                 cumulative_profit=_round4(p["cumulative_profit"]),

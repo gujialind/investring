@@ -61,6 +61,8 @@ export interface HoldingPlatformAggregate {
   /** 含该平台现金与在途 */
   market_value: number;
   cash_balance: number;
+  /** 本平台在途合计（#641；0 = 无在途；market_value 含它，明细卡不含） */
+  in_transit_market_value: number;
   /** 非现金、非在途持仓产品数 */
   product_count: number;
   holding_profit: number | null;
