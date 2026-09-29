@@ -96,6 +96,13 @@ export function dialogByTitle(page: Page, title: string | RegExp): Locator {
  * 按标题定位 toast 卡片（#382）。ToastContainer 卡片根挂 data-testid="toast-card"；
  * toast 默认存活 3s、可堆叠出多张，故用 filter({ has: heading }) 按标题收窄。
  * 不用 hasText：把标题钉在 <h4> 上，避免误命中消息 <p>。
+ *
+ * ⚠️ **只能用于「没有 modal Dialog 开着」的时机**（#640 第三轮实测）：Radix modal Dialog
+ * 打开期间把 portal 之外的其余子树置 `aria-hidden`，而 `getByRole` 走**无障碍树**——
+ * 挂在 app root 的 toast 此刻对 `getByRole('heading')` 完全不可见，本函数恒返回 0 命中，
+ * 而 DOM 口径的 `getByTestId('toast-card')` 照常命中。所以在 Dialog 内提交/撤销后断 toast
+ * （典型如「更新现金市值」），写 `page.getByTestId('toast-card').filter({ hasText: 标题 })`，
+ * 不要改用本函数——它会以「element(s) not found」红在一个其实正确的产品行为上。
  */
 export function toastByTitle(page: Page, title: string | RegExp): Locator {
   return page
@@ -128,6 +135,63 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
   const token = await page.evaluate(() => window.localStorage.getItem('token'));
   expect(token, '页面 localStorage 中缺少登录 token，无法调用后端 API').toBeTruthy();
   return { Authorization: `Bearer ${token}` };
+}
+
+// ===========================================================================
+// 日历选日共享交互（#640 U-4）
+//
+// 抽自 platform-detail 的 pickDialogDay 与 trade-in-transit 的 pickDay——两份逐行同形，
+// 漂移出来的正是多套一层 getByRole('dialog') 的那份（#640 T-1 因此从未真正执行过）。
+// 与 datepicker-in-dialog / share-change-cash-pay-date 的差别：那两处按「当月某日」
+// （data-day$="-18"）定位，本函数按完整 ISO 日定位，供「交易日锚定」类用例使用。
+// ===========================================================================
+
+/** 本地日期 → yyyy-MM-dd（**不用 toISOString**：它按 UTC 切日，与组件侧 `toDateOnly()`
+ *  的本地口径错开，本机 TZ=UTC+8 的开发者在 00:00–07:59 跑必红，#640 U-2） */
+export function toISODate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * 在日历弹层点选 `targetISO`（yyyy-MM-dd），断言 trigger 回显后收干净弹层。
+ *
+ * `trigger` 由**调用方**给出，且其作用域必须是 `dialogByTitle` 的结果：Radix
+ * `PopoverContent` 自带 `role="dialog"`，在已取得的 dialog 上再套一层
+ * `getByRole('dialog')` 会命中 0（弹层内没有第二个 dialog）。
+ *
+ * 「目标日 == 控件当前值」时直接跳过、不开弹层：少一次浮层开合即少一处 #524 竞态面。
+ * #542 之前这一跳过是**正确性前提**——react-day-picker@10 单选未传 `required`，把「点已
+ * 选日」当成取消选择（`useSingle`: `!required && isSameDay → onSelect(undefined)`），而当
+ * 时 `date-picker.tsx` 只在 newDate 非空时才关弹层，结果值被清空、弹层还开着（CI
+ * 2026-09-16 实踩：目标日恰为表单默认值 today）。#542 已改为「点任何日都关弹层、toggle-off
+ * 不回传调用方」，清空唯一入口是 X 按钮，故这里的跳过只剩效率意义。
+ *
+ * ⚠️ 目标日与 today 最多相差数天，日历默认展示当前月（或已选日所在月），故 `data-day`
+ * 不在当前月时按月翻一次——**没有断言兜底这条翻页前提**，若把 target 口径改成「最近
+ * N 个交易日」（长假可跨月），这里会静默点错月（#640 U-5）。
+ *
+ * 隐含前提：trigger 所在 DialogContent **不得**自带 `overflow-y-auto`——#191 方案 C 把
+ * 弹层 Portal 注入 DialogContent 自身，父级 overflow 会裁掉月历底行，那一点落在遮罩上、
+ * 连人带表单一起关闭（#640 U-1）。
+ */
+export async function pickCalendarDay(
+  page: Page,
+  trigger: Locator,
+  targetISO: string,
+): Promise<void> {
+  if ((await trigger.textContent())?.trim() === targetISO) return;
+  await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
+  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
+  // 显式上界，与全局 use.actionTimeout（#551 §2）同值；留字面值防预算随配置漂移
+  if ((await day.count()) === 0) {
+    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
+    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
+  }
+  await day.click({ timeout: 10_000 });
+  await expect(trigger).toHaveText(targetISO);
+  await settlePopovers(page); // 选日即关弹层（#542），收干净再让调用方操作下一控件
 }
 
 // ===========================================================================

@@ -168,7 +168,10 @@ export default function CashMarketValueUpdateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
+      {/* 高度上限交给 dialog.tsx 的内层滚动容器，**不得**在本节点加 overflow-y-auto：
+          #191 方案 C 把日历弹层 Portal 注入 DialogContent 自身，父级 overflow 会把
+          月历底行裁进裁剪盒——那点落在遮罩上，连人带表单一起关（#640 U-1）。 */}
+      <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>更新现金市值</DialogTitle>
           <DialogDescription>

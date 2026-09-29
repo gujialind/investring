@@ -1,10 +1,11 @@
-import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
   E2E_ACTIVE,
   gotoPortfolioDetail,
   authHeaders,
-  openPopover,
-  settlePopovers,
+  dialogByTitle,
+  pickCalendarDay,
+  toISODate,
 } from "./helpers";
 
 /**
@@ -25,11 +26,14 @@ const PLATFORM_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/
 const CASH_PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/CASH?market=`;
 
 /**
- * 拉交易日历返回 ≤ 今天的全部交易日（升序，#468 口径：交易日经 /api/trading-calendar
- * 取，不写死、不假设周末）。Blocker 1 回归与现金市值写入共用。
+ * 拉交易日历中 ≤ 今天的全部日历行（升序，#468 口径：交易日经 /api/trading-calendar
+ * 取，不写死、不假设周末）。Blocker 1 回归、现金市值写入日锚定与非交易日拒绝共用。
+ * 日期口径用 **本地** `toISODate`（与组件侧 `toDateOnly()` 同一时钟，#640 U-2）。
  */
-async function tradingDaysUptoToday(page: Page): Promise<string[]> {
-  const today = new Date().toISOString().slice(0, 10);
+async function calendarRowsUptoToday(
+  page: Page,
+): Promise<{ calendar_date: string; is_open: boolean }[]> {
+  const today = toISODate(new Date());
   const year = Number(today.slice(0, 4));
   const headers = await authHeaders(page);
   const calendars = await Promise.all(
@@ -41,36 +45,33 @@ async function tradingDaysUptoToday(page: Page): Promise<string[]> {
   );
   return calendars
     .flat()
-    .filter((d) => d.is_open && d.calendar_date <= today)
-    .map((d) => d.calendar_date)
-    .sort();
+    .filter((d) => d.calendar_date <= today)
+    .sort((a, b) => a.calendar_date.localeCompare(b.calendar_date));
 }
 
-/** Dialog 内 DatePicker 触发按钮（占位文案或已选日期，同 datepicker-in-dialog pickerTrigger 口径） */
-function dialogDateTrigger(scope: Locator): Locator {
-  return scope
-    .getByRole("dialog")
-    .locator("button")
-    .filter({ hasText: /选择日期|\d{4}-\d{2}-\d{2}/ })
-    .first();
+/** ≤ 今天的全部交易日（升序） */
+async function tradingDaysUptoToday(page: Page): Promise<string[]> {
+  return (await calendarRowsUptoToday(page))
+    .filter((d) => d.is_open)
+    .map((d) => d.calendar_date);
+}
+
+/** 最近一个非交易日（≤ 今天）——非交易日拒绝路径的选日目标 */
+async function lastNonTradingDayUptoToday(page: Page): Promise<string> {
+  const closed = (await calendarRowsUptoToday(page))
+    .filter((d) => !d.is_open)
+    .map((d) => d.calendar_date);
+  expect(closed.length, "交易日历里找不到 ≤ 今天的非交易日").toBeGreaterThan(0);
+  return closed.at(-1)!;
 }
 
 /**
- * 在日历弹层点选 targetISO（与 trade-in-transit.spec.ts pickDay 同口径：目标日
- * 与今天最多相差数天，data-day 不在当前月时按月翻一次；选日即关弹层）。
+ * Dialog 内 DatePicker 触发按钮（占位文案或已选日期，同 datepicker-in-dialog pickerTrigger 口径）。
+ * scope 必须是 `dialogByTitle` 的结果——**不能**在已取得的 dialog 上再套一层
+ * `getByRole("dialog")`：弹层内没有第二个 dialog，那样恒为 0 命中（#640 T-1 未落地的根因）。
  */
-async function pickDialogDay(page: Page, trigger: Locator, targetISO: string): Promise<void> {
-  if ((await trigger.textContent())?.trim() === targetISO) return;
-  await openPopover(page, trigger, page.locator("button.rdp-day_button").first());
-  const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
-  // 显式上界，与全局 use.actionTimeout（#551 §2）同值；留字面值防预算随配置漂移
-  if ((await day.count()) === 0) {
-    const dir = targetISO > new Date().toISOString().slice(0, 10) ? "next" : "previous";
-    await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
-  }
-  await day.click({ timeout: 10_000 });
-  await expect(trigger).toHaveText(targetISO);
-  await settlePopovers(page); // 选日即关弹层（#542），收干净再让调用方操作下一控件
+function dialogDateTrigger(dlg: Locator): Locator {
+  return dlg.locator("button").filter({ hasText: /选择日期|\d{4}-\d{2}-\d{2}/ }).first();
 }
 
 test.describe("平台详情页", () => {
@@ -339,23 +340,24 @@ test.describe("现金市值更新 Dialog", () => {
   test("表单校验、成功反馈、写入日请求体锚定与撤销两段式", async ({ page }) => {
     await page.goto(CASH_PRODUCT_PATH);
     await page.getByTestId("platform-product-action-row").getByRole("button", { name: "市值更新" }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    // 作用域单点取 dialogByTitle：日历弹层也带 role=dialog，page.getByRole("dialog")
+    // 在弹层打开期间命中 2 个（#640 U-4 的坑），后续所有 Dialog 内定位一律走 dlg
+    const dlg = dialogByTitle(page, "更新现金市值");
+    await expect(dlg).toBeVisible();
 
     // S-2：空金额提交——HTML5 required 阻止表单提交，Dialog 不关闭且无成功反馈。
     // 预填平台无法经 UI 清空（SearchablePlatformSelect 无 clear 按钮），故只覆盖金额校验。
     const amountInput = page.getByLabel("当前金额（元）");
     await amountInput.fill("");
     await page.getByRole("button", { name: "确认更新" }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(dlg).toBeVisible();
     await expect(page.getByTestId("toast-card").getByText("现金市值已更新")).not.toBeVisible();
 
-    // T-1：写入日锚定最近交易日——周末/节假日直接提交会撞后端 NON_TRADING_DAY
-    // 把 CI 烧红（#468 口径：交易日经 /api/trading-calendar 取，不写死不假设周末）
+    // T-1（#640 第三轮收口）：写入日锚定最近交易日，且**每次跑都显式选日**。
+    // 上一轮的 `if (target !== today)` 让选日分支在工作日根本不执行（只有周末才第一次
+    // 跑），而该分支当时恒为 0 命中——等于「周末必红」的缺陷从未被执行过。
     const target = (await tradingDaysUptoToday(page)).at(-1)!;
-    const today = new Date().toISOString().slice(0, 10);
-    if (target !== today) {
-      await pickDialogDay(page, dialogDateTrigger(page.getByRole("dialog")), target);
-    }
+    await pickCalendarDay(page, dialogDateTrigger(dlg), target);
 
     // T-2：R-1 回归锚在请求体——POST 的 update_date 必须非空且等于预期写入日。
     // 仅断言面板覆盖块（下一条）在同时钟环境锁不住时钟错开，请求体才是真网
@@ -389,10 +391,43 @@ test.describe("现金市值更新 Dialog", () => {
     await expect(page.getByText("当日已有覆盖记录")).toBeVisible(); // 记录未删
     await undoBtn.click();
     await confirmDialog.getByRole("button", { name: "确认撤销" }).click();
-    await expect(
-      page.getByTestId("toast-card").getByText("已撤销")
-    ).toBeVisible({ timeout: 10_000 });
+    // U-3：message 两支都要钉住——只断言标题时，后端字段读错键（requires_snapshot_regen
+    // 拼错）会无声退化成另一条文案。本形态下 target > 最新快照日 →
+    // requires_snapshot_regen=False（position_service:974 真算），故应为短文案且不含
+    // 「需重新生成快照」；短文案是长文案的前缀，所以「不含」那条才是判别支的承重断言。
+    // ⚠️ 定位一律 testid + hasText（DOM 口径），**不用 toastByTitle**：Radix modal Dialog
+    // 打开期间把其余子树 aria-hidden，基于 role 的定位器看不见挂在 app root 的 toast
+    const undoToast = page.getByTestId("toast-card").filter({ hasText: "已撤销" });
+    await expect(undoToast).toBeVisible({ timeout: 10_000 });
+    await expect(undoToast).toContainText("覆盖记录已删除，回退到自然计算值");
+    await expect(undoToast).not.toContainText("需重新生成快照");
     await expect(page.getByText("当日已有覆盖记录")).not.toBeVisible();
+  });
+
+  // 待确认 2（#640 第三轮显式处置：做）：Dialog 内提示「只能选择交易日，非交易日将被拒绝」
+  // 是对用户作出的承诺，此前两侧均无断言锁定它——后端 position_service:807 抛
+  // NON_TRADING_DAY 对 cash-position 这条路径没有任何测试，前端也只有文案。
+  // 拒绝由后端作出（不落库、无残留），故本用例可在共享 E2E_ACTIVE 上跑。
+  test("非交易日提交被可见拒绝：透出后端文案、表单不关、无成功反馈", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await page.getByTestId("platform-product-action-row").getByRole("button", { name: "市值更新" }).click();
+    const dlg = dialogByTitle(page, "更新现金市值");
+    await expect(dlg).toBeVisible();
+
+    // 本 Dialog 的 DatePicker 未传 dayDisabled（date-picker.tsx:95 硬禁用仅在给了谓词时
+    // 启用），故非交易日确实可点选——这条拒绝路径在 UI 上真实可达，不是死分支
+    await pickCalendarDay(page, dialogDateTrigger(dlg), await lastNonTradingDayUptoToday(page));
+    await page.getByLabel("当前金额（元）").fill("40000");
+    await page.getByRole("button", { name: "确认更新" }).click();
+
+    // 定位口径同上方撤销 toast 的注释（Dialog 开着时 role 定位器看不到它）
+    const failToast = page.getByTestId("toast-card").filter({ hasText: "更新失败" });
+    await expect(failToast).toBeVisible({ timeout: 10_000 });
+    // 断的是后端 detail.message 经 request()→ApiException→getErrorMessage 原样透出
+    // ——出现「非交易日」即证明走了一趟服务端并被拒，而不是前端自己拦下
+    await expect(failToast).toContainText("非交易日");
+    await expect(dlg).toBeVisible(); // 拒绝不得连带关掉用户刚填完的表单
+    await expect(page.getByTestId("toast-card").getByText("现金市值已更新")).not.toBeVisible();
   });
 
   test("转入/转出打开现金转移 Dialog 且按方向预填本平台", async ({ page }) => {
