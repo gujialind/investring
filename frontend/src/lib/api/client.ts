@@ -73,18 +73,60 @@ export class ApiException extends Error {
   }
 }
 
+/**
+ * FastAPI RequestValidationError 的 detail 是数组：[{loc, msg, type}, ...]（#643）。
+ * 拼成字段级可读文案（loc 末段作字段名）。
+ */
+function formatValidationDetail(detail: unknown[]): string {
+  const parts = detail
+    .map((item) => {
+      const entry = item as { loc?: unknown; msg?: unknown } | null;
+      const loc = Array.isArray(entry?.loc) ? (entry.loc as unknown[]) : [];
+      const field = loc.length > 0 ? String(loc[loc.length - 1]) : "";
+      const msg = typeof entry?.msg === "string" ? entry.msg : "";
+      if (field && msg) return `${field}: ${msg}`;
+      return msg || field;
+    })
+    .filter(Boolean);
+  return parts.join("; ");
+}
+
+/**
+ * 从响应 detail 提取用户可读消息；三种形态（裸字符串 / 校验数组 / 结构化对象）
+ * 统一在此解析，无法解析返回 null（#643）。
+ */
+function detailMessage(detail: unknown): string | null {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) return formatValidationDetail(detail) || null;
+  if (detail && typeof detail === "object") {
+    const msg = (detail as { message?: unknown }).message;
+    if (typeof msg === "string" && msg) return msg;
+  }
+  return null;
+}
+
 export function handleApiError(error: unknown): ApiException {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<ApiError>;
     const status = axiosError.response?.status || 500;
     const detail = axiosError.response?.data?.detail;
-    // 后端存在两种 detail 形态：结构化 {error, message, details} 与裸字符串（HTTPException(detail="...")）
-    if (typeof detail === "string") {
-      return new ApiException("UNKNOWN_ERROR", detail, status);
+    // 后端存在三种 detail 形态：结构化 {error, message, details}、裸字符串
+    // （HTTPException(detail="...")）与校验失败数组 [{loc, msg, type}, ...]（#643）
+    if (Array.isArray(detail)) {
+      const message =
+        formatValidationDetail(detail) || axiosError.message || "请求失败";
+      return new ApiException("VALIDATION_ERROR", message, status);
     }
-    const code = detail?.error || "UNKNOWN_ERROR";
-    const message = detail?.message || axiosError.message || "请求失败";
-    return new ApiException(code, message, status, detail?.details);
+    const code =
+      (detail && typeof detail === "object" && detail.error) || "UNKNOWN_ERROR";
+    const message =
+      detailMessage(detail) || axiosError.message || "请求失败";
+    return new ApiException(
+      code,
+      message,
+      status,
+      detail && typeof detail === "object" ? detail.details : undefined
+    );
   }
   if (error instanceof Error) {
     return new ApiException("UNKNOWN_ERROR", error.message, 500);
@@ -108,9 +150,19 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
  * 用于 React Query 的 onError 回调，避免使用 any。
  */
 export function getErrorMessage(error: unknown, fallback = "操作失败"): string {
+  // axios 错误必须先走 detail 解析：AxiosError 是 Error 子类，若先落
+  // `instanceof Error` 分支会把裸 HTTP 文案（"Request failed with status
+  // code 422"）当用户消息返回——正是 #643 文案裸奔的根因之一
+  if (axios.isAxiosError(error)) {
+    return (
+      detailMessage((error.response?.data as ApiError | undefined)?.detail) ||
+      error.message ||
+      fallback
+    );
+  }
   if (error instanceof Error && error.message) return error.message;
-  const e = error as { response?: { data?: { detail?: { message?: string } } }; message?: string };
-  return e?.response?.data?.detail?.message || e?.message || fallback;
+  const e = error as { response?: { data?: { detail?: unknown } }; message?: string };
+  return detailMessage(e?.response?.data?.detail) || e?.message || fallback;
 }
 
 export default api;
