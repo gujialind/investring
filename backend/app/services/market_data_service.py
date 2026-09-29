@@ -21,6 +21,9 @@ def _usable_price(value: Any) -> bool:
     数据源缺值时给的是 None/空串，pandas 转换还说不准给 NaN——三者都不能作为
     「这一天的价格」落库。它们一旦进了 price_record，`unit_price` 就从此不再可靠：
     读取侧 `float(None)` 直接 500，快照取价反过来把 NULL 当成说好吧有价。
+
+    取数层 `akshare_client._finite_number` 判的是同一族坏值，刻意各留一处（把 DB 层
+    service 引回叶子数据源模块会反转分层）；放宽一侧的口径必须同时复核另一侧。
     """
     if value is None or value == "":
         return False
@@ -366,6 +369,15 @@ def sync_product_prices(
         return {"success": False, "message": str(e), "synced_count": 0, "source": data_source}
 
     if not raw_data:
+        # 空 raw_data 有两种含义，此处只该放行其中一种（#651）：
+        #   1. 上游这段区间确实没有数据——周末、停市日、净值尚未发布。实测东财对无效
+        #      代码与周末窗口返回逐字节同形，无法在传输层区分，故这里保持 success。
+        #      若照 #651 原文改判 failed，`run_nav_sync` 的增量窗 [本地最大+1, 昨天]
+        #      会让每个周一、每个港股假日都给健康产品记一次失败，噪音反过来淹没真故障。
+        #   2. 上游给了行而我们解析不出任何一条（接口结构变动）。这种形态已在
+        #      akshare_client 的响亮判据处抛 AkshareAPIError，走上面 except 分支落
+        #      failed + sync_error，不会到达这里。
+        # 即：判据是「上游有行而零可解析」（取数层看得见），不是「结果为空」（这里看不见）。
         product.data_source_status = "success"
         product.last_sync_at = datetime.utcnow()
         product.sync_error = None

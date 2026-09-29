@@ -935,7 +935,7 @@ ir market sync <PRODUCT_CODE> <MARKET> [--start-date YYYY-MM-DD] [--end-date YYY
 
 #### `ir market sync-history`
 
-同步产品近 90 天历史数据（自动计算日期范围）。
+同步产品全部历史数据（不设下界，上界为今天；原文误作「近 90 天」，实现自始传 `start_date=None`）。需限定区间改用 `ir market sync --start-date/--end-date`。港互认自 #651 起按 `TotalCount` 分页取净，历史不再封顶在最近 1000 行。
 
 ```bash
 ir market sync-history <PRODUCT_CODE> <MARKET>
