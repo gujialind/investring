@@ -8,6 +8,7 @@ sync_product_prices 改造测试（P5.2）
 - sync_error 失败落库
 - 不支持的数据源 → skipped
 - 无单价行的写入侧过滤（#580）：跳过 + WARNING，整批无价不是失败
+- 港互认净值故障的响亮与良性边界（#651）：取数层抛错→failed，合法空窗→仍 success
 """
 import logging
 
@@ -300,3 +301,106 @@ class TestUnusablePriceFiltered:
         assert db.execute.call_count == 1
         values = db.execute.call_args.args[1]
         assert [v["price_date"] for v in values] == [date(2025, 1, 6)]
+
+
+# 实测的港互认故障窗口（#651，2026-09-14~09-22 共 7 个交易日，已与东财 PDATE/NAV 逐日核对）
+_HK_WINDOW_NAV = {
+    "20260914": 10.55, "20260915": 10.54, "20260916": 10.56, "20260917": 10.59,
+    "20260918": 10.56, "20260921": 10.59, "20260922": 10.60,
+}
+
+
+class TestHkMutualNavFailureIsLoud:
+    """#651 的服务层边界：结构变动响亮落 failed，合法空窗仍是有意义的成功。
+
+    打桩打在 `app.services.akshare_client.get_fund_hk_mutual` 而**不是**消费模块：
+    `market_data_service` 是在函数体内 `from app.services.akshare_client import …`
+    （:348，为的是 akshare 缺失时不影响 tushare 主路径），每次调用都重新从源模块取名，
+    所以在 `market_data_service` 上 patch 会 AttributeError。上面那批 tushare 用例
+    patch 消费模块是正确的，因为 `get_fund_daily`/`get_fund_nav` 确为顶层导入。
+    """
+
+    @patch("app.services.akshare_client.get_fund_hk_mutual")
+    def test_parse_error_marks_product_failed(
+        self, mock_fetch, test_db: Session
+    ):
+        """取数层抛 AkshareAPIError → success=False + failed + 可定位的 sync_error。
+
+        复用既有 except 分支（:364-366），服务层不新增任何返回语义——「响亮」全部
+        来自取数层那一句判据。
+        """
+        from app.services.akshare_client import AkshareAPIError
+
+        mock_fetch.side_effect = AkshareAPIError(
+            "HK_MUTUAL 1001767344 上游返回 1768 行但无一行可解析，疑似接口结构变动"
+        )
+
+        result = sync_product_prices(test_db, "1001767344", "HK_MUTUAL",
+                                     start_date=date(2026, 9, 14), end_date=date(2026, 9, 22))
+
+        assert result["success"] is False
+        assert result["synced_count"] == 0
+        assert "无新数据" not in result["message"], "结构变动被读成「无新数据」即本次故障本体"
+        product = test_db.query(Product).filter(Product.code == "1001767344").first()
+        test_db.refresh(product)
+        assert product.data_source_status == "failed"
+        assert "无一行可解析" in product.sync_error
+
+    @patch("app.services.akshare_client.get_fund_hk_mutual")
+    def test_benign_empty_window_is_still_success(
+        self, mock_fetch, test_db: Session
+    ):
+        """上游这段确实没数据（周末/停市/尚未发布）→ 仍是 success + 「无新数据」。
+
+        这条是反向保险：`run_nav_sync` 的增量窗是 [本地最大+1, 昨天] 且只在 A 股交易日
+        跑，若照 #651 原文把空集一律判 failed，每个周一都会给健康产品记一次失败并写
+        system_error_log，噪音反过来淹没真故障。改判此处即测试先红。
+        """
+        mock_fetch.return_value = []
+
+        result = sync_product_prices(test_db, "1001767344", "HK_MUTUAL",
+                                     start_date=date(2026, 9, 26), end_date=date(2026, 9, 27))
+
+        assert result["success"] is True
+        assert result["message"] == "无新数据"
+        product = test_db.query(Product).filter(Product.code == "1001767344").first()
+        test_db.refresh(product)
+        assert product.data_source_status == "success"
+
+    @patch("app.services.akshare_client.get_fund_hk_mutual")
+    def test_parsed_nav_lands_without_absurd_magnitude(
+        self, mock_fetch, test_db: Session
+    ):
+        """错位量级（ESEQID 3.4e11）绝不允许进 price_record。
+
+        本次故障没写脏数据纯属侥幸：旧代码的日期过滤器恰好在 `float(单位净值)` 之前
+        把行剔除。若两句换个次序，09-12 之后的每个港互认净值都会是 342652919208。
+        所以这里既逐日核对数值，也给量级封顶。
+        """
+        mock_fetch.return_value = [
+            {"trade_date": td, "unit_price": nav, "accumulated_nav": None}
+            for td, nav in _HK_WINDOW_NAV.items()
+        ]
+
+        result = sync_product_prices(test_db, "1001767344", "HK_MUTUAL",
+                                     start_date=date(2026, 9, 14), end_date=date(2026, 9, 22))
+
+        assert result["synced_count"] == len(_HK_WINDOW_NAV)
+        written = test_db.query(PriceRecord).filter(
+            PriceRecord.product_code == "1001767344",
+            PriceRecord.market == "HK_MUTUAL",
+        ).all()
+        assert {r.price_date.isoformat().replace("-", ""): float(r.unit_price)
+                for r in written} == _HK_WINDOW_NAV
+        assert all(float(r.unit_price) < 100 for r in written), "出现错位量级即键序又变了"
+        assert all(r.unit_price is not None for r in written)
+
+    @patch("app.services.akshare_client.get_fund_hk_mutual")
+    def test_hk_mutual_routes_to_akshare_with_compact_bounds(self, mock_fetch, test_db: Session):
+        """路由与入参契约：akshare + HK_MUTUAL → 恰好一次取数，日期为 YYYYMMDD 串。"""
+        mock_fetch.return_value = []
+
+        sync_product_prices(test_db, "1001767344", "HK_MUTUAL",
+                            start_date=date(2026, 9, 14), end_date=date(2026, 9, 22))
+
+        mock_fetch.assert_called_once_with("1001767344", "20260914", "20260922")

@@ -40,7 +40,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `confirm_days` | 恒 0，校验强制 | 缺省推导：境内场外 1、QDII 2、港互认 1 |
 | `nav_lag_days` | 强制 0 | 逐产品独立设置，默认 0；QDII/港互认惯例置 1 |
 | cancel | 不允许 | 允许 |
-| 数据源 | tushare / akshare | tushare 不支持港互认，走 akshare |
+| 数据源 | tushare / akshare | tushare 不支持港互认，走 akshare；#651 起港互认净值由 [akshare_client](../../backend/app/services/akshare_client.py) 直连东财海外接口按字段名取数，不再消费 akshare 的位置重命名结果（`data_source` 取值不变） |
 
 - **估值滞后与确认间隔正交**：`nav_lag_days` 是 NOT NULL 独立列，不由产品类型/市场推导；只有 `confirm_days` 按 market + `is_qdii` 推导。`is_qdii` 只是展示标签、不参与取价分支。历史回填边界见 [backend 指南](../../backend/AGENTS.md) 的数据模型说明。
 - **一码多市场**：LOF 的场内/场外是两条独立产品记录，只给 product_code 时必须显式指定 market。
