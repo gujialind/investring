@@ -369,7 +369,8 @@ test.describe("现金市值更新 Dialog", () => {
       (r) => r.method() === "POST" && r.url().includes("cash-position"),
     );
     // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）。
-    // R-3：锚点取无条件出的成功 toast，而非绑在恒真 requires_snapshot_regen 上的 Alert 分支
+    // R-3：锚点取无条件出的成功 toast，而非绑在条件性 requires_snapshot_regen 上的 Alert 分支
+    // （#645 起写入侧同为真算：本用例 target 晚于最新快照日 → false → 走「✓ 更新成功」短文案）
     await amountInput.fill("40000");
     await page.getByRole("button", { name: "确认更新" }).click();
     const postBody = JSON.parse((await postReq).postData() ?? "{}") as { update_date?: string };

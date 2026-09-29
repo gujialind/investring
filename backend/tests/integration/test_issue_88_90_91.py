@@ -16,6 +16,7 @@ from app.models.product import Product
 from app.models.manual_market_value import ManualMarketValue
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import (
+    MAX_CASH_OVERRIDE_AMOUNT,
     delete_manual_cash_override,
     list_manual_cash_overrides,
     update_cash_position,
@@ -161,6 +162,125 @@ class TestManualOverrideListDelete:
             amount=Decimal("100"), update_date=T,
         )
         assert result["warnings"] == []
+
+
+class TestCashOverrideGuards:
+    """#644 金额闸门（符号/量级）+ #645 写入侧 requires_snapshot_regen 真算"""
+
+    def test_update_rejects_negative_amount(self, test_db):
+        create_portfolio(test_db, code="CG_P1", status="active")
+        create_platform(test_db, code="CG_PL1")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P1", platform_code="CG_PL1",
+                amount=Decimal("-0.01"), update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+
+    def test_update_rejects_amount_above_column_capacity(self, test_db):
+        create_portfolio(test_db, code="CG_P2", status="active")
+        create_platform(test_db, code="CG_PL2")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P2", platform_code="CG_PL2",
+                amount=Decimal("1000000000000"), update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+
+    def test_update_rejects_edge_amount_rounded_over_capacity(self, test_db):
+        """原值 == 上界合法通过第一道，但量化到 2 位进位（…999.9999 →
+        1000000000000.00）超 Numeric(15,4) 容量 → 第二道拒绝"""
+        create_portfolio(test_db, code="CG_P3", status="active")
+        create_platform(test_db, code="CG_PL3")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P3", platform_code="CG_PL3",
+                amount=MAX_CASH_OVERRIDE_AMOUNT, update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+
+    def test_update_allows_zero_amount(self, test_db):
+        """写 0 合法（清空当日现金）——符号闸门是 < 0，不套用转移的 > 0"""
+        create_portfolio(test_db, code="CG_P4", status="active")
+        create_platform(test_db, code="CG_PL4")
+        ensure_trading_day(test_db, T, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P4", platform_code="CG_PL4",
+            amount=Decimal("0"), update_date=T,
+        )
+        assert result["cash_amount"] == 0.0
+
+    def test_update_requires_regen_false_when_after_latest_snapshot(self, test_db):
+        """写入日 > 最新快照日 → 尚未烘焙进快照，False（不再恒真）"""
+        _seed_cash(test_db, "CG_P5", "CG_PL5", 5000)  # 最新快照日 = SNAP
+        ensure_trading_day(test_db, T, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P5", platform_code="CG_PL5",
+            amount=Decimal("100"), update_date=T,  # T > SNAP
+        )
+        assert result["requires_snapshot_regen"] is False
+
+    def test_update_requires_regen_true_when_on_latest_snapshot(self, test_db):
+        """写入日 == 最新快照日 → 已烘焙，True（与撤销侧同一判据）"""
+        _seed_cash(test_db, "CG_P6", "CG_PL6", 5000)
+        ensure_trading_day(test_db, SNAP, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P6", platform_code="CG_PL6",
+            amount=Decimal("100"), update_date=SNAP,
+        )
+        assert result["requires_snapshot_regen"] is True
+
+    def test_update_requires_regen_false_without_snapshot(self, test_db):
+        """无快照 → False（对齐撤销侧 test_list_and_delete_override_service 口径）"""
+        create_portfolio(test_db, code="CG_P7", status="active")
+        create_platform(test_db, code="CG_PL7")
+        ensure_trading_day(test_db, T, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P7", platform_code="CG_PL7",
+            amount=Decimal("100"), update_date=T,
+        )
+        assert result["requires_snapshot_regen"] is False
+
+    def test_rest_post_negative_amount_rejected_and_not_persisted(
+        self, client, admin_headers, test_db,
+    ):
+        create_portfolio(test_db, code="CG_R1", status="active")
+        create_platform(test_db, code="CG_R1_PL")
+        ensure_trading_day(test_db, T, is_open=True)
+        resp = client.post(
+            "/api/positions/portfolio/CG_R1/cash-position",
+            json={
+                "platform_code": "CG_R1_PL",
+                "cash_amount": -50000,
+                "update_date": T.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_AMOUNT"
+        assert list_manual_cash_overrides(test_db, "CG_R1") == []
+
+    def test_rest_post_returns_real_requires_snapshot_regen(
+        self, client, admin_headers, test_db,
+    ):
+        _seed_cash(test_db, "CG_R2", "CG_R2_PL", 5000)  # 最新快照日 = SNAP
+        ensure_trading_day(test_db, T, is_open=True)
+        resp = client.post(
+            "/api/positions/portfolio/CG_R2/cash-position",
+            json={
+                "platform_code": "CG_R2_PL",
+                "cash_amount": 100,
+                "update_date": T.isoformat(),  # T > SNAP → false
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["requires_snapshot_regen"] is False
+        assert data["cash_amount"] == 100.0
 
 
 # ============================================================================
