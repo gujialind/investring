@@ -132,7 +132,8 @@ export function useDeleteCashOverride(portfolioCode: string) {
       positionApi.deleteCashOverride(portfolioCode, platformCode, updateDate),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [POSITION_QUERY_KEY, portfolioCode] });
-      addToast({ type: "success", title: "已撤销", message: "覆盖记录已删除，回退到自然计算值" });
+      // R-6：与覆盖写入侧口径一致——回退值同样需重新生成快照才在持仓生效
+      addToast({ type: "success", title: "已撤销", message: "覆盖记录已删除，回退到自然计算值；需重新生成快照后持仓生效" });
     },
     onError: (error: unknown) => {
       addToast({ type: "error", title: "撤销失败", message: getErrorMessage(error, "请稍后重试") });

@@ -133,9 +133,14 @@ export const positionApi = {
       params,
     }),
 
-  // #595 §4.5：撤销现金手动覆盖（回退自然值）
+  // #595 §4.5：撤销现金手动覆盖（回退自然值）；后端返回 deleted_value/requires_snapshot_regen
   deleteCashOverride: (portfolioCode: string, platformCode: string, updateDate: string) =>
-    request<{ success: boolean; message: string }>({
+    request<{
+      success: boolean;
+      message: string;
+      deleted_value?: number;
+      requires_snapshot_regen?: boolean;
+    }>({
       method: "DELETE",
       url: `/positions/portfolio/${portfolioCode}/cash-position`,
       params: { platform_code: platformCode, update_date: updateDate },

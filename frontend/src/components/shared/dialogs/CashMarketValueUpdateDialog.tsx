@@ -29,8 +29,9 @@ import {
 import { useUIStore } from "@/stores/uiStore";
 import type { Platform } from "@/types/platform";
 
-/** 金额上限：后端 manual_market_value 为 Numeric(15,2)，超出撞 500 而非可读拒绝，前端是唯一闸门 */
-const MAX_CASH_AMOUNT = 999_999_999_999_999.99;
+/** 金额上限：后端 manual_market_value 列为 Numeric(15,4)（11 位整数 + 4 位小数，服务层再量化 2 位），
+ * 超出撞 500 而非可读拒绝，前端是唯一闸门 */
+const MAX_CASH_AMOUNT = 99_999_999_999.9999;
 
 interface CashMarketValueUpdateDialogProps {
   portfolioCode: string;
@@ -38,8 +39,6 @@ interface CashMarketValueUpdateDialogProps {
   onOpenChange: (open: boolean) => void;
   /** 预填平台（来自平台-产品详情页）；undefined 表示需用户选择 */
   defaultPlatformCode?: string;
-  /** 预填日期；undefined 表示默认今天 */
-  defaultDate?: Date;
 }
 
 /**
@@ -54,7 +53,6 @@ export default function CashMarketValueUpdateDialog({
   open,
   onOpenChange,
   defaultPlatformCode,
-  defaultDate,
 }: CashMarketValueUpdateDialogProps) {
   const addToast = useUIStore((state) => state.addToast);
   // page_size 100 与仓内其余平台下拉调用点对齐（后端默认 20，超出部分选不到）
@@ -65,7 +63,7 @@ export default function CashMarketValueUpdateDialog({
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(
     defaultPlatformCode ?? null,
   );
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(defaultDate);
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [cashAmount, setCashAmount] = useState("");
 
   // Success feedback state
@@ -98,11 +96,11 @@ export default function CashMarketValueUpdateDialog({
   useEffect(() => {
     if (open) {
       setSelectedPlatform(defaultPlatformCode ?? null);
-      setSelectedDate(defaultDate);
+      setSelectedDate(undefined);
       setCashAmount("");
       setSubmitResult(null);
     }
-  }, [open, defaultPlatformCode, defaultDate]);
+  }, [open, defaultPlatformCode]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,7 +124,10 @@ export default function CashMarketValueUpdateDialog({
       {
         amount,
         platformCode: selectedPlatform,
-        updateDate: selectedDate ? toDateOnly(selectedDate) : undefined,
+        // R-1：写入日显式取客户端今天（与面板匹配、撤销目标同一时钟）。缺省送 undefined
+        // 时后端按 date.today() 兜底（position_service 全仓唯一一处），服务端/客户端时钟
+        // 错开（容器 UTC vs 用户 UTC+8）会把覆盖写到相邻日、面板却显示「当日无覆盖」
+        updateDate: toDateOnly(selectedDate ?? new Date()),
       },
       {
         onSuccess: (result) => {
@@ -148,8 +149,7 @@ export default function CashMarketValueUpdateDialog({
   };
 
   // Find matching override for current platform/date selection。
-  // 未选日期按后端缺省口径显式取今天参与过滤（POST 缺省也是今天），
-  // 避免命中该平台任意日期的第一条记录
+  // 未选日期按客户端今天参与过滤——与写入日（handleSubmit 显式送出）同一时钟
   const dateStr = toDateOnly(selectedDate ?? new Date());
   const matchingOverride = overridesData?.items?.find(
     (item) => item.platform_code === selectedPlatform && item.value_date === dateStr,

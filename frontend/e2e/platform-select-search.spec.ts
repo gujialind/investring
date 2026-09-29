@@ -284,7 +284,9 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
   // ---- 用例 6：现金转移互斥——对方已选平台在列表中可见但禁用 ----
   test('现金转移：对方已选平台可见但禁用，点击不生效', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name === 'mobile', '移动端无现金转移功能');
+    // R-7：移动端 positions 子页无现金转移入口（移动现金转移经产品详情页 Dialog，
+    // 其互斥已由 platform-detail.spec.ts 转入/转出用例双端覆盖），故此处仅桌面
+    test.skip(testInfo.project.name === 'mobile', '移动端 positions 子页无现金转移入口');
     const errors = collectPageErrors(page);
     await gotoPositionsPage(page);
     await page.getByRole('button', { name: '现金转移' }).click();

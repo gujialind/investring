@@ -287,8 +287,8 @@ test.describe("现金市值更新 Dialog", () => {
     await actionRow.getByRole("button", { name: "市值更新" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
-    // 平台应预填 HBZQ（N-2：id 是组件显式 API，data-testid 为 platform-trigger 不适用）
-    await expect(page.locator("button#cash-platform")).toContainText("华宝证券 (HBZQ)");
+    // 平台应预填 HBZQ（Dialog 的 Label htmlFor="cash-platform"，走 a11y 锚点而非元素类型 + id）
+    await expect(page.getByLabel("平台")).toContainText("华宝证券 (HBZQ)");
   });
 
   test("Dialog 表单校验与成功反馈（B-5 死分支回归）", async ({ page }) => {
@@ -302,14 +302,19 @@ test.describe("现金市值更新 Dialog", () => {
     await amountInput.fill("");
     await page.getByRole("button", { name: "确认更新" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByText(/覆盖已写入/)).not.toBeVisible();
+    await expect(page.getByTestId("toast-card").getByText("现金市值已更新")).not.toBeVisible();
 
-    // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）
+    // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）。
+    // R-3：锚点取无条件出的成功 toast，而非绑在恒真 requires_snapshot_regen 上的 Alert 分支
     await amountInput.fill("40000");
     await page.getByRole("button", { name: "确认更新" }).click();
     await expect(
-      page.getByText(/覆盖已写入，需重新生成快照/)
+      page.getByTestId("toast-card").getByText("现金市值已更新")
     ).toBeVisible({ timeout: 10_000 });
+
+    // R-1 回归：不选日期直接提交，写入日与面板匹配日同取客户端今天——
+    // 覆盖记录块必须当场出现（时钟错开实现下该断言会红）
+    await expect(page.getByText("当日已有覆盖记录")).toBeVisible({ timeout: 10_000 });
   });
 
   test("转入/转出打开现金转移 Dialog 且按方向预填本平台", async ({ page }) => {

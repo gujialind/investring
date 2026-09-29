@@ -396,8 +396,9 @@ export default function PlatformProductDetailContent({
     </section>
   );
 
-  // 「查看该产品全部平台持仓」— 非现金产品才有产品详情页
-  const allPlatformsLink = !isCash && product.platforms.length > 0 && (
+  // 「查看该产品全部平台持仓」— R-5：现金产品详情页自 B-6 迁移后同样可达（?market= 形态），
+  // 不再屏蔽现金侧，保证平台-产品页 → 产品详情页三级跳转链在现金也闭合
+  const allPlatformsLink = product.platforms.length > 0 && (
     <Link
       href={productDetailLink}
       className="text-sm text-primary hover:underline"
@@ -407,8 +408,8 @@ export default function PlatformProductDetailContent({
     </Link>
   );
 
-  // 全部平台持仓卡（D5 右栏 / M5 底部）
-  const allPlatformsCard = !isCash && product.platforms.length > 1 && (
+  // 全部平台持仓卡（D5 右栏 / M5 底部）；现金同样展示（各平台现金切片经 rowLinkPrefix 互跳）
+  const allPlatformsCard = product.platforms.length > 1 && (
     <PlatformDistributionCard
       title="全部平台持仓"
       slices={product.platforms}

@@ -86,9 +86,11 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
   const productCode = params.productCode as string;
-  const market = searchParams.get("market") ?? "";
-  const isMobile = variant === "mobile";
   const isCash = productCode === CASH_PRODUCT_CODE;
+  // R-8：现金归一 market=""——手改 ?market=CN_OTC 不得把净值请求与交易过滤带偏；
+  // 非现金仍以 query 为准（缺失守卫见下方 EmptyState）
+  const market = isCash ? "" : (searchParams.get("market") ?? "");
+  const isMobile = variant === "mobile";
 
   // #595 §4.5/D-10：现金操作 Dialog 状态
   const [isCashUpdateOpen, setIsCashUpdateOpen] = useState(false);
@@ -124,7 +126,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const { data: tradesData } = useTradeList({
     portfolio_code: portfolioCode,
     product_code: productCode,
-    market,
+    market: market || undefined,
     page: 1,
     page_size: 5,
   });
@@ -147,6 +149,15 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           重试
         </Button>
       </div>
+    );
+  }
+  // R-4：非现金缺 market 单独提示（与平台-产品详情页 S4 同形态），避免把参数问题说成数据问题
+  if (!isCash && !market) {
+    return (
+      <EmptyState
+        message="缺少 market 参数"
+        description="请从组合持仓或平台分布进入产品详情页"
+      />
     );
   }
   if (!product) {
