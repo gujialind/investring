@@ -448,7 +448,7 @@ ir position available-shares --portfolio-code <组合代码> --product-code <产
 
 #### `ir position update-cash`
 
-更新非净值类现金市值：写入 `manual_market_value`（绝对替换），**不直接写快照表 `portfolio_position`**。响应含真算的 `requires_snapshot_regen`：仅写入日 ≤ 最新快照日（覆盖已烘焙进快照）时为 true、需重算快照才生效；写入日晚于最新快照日时后续生成快照自然反映，无需重算（#645）。金额闸门：`0 ≤ --cash-amount ≤ 999999999999.9999`（0 = 清空当日现金；负值或超上限拒绝 `INVALID_AMOUNT`，#644）。
+更新非净值类现金市值：写入 `manual_market_value`（绝对替换），**不直接写快照表 `portfolio_position`**。响应含真算的 `requires_snapshot_regen`：仅写入日 ≤ 最新快照日（覆盖已烘焙进快照）时为 true、需重算快照才生效；写入日晚于最新快照日时无需重算（#645）。`false` 只表示「不必重算」，不保证覆盖必然生效——该平台当日需已有 CASH 持仓行、且覆盖日与最新快照日之间能逐交易日生成，语义见 `docs/reference/business-constraints.md#rule-cash`。金额闸门：`0 ≤ --cash-amount ≤ 99999999999.9999`（列 Numeric(15,4) 只有 11 位整数；0 = 清空当日现金；负值、非有限数或超上限拒绝 `INVALID_AMOUNT`，#644）。
 
 ```bash
 ir position update-cash <PORTFOLIO_CODE> --platform-code <平台代码> --cash-amount <金额> [--update-date YYYY-MM-DD]

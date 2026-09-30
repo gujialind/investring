@@ -370,7 +370,7 @@ test.describe("现金市值更新 Dialog", () => {
     );
     // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）。
     // R-3：锚点取无条件出的成功 toast，而非绑在条件性 requires_snapshot_regen 上的 Alert 分支
-    // （#645 起写入侧同为真算：本用例 target 晚于最新快照日 → false → 走「✓ 更新成功」短文案）
+    // （条件分支的界面出口由下面 #645 那两条单独钉，两者不互替）
     await amountInput.fill("40000");
     await page.getByRole("button", { name: "确认更新" }).click();
     const postBody = JSON.parse((await postReq).postData() ?? "{}") as { update_date?: string };
@@ -381,6 +381,17 @@ test.describe("现金市值更新 Dialog", () => {
       page.getByTestId("toast-card").getByText("现金市值已更新")
     ).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("当日已有覆盖记录")).toBeVisible({ timeout: 10_000 });
+
+    // #645 写入侧真算的界面出口。**实测本形态走 warnings 分支，不是「✓ 更新成功」短文案**：
+    // 种子 E2E_ACTIVE 在写入日有 1 笔已确认现金交易，而短分支条件是
+    // `!regen && warnings 为空`（CashMarketValueUpdateDialog 的 submitResult 块），
+    // 日期一支成立不代表整条件成立。
+    // 承重的判别网是「不含需重新生成快照」：regen 若退化成 #645 前的恒真、或后端把
+    // true 写死，长文案 Alert（"覆盖已写入，需重新生成快照才能…"）会渲染并判红。
+    // 两支的完整真/假组合由后端 REST 参数化用例钉（test_issue_88_90_91 的
+    // test_rest_post_returns_real_requires_snapshot_regen）。
+    await expect(dlg.getByText(/覆盖层将压制其效果/)).toBeVisible();
+    await expect(dlg).not.toContainText("需重新生成快照");
 
     // T-3：撤销覆盖两段式（B-8）——取消不发 DELETE，确认才删；目标记录就在屏上
     let deleteCount = 0;
@@ -398,7 +409,8 @@ test.describe("现金市值更新 Dialog", () => {
     await confirmDialog.getByRole("button", { name: "确认撤销" }).click();
     // U-3：message 两支都要钉住——只断言标题时，后端字段读错键（requires_snapshot_regen
     // 拼错）会无声退化成另一条文案。本形态下 target > 最新快照日 →
-    // requires_snapshot_regen=False（position_service:974 真算），故应为短文案且不含
+    // requires_snapshot_regen=False（position_service::delete_manual_cash_override 经共用
+    // 判据 ::_cash_override_requires_regen 真算，不写行号——该函数体量会变），故应为短文案且不含
     // 「需重新生成快照」；短文案是长文案的前缀，所以「不含」那条才是判别支的承重断言。
     // ⚠️ 定位一律 testid + hasText（DOM 口径），**不用 toastByTitle**：Radix modal Dialog
     // 打开期间把其余子树 aria-hidden，基于 role 的定位器看不见挂在 app root 的 toast
@@ -410,8 +422,8 @@ test.describe("现金市值更新 Dialog", () => {
   });
 
   // 待确认 2（#640 第三轮显式处置：做）：Dialog 内提示「只能选择交易日，非交易日将被拒绝」
-  // 是对用户作出的承诺，此前两侧均无断言锁定它——后端 position_service:807 抛
-  // NON_TRADING_DAY 对 cash-position 这条路径没有任何测试，前端也只有文案。
+  // 是对用户作出的承诺，此前两侧均无断言锁定它——后端 position_service::update_cash_position
+  // 抛 NON_TRADING_DAY（符号锚点，不写行号：该函数体量会变）对 cash-position 这条路径没有任何测试，前端也只有文案。
   // 拒绝由后端作出（不落库、无残留），故本用例可在共享 E2E_ACTIVE 上跑。
   test("非交易日提交被可见拒绝：透出后端文案、表单不关、无成功反馈", async ({ page }) => {
     await page.goto(CASH_PRODUCT_PATH);
