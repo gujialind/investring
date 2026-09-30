@@ -16,6 +16,7 @@ from app.models.product import Product
 from app.models.manual_market_value import ManualMarketValue
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import (
+    MAX_CASH_ACCEPTED_AMOUNT,
     MAX_CASH_OVERRIDE_AMOUNT,
     delete_manual_cash_override,
     list_manual_cash_overrides,
@@ -189,6 +190,11 @@ class TestCashOverrideGuards:
         MAX_CASH_OVERRIDE_AMOUNT 符号本身，对错位常量同样全绿。
         """
         assert MAX_CASH_OVERRIDE_AMOUNT == _cash_column_capacity()
+        # 可接受上界是容量按分向下取整，不是容量本身：容量原值会被量化进位那道拒
+        assert MAX_CASH_ACCEPTED_AMOUNT == _cash_column_capacity().quantize(
+            Decimal("0.01"), rounding=ROUND_DOWN
+        )
+        assert MAX_CASH_ACCEPTED_AMOUNT < MAX_CASH_OVERRIDE_AMOUNT
 
     def test_update_rejects_negative_amount(self, test_db):
         create_portfolio(test_db, code="CG_P1", status="active")
@@ -216,13 +222,16 @@ class TestCashOverrideGuards:
                 amount=Decimal("100000000000"), update_date=T,
             )
         assert exc.value.code == "INVALID_AMOUNT"
+        # 第一道（原值超容量）的文案不得提「量化」——与第二道可区分是本轮的判据之一
+        assert "不能超过列容量" in exc.value.message
+        assert "量化" not in exc.value.message
 
     def test_update_accepts_amount_just_below_capacity(self, test_db):
-        """闸门不得过度拒绝：贴容量下界（99,999,999,999.99）应正常落库。"""
+        """闸门不得过度拒绝：贴可接受上界（容量按分 `99,999,999,999.99`）应正常落库。"""
         create_portfolio(test_db, code="CG_P2B", status="active")
         create_platform(test_db, code="CG_PL2B")
         ensure_trading_day(test_db, T, is_open=True)
-        near_cap = MAX_CASH_OVERRIDE_AMOUNT.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        near_cap = MAX_CASH_ACCEPTED_AMOUNT
         result = update_cash_position(
             test_db, portfolio_code="CG_P2B", platform_code="CG_PL2B",
             amount=near_cap, update_date=T,
@@ -266,7 +275,12 @@ class TestCashOverrideGuards:
 
     def test_update_rejects_edge_amount_rounded_over_capacity(self, test_db):
         """原值 == 上界合法通过第一道，但量化到 2 位进位（99999999999.9999 →
-        100000000000.00）超 Numeric(15,4) 容量 → 第二道拒绝"""
+        100000000000.00）超 Numeric(15,4) 容量 → 第二道拒绝。
+
+        文案必须点名「量化到分」并给出可接受的最大值：用户按契约字面填的正是列容量本身，
+        若沿用第一道那句「不能超过 99999999999.9999」，读起来就是他刚输入的数被自己的
+        上限拒了（#644，L2 复审 #653）。
+        """
         create_portfolio(test_db, code="CG_P3", status="active")
         create_platform(test_db, code="CG_PL3")
         ensure_trading_day(test_db, T, is_open=True)
@@ -276,6 +290,10 @@ class TestCashOverrideGuards:
                 amount=MAX_CASH_OVERRIDE_AMOUNT, update_date=T,
             )
         assert exc.value.code == "INVALID_AMOUNT"
+        message = exc.value.message
+        assert "量化到分" in message
+        assert "100000000000.00" in message          # 点名进位后的实际值
+        assert str(MAX_CASH_ACCEPTED_AMOUNT) in message  # 给出可执行的上界
 
     def test_update_allows_zero_amount(self, test_db):
         """写 0 合法（清空当日现金）——符号闸门是 < 0，不套用转移的 > 0"""

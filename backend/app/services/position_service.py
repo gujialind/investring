@@ -784,6 +784,14 @@ def calculate_investor_available_shares(
 # 另一侧；容量本身由 tests/integration/test_issue_88_90_91.py 从列类型派生钉住。
 MAX_CASH_OVERRIDE_AMOUNT = Decimal("99999999999.9999")
 
+# 可接受的最大金额 = 列容量按分向下取整。原值**等于**列容量时，量化到 2 位（ROUND_HALF_UP）
+# 会进位成 100000000000.00 超界、被第二道闸门拒绝，所以「上限」对调用方的可执行含义是这个数，
+# 而不是列容量本身；两道闸门的文案因此必须可区分（#644，L2 复审 #653）。
+# 刻意写常量而非在此 `.quantize(...)`：模块级取整属 quantize.py 守卫禁止的非产生点量化
+# （tests/unit/test_quantize.py::TestFinancialQuantizationGuard），且 ROUND_DOWN 与全系统
+# 金额口径 ROUND_HALF_UP 不同。它与列容量的关系由 test_issue_88_90_91 从列类型派生钉住。
+MAX_CASH_ACCEPTED_AMOUNT = Decimal("99999999999.99")
+
 
 def _cash_override_requires_regen(
     db: Session, portfolio_code: str, value_date: date
@@ -814,7 +822,8 @@ def update_cash_position(
     绝不直接写 portfolio_position（快照表受 ORM 事件保护）。不 commit。
     金额闸门（issue #644）：amount 必须是有限十进制数且
     0 <= amount <= MAX_CASH_OVERRIDE_AMOUNT（= 列 Numeric(15,4) 容量）；0 合法
-    （清空当日现金），负值、非有限或超列容量拒绝 INVALID_AMOUNT。
+    （清空当日现金），负值、非有限或超列容量拒绝 INVALID_AMOUNT。原值等于列容量会被
+    第二道（量化后）闸门拒绝，故对调用方的可接受上界是 MAX_CASH_ACCEPTED_AMOUNT。
 
     Returns:
         dict：portfolio_code/platform_code/cash_amount/computed_value/
@@ -845,17 +854,19 @@ def update_cash_position(
     if amount_orig > MAX_CASH_OVERRIDE_AMOUNT:
         raise BusinessError(
             "INVALID_AMOUNT",
-            f"现金覆盖金额不能超过 {MAX_CASH_OVERRIDE_AMOUNT}",
+            f"现金覆盖金额不能超过列容量 {MAX_CASH_OVERRIDE_AMOUNT}，"
+            f"可接受的最大值按分为 {MAX_CASH_ACCEPTED_AMOUNT}",
         )
 
     # 覆盖金额为手动重估值，统一量化到 2 位（issue #94）；量化进位可能把
     # 贴上界的原值推过 Numeric(15,4) 容量（99999999999.9999 → 100000000000.00），
-    # 故量化后必须再查一道上界。
+    # 故量化后必须再查一道上界。文案点名「量化后」，与第一道的「原值超容量」可区分。
     amount_d = quantize_amount(amount)
     if amount_d > MAX_CASH_OVERRIDE_AMOUNT:
         raise BusinessError(
             "INVALID_AMOUNT",
-            f"现金覆盖金额不能超过 {MAX_CASH_OVERRIDE_AMOUNT}",
+            f"现金覆盖金额量化到分后为 {amount_d}，超过列容量 {MAX_CASH_OVERRIDE_AMOUNT}；"
+            f"可接受的最大值按分为 {MAX_CASH_ACCEPTED_AMOUNT}",
         )
 
     # 计算当前隐式值（用于审计）

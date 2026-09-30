@@ -401,7 +401,8 @@ def update_cash_position(
     - 必须指定平台代码
     - 金额闸门（issue #644）：0 <= cash_amount <= 99999999999.9999
       （manual_market_value 列 Numeric(15,4) 容量：15 位总数字减 4 位小数
-      ⇒ 整数位 11 位；0 合法 = 清空当日现金），
+      ⇒ 整数位 11 位；0 合法 = 清空当日现金）。可接受的最大值按分为
+      99999999999.99——原值恰好等于列容量时量化到 2 位会进位超界、被第二道闸门拒绝。
       负值、非有限数或超上限拒绝 INVALID_AMOUNT
     - 写入 manual_market_value 表（绝对替换），不再直接写 portfolio_position
     - 响应携带真算的 requires_snapshot_regen（issue #645，与撤销侧同一判据：

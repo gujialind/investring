@@ -32,7 +32,9 @@ import type { Platform } from "@/types/platform";
 /** 金额上限：后端 manual_market_value 列为 Numeric(15,4)（15 位总数字减 4 位小数
  * ⇒ 11 位整数 + 4 位小数，服务层再量化 2 位）。承重闸门在后端服务层
  * （`position_service.MAX_CASH_OVERRIDE_AMOUNT`，#644 起拒绝非有限/负值/超容量并返回
- * 可读 `INVALID_AMOUNT`），本常量只是体验层闸门——挡不住 API 直调 / CLI。
+ * 可读 `INVALID_AMOUNT`），本常量只是体验层宽松闸门——挡不住 API 直调 / CLI，也
+ * **不**复算「量化到分后是否超界」：可接受的最大值按分是 `99999999999.99`，
+ * 填到列容量本身（…9999）会在此放行、由后端第二道闸门以可读 422 拒绝。
  * 语义正文见 docs/reference/business-constraints.md#rule-cash，改任一侧须同步另一侧。 */
 const MAX_CASH_AMOUNT = 99_999_999_999.9999;
 
