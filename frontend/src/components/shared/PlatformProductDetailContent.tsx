@@ -12,6 +12,7 @@ import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
 import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
@@ -113,6 +114,12 @@ export default function PlatformProductDetailContent({
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
   const historyTotal = historyQueries[0]?.data?.total ?? 0;
   const historyError = historyQueries.some((q) => q.isError);
+  // #647：失败态升级为共享 QueryErrorState（带 getErrorMessage 文案与重试入口），
+  // 与产品详情页同一套文案/样式入口，不各写一份
+  const historyErr = historyQueries.find((q) => q.isError)?.error ?? null;
+  const refetchHistory = () => {
+    historyQueries.forEach((q) => void q.refetch());
+  };
   const latestPrice = historyItems[0];
 
   const { data: tradesData, isError: tradesError } = useTradeList({
@@ -299,7 +306,7 @@ export default function PlatformProductDetailContent({
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-history-card">
       <h3 className="text-lg font-semibold">历史净值</h3>
       {historyError ? (
-        <p className="mt-3 text-sm text-muted-foreground">净值加载失败</p>
+        <QueryErrorState error={historyErr} onRetry={refetchHistory} className="mt-3" />
       ) : historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (

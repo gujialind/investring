@@ -70,6 +70,35 @@ test.describe("产品详情页", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
+  test("历史净值请求失败 → 失败态与重试，而非空态（#647）", async ({ page }) => {
+    // 拦截 nav-history 返 500：失败必须可见（失败文案 + 重试入口），不得伪装成
+    // 「暂无净值数据」——静默失败会把后端故障/权限过期读成「产品无历史」。
+    // retry: 1（providers.tsx）下失败态约 1-2s 内显现，断言留 10s 余量
+    await page.route("**/market-data/products/**/nav-history*", (route) =>
+      route.fulfill({ status: 500, json: { detail: "internal error" } })
+    );
+    await page.goto(PRODUCT_PATH);
+    const history = page.getByTestId("product-history-card");
+    await expect(history).toContainText("加载失败", { timeout: 10_000 });
+    await expect(history).not.toContainText("暂无净值数据");
+    await expect(history.getByRole("button", { name: "重试" })).toBeVisible();
+  });
+
+  test("历史净值空响应 → 空态而非失败态（#647 两态分别钉住）", async ({ page }) => {
+    // 种子无「组合持有但产品无净值记录」形态（E2E_ACTIVE 仅持 510300.SH 且有夹具），
+    // 空分支以空响应钉住——与上一条失败分支分别断言、不互相覆盖
+    await page.route("**/market-data/products/**/nav-history*", (route) =>
+      route.fulfill({
+        status: 200,
+        json: { items: [], total: 0, page: 1, page_size: 5 },
+      })
+    );
+    await page.goto(PRODUCT_PATH);
+    const history = page.getByTestId("product-history-card");
+    await expect(history).toContainText("暂无净值数据", { timeout: 10_000 });
+    await expect(history).not.toContainText("加载失败");
+  });
+
   test("平台分布：单平台一行、市值与占比、行可点击进入平台-产品详情", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
     const card = page.getByTestId("platform-distribution-card");
