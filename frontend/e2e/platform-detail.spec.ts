@@ -18,6 +18,8 @@ import {
  *   平台级交易列表经 groupTradeRows 结对展示（CASH 腿折叠为子行），2 对 + 1 孤儿 = 3 行。
  * - 多平台形态当前种子不可达（seed_e2e_active 只写 HBZQ），allPlatformsCard 与
  *   「当前平台行不可点」分支在 API 层由后端 test_holding_aggregation.py HAGG_D 覆盖。
+ *   需要「组合级 ≠ 平台级」的形态只能自建：见下方 Blocker 1 用例的 MYCF 负向断言
+ *   （#654 L2 A）。因此**没有任何基于 E2E_ACTIVE 的断言能区分两个在途粒度**。
  * - 断言为可见性与关系式，不硬绑定快照日期；两端共用组件，mobile project 同跑。
  */
 
@@ -179,12 +181,18 @@ test.describe("平台详情页", () => {
   test("在途脚注负向：本平台最新快照日无在途时不出现（#641）", async ({ page }) => {
     // E2E_ACTIVE 的 HBZQ 最新快照（D3）无在途行（D4 的 pending 买入尚未进快照）
     // → 平台级 in_transit_market_value == 0.0，脚注不渲染。
-    // 防 B2 换形态复现：恒渲染或借组合级数字都会让本用例红。
+    // 本用例只防「恒渲染」，防不了「借组合级数字」：E2E_ACTIVE 只有 HBZQ 单平台，
+    // 该日组合级与平台级同为 0，借数后渲染的仍是不渲染。两粒度区分的机器保护
+    // 在 Blocker 1 用例的 MYCF 负向断言（#654 L2 A）。
+    // 先钉「有卡分支已到达」：platform-holdings-section 无条件渲染、「暂无持仓」
+    // 也在其内，而脚注在有卡分支——不钉则分支未到时 toHaveCount(0) 以错误理由变绿
+    // （#654 L2 B）
     // 归属本 describe（#654 L2 S1）：用例跑的是平台详情页，此前误放在
     // 「平台-产品详情页」分组下，按分组筛平台页回归会漏掉它
     await page.goto(PLATFORM_PATH);
     const holdings = page.getByTestId("platform-holdings-section");
     await expect(holdings).toBeVisible();
+    await expect(holdings.getByText("沪深300ETF")).toBeVisible();
     await expect(page.getByTestId("platform-in-transit-note")).toHaveCount(0);
   });
 });
@@ -290,6 +298,10 @@ test.describe("平台-产品详情页", () => {
  * S1'：自建隔离组合造一笔场外（CN_OTC）pending 调仓（price=NULL），
  * 正向断言平台交易卡该行显示 "--"（而非 "0.0000"）。
  * 模式复用 portfolio-holdings-view.spec.ts 的 setupInTransitPortfolio。
+ *
+ * 该用例同时是 #641 在途**两粒度**的唯一 E2E 保护处：隔离组合里 HBZQ 有 8,200 买入
+ * 在途、MYCF 只有已确认现金无在途，故「组合级 8,200 / 平台级 0」在同一快照上可区分
+ * （#654 L2 A）。E2E_ACTIVE 是单平台种子、最新快照日两粒度同为 0，区分不了。
  */
 test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
   test("场外 pending 调仓价格显示 -- 而非 0.0000", async ({ page }, testInfo) => {
@@ -313,6 +325,14 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
       sub_type: "subscribe", amount: 100000, apply_date: apply,
     });
     await post(`/api/subscriptions/${sub.id}/confirm`);
+    // 第二平台 MYCF：只放**已确认申购**（现金行不需净值夹具），无在途。
+    // 于是同一快照上「组合级在途 8,200 / MYCF 平台级在途 0」两个粒度可区分，
+    // 供末尾负向断言抓「借组合级数字」（#654 L2 A）
+    const mycfSub = await post<{ id: number }>("/api/subscriptions", {
+      portfolio_code: code, investor_code: "ADMIN", platform_code: "MYCF",
+      sub_type: "subscribe", amount: 50000, apply_date: apply,
+    });
+    await post(`/api/subscriptions/${mycfSub.id}/confirm`);
     // 场外 pending 买入：不传 price → 落库 NULL
     await post("/api/trades", {
       portfolio_code: code, product_code: "000300.OF", market: "CN_OTC",
@@ -339,6 +359,18 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
     const note = page.getByTestId("platform-in-transit-note");
     await expect(note).toContainText("持仓市值含在途资金");
     await expect(note).toContainText("8,200.00");
+
+    // #654 L2 A：真负向——本平台（MYCF）在途为 0，而**组合级**在途为 8,200。
+    // 这是当前唯一能区分两粒度的 E2E 形态：组件若借组合级字段（或加「平台级缺失
+    // 则回落组合级」兜底），该页会渲染出 ¥8,200.00 而当场红。
+    // 先等现金卡可见：既钉住「MYCF 平台卡已发布」（未发布时页面走
+    // 「未找到该平台持仓」，toHaveCount(0) 会以错误理由空过），也钉住「进入了
+    // 脚注所在的有卡分支」（同 L2 B 口径）
+    await page.goto(`/portfolio/${code}/platforms/MYCF`);
+    await expect(
+      page.getByTestId("platform-holdings-section").getByTestId("platform-cash-card")
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("platform-in-transit-note")).toHaveCount(0);
   });
 });
 
