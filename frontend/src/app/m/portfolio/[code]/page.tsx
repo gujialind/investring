@@ -212,8 +212,8 @@ function MobilePortfolioDetailInner() {
                 currentConfig={portfolio.display_config}
               />
 
-              {/* #649 起双端共享组件：移动端同得 4 个区间 chips；空数据不再整卡
-                  不渲染，改为卡恒在 + 卡内空态（与桌面一致） */}
+              {/* #649 起双端共享组件：移动端同得 4 个区间 chips；卡恒在（抽取前空数据
+                  整卡不渲染），加载期出占位 spinner、空数据出卡内空态，与桌面一致 */}
               <PortfolioNavTrendCard code={code} variant="mobile" />
 
               {/* 绩效指标（紧凑两列） */}

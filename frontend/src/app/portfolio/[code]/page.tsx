@@ -225,7 +225,7 @@ function PortfolioDetailInner() {
                     </CardContent>
                   </Card>
 
-                  {/* #649 起双端共享组件（右栏窄：区间 chips 溢出横滚） */}
+                  {/* #649 起双端共享组件（右栏窄：标题与区间 chips 放不下时整组换行） */}
                   <PortfolioNavTrendCard code={code} variant="desktop" />
 
                   {/* 绩效指标（6 项） */}

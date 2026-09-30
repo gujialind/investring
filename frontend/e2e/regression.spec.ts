@@ -134,36 +134,64 @@ test.describe('持仓明细维度二级分组（防 #109 / #114 复发，#128 �
 
 test.describe('组合净值走势卡双端一致（#649）', () => {
   // 抽取前：区间切换只在桌面落地（#99），移动端恒全量、无 chips、空数据整卡不渲染；
-  // 空态文案两端两套（桌面页级「该区间暂无净值数据」 vs NavCurve 内置「暂无净值数据」）。
+  // 桌面页级分支不论区间恒写「该区间暂无净值数据」。移动端那句「暂无净值数据」来自
+  // NavCurve 内置空态，而抽取前该页只在有数据时才渲染曲线，故内置句在组合页是不可达
+  // 分支（只在产品/平台页曲线卡生效）——两套文案是潜在漂移，不是两端各自呈现过的观感。
   // 抽取后组件自持 navRange 与 start_date，双端同能力、空态文案单点。
-  test('区间 chips 双端同款：默认成立以来，点击后 aria-pressed 翻转并按 start_date 重新取数', async ({ page }) => {
+  test('区间 chips 双端同款：默认成立以来不带 start_date，切区间后按区间起点重新取数', async ({ page }) => {
+    // 「成立以来 = 不带 start_date」是移动端默认态与抽取前恒全量等价的锚点，注册必须在 goto 前
+    const fullRange = page.waitForRequest(
+      (r) => r.url().includes('/nav-history') && !r.url().includes('start_date='),
+      { timeout: 10_000 },
+    );
     await gotoPortfolioDetail(page, E2E_ACTIVE);
+    await fullRange;
+
     const card = page.getByTestId('portfolio-nav-trend-card');
     await expect(card).toBeVisible();
     // 默认「成立以来」= 移动端抽取前的恒全量行为，双端同一初值（同一缓存键）
     await expect(page.getByTestId('nav-range-all')).toHaveAttribute('aria-pressed', 'true');
 
-    // start_date 归属显式可读：切区间后由组件自己带 start_date 重新取数，页面不再持有该参数
-    const ranged = page.waitForRequest(
-      (r) => r.url().includes('/nav-history') && r.url().includes('start_date='),
-      { timeout: 10_000 },
-    );
-    await page.getByTestId('nav-range-6m').click();
-    await ranged;
-    await expect(page.getByTestId('nav-range-6m')).toHaveAttribute('aria-pressed', 'true');
+    // 归属与取值都钉住：只断 URL 里「有 start_date=」时，6m/1y/3y 的分支写反照样全绿。
+    // 容差 30 天远小于相邻窗口间隔（182/365/1096），能吸收 setMonth 月末进位与闰年，
+    // 又不至于放过整档窗口取错。
+    const expectedDaysBack: Record<string, number> = { '6m': 182, '1y': 365, '3y': 1096 };
+    for (const [key, days] of Object.entries(expectedDaysBack)) {
+      const ranged = page.waitForRequest(
+        (r) => r.url().includes('/nav-history') && r.url().includes('start_date='),
+        { timeout: 10_000 },
+      );
+      await page.getByTestId(`nav-range-${key}`).click();
+      const sent = new URL((await ranged).url()).searchParams.get('start_date') ?? '';
+      expect(sent, `${key} 应带 yyyy-mm-dd 形式的 start_date`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      const [year, month, day] = sent.split('-').map(Number);
+      // 按本地时区解析（不做 UTC 切片，#640 U-4），与组件侧 toDateOnly 同一时钟
+      const daysBack = Math.round(
+        (Date.now() - new Date(year, month - 1, day).getTime()) / 86_400_000,
+      );
+      expect(
+        Math.abs(daysBack - days),
+        `${key} 起点 ${sent} 偏离 ${days} 天过多`,
+      ).toBeLessThanOrEqual(30);
+      await expect(page.getByTestId(`nav-range-${key}`)).toHaveAttribute('aria-pressed', 'true');
+    }
     await expect(page.getByTestId('nav-range-all')).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('空数据：卡片仍渲染 + 卡内空态，全量态与区间态措辞由组件单点决定', async ({ page }) => {
-    await page.route('**/nav-history**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
-    );
+    // 延迟 3s  fulfill，制造一个可断言的「加载中」窗口（#649 L2 S2：加载期不得写成空态）
+    await page.route('**/nav-history**', async (route) => {
+      await new Promise((r) => setTimeout(r, 3_000));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     const card = page.getByTestId('portfolio-nav-trend-card');
-    // 移动端抽取前是「整卡不渲染」，现与桌面一致：卡恒在、空态在卡内。
+    // 移动端抽取前是「整卡不渲染」，现与桌面一致：卡恒在、加载期 spinner、空数据才落空态。
+    await expect(card).toBeVisible();
+    // 取数在途时先出 spinner：修复前此处会渲染空态文案，本断言即红
+    await expect(card.getByText('暂无净值数据', { exact: true })).toHaveCount(0);
     // 措辞用 exact 断言——「该区间暂无净值数据」本身包含「暂无净值数据」，
     // 非 exact 会让全量态断言在区间态文案下也假绿
-    await expect(card).toBeVisible();
     await expect(card.getByText('暂无净值数据', { exact: true })).toBeVisible();
     await page.getByTestId('nav-range-1y').click();
     await expect(card.getByText('该区间暂无净值数据', { exact: true })).toBeVisible();
