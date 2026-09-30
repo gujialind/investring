@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { E2E_ACTIVE, gotoPortfolioDetail } from "./helpers";
+import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger } from "./helpers";
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享 ProductDetailContent）。
@@ -138,6 +138,61 @@ test.describe("产品详情页", () => {
     expect(page.url()).toContain("trade_type=buy");
     // 预填后服务端过滤生效：510300.SH 的已确认买入在列表中
     await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("操作行买入：跳转即开录入 Dialog，方向与产品/市场已预填（#646）", async ({ page }) => {
+    await page.goto(PRODUCT_PATH);
+    await page.getByTestId("product-action-row").getByRole("link", { name: "买入" }).click();
+    await page.waitForURL(/\/trades\?/);
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "提交交易");
+    await dlg.waitFor({ timeout: 10_000 });
+    // 方向=买入：买入/卖出各有专属提示 Alert，据此判定（不靠按钮 variant 样式）
+    await expect(dlg.getByTestId("buy-deduct-hint")).toBeVisible();
+    await expect(dlg.getByTestId("sell-arrival-hint")).not.toBeVisible();
+    // 产品与市场已预填：触发框回显「…510300.SH · A股场内」。名称缓存未命中时只回显
+    // code（SearchableProductSelect 懒加载），故断 code 与市场后缀两段、不断产品名
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    await expect(productTrigger(dlg, "A股场内")).toBeVisible();
+    // 预填值仍可当场改选（验收第 5 条）：预填只作 useState 初值、无 effect 回灌，
+    // 故改方向后既有预填不被重置
+    await dlg.getByRole("button", { name: "卖出" }).click();
+    await expect(dlg.getByTestId("sell-arrival-hint")).toBeVisible();
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+  });
+
+  test("操作行卖出：录入方向为卖出，不被重置成买入（#646）", async ({ page }) => {
+    await page.goto(PRODUCT_PATH);
+    await page.getByTestId("product-action-row").getByRole("link", { name: "卖出" }).click();
+    await page.waitForURL(/\/trades\?/);
+    expect(page.url()).toContain("trade_type=sell");
+    const dlg = dialogByTitle(page, "提交交易");
+    await dlg.waitFor({ timeout: 10_000 });
+    await expect(dlg.getByTestId("sell-arrival-hint")).toBeVisible();
+    await expect(dlg.getByTestId("buy-deduct-hint")).not.toBeVisible();
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+  });
+
+  test("操作行事件：落事件录入页并开 Dialog，产品已预填（#646）", async ({ page }) => {
+    await page.goto(PRODUCT_PATH);
+    // #656 L2 S1：URL 参数与 trades 页同口径——既预填录入表单也驱动列表筛选，
+    // 故事件列表请求应带 products=<code>|<market>（| 编码为 %7C，只断前缀）
+    const listReq = page.waitForRequest(
+      (r) =>
+        r.url().includes("/api/share-change-events") &&
+        r.url().includes("products=510300.SH"),
+      { timeout: 10_000 },
+    );
+    // 原 href 是不带参数的裸 tradesLink（与「查看全部」相同），落到没有事件录入的调仓列表
+    await page.getByTestId("product-action-row").getByRole("link", { name: "事件" }).click();
+    await listReq;
+    await page.waitForURL(/\/share-change-events\?/);
+    expect(page.url()).toContain("product=510300.SH");
+    expect(page.url()).toContain("market=CN_EXCHANGE");
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "新建份额变动事件");
+    await dlg.waitFor({ timeout: 10_000 });
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
   });
 
   test("从组合详情产品卡点击进入（深链起点）", async ({ page }) => {

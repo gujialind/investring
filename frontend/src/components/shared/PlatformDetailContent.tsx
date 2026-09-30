@@ -119,6 +119,9 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
 
   const snapshotDate = productData?.snapshot_date ?? platformData?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?platform=${encodeURIComponent(platformCode)}`;
+  // #646：操作行「事件」落事件录入页（原 href 是不带参数的裸 tradesLink，与「查看全部」
+  // 完全相同，跳到没有事件录入的调仓列表）
+  const eventsLink = `${basePath}/${portfolioCode}/share-change-events?platform=${encodeURIComponent(platformCode)}&action=create`;
 
   // 在途资金口径披露（#641 恢复首轮 S5）：概览市值含本平台在途、下方持仓明细
   // 不含——数字取本平台平台卡的 in_transit_market_value，不得借组合级字段
@@ -170,13 +173,13 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   const actionRow = (
     <div className="flex gap-2" data-testid="platform-action-row">
       <Button asChild className="flex-1">
-        <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
+        <Link href={`${tradesLink}&trade_type=buy&action=create`}>买入</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={`${tradesLink}&trade_type=sell`}>卖出</Link>
+        <Link href={`${tradesLink}&trade_type=sell&action=create`}>卖出</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={tradesLink}>事件</Link>
+        <Link href={eventsLink}>事件</Link>
       </Button>
     </div>
   );

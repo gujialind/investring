@@ -179,6 +179,9 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
 
   const snapshotDate = holdings?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}`;
+  // #646：操作行「事件」落事件录入页（原 href 是不带参数的裸 tradesLink，与「查看全部」
+  // 完全相同，跳到没有事件录入的调仓列表）
+  const eventsLink = `${basePath}/${portfolioCode}/share-change-events?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}&action=create`;
 
   const overview = (
     <Card data-testid="product-overview-card">
@@ -255,13 +258,13 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   ) : (
     <div className="flex gap-2" data-testid="product-action-row">
       <Button asChild className="flex-1">
-        <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
+        <Link href={`${tradesLink}&trade_type=buy&action=create`}>买入</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={`${tradesLink}&trade_type=sell`}>卖出</Link>
+        <Link href={`${tradesLink}&trade_type=sell&action=create`}>卖出</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={tradesLink}>事件</Link>
+        <Link href={eventsLink}>事件</Link>
       </Button>
     </div>
   );
