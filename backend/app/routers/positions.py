@@ -399,8 +399,17 @@ def update_cash_position(
     规则：
     - 必须在交易日进行
     - 必须指定平台代码
+    - 金额闸门（issue #644）：0 <= cash_amount <= 99999999999.9999
+      （manual_market_value 列 Numeric(15,4) 容量：15 位总数字减 4 位小数
+      ⇒ 整数位 11 位；0 合法 = 清空当日现金）。可接受的最大值按分为
+      99999999999.99——原值恰好等于列容量时量化到 2 位会进位超界、被第二道闸门拒绝。
+      负值、非有限数或超上限拒绝 INVALID_AMOUNT
     - 写入 manual_market_value 表（绝对替换），不再直接写 portfolio_position
-    - 写入后提示用户重新生成快照（非强制）
+    - 响应携带真算的 requires_snapshot_regen（issue #645，与撤销侧同一判据：
+      仅写入日 <= 最新快照日、覆盖已烘焙进快照时为 true）；写入日晚于最新
+      快照日时无需重算。注意 false 只表示「不必重算」，不保证覆盖必然生效
+      （该平台当日需已有 CASH 持仓行、且中间快照能逐交易日生成），语义正文见
+      docs/reference/business-constraints.md#rule-cash
     - 同日存在已确认现金交易时附 warnings 提示（issue #88，不阻断）
     """
     from app.services.position_service import update_cash_position as update_cash_service
@@ -417,13 +426,13 @@ def update_cash_position(
 
     return {
         "success": True,
-        "message": "现金市值覆盖已写入 manual_market_value，建议重新生成快照以更新持仓",
+        "message": "现金市值覆盖已写入 manual_market_value",
         "portfolio_code": result["portfolio_code"],
         "platform_code": result["platform_code"],
         "cash_amount": result["cash_amount"],
         "computed_value": result["computed_value"],
         "update_date": result["update_date"].isoformat(),
-        "requires_snapshot_regen": True,
+        "requires_snapshot_regen": result["requires_snapshot_regen"],
         "warnings": result["warnings"],
     }
 
