@@ -230,6 +230,20 @@ test.describe("平台-产品详情页", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
+  test("历史净值请求失败 → 失败态与重试，而非空态（#647）", async ({ page }) => {
+    // 与 product-detail.spec.ts 同形：两页共用 QueryErrorState 只统一了文案入口，
+    // 失败/空态的**判序**各写一份，而组件不在覆盖率分母内——把 historyError 分支
+    // 改回 `length === 0` 优先，#647 的原始症状会在 CI 全绿下复发（#655 L2 ①）
+    await page.route("**/market-data/products/**/nav-history*", (route) =>
+      route.fulfill({ status: 500, json: { detail: "internal error" } })
+    );
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    const history = page.getByTestId("platform-product-history-card");
+    await expect(history).toContainText("加载失败", { timeout: 10_000 });
+    await expect(history).not.toContainText("暂无净值数据");
+    await expect(history.getByRole("button", { name: "重试" })).toBeVisible();
+  });
+
   test("交易记录卡：该产品在该平台的交易（不含 CASH 腿）", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     const card = page.getByTestId("platform-product-trades-card");
