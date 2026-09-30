@@ -123,6 +123,11 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   // 完全相同，跳到没有事件录入的调仓列表）
   const eventsLink = `${basePath}/${portfolioCode}/share-change-events?platform=${encodeURIComponent(platformCode)}&action=create`;
 
+  // 在途资金口径披露（#641 恢复首轮 S5）：概览市值含本平台在途、下方持仓明细
+  // 不含——数字取本平台平台卡的 in_transit_market_value，不得借组合级字段
+  //（PR #639 B2 教训：组合级的数会把 A 平台的在途写到 B 平台名下）
+  const inTransitValue = platform.in_transit_market_value ?? 0;
+
   const overview = (
     <Card data-testid="platform-overview-card">
       <CardContent className="pt-4">
@@ -234,6 +239,13 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
               </Link>
             )}
           </div>
+          {/* S5/#641：在途资金口径说明——概览市值含在途，明细卡片不含。
+              testid 供 E2E 按元素断言（#654 L2 S2：整段 toContainText 将来可能变松） */}
+          {inTransitValue > 0 && (
+            <p data-testid="platform-in-transit-note" className="mt-2 text-xs text-muted-foreground">
+              *持仓市值含在途资金 ¥{formatCurrency(inTransitValue).replace("¥", "")}，上方卡片不含在途
+            </p>
+          )}
         </>
       )}
     </section>

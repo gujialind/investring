@@ -256,7 +256,10 @@ export default function TradesContent({
   );
   const [formData, setFormData] = useState({
     // #646：录入意图下按来源页预填产品/市场/平台；扣款平台（cash_platform_code）
-    // 一律不预填，由用户自选
+    // 一律不预填，由用户自选。
+    // 已知限制：自动开的 Dialog 里 SearchableProductSelect 名称缓存尚未建立（懒加载
+    // enabled:hasOpened，#165），产品先回显「code·市场名」，打开下拉才补名称——不影响
+    // 提交（落账走 code+market，名称仅在确认弹窗显示），勿为此预填加「先拉名称再放行」。
     product_code: createIntent ? normalizedInitialProduct?.code ?? "" : "",
     market: createIntent ? normalizedInitialProduct?.market ?? "" : "",
     platform_code: createIntent ? initialPlatform || "" : "",

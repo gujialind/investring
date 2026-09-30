@@ -156,6 +156,8 @@ class HoldingPlatformAggregate(BaseModel):
     """按平台聚合的持仓卡。
 
     market_value 含该平台现金与在途（现金行按 cash_amount 计）；
+    in_transit_market_value 为**本平台**在途合计（#641，无在途为 0.0；
+    market_value 含它，产品/现金明细卡不含）；
     product_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit
     为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。
     cumulative_profit 为 #598 平台粒度口径，无市值快照时 None。
@@ -166,6 +168,7 @@ class HoldingPlatformAggregate(BaseModel):
     platform_type: Optional[str] = None
     market_value: float
     cash_balance: float
+    in_transit_market_value: float
     product_count: int
     holding_profit: Optional[float] = None
     cumulative_profit: Optional[float] = None
