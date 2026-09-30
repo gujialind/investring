@@ -359,6 +359,7 @@ class TestByPlatform:
         assert a["platform_type"] == "第三方平台"     # 与 platform 表映射一致
         assert a["market_value"] == 1720.0
         assert a["cash_balance"] == 1000.0
+        assert a["in_transit_market_value"] == 300.0  # 本平台在途（#641）
         assert a["product_count"] == 2               # 只计非现金非在途（F1、F2）
         assert a["holding_profit"] == -80.0          # 20 + (−100) + 现金 0
         assert a["cumulative_profit"] == -80.0       # 20 − 100 + 现金 0
@@ -367,10 +368,24 @@ class TestByPlatform:
         b = data["platforms"][1]
         assert b["market_value"] == 560.0
         assert b["cash_balance"] == 500.0
+        # B2 反例的关键断言（#641）：无在途的平台是 0.0——有值且为 0，
+        # 不是 None、不是缺字段，消费方无需判空也不会借组合级的数
+        assert b["in_transit_market_value"] == 0.0
         assert b["product_count"] == 1
         assert b["holding_profit"] == 10.0
         assert b["cumulative_profit"] == 10.0        # 10 + 现金 0
         assert b["ratio"] == 0.2456
+
+    def test_platform_in_transit_sums_to_portfolio_level(
+        self, client, admin_headers, base_portfolio
+    ):
+        """Σ(平台级在途) == 组合级 in_transit_market_value（#641 两粒度一致性）"""
+        by_platform = _by_platform(client, admin_headers)
+        by_product = _by_product(client, admin_headers)
+        platform_sum = sum(
+            p["in_transit_market_value"] for p in by_platform["platforms"]
+        )
+        assert platform_sum == by_product["in_transit_market_value"] == 300.0
 
     def test_cumulative_none_without_value_snapshot(
         self, client, admin_headers, test_db, base_portfolio

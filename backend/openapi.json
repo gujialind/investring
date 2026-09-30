@@ -8114,6 +8114,10 @@
             "type": "number",
             "title": "Cash Balance"
           },
+          "in_transit_market_value": {
+            "type": "number",
+            "title": "In Transit Market Value"
+          },
           "product_count": {
             "type": "integer",
             "title": "Product Count"
@@ -8156,10 +8160,11 @@
         "required": [
           "market_value",
           "cash_balance",
+          "in_transit_market_value",
           "product_count"
         ],
         "title": "HoldingPlatformAggregate",
-        "description": "按平台聚合的持仓卡。\n\nmarket_value 含该平台现金与在途（现金行按 cash_amount 计）；\nproduct_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit\n为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
+        "description": "按平台聚合的持仓卡。\n\nmarket_value 含该平台现金与在途（现金行按 cash_amount 计）；\nin_transit_market_value 为**本平台**在途合计（#641，无在途为 0.0；\nmarket_value 含它，产品/现金明细卡不含）；\nproduct_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit\n为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
       },
       "HoldingProductAggregate": {
         "properties": {

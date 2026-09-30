@@ -9,8 +9,14 @@
   业务判据读取，不依赖该同写巧合）。
 - `total_market_value` 含在途（市值口径：在途计市值），产品卡/平台卡的占比基数
   同此；在途虚拟产品（product_type="IN_TRANSIT"）不出现为产品卡，但仍计入所属
-  平台市值；`in_transit_market_value` 单独发布在途合计，前端据其渲染在途聚合卡，
-  与产品卡同一占比体系（行级最大余数法，visual-spec §4）。
+  平台市值。在途金额按**两粒度**发布（#641）：组合级 `in_transit_market_value`
+  （by-product 顶层，前端据其渲染在途聚合卡，与产品卡同一占比体系——行级最大
+  余数法，visual-spec §4）；平台级 `platforms[].in_transit_market_value`
+  （by-platform 每张平台卡，本平台在途合计，无在途为 0.0；组合级 = Σ **已发布**平台级——
+  平台卡按 market_value == 0 整卡隐藏时其在途不进响应，等式只对已发布卡片成立）。
+  消费方不得拿组合级数字作单平台披露（PR #639 B2 教训），也不得以
+  「平台市值 − 现金 − Σ 产品切片市值」减法反推平台级在途——过滤只隐藏卡、
+  不改变合计基数，减法会把被过滤行的残差市值误当在途。
 - 持有收益与持仓列表同公式（精度路径不同：本层 Decimal，列表 float+round）：
   非现金行 = 市值 − 份额×成本价 + 事件现金加回；CASH 行取现金累计收益；
   当日收益、事件加回复用 `compute_derived_fields` 一次聚合（issue #103），
@@ -385,7 +391,7 @@ def aggregate_holdings_by_platform(db: Session, portfolio_code: str) -> dict:
     _, _, cum_by_platform = _load_cumulative_maps(db, portfolio_code, snapshot_date)
 
     aggregates: dict = {}
-    # 在途行只贡献平台市值，不贡献产品数/现金/收益
+    # 在途行贡献平台市值与平台级在途合计（#641），不贡献产品数/现金/收益
     for row in rows:
         value = _row_value(row)
         if row.platform_code is None:
@@ -400,6 +406,7 @@ def aggregate_holdings_by_platform(db: Session, portfolio_code: str) -> dict:
             "platform_type": platform_types.get(row.platform_code),
             "market_value": _ZERO,
             "cash_balance": _ZERO,
+            "in_transit_market_value": _ZERO,
             "_product_keys": set(),
             "_profit_skipped": 0,
             "holding_profit": None,
@@ -407,6 +414,9 @@ def aggregate_holdings_by_platform(db: Session, portfolio_code: str) -> dict:
         })
         agg["market_value"] += value
         if (row.product_code, row.market) in transit_keys:
+            # 平台级在途合计（#641）：在途行贡献平台市值的同时单独记账，
+            # 供平台卡发布本平台在途额（无在途的平台保持 0.0，非 None）
+            agg["in_transit_market_value"] += value
             continue
         pos_key = (row.portfolio_code, row.product_code, row.market, row.platform_code)
         if row.cash_amount is not None:
