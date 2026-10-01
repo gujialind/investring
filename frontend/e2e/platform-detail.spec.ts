@@ -5,6 +5,8 @@ import {
   authHeaders,
   dialogByTitle,
   pickCalendarDay,
+  platformTrigger,
+  productTrigger,
   toISODate,
 } from "./helpers";
 
@@ -18,6 +20,8 @@ import {
  *   平台级交易列表经 groupTradeRows 结对展示（CASH 腿折叠为子行），2 对 + 1 孤儿 = 3 行。
  * - 多平台形态当前种子不可达（seed_e2e_active 只写 HBZQ），allPlatformsCard 与
  *   「当前平台行不可点」分支在 API 层由后端 test_holding_aggregation.py HAGG_D 覆盖。
+ *   需要「组合级 ≠ 平台级」的形态只能自建：见下方 Blocker 1 用例的 MYCF 负向断言
+ *   （#654 L2 A）。因此**没有任何基于 E2E_ACTIVE 的断言能区分两个在途粒度**。
  * - 断言为可见性与关系式，不硬绑定快照日期；两端共用组件，mobile project 同跑。
  */
 
@@ -106,6 +110,39 @@ test.describe("平台详情页", () => {
     await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 10_000 });
   });
 
+  test("操作行买入：跳转即开录入 Dialog，平台已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PATH);
+    await page.getByTestId("platform-action-row").getByRole("link", { name: "买入" }).click();
+    await page.waitForURL(/\/trades\?/);
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "提交交易");
+    await dlg.waitFor({ timeout: 10_000 });
+    // 交易平台回显「华宝证券 (HBZQ)」（平台列表未加载完时退化为 code，两者都含 HBZQ）
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+    // 平台级来源页没有产品上下文 → 产品保持未选（占位文案在），不拿筛选参数硬凑
+    await expect(productTrigger(dlg, "请选择产品")).toBeVisible();
+  });
+
+  test("操作行事件：落事件录入页并开 Dialog，平台已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PATH);
+    // #656 L2 S1：URL 参数与 trades 页同口径——列表也按平台筛选
+    const listReq = page.waitForRequest(
+      (r) =>
+        r.url().includes("/api/share-change-events") &&
+        r.url().includes("platform_code=HBZQ"),
+      { timeout: 10_000 },
+    );
+    await page.getByTestId("platform-action-row").getByRole("link", { name: "事件" }).click();
+    await listReq;
+    await page.waitForURL(/\/share-change-events\?/);
+    expect(page.url()).toContain("platform=HBZQ");
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "新建份额变动事件");
+    await dlg.waitFor({ timeout: 10_000 });
+    // 默认事件类型 cash_dividend 属平台级 → 平台控件渲染且已预填
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+  });
+
   test("持仓明细：510300.SH 产品卡可点击进入平台-产品详情", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
     const holdings = page.getByTestId("platform-holdings-section");
@@ -146,6 +183,13 @@ test.describe("平台详情页", () => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     // 切换到按平台视图
     await page.getByTestId("holdings-tab-platform").click();
+    // 视图经 URL ?view= 异步切换：先确认分段按钮已置为「按平台」，否则「按产品」视图
+    // 的现金卡（单平台时其可及名同样含平台名）会被 .first() 抢先命中，点进
+    // /product/CASH 而非平台详情（#654 聚合 + #646 预填用例改变渲染时序后此竞态显形）
+    await expect(page.getByTestId("holdings-tab-platform")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
     await page.getByRole("link", { name: /华宝证券/ }).first().click();
     await page.waitForURL(/\/platforms\/HBZQ/);
     await expect(
@@ -174,6 +218,24 @@ test.describe("平台详情页", () => {
   test("未知平台 EmptyState", async ({ page }) => {
     await page.goto(`/portfolio/${E2E_ACTIVE}/platforms/NONEXISTENT`);
     await expect(page.getByText("未找到该平台持仓")).toBeVisible();
+  });
+
+  test("在途脚注负向：本平台最新快照日无在途时不出现（#641）", async ({ page }) => {
+    // E2E_ACTIVE 的 HBZQ 最新快照（D3）无在途行（D4 的 pending 买入尚未进快照）
+    // → 平台级 in_transit_market_value == 0.0，脚注不渲染。
+    // 本用例只防「恒渲染」，防不了「借组合级数字」：E2E_ACTIVE 只有 HBZQ 单平台，
+    // 该日组合级与平台级同为 0，借数后渲染的仍是不渲染。两粒度区分的机器保护
+    // 在 Blocker 1 用例的 MYCF 负向断言（#654 L2 A）。
+    // 先钉「有卡分支已到达」：platform-holdings-section 无条件渲染、「暂无持仓」
+    // 也在其内，而脚注在有卡分支——不钉则分支未到时 toHaveCount(0) 以错误理由变绿
+    // （#654 L2 B）
+    // 归属本 describe（#654 L2 S1）：用例跑的是平台详情页，此前误放在
+    // 「平台-产品详情页」分组下，按分组筛平台页回归会漏掉它
+    await page.goto(PLATFORM_PATH);
+    const holdings = page.getByTestId("platform-holdings-section");
+    await expect(holdings).toBeVisible();
+    await expect(holdings.getByText("沪深300ETF")).toBeVisible();
+    await expect(page.getByTestId("platform-in-transit-note")).toHaveCount(0);
   });
 });
 
@@ -206,6 +268,33 @@ test.describe("平台-产品详情页", () => {
     await expect(page.locator("table tbody tr")).toHaveCount(2, { timeout: 10_000 });
   });
 
+  test("操作行买入：跳转即开录入 Dialog，平台+产品均已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await page.getByTestId("platform-product-action-row").getByRole("link", { name: "买入" }).click();
+    await page.waitForURL(/\/trades\?/);
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "提交交易");
+    await dlg.waitFor({ timeout: 10_000 });
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    await expect(productTrigger(dlg, "A股场内")).toBeVisible();
+    // 扣款平台按 #646 契约不预填（用户自选），仍显示占位/特殊项文案
+    await expect(platformTrigger(dlg, "同交易平台")).toBeVisible();
+  });
+
+  test("操作行事件：落事件录入页并开 Dialog，平台+产品均已预填（#646）", async ({ page }) => {
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await page.getByTestId("platform-product-action-row").getByRole("link", { name: "事件" }).click();
+    await page.waitForURL(/\/share-change-events\?/);
+    expect(page.url()).toContain("product=510300.SH");
+    expect(page.url()).toContain("platform=HBZQ");
+    expect(page.url()).toContain("action=create");
+    const dlg = dialogByTitle(page, "新建份额变动事件");
+    await dlg.waitFor({ timeout: 10_000 });
+    await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
+    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+  });
+
   test("净值曲线空态与六窗区间收益率占位", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     const curve = page.getByTestId("platform-product-curve-card");
@@ -228,6 +317,20 @@ test.describe("平台-产品详情页", () => {
     await expect(rows.nth(0).getByText("--").first()).toBeVisible();
     // 无查看更多（仅 2 行 < page_size 5）
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
+  });
+
+  test("历史净值请求失败 → 失败态与重试，而非空态（#647）", async ({ page }) => {
+    // 与 product-detail.spec.ts 同形：两页共用 QueryErrorState 只统一了文案入口，
+    // 失败/空态的**判序**各写一份，而组件不在覆盖率分母内——把 historyError 分支
+    // 改回 `length === 0` 优先，#647 的原始症状会在 CI 全绿下复发（#655 L2 ①）
+    await page.route("**/market-data/products/**/nav-history*", (route) =>
+      route.fulfill({ status: 500, json: { detail: "internal error" } })
+    );
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    const history = page.getByTestId("platform-product-history-card");
+    await expect(history).toContainText("加载失败", { timeout: 10_000 });
+    await expect(history).not.toContainText("暂无净值数据");
+    await expect(history.getByRole("button", { name: "重试" })).toBeVisible();
   });
 
   test("交易记录卡：该产品在该平台的交易（不含 CASH 腿）", async ({ page }) => {
@@ -278,6 +381,10 @@ test.describe("平台-产品详情页", () => {
  * S1'：自建隔离组合造一笔场外（CN_OTC）pending 调仓（price=NULL），
  * 正向断言平台交易卡该行显示 "--"（而非 "0.0000"）。
  * 模式复用 portfolio-holdings-view.spec.ts 的 setupInTransitPortfolio。
+ *
+ * 该用例同时是 #641 在途**两粒度**的唯一 E2E 保护处：隔离组合里 HBZQ 有 8,200 买入
+ * 在途、MYCF 只有已确认现金无在途，故「组合级 8,200 / 平台级 0」在同一快照上可区分
+ * （#654 L2 A）。E2E_ACTIVE 是单平台种子、最新快照日两粒度同为 0，区分不了。
  */
 test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
   test("场外 pending 调仓价格显示 -- 而非 0.0000", async ({ page }, testInfo) => {
@@ -301,6 +408,14 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
       sub_type: "subscribe", amount: 100000, apply_date: apply,
     });
     await post(`/api/subscriptions/${sub.id}/confirm`);
+    // 第二平台 MYCF：只放**已确认申购**（现金行不需净值夹具），无在途。
+    // 于是同一快照上「组合级在途 8,200 / MYCF 平台级在途 0」两个粒度可区分，
+    // 供末尾负向断言抓「借组合级数字」（#654 L2 A）
+    const mycfSub = await post<{ id: number }>("/api/subscriptions", {
+      portfolio_code: code, investor_code: "ADMIN", platform_code: "MYCF",
+      sub_type: "subscribe", amount: 50000, apply_date: apply,
+    });
+    await post(`/api/subscriptions/${mycfSub.id}/confirm`);
     // 场外 pending 买入：不传 price → 落库 NULL
     await post("/api/trades", {
       portfolio_code: code, product_code: "000300.OF", market: "CN_OTC",
@@ -320,6 +435,25 @@ test.describe("Blocker 1 回归：pending 场外价格渲染", () => {
     await expect(fundRow).toContainText("@ --");
     // 不应出现 0.0000
     await expect(card).not.toContainText("0.0000");
+
+    // #641 正向：本平台有买入在途 8200（pending 场外买入的 CASH 腿已扣、基金腿未生效）
+    // → 持仓明细区出现口径脚注，数字为本平台卡的 in_transit_market_value。
+    // 按脚注元素断言（#654 L2 S2）：整段 toContainText 在明细区出现同值金额时会变松
+    const note = page.getByTestId("platform-in-transit-note");
+    await expect(note).toContainText("持仓市值含在途资金");
+    await expect(note).toContainText("8,200.00");
+
+    // #654 L2 A：真负向——本平台（MYCF）在途为 0，而**组合级**在途为 8,200。
+    // 这是当前唯一能区分两粒度的 E2E 形态：组件若借组合级字段（或加「平台级缺失
+    // 则回落组合级」兜底），该页会渲染出 ¥8,200.00 而当场红。
+    // 先等现金卡可见：既钉住「MYCF 平台卡已发布」（未发布时页面走
+    // 「未找到该平台持仓」，toHaveCount(0) 会以错误理由空过），也钉住「进入了
+    // 脚注所在的有卡分支」（同 L2 B 口径）
+    await page.goto(`/portfolio/${code}/platforms/MYCF`);
+    await expect(
+      page.getByTestId("platform-holdings-section").getByTestId("platform-cash-card")
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("platform-in-transit-note")).toHaveCount(0);
   });
 });
 
@@ -369,7 +503,8 @@ test.describe("现金市值更新 Dialog", () => {
       (r) => r.method() === "POST" && r.url().includes("cash-position"),
     );
     // B-5 回归：写入成功必须出现可见反馈（原实现 requires_snapshot_regen 死分支导致无出口）。
-    // R-3：锚点取无条件出的成功 toast，而非绑在恒真 requires_snapshot_regen 上的 Alert 分支
+    // R-3：锚点取无条件出的成功 toast，而非绑在条件性 requires_snapshot_regen 上的 Alert 分支
+    // （条件分支的界面出口由下面 #645 那两条单独钉，两者不互替）
     await amountInput.fill("40000");
     await page.getByRole("button", { name: "确认更新" }).click();
     const postBody = JSON.parse((await postReq).postData() ?? "{}") as { update_date?: string };
@@ -380,6 +515,17 @@ test.describe("现金市值更新 Dialog", () => {
       page.getByTestId("toast-card").getByText("现金市值已更新")
     ).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("当日已有覆盖记录")).toBeVisible({ timeout: 10_000 });
+
+    // #645 写入侧真算的界面出口。**实测本形态走 warnings 分支，不是「✓ 更新成功」短文案**：
+    // 种子 E2E_ACTIVE 在写入日有 1 笔已确认现金交易，而短分支条件是
+    // `!regen && warnings 为空`（CashMarketValueUpdateDialog 的 submitResult 块），
+    // 日期一支成立不代表整条件成立。
+    // 承重的判别网是「不含需重新生成快照」：regen 若退化成 #645 前的恒真、或后端把
+    // true 写死，长文案 Alert（"覆盖已写入，需重新生成快照才能…"）会渲染并判红。
+    // 两支的完整真/假组合由后端 REST 参数化用例钉（test_issue_88_90_91 的
+    // test_rest_post_returns_real_requires_snapshot_regen）。
+    await expect(dlg.getByText(/覆盖层将压制其效果/)).toBeVisible();
+    await expect(dlg).not.toContainText("需重新生成快照");
 
     // T-3：撤销覆盖两段式（B-8）——取消不发 DELETE，确认才删；目标记录就在屏上
     let deleteCount = 0;
@@ -397,7 +543,8 @@ test.describe("现金市值更新 Dialog", () => {
     await confirmDialog.getByRole("button", { name: "确认撤销" }).click();
     // U-3：message 两支都要钉住——只断言标题时，后端字段读错键（requires_snapshot_regen
     // 拼错）会无声退化成另一条文案。本形态下 target > 最新快照日 →
-    // requires_snapshot_regen=False（position_service:974 真算），故应为短文案且不含
+    // requires_snapshot_regen=False（position_service::delete_manual_cash_override 经共用
+    // 判据 ::_cash_override_requires_regen 真算，不写行号——该函数体量会变），故应为短文案且不含
     // 「需重新生成快照」；短文案是长文案的前缀，所以「不含」那条才是判别支的承重断言。
     // ⚠️ 定位一律 testid + hasText（DOM 口径），**不用 toastByTitle**：Radix modal Dialog
     // 打开期间把其余子树 aria-hidden，基于 role 的定位器看不见挂在 app root 的 toast
@@ -409,8 +556,8 @@ test.describe("现金市值更新 Dialog", () => {
   });
 
   // 待确认 2（#640 第三轮显式处置：做）：Dialog 内提示「只能选择交易日，非交易日将被拒绝」
-  // 是对用户作出的承诺，此前两侧均无断言锁定它——后端 position_service:807 抛
-  // NON_TRADING_DAY 对 cash-position 这条路径没有任何测试，前端也只有文案。
+  // 是对用户作出的承诺，此前两侧均无断言锁定它——后端 position_service::update_cash_position
+  // 抛 NON_TRADING_DAY（符号锚点，不写行号：该函数体量会变）对 cash-position 这条路径没有任何测试，前端也只有文案。
   // 拒绝由后端作出（不落库、无残留），故本用例可在共享 E2E_ACTIVE 上跑。
   test("非交易日提交被可见拒绝：透出后端文案、表单不关、无成功反馈", async ({ page }) => {
     await page.goto(CASH_PRODUCT_PATH);

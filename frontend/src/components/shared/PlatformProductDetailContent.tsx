@@ -12,6 +12,7 @@ import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
 import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
@@ -113,6 +114,12 @@ export default function PlatformProductDetailContent({
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
   const historyTotal = historyQueries[0]?.data?.total ?? 0;
   const historyError = historyQueries.some((q) => q.isError);
+  // #647：失败态升级为共享 QueryErrorState（带 getErrorMessage 文案与重试入口），
+  // 与产品详情页同一套文案/样式入口，不各写一份
+  const historyErr = historyQueries.find((q) => q.isError)?.error ?? null;
+  const refetchHistory = () => {
+    historyQueries.forEach((q) => void q.refetch());
+  };
   const latestPrice = historyItems[0];
 
   const { data: tradesData, isError: tradesError } = useTradeList({
@@ -156,6 +163,9 @@ export default function PlatformProductDetailContent({
 
   const snapshotDate = holdings?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}&platform=${encodeURIComponent(platformCode)}`;
+  // #646：操作行「事件」落事件录入页（原 href 是不带参数的裸 tradesLink，与「查看全部」
+  // 完全相同，跳到没有事件录入的调仓列表）
+  const eventsLink = `${basePath}/${portfolioCode}/share-change-events?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}&platform=${encodeURIComponent(platformCode)}&action=create`;
   // 产品详情页路由（步骤⑤起 market 走 ?market= searchParams，与平台-产品页形态对齐）
   const productDetailLink = `${basePath}/${portfolioCode}/product/${encodeURIComponent(productCode)}?market=${encodeURIComponent(market)}`;
 
@@ -237,13 +247,13 @@ export default function PlatformProductDetailContent({
   ) : (
     <div className="flex gap-2" data-testid="platform-product-action-row">
       <Button asChild className="flex-1">
-        <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
+        <Link href={`${tradesLink}&trade_type=buy&action=create`}>买入</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={`${tradesLink}&trade_type=sell`}>卖出</Link>
+        <Link href={`${tradesLink}&trade_type=sell&action=create`}>卖出</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={tradesLink}>事件</Link>
+        <Link href={eventsLink}>事件</Link>
       </Button>
     </div>
   );
@@ -299,7 +309,7 @@ export default function PlatformProductDetailContent({
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-history-card">
       <h3 className="text-lg font-semibold">历史净值</h3>
       {historyError ? (
-        <p className="mt-3 text-sm text-muted-foreground">净值加载失败</p>
+        <QueryErrorState error={historyErr} onRetry={refetchHistory} className="mt-3" />
       ) : historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (

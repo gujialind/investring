@@ -98,6 +98,12 @@ interface TradesContentProps {
   initialProduct?: ProductSelection;
   initialPlatform?: string;
   initialTradeType?: string;
+  /**
+   * #646：`action=create` = 录入意图——挂载即打开录入 Dialog，并把 product/market/
+   * platform/trade_type 同时作为**表单初值**（不只是列表筛选）。不带该参数时语义
+   * 不变：仅筛选列表，表单初值仍为空（「查看全部」路径行为零变化）。
+   */
+  initialAction?: string;
 }
 
 type ConfirmState =
@@ -146,6 +152,7 @@ export default function TradesContent({
   initialProduct,
   initialPlatform,
   initialTradeType,
+  initialAction,
 }: TradesContentProps) {
   const params = useParams();
   const code = params.code as string;
@@ -155,6 +162,8 @@ export default function TradesContent({
   const normalizedInitialProduct = initialProduct?.market ? initialProduct : undefined;
   const normalizedInitialTradeType =
     initialTradeType === "buy" || initialTradeType === "sell" ? initialTradeType : undefined;
+  // #646：只认 create；其它值（含空串/拼错）一律视为无录入意图，不静默开弹窗
+  const createIntent = initialAction === "create";
 
   // 筛选状态（#126 服务端筛选）：tradeRange 默认最近 1 年（决策⑤，惰性初始化避免每渲染重算）
   // #595：initial* 仅作 useState 初值（一次性），用户进入后可自行清空/改选
@@ -236,14 +245,24 @@ export default function TradesContent({
     setPage(1);
   };
 
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  // #646：录入意图下挂载即开 Dialog（受控 open，不靠 DialogTrigger 点击）。
+  // 一次性语义由 page 的 key 重挂载保证：query 变 → 重挂载 → 重新按 action 判定
+  const [isDialogOpen, setIsDialogOpen] = useState(createIntent);
   // 提交交易表单内嵌「新增产品」弹窗（受控，创建成功后自动选中）
   const [productFormOpen, setProductFormOpen] = useState(false);
-  const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
+  // #646：方向按来源页预填（此前恒 "buy"，从产品详情页点「卖出」进来会被重置成买入）
+  const [tradeType, setTradeType] = useState<"buy" | "sell">(
+    createIntent && normalizedInitialTradeType ? normalizedInitialTradeType : "buy"
+  );
   const [formData, setFormData] = useState({
-    product_code: "",
-    market: "",
-    platform_code: "",
+    // #646：录入意图下按来源页预填产品/市场/平台；扣款平台（cash_platform_code）
+    // 一律不预填，由用户自选。
+    // 已知限制：自动开的 Dialog 里 SearchableProductSelect 名称缓存尚未建立（懒加载
+    // enabled:hasOpened，#165），产品先回显「code·市场名」，打开下拉才补名称——不影响
+    // 提交（落账走 code+market，名称仅在确认弹窗显示），勿为此预填加「先拉名称再放行」。
+    product_code: createIntent ? normalizedInitialProduct?.code ?? "" : "",
+    market: createIntent ? normalizedInitialProduct?.market ?? "" : "",
+    platform_code: createIntent ? initialPlatform || "" : "",
     cash_platform_code: "",
     shares: "",
     amount: "",

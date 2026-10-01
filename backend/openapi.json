@@ -5522,7 +5522,7 @@
           "持仓管理"
         ],
         "summary": "Update Cash Position",
-        "description": "更新非净值型资产（现金）金额\n\n权限：仅admin\n规则：\n- 必须在交易日进行\n- 必须指定平台代码\n- 写入 manual_market_value 表（绝对替换），不再直接写 portfolio_position\n- 写入后提示用户重新生成快照（非强制）\n- 同日存在已确认现金交易时附 warnings 提示（issue #88，不阻断）",
+        "description": "更新非净值型资产（现金）金额\n\n权限：仅admin\n规则：\n- 必须在交易日进行\n- 必须指定平台代码\n- 金额闸门（issue #644）：0 <= cash_amount <= 99999999999.9999\n  （manual_market_value 列 Numeric(15,4) 容量：15 位总数字减 4 位小数\n  ⇒ 整数位 11 位；0 合法 = 清空当日现金）。可接受的最大值按分为\n  99999999999.99——原值恰好等于列容量时量化到 2 位会进位超界、被第二道闸门拒绝。\n  负值、非有限数或超上限拒绝 INVALID_AMOUNT\n- 写入 manual_market_value 表（绝对替换），不再直接写 portfolio_position\n- 响应携带真算的 requires_snapshot_regen（issue #645，与撤销侧同一判据：\n  仅写入日 <= 最新快照日、覆盖已烘焙进快照时为 true）；写入日晚于最新\n  快照日时无需重算。注意 false 只表示「不必重算」，不保证覆盖必然生效\n  （该平台当日需已有 CASH 持仓行、且中间快照能逐交易日生成），语义正文见\n  docs/reference/business-constraints.md#rule-cash\n- 同日存在已确认现金交易时附 warnings 提示（issue #88，不阻断）",
         "operationId": "update_cash_position_api_positions_portfolio__portfolio_code__cash_position_post",
         "security": [
           {
@@ -8114,6 +8114,10 @@
             "type": "number",
             "title": "Cash Balance"
           },
+          "in_transit_market_value": {
+            "type": "number",
+            "title": "In Transit Market Value"
+          },
           "product_count": {
             "type": "integer",
             "title": "Product Count"
@@ -8156,10 +8160,11 @@
         "required": [
           "market_value",
           "cash_balance",
+          "in_transit_market_value",
           "product_count"
         ],
         "title": "HoldingPlatformAggregate",
-        "description": "按平台聚合的持仓卡。\n\nmarket_value 含该平台现金与在途（现金行按 cash_amount 计）；\nproduct_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit\n为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
+        "description": "按平台聚合的持仓卡。\n\nmarket_value 含该平台现金与在途（现金行按 cash_amount 计）；\nin_transit_market_value 为**本平台**在途合计（#641，无在途为 0.0；\nmarket_value 含它，产品/现金明细卡不含）；\nproduct_count 只计非现金、非在途产品。行级缺份额/成本时 holding_profit\n为 None（不发布部分和）。ratio 为占组合比（0–1 小数）。\ncumulative_profit 为 #598 平台粒度口径，无市值快照时 None。"
       },
       "HoldingProductAggregate": {
         "properties": {
