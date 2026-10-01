@@ -154,8 +154,13 @@ export default function SettingsContent() {
 
   return (
     <div className="space-y-6">
-      {/* 移动端管理入口（#650）：平台/任务不进移动底部 Tab（5 项已占满位宽），
-          改从设置页这一移动一级 Tab 到达；桌面走侧边栏，故 lg:hidden。
+      {/* 移动端管理入口（#650）：平台/任务不进底部 Tab（位宽有限，见 navItems 的
+          mobileTab 说明），改从设置页这一移动一级 Tab 到达。
+          注意 lg:hidden 是**按视口宽度**分流、不是按端：桌面视口 <1024px 时本块同样显示
+          （而 Sidebar 是 hidden lg:block，此时也不显示），href 写死 /m/ 后靠 proxy.ts 按
+          UA 弹回 /platforms；反向缺口（移动 UA 且视口 ≥1024px）本块与底部 Tab 同时隐藏、
+          这两页重新无入口，属 #650 已登记的已知限制。返回出口在 MobileLayout 按
+          navItems 的 mobileEntryHost 统一补，不在这里各写一份。
           形态照 ProductsContent 的「分类」入口（Link + outline Button） */}
       {isAdmin && (
         <div className="grid grid-cols-2 gap-2 lg:hidden">

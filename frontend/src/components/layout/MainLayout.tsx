@@ -56,7 +56,7 @@ export default function MainLayout({
           {children}
         </main>
       </div>
-      <BottomNav basePath="/" />
+      <BottomNav basePath="" />
     </div>
   );
 }
