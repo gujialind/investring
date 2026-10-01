@@ -15,9 +15,10 @@ WORKDIR /app
 # Debian / PyPI 源（可选）：形态与 frontend/Dockerfile 的 NPM_REGISTRY 一致——
 # 缺省用官方源，国内环境构建传 --build-arg APT_MIRROR=mirrors.aliyun.com
 # --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ 即回到旧行为。
-# 缺省不能是阿里云：docker-build-smoke 的 runner 在境外，冷缓存实测走阿里云 Debian
-# 源两步 apt 合计 1272s（#12 install gcc 1058s + #11 install curl 214s），pip 再 15
-# 分钟以上，单构建就超过 job 的 20 分钟闸门（run 36878413226 分层时间戳）。
+# 缺省不能是阿里云：docker-build-smoke 的 runner 在境外，冷缓存实测走阿里云源时
+# 两步 apt 并发，墙钟取较长的 #12 install gcc = 1058.1s（#11 install curl 214.0s
+# 并行跑完）；随后 pip 跑到 721s 仍在解析 line 8 的传递依赖，job 14:42:13→15:12:27
+# 满 30 分钟被 cancel（run 36878413226 分层时间戳），必超 main 的 20 分钟闸门。
 ARG APT_MIRROR=
 RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|http://deb.debian.org|http://${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; fi
 
