@@ -672,10 +672,13 @@ jobs:
   # Dockerfile 构建冒烟（issue #170）：每个 PR 验证两个 Dockerfile 可构建，
   # 避免「构建问题合入 main 触发 CD 才暴露」（#141 ACR 拒推 provenance 即此类）。
   # 与 image-smoke 共用 gha 缓存 scope（相互预热）；push: false 不产生 ACR tag。
+  # 超时 30（原 20）：冷缓存时 docker.io 拉 python:3.12-slim 实测 11.6 分钟，
+  # 叠加 pip 走阿里云镜像（境外 runner）8+ 分钟，20 分钟必撞；被超时 cancel 的
+  # 构建不导出 gha 缓存，下一轮仍冷启动——自锁循环只有放宽闸门能打断。
   docker-build-smoke:
     name: "Docker Build Smoke (${{ matrix.service }})"
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
