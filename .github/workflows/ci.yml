@@ -706,7 +706,15 @@ jobs:
           build-args: ${{ matrix.build_args }}
           tags: investring-${{ matrix.service }}:smoke
           cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          # 导出只在 push（main）发生，PR 侧只读不写。判据是 GitHub 缓存的作用域规则：
+          # 一次 run 能读 current / default / base 分支的缓存，但 PR 写出去的条目只属于
+          # 它自己那条 merge ref，别的分支与别的 PR 永远读不到。实测本仓 10 GiB 配额里
+          # buildkit blob 占 8.10 GiB，其中 6.55 GiB 是 refs/pull/*/merge 作用域的死重；
+          # 配额写满后按最早使用驱逐，先被挤掉的正是 main 那份唯一全仓可读的 1.56 GiB，
+          # 于是所有 PR 一起冷启动（#170 冒烟门禁连红即此形态）。冷构建成本已由 #670
+          # （Debian/PyPI 源缺省官方）降到分钟级，这里收敛写侧是为了不再靠运气命中缓存。
+          # gzip=true：buildx 对 gha 缓存后端支持压缩导出，同一层集明显更小。
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,gzip=true,scope={0}', matrix.service) || '' }}
           # ACR 个人版不支持 OCI attestation（issue #141）
           provenance: false
           sbom: false
@@ -786,7 +794,8 @@ jobs:
             GIT_REVISION=${{ github.sha }}
           tags: ${{ steps.mode.outputs.backend_tags }}
           cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+          # 只 push 导出的理由与判据见 docker-build-smoke 的 cache-to 注释（单一持有处）
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,gzip=true,scope=backend' || '' }}
           # ACR 个人版不支持 OCI attestation（issue #141）
           provenance: false
           sbom: false
@@ -805,7 +814,8 @@ jobs:
             API_BASE_URL=http://backend:8000
           tags: ${{ steps.mode.outputs.frontend_tags }}
           cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
+          # 同 backend：PR 侧只读不写，判据见 docker-build-smoke 的 cache-to 注释
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,gzip=true,scope=frontend' || '' }}
           provenance: false
           sbom: false
 
