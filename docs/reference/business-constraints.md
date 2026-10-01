@@ -56,7 +56,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | --- | --- | --- |
 | 申赎/调仓/转移 | trade 的 CASH 腿 | transfer_group 关联 |
 | 现金分红等事件 | share_change_event | cash_change，按有效现金日（effective 日期）生效：现金分红取 cash_pay_date，NULL 回退 ex_date；其他事件仍取 ex_date |
-| 手动重估 | manual_market_value | 按日期绝对替换，不进 trade/event；高于当日交易/事件，作为后续增量基线；删除后须重算快照回退自然值 |
+| 手动重估 | manual_market_value | 按日期绝对替换，不进 trade/event；高于当日交易/事件，作为后续增量基线；删除后**仅当覆盖日已被快照烘焙时**须重算快照回退自然值（判据与生效前提见[现金覆盖的金额闸门与重算判据](#rule-cash)，#645） |
 
 下表中 T 为下单日、C 为基金确认日、A 为现金到账日。
 
@@ -71,6 +71,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **CASH 腿日期不变量**（#493）：任一 CASH 腿恒有 `trade_date <= confirm_date`（读侧可依赖的**数据不变量**；两日期同日或正常顺序偏离均为合法形态）。该不变量由申赎确认、调仓配对腿、跨平台转移**三处独立写入方**分别成立，**并无共用闸门**——调整日期校验规则须逐一排查三处（调仓侧闸门自身还有两处实现，见[调仓](#rule-trade)）。
 - **可用现金实时计算**：快照基线 + 增量；无快照则基线为 0、全量流水各计一次（#515）。流出 sell 的资金承诺锚定下单日 trade_date（pending/confirmed 均计）；流入 buy 须 confirmed 且 confirm_date ≤ T 才计。pending 卖出不增加可用现金，不足时须先卖后买两步操作（#70/#78）。自身扣款加回见[可用量口径](#可用量口径)。
 - **CASH 腿来源受限**：仅申赎、基金调仓配对、跨平台转移三条路径生成，均预置 transfer_group；该列 NOT NULL，REST 禁止直接创建 CASH 交易。
+- **现金覆盖的金额闸门与重算判据**（#644/#645）：手动重估只接受有限十进制数且 `0 <= 金额 <= 99,999,999,999.9999`（`manual_market_value.market_value` 列 Numeric(15,4) 容量：precision 是**总**位数，减 4 位小数后整数位只有 11 位；**0 合法 = 清空当日现金**，符号闸门不套用现金转移的「必须 > 0」），负值、`NaN`/`Infinity` 等非有限数或超上限拒绝 `INVALID_AMOUNT`，原值与量化后两道校验。**可接受的最大值按分为 `99,999,999,999.99`**：原值恰好等于列容量时，量化到 2 位（`quantize_amount` 的 ROUND_HALF_UP）会进位成 `100,000,000,000.00` 超界并被第二道拒绝，故按契约字面填 `99,999,999,999.9999` 是一定被拒的，两道闸门的拒绝文案分别点名「原值超容量」与「量化到分后超容量」。上限与前端 `CashMarketValueUpdateDialog` 的 MAX_CASH_AMOUNT 常量闸门同口径，改任一侧须同步另一侧；后端侧的容量本身由列类型派生的用例钉住，不靠字面量互指（前端只做体验层宽松闸门，「量化后是否超界」不由它复算）。写入/撤销响应的 `requires_snapshot_regen` 为**同一判据的真算**（`position_service._cash_override_requires_regen` 单一实现）：仅 `value_date <= 最新快照日`（覆盖已烘焙进快照）时为 true；覆盖日晚于最新快照日时不需要重算，界面不得引导用户重算。**但 `false` 只是「不必重算」，不是「覆盖必然生效」的充分条件**：覆盖值由生成侧贴在**该平台当日已有的 CASH 持仓行**上（`snapshot_service` 只对 `cash_amount` 非 NULL 的现金行打覆盖补丁），无现金行时覆盖永不生效；覆盖日与最新快照日之间也必须能按[快照规则](#rule-snapshot)逐交易日连续生成，否则中途报 `SNAPSHOT_NOT_CONTINUOUS`；零快照且目标日前已有 confirmed **申赎或交易**时报 `SNAPSHOT_REQUIRES_RECALCULATE`（判据与#180 的既有正文一致，见[零快照守卫](#rule-snapshot)）。三种形态响应仍是 `success` + `requires_snapshot_regen=false` 且 `warnings` 不含该口径（生成侧既存行为），排查现金「改了没变」时先按这三条核对。
 - **事件现金生效**（#522）：只计 confirmed 平台级事件的 `cash_change`（不重复计基金级父记录），按表中有效现金日入 CASH。快照独立消费 `(前快照日, D]` 内的事件现金，不得复用按 `ex_date` 选出的份额事件窗口；可用现金增量的上下界及全量现金审计同取有效现金日。`as_of_date=None` 仍不设上限，无快照基线仍为 0，各笔流水只计一次。
 - **买卖在途资金**（#93，#493 起为单腿确认口径）：买入在途为 CASH sell 已 confirmed 且现金日 ≤ D、基金买入腿尚未在 D 生效（pending 或确认日 C > D）；卖出在途为基金 sell 已 confirmed 且 C ≤ D、CASH buy 尚未生效（pending 或到账日 A > D）。两腿均 confirmed 的跨期窗口与跨天现金转移规则保留；配对方向显式限定、cancelled 腿一律排除，金额按现金腿平台归属。两类在途每日独立计算、不继承前日，cash_amount 恒正，计入市值但不计入可用现金。
 - **分红在途**（#522）：对 confirmed 平台级现金分红，`ex_date <= D < cash_pay_date` 时，将该笔 `cash_change` 按事件平台归入 `product_code="IN_TRANSIT_DIVIDEND"`；与买卖在途共用每日绝对计算口径，不从前日余额递增或继承。计入组合市值及在途合计，不入 CASH、不计可用现金；到账日不再在途，现金窗口仅消费一次。NULL 或同日到账没有在途区间；计算不依赖 D 日仍持有基金，除息后清仓不能丢掉待到账分红。
@@ -259,7 +260,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `FORBIDDEN` | 403 | 权限门（非资源不存在）：`get_current_admin` 要求 `current_user.role == "admin"`，非 admin 访问 admin-only 端点即拒；改密端点非 admin 且 `target_code` 指向他人 | dependencies.py::get_current_admin; routers/auth.py::change_password |
 | `INSUFFICIENT_CASH` | 422 | 支出超过扣款平台实时可用现金（先量化 2 位再精确比较、无容差）：调仓买入按 `as_of` 校验（创建/PUT/确认共用，加回自身 CASH sell 腿——#493 起含 pending/confirmed，且只加回查询时点已计提的扣款，见「可用量口径」节；确认侧 `skip_available_check` 跳过）；赎回确认按确认日校验该平台可用现金（`skip_cash_check` 跳过）；现金转移按转出平台校验（#493 起按 `transfer_date` 时点） | services/trade_service.py::validate_buy_cash_with_addback; services/subscription_service.py::confirm_single_subscription |
 | `INSUFFICIENT_SHARES` | 422 | 卖出/赎回份额超过实时可用份额：调仓卖出（创建/PUT/确认共用 `validate_sell_shares_with_addback`，自身 pending 卖出份额加回防双重计数）；赎回创建按申请日投资人可用份额，赎回 PUT 按新份额（本条 pending 旧份额加回） | services/trade_service.py::validate_sell_shares_with_addback; services/subscription_service.py::create_subscription |
-| `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额）。**另一类语义（#598 读侧）**：累计收益计算遇到 confirmed 交易 `actual_amount` 为 NULL 时同码拒绝——这是**存量数据不完整**而非入参非法（应用写路径恒写 `actual_amount`，只有库外写入/历史脏数据能命中），处置是修数据不是改入参；服务刻意不回退 `amount`、不伪装为零 | services/trade_service.py::validate_buy_cash_with_addback; services/cash_transfer_service.py::create_cash_transfer; services/cumulative_profit_service.py::compute_cumulative_profits |
+| `INVALID_AMOUNT` | 422 | 金额入参为 None 或量化到 2 位后 `<= 0`：调仓买入含费现金支出（创建/PUT/确认共用）、现金转移金额（原值与量化后两道）、申购金额（创建原值 + 量化后、PUT 量化后）；另卖出调仓有价格时 `quantize(shares×price) − fee <= 0`（fee 不小于毛额）。**现金手动覆盖的变体口径（#644）**：0 合法（清空当日现金），拒绝非有限数（`NaN`/`Infinity`）、`< 0` 或超 `99,999,999,999.9999`（Numeric(15,4) 列容量 = 11 位整数 + 4 位小数），原值与量化后两道、文案分别点名「原值超容量」与「量化到分后超容量」，**可接受的最大值按分为 `99,999,999,999.99`**（原值等于列容量会被量化进位那道拒），见[现金账本](#rule-cash)。**另一类语义（#598 读侧）**：累计收益计算遇到 confirmed 交易 `actual_amount` 为 NULL 时同码拒绝——这是**存量数据不完整**而非入参非法（应用写路径恒写 `actual_amount`，只有库外写入/历史脏数据能命中），处置是修数据不是改入参；服务刻意不回退 `amount`、不伪装为零 | services/trade_service.py::validate_buy_cash_with_addback; services/cash_transfer_service.py::create_cash_transfer; services/position_service.py::update_cash_position; services/cumulative_profit_service.py::compute_cumulative_profits |
 | `INVALID_CLASSIFICATION` | 422 | 资产分类维度字典新建/编辑形态非法：`dimension` 不在五维白名单；`code` 非全大写或不带该维度前缀（ASSET_/REGION_/STYLE_/SIZE_/SEG_）；asset_class 值却传 `applicable_asset_classes`、非 asset_class 值传 `dimension_rules` 或适用大类为空（新建/更新均须 ≥1）；`dimension_rules` 的维度或规则值越界；关联的适用大类不存在/不是 asset_class 维度值，或其规则矩阵无该维度行（无行 = 禁止） | services/asset_classification_service.py::create_classification; ::_validate_applicable_classes |
 | `INVALID_CONFIRM_DAYS` | 422 | 产品 `confirm_days` 非法（`validate_confirm_days`）：显式传 null、< 0，或场内（`CN_EXCHANGE`）不为 0。create 仅在显式传入时校验（未传按 market+is_qdii 推导）；update 对合并后终态**无条件**校验——即使本次没改该字段，存量脏值（NULL/负数）也会在任何 PUT 上被拦 | services/product_service.py::validate_confirm_days |
 | `INVALID_CREDENTIALS` | 401 | 登录：`code` 查无该投资人，或 `verify_password` 对 password_hash 校验不通过（两种情形同一分支、不区分用户是否存在），且账户进入时未被锁定、本次失败也未新触发锁定（锁定态一律 403 `ACCOUNT_LOCKED`） | routers/auth.py::login |
@@ -361,7 +362,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 ## 易错陷阱
 
-1. 现金市值修正走 `POST /positions/portfolio/{code}/cash-position` 写 `manual_market_value`（绝对替换），**不直接改 `portfolio_position`**；写入后需重新生成快照。
+1. 现金市值修正走 `POST /positions/portfolio/{code}/cash-position` 写 `manual_market_value`（绝对替换），**不直接改 `portfolio_position`**；是否需重新生成快照按覆盖日是否已被快照烘焙判定，**不是写入即需重算**，判据与三种「无需重算但覆盖仍不生效」的形态见[现金账本](#rule-cash)（#645）。
 2. LOF 拆分为两条记录（场内/场外分别处理）。
 3. 组合份额仅因申购赎回变化；分红再投资只影响成分基金份额。
 4. 投资人不支持强制物理删除——份额需为 0 才能删。

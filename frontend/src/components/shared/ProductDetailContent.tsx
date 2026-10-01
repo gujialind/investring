@@ -32,6 +32,7 @@ import { useNavAnalysis } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
 
@@ -122,6 +123,13 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
   const historyTotal = historyQueries[0]?.data?.total ?? 0;
   const latestPrice = historyItems[0];
+  // #647：历史净值请求失败与真空态必须可区分——失败走失败态 + 重试，
+  // 不得落进「暂无净值数据」空态分支（静默失败会把后端故障读成产品无历史）
+  const historyError = historyQueries.some((q) => q.isError);
+  const historyErr = historyQueries.find((q) => q.isError)?.error ?? null;
+  const refetchHistory = () => {
+    historyQueries.forEach((q) => void q.refetch());
+  };
 
   const { data: tradesData } = useTradeList({
     portfolio_code: portfolioCode,
@@ -171,6 +179,9 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
 
   const snapshotDate = holdings?.snapshot_date;
   const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}`;
+  // #646：操作行「事件」落事件录入页（原 href 是不带参数的裸 tradesLink，与「查看全部」
+  // 完全相同，跳到没有事件录入的调仓列表）
+  const eventsLink = `${basePath}/${portfolioCode}/share-change-events?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}&action=create`;
 
   const overview = (
     <Card data-testid="product-overview-card">
@@ -247,13 +258,13 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   ) : (
     <div className="flex gap-2" data-testid="product-action-row">
       <Button asChild className="flex-1">
-        <Link href={`${tradesLink}&trade_type=buy`}>买入</Link>
+        <Link href={`${tradesLink}&trade_type=buy&action=create`}>买入</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={`${tradesLink}&trade_type=sell`}>卖出</Link>
+        <Link href={`${tradesLink}&trade_type=sell&action=create`}>卖出</Link>
       </Button>
       <Button asChild variant="outline" className="flex-1">
-        <Link href={tradesLink}>事件</Link>
+        <Link href={eventsLink}>事件</Link>
       </Button>
     </div>
   );
@@ -320,7 +331,9 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const historyCard = !isCash && (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-history-card">
       <h3 className="text-lg font-semibold">历史净值</h3>
-      {historyItems.length === 0 ? (
+      {historyError ? (
+        <QueryErrorState error={historyErr} onRetry={refetchHistory} className="mt-3" />
+      ) : historyItems.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (
         <>

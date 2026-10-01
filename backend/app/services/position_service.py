@@ -777,6 +777,37 @@ def calculate_investor_available_shares(
     return shares
 
 
+# 现金手动覆盖金额上限 = manual_market_value.market_value 列 Numeric(15,4) 的容量
+# （issue #644）：precision 15 位**总**数字、scale 4 位小数 ⇒ 整数位只有 11 位，
+# 即 99,999,999,999.9999（不是 12 位整数的 …9999.9999，那比列容量大 10 倍）。
+# 与前端 CashMarketValueUpdateDialog 的 MAX_CASH_AMOUNT 同口径，改任一侧必须同步
+# 另一侧；容量本身由 tests/integration/test_issue_88_90_91.py 从列类型派生钉住。
+MAX_CASH_OVERRIDE_AMOUNT = Decimal("99999999999.9999")
+
+# 可接受的最大金额 = 列容量按分向下取整。原值**等于**列容量时，量化到 2 位（ROUND_HALF_UP）
+# 会进位成 100000000000.00 超界、被第二道闸门拒绝，所以「上限」对调用方的可执行含义是这个数，
+# 而不是列容量本身；两道闸门的文案因此必须可区分（#644，L2 复审 #653）。
+# 刻意写常量而非在此 `.quantize(...)`：模块级取整属 quantize.py 守卫禁止的非产生点量化
+# （tests/unit/test_quantize.py::TestFinancialQuantizationGuard），且 ROUND_DOWN 与全系统
+# 金额口径 ROUND_HALF_UP 不同。它与列容量的关系由 test_issue_88_90_91 从列类型派生钉住。
+MAX_CASH_ACCEPTED_AMOUNT = Decimal("99999999999.99")
+
+
+def _cash_override_requires_regen(
+    db: Session, portfolio_code: str, value_date: date
+) -> bool:
+    """现金覆盖写入/撤销后是否需重算快照：覆盖日是否已被快照烘焙。
+
+    判据 = value_date <= 最新快照日（组合市值快照）。写入与撤销两条路径共用
+    本函数（issue #645，单一实现防两份判据漂移）；覆盖日晚于最新快照日时
+    不需要重算——但 true/false 都不是「覆盖必然生效」的充分条件（该平台当日
+    需已有 CASH 持仓行、且覆盖日与最新快照日之间能逐交易日生成），生效前提见
+    docs/reference/business-constraints.md#rule-cash。
+    """
+    latest_snapshot_date = get_latest_snapshot_date(db, portfolio_code)
+    return bool(latest_snapshot_date and value_date <= latest_snapshot_date)
+
+
 def update_cash_position(
     db: Session,
     *,
@@ -788,11 +819,15 @@ def update_cash_position(
 ) -> dict:
     """现金市值修正：写 manual_market_value（绝对替换），供 REST 与 CLI 共用。
 
-    绝不直接写 portfolio_position（快照表受 ORM 事件保护）。
-    写入后需重新生成快照才会反映到持仓。不 commit。
+    绝不直接写 portfolio_position（快照表受 ORM 事件保护）。不 commit。
+    金额闸门（issue #644）：amount 必须是有限十进制数且
+    0 <= amount <= MAX_CASH_OVERRIDE_AMOUNT（= 列 Numeric(15,4) 容量）；0 合法
+    （清空当日现金），负值、非有限或超列容量拒绝 INVALID_AMOUNT。原值等于列容量会被
+    第二道（量化后）闸门拒绝，故对调用方的可接受上界是 MAX_CASH_ACCEPTED_AMOUNT。
 
     Returns:
-        dict：portfolio_code/platform_code/cash_amount/computed_value/update_date(date)
+        dict：portfolio_code/platform_code/cash_amount/computed_value/
+        update_date(date)/warnings/requires_snapshot_regen（真算，issue #645）
     """
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
@@ -806,8 +841,33 @@ def update_cash_position(
     if not is_trading_day(db, target_date):
         raise BusinessError("NON_TRADING_DAY", "非交易日，请等待交易日再提交")
 
-    # 覆盖金额为手动重估值，统一量化到 2 位（issue #94）
+    # 金额闸门（issue #644）：符号与量级在服务层收口，前端 MAX_CASH_AMOUNT
+    # 只是体验层闸门，挡不住 API 直调 / CLI / 其他客户端。
+    # 与现金转移同族（cash_transfer_service 原值+量化后两道），差别是 0 合法。
+    # 有限性必须先查：Decimal("NaN") 上的有序比较抛 InvalidOperation → 500，
+    # 而 pydantic 的 float 默认 allow_inf_nan，NaN 是能进到这里的入参。
+    amount_orig = Decimal(str(amount))
+    if not amount_orig.is_finite():
+        raise BusinessError("INVALID_AMOUNT", "现金覆盖金额必须是有限十进制数")
+    if amount_orig < 0:
+        raise BusinessError("INVALID_AMOUNT", "现金覆盖金额不能为负")
+    if amount_orig > MAX_CASH_OVERRIDE_AMOUNT:
+        raise BusinessError(
+            "INVALID_AMOUNT",
+            f"现金覆盖金额不能超过列容量 {MAX_CASH_OVERRIDE_AMOUNT}，"
+            f"可接受的最大值按分为 {MAX_CASH_ACCEPTED_AMOUNT}",
+        )
+
+    # 覆盖金额为手动重估值，统一量化到 2 位（issue #94）；量化进位可能把
+    # 贴上界的原值推过 Numeric(15,4) 容量（99999999999.9999 → 100000000000.00），
+    # 故量化后必须再查一道上界。文案点名「量化后」，与第一道的「原值超容量」可区分。
     amount_d = quantize_amount(amount)
+    if amount_d > MAX_CASH_OVERRIDE_AMOUNT:
+        raise BusinessError(
+            "INVALID_AMOUNT",
+            f"现金覆盖金额量化到分后为 {amount_d}，超过列容量 {MAX_CASH_OVERRIDE_AMOUNT}；"
+            f"可接受的最大值按分为 {MAX_CASH_ACCEPTED_AMOUNT}",
+        )
 
     # 计算当前隐式值（用于审计）
     computed = compute_cash_balance(db, portfolio_code, platform_code, target_date)
@@ -879,6 +939,9 @@ def update_cash_position(
         "computed_value": float(computed) if computed is not None else None,
         "update_date": target_date,
         "warnings": warnings,
+        "requires_snapshot_regen": _cash_override_requires_regen(
+            db, portfolio_code, target_date
+        ),
     }
 
 
@@ -970,8 +1033,8 @@ def delete_manual_cash_override(
     db.delete(manual)
     db.flush()
 
-    latest_snapshot_date = get_latest_snapshot_date(db, portfolio_code)
-    requires_regen = bool(latest_snapshot_date and value_date <= latest_snapshot_date)
+    # issue #645：与写入侧共用同一判据函数，不再各自内联
+    requires_regen = _cash_override_requires_regen(db, portfolio_code, value_date)
 
     return {
         "portfolio_code": portfolio_code,

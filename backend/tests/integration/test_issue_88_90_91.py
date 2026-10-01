@@ -8,7 +8,7 @@
 
 import pytest
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from unittest.mock import patch
 
 from app.models.trade import Trade
@@ -16,6 +16,8 @@ from app.models.product import Product
 from app.models.manual_market_value import ManualMarketValue
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import (
+    MAX_CASH_ACCEPTED_AMOUNT,
+    MAX_CASH_OVERRIDE_AMOUNT,
     delete_manual_cash_override,
     list_manual_cash_overrides,
     update_cash_position,
@@ -53,6 +55,20 @@ def _get_product(db, code, market):
     return db.query(Product).filter(
         Product.code == code, Product.market == market
     ).first()
+
+
+def _cash_column_capacity() -> Decimal:
+    """由 ManualMarketValue.market_value 的列类型**派生**容量，不写字面量。
+
+    precision 是总位数、scale 是小数位 ⇒ 整数位只有 precision - scale。
+    闸门用例一律以此为基准：引用 MAX_CASH_OVERRIDE_AMOUNT 符号的断言在错位常量下同样
+    全绿（L2 #653 的 Blocker 就是这么躲过 9 条用例的），派生基准才能双向判红。
+    """
+    col_type = ManualMarketValue.__table__.c.market_value.type
+    return (
+        Decimal(10) ** (col_type.precision - col_type.scale)
+        - Decimal(10) ** -col_type.scale
+    )
 
 
 # ============================================================================
@@ -161,6 +177,242 @@ class TestManualOverrideListDelete:
             amount=Decimal("100"), update_date=T,
         )
         assert result["warnings"] == []
+
+
+class TestCashOverrideGuards:
+    """#644 金额闸门（符号/量级/有限性）+ #645 写入侧 requires_snapshot_regen 真算"""
+
+    def test_gate_equals_column_capacity(self):
+        """闸门必须**等于列容量**，而不是某个自说自话的字面量。
+
+        把常量写成 12 位整数（999999999999.9999，比 Numeric(15,4) 的 11 位整数容量大 10
+        倍）会当场判红——L2 #653 的 Blocker 正是这个漂移，而该轮其余用例都引用
+        MAX_CASH_OVERRIDE_AMOUNT 符号本身，对错位常量同样全绿。
+        """
+        assert MAX_CASH_OVERRIDE_AMOUNT == _cash_column_capacity()
+        # 可接受上界是容量按分向下取整，不是容量本身：容量原值会被量化进位那道拒
+        assert MAX_CASH_ACCEPTED_AMOUNT == _cash_column_capacity().quantize(
+            Decimal("0.01"), rounding=ROUND_DOWN
+        )
+        assert MAX_CASH_ACCEPTED_AMOUNT < MAX_CASH_OVERRIDE_AMOUNT
+
+    def test_update_rejects_negative_amount(self, test_db):
+        create_portfolio(test_db, code="CG_P1", status="active")
+        create_platform(test_db, code="CG_PL1")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P1", platform_code="CG_PL1",
+                amount=Decimal("-0.01"), update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+
+    def test_update_rejects_amount_above_column_capacity(self, test_db):
+        """贴容量上界的第一位整数（12 位整数 = 1e11）必须拒。
+
+        刻意不用 1e12 这类「比错一倍还多」的输入：1e12 在 12 位整数的错位闸门下同样被拒，
+        判不出闸门等于列容量这条不变量。
+        """
+        create_portfolio(test_db, code="CG_P2", status="active")
+        create_platform(test_db, code="CG_PL2")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P2", platform_code="CG_PL2",
+                amount=Decimal("100000000000"), update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+        # 第一道（原值超容量）的文案不得提「量化」——与第二道可区分是本轮的判据之一
+        assert "不能超过列容量" in exc.value.message
+        assert "量化" not in exc.value.message
+
+    def test_update_accepts_amount_just_below_capacity(self, test_db):
+        """闸门不得过度拒绝：贴可接受上界（容量按分 `99,999,999,999.99`）应正常落库。"""
+        create_portfolio(test_db, code="CG_P2B", status="active")
+        create_platform(test_db, code="CG_PL2B")
+        ensure_trading_day(test_db, T, is_open=True)
+        near_cap = MAX_CASH_ACCEPTED_AMOUNT
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P2B", platform_code="CG_PL2B",
+            amount=near_cap, update_date=T,
+        )
+        assert result["cash_amount"] == float(near_cap)
+        persisted = list_manual_cash_overrides(test_db, "CG_P2B")
+        assert Decimal(str(persisted[0]["market_value"])) == near_cap
+
+    @pytest.mark.parametrize("bad", [float("nan"), Decimal("NaN")])
+    def test_update_rejects_non_finite_amount(self, test_db, bad):
+        """NaN 必须在闸门处可读拒绝（422），不能逃成 decimal.InvalidOperation → 500。
+
+        pydantic 的 float 默认 allow_inf_nan，NaN 是能进到服务层的真实入参；
+        Decimal("NaN") 上的有序比较抛 InvalidOperation，故有限性检查须先于符号比较。
+        """
+        create_portfolio(test_db, code="CG_P2C", status="active")
+        create_platform(test_db, code="CG_PL2C")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P2C", platform_code="CG_PL2C",
+                amount=bad, update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+        assert "有限" in exc.value.message
+        assert list_manual_cash_overrides(test_db, "CG_P2C") == []
+
+    def test_update_rejects_infinite_amount(self, test_db):
+        """±Infinity 与 NaN 走同一条有限性出口，不再分叉成两种失败形态。"""
+        create_portfolio(test_db, code="CG_P2D", status="active")
+        create_platform(test_db, code="CG_PL2D")
+        ensure_trading_day(test_db, T, is_open=True)
+        for infinity in (float("inf"), float("-inf")):
+            with pytest.raises(BusinessError) as exc:
+                update_cash_position(
+                    test_db, portfolio_code="CG_P2D", platform_code="CG_PL2D",
+                    amount=infinity, update_date=T,
+                )
+            assert exc.value.code == "INVALID_AMOUNT"
+            assert "有限" in exc.value.message
+
+    def test_update_rejects_edge_amount_rounded_over_capacity(self, test_db):
+        """原值 == 上界合法通过第一道，但量化到 2 位进位（99999999999.9999 →
+        100000000000.00）超 Numeric(15,4) 容量 → 第二道拒绝。
+
+        文案必须点名「量化到分」并给出可接受的最大值：用户按契约字面填的正是列容量本身，
+        若沿用第一道那句「不能超过 99999999999.9999」，读起来就是他刚输入的数被自己的
+        上限拒了（#644，L2 复审 #653）。
+        """
+        create_portfolio(test_db, code="CG_P3", status="active")
+        create_platform(test_db, code="CG_PL3")
+        ensure_trading_day(test_db, T, is_open=True)
+        with pytest.raises(BusinessError) as exc:
+            update_cash_position(
+                test_db, portfolio_code="CG_P3", platform_code="CG_PL3",
+                amount=MAX_CASH_OVERRIDE_AMOUNT, update_date=T,
+            )
+        assert exc.value.code == "INVALID_AMOUNT"
+        message = exc.value.message
+        assert "量化到分" in message
+        assert "100000000000.00" in message          # 点名进位后的实际值
+        assert str(MAX_CASH_ACCEPTED_AMOUNT) in message  # 给出可执行的上界
+
+    def test_update_allows_zero_amount(self, test_db):
+        """写 0 合法（清空当日现金）——符号闸门是 < 0，不套用转移的 > 0"""
+        create_portfolio(test_db, code="CG_P4", status="active")
+        create_platform(test_db, code="CG_PL4")
+        ensure_trading_day(test_db, T, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P4", platform_code="CG_PL4",
+            amount=Decimal("0"), update_date=T,
+        )
+        assert result["cash_amount"] == 0.0
+        # 与拒绝用例对称的反向网：0 不只是「没被拒」，覆盖行确实落库
+        persisted = list_manual_cash_overrides(test_db, "CG_P4")
+        assert len(persisted) == 1
+        assert Decimal(str(persisted[0]["market_value"])) == Decimal("0")
+
+    def test_update_requires_regen_false_when_after_latest_snapshot(self, test_db):
+        """写入日 > 最新快照日 → 尚未烘焙进快照，False（不再恒真）"""
+        _seed_cash(test_db, "CG_P5", "CG_PL5", 5000)  # 最新快照日 = SNAP
+        ensure_trading_day(test_db, T, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P5", platform_code="CG_PL5",
+            amount=Decimal("100"), update_date=T,  # T > SNAP
+        )
+        assert result["requires_snapshot_regen"] is False
+
+    def test_update_requires_regen_true_when_on_latest_snapshot(self, test_db):
+        """写入日 == 最新快照日 → 已烘焙，True（与撤销侧同一判据）"""
+        _seed_cash(test_db, "CG_P6", "CG_PL6", 5000)
+        ensure_trading_day(test_db, SNAP, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P6", platform_code="CG_PL6",
+            amount=Decimal("100"), update_date=SNAP,
+        )
+        assert result["requires_snapshot_regen"] is True
+
+    def test_update_requires_regen_false_without_snapshot(self, test_db):
+        """无快照 → False（对齐撤销侧 test_list_and_delete_override_service 口径）"""
+        create_portfolio(test_db, code="CG_P7", status="active")
+        create_platform(test_db, code="CG_PL7")
+        ensure_trading_day(test_db, T, is_open=True)
+        result = update_cash_position(
+            test_db, portfolio_code="CG_P7", platform_code="CG_PL7",
+            amount=Decimal("100"), update_date=T,
+        )
+        assert result["requires_snapshot_regen"] is False
+
+    def test_rest_post_negative_amount_rejected_and_not_persisted(
+        self, client, admin_headers, test_db,
+    ):
+        create_portfolio(test_db, code="CG_R1", status="active")
+        create_platform(test_db, code="CG_R1_PL")
+        ensure_trading_day(test_db, T, is_open=True)
+        resp = client.post(
+            "/api/positions/portfolio/CG_R1/cash-position",
+            json={
+                "platform_code": "CG_R1_PL",
+                "cash_amount": -50000,
+                "update_date": T.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_AMOUNT"
+        assert list_manual_cash_overrides(test_db, "CG_R1") == []
+
+    def test_rest_post_rejects_non_finite_amount_with_readable_422(
+        self, client, admin_headers, test_db,
+    ):
+        """REST 端到端钉 NaN → 422（不是 500）：这是 #644「异常输入收成可读拒绝」的公开出口。
+
+        NaN 能过 pydantic 的 float 校验（allow_inf_nan），修前会在服务层的有序比较上抛
+        decimal.InvalidOperation，走全局未预期异常 → 500，toast 只剩 "Request code 500"。
+        """
+        create_portfolio(test_db, code="CG_R3", status="active")
+        create_platform(test_db, code="CG_R3_PL")
+        ensure_trading_day(test_db, T, is_open=True)
+        # 刻意用 content= 手写字面量而不用 json=：httpx 的 dumps 是 allow_nan=False，
+        # NaN 会被它自己拒掉。真实 JSON 规范里也没有 NaN——能发进来的只有直调 API 的
+        # 非标准客户端（Python json.dumps 缺省 allow_nan=True 就产出这种请求体）。
+        resp = client.post(
+            "/api/positions/portfolio/CG_R3/cash-position",
+            content=(
+                b'{"platform_code": "CG_R3_PL", "cash_amount": NaN,'
+                b' "update_date": "' + T.isoformat().encode() + b'"}'
+            ),
+            headers={**admin_headers, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_AMOUNT"
+        assert list_manual_cash_overrides(test_db, "CG_R3") == []
+
+    @pytest.mark.parametrize(
+        "update_date,expected_regen",
+        [
+            (pytest.param(T, False, id="after-snapshot")),   # 晚于最新快照日 → 未烘焙
+            (pytest.param(SNAP, True, id="on-snapshot")),    # == 最新快照日 → 已烘焙
+        ],
+    )
+    def test_rest_post_returns_real_requires_snapshot_regen(
+        self, client, admin_headers, test_db, update_date, expected_regen,
+    ):
+        """两支都钉：只钉 False 时「router 再硬编码 False」同样全绿（Q4 盲区）。"""
+        code = f"CG_R2_{'T' if expected_regen else 'F'}"
+        _seed_cash(test_db, code, f"{code}_PL", 5000)  # 最新快照日 = SNAP
+        ensure_trading_day(test_db, update_date, is_open=True)
+        resp = client.post(
+            f"/api/positions/portfolio/{code}/cash-position",
+            json={
+                "platform_code": f"{code}_PL",
+                "cash_amount": 100,
+                "update_date": update_date.isoformat(),
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["requires_snapshot_regen"] is expected_regen
+        assert data["cash_amount"] == 100.0
 
 
 # ============================================================================
