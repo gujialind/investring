@@ -12,8 +12,15 @@ FROM python:3.12-slim AS deps
 
 WORKDIR /app
 
-# 使用阿里云 Debian 镜像（国内加速）
-RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+# Debian / PyPI 源（可选）：形态与 frontend/Dockerfile 的 NPM_REGISTRY 一致——
+# 缺省用官方源，国内环境构建传 --build-arg APT_MIRROR=mirrors.aliyun.com
+# --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ 即回到旧行为。
+# 缺省不能是阿里云：docker-build-smoke 的 runner 在境外，冷缓存实测走阿里云源时
+# 两步 apt 并发，墙钟取较长的 #12 install gcc = 1058.1s（#11 install curl 214.0s
+# 并行跑完）；随后 pip 跑到 721s 仍在解析 line 8 的传递依赖，job 14:42:13→15:12:27
+# 满 30 分钟被 cancel（run 36878413226 分层时间戳），必超 main 的 20 分钟闸门。
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|http://deb.debian.org|http://${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; fi
 
 # 安装系统依赖（pymysql 编译需要）
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,12 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 先复制依赖文件，利用 Docker 层缓存
 COPY backend/requirements.txt .
 
-# 安装 Python 依赖（使用阿里云 PyPI 镜像，国内加速）。
+# 安装 Python 依赖。
 # --no-binary jsonpath 豁免：akshare>=1.18.90 依赖 jsonpath，该包仅发布
 # sdist（纯 Python，无需编译），与 --only-binary :all: 冲突，
 # 由 docker-build-smoke 门禁发现（issue #170，#196 引入 akshare 后构建即断）
+ARG PIP_INDEX_URL=
 RUN pip install --no-cache-dir --prefix=/install --only-binary :all: --no-binary jsonpath \
-    -i https://mirrors.aliyun.com/pypi/simple/ \
+    ${PIP_INDEX_URL:+-i ${PIP_INDEX_URL}} \
     -r requirements.txt
 
 # ------------------------------------------------------------------
@@ -44,8 +52,9 @@ WORKDIR /app
 ARG GIT_REVISION=
 LABEL org.opencontainers.image.revision="${GIT_REVISION}"
 
-# 使用阿里云 Debian 镜像（国内加速）
-RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+# Debian 源覆盖同 deps 阶段；ARG 不跨阶段继承，需在此重新声明
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|http://deb.debian.org|http://${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; fi
 
 # 安装运行时必要的系统库（不含 gcc 等编译工具）
 RUN apt-get update && apt-get install -y --no-install-recommends \

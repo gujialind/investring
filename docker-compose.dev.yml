@@ -42,6 +42,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      # 国内开发机保留阿里云源（Dockerfile 缺省为官方源，CI 境外 runner 用它）
+      args:
+        APT_MIRROR: mirrors.aliyun.com
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
     container_name: investring-dev-backend
     ports:
       - "8000:8000"
