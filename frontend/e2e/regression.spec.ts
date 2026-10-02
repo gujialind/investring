@@ -6,6 +6,8 @@
  */
 import { test, expect } from '@playwright/test';
 import { E2E_ACTIVE, E2E_PORT, collectPageErrors, gotoPortfolioDetail, gotoPortfolioSubpage } from './helpers';
+// 运行时导入导航单源：断言清单与返回出口由同一份数据派生，不在 spec 里抄第三份（#650）
+import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
 
 test.describe('页面渲染回归（防 P0 复发）', () => {
   // 防 P0-2：taskApi.list 返回分页对象却按数组处理，导致 tasks.map is not a function 白屏
@@ -195,5 +197,67 @@ test.describe('组合净值走势卡双端一致（#649）', () => {
     await expect(card.getByText('暂无净值数据', { exact: true })).toBeVisible();
     await page.getByTestId('nav-range-1y').click();
     await expect(card.getByText('该区间暂无净值数据', { exact: true })).toBeVisible();
+  });
+});
+
+test.describe('桌面窄屏底部导航（#658 L2 Blocker 1 回归网）', () => {
+  // 防 Blocker 1：basePath 写成 "/" 时 href 拼成 "//dashboard" 这种协议相对 URL（指向名为
+  // dashboard 的 host），桌面窄屏五个入口整体离开本站、激活高亮恒假。此前三层门禁结构上
+  // 碰不到这一面：chromium project 固定 1280 宽（本导航被 lg:hidden 隐藏）、mobile project
+  // 走 /m 前缀（拼接恰好正确）、vitest 分母不含 components。
+  test.use({ viewport: { width: 900, height: 800 } });
+
+  test('窄屏底部导航 href 同源、当前项带 aria-current、点击到达同站一级页', async ({ page }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== 'chromium',
+      '桌面窄视口断言仅针对桌面项目（mobile 项目 390px 视口走 /m 端，另一条用例覆盖）',
+    );
+
+    const nav = page.getByTestId('bottom-nav');
+    await page.goto('/dashboard');
+    await expect(nav).toBeVisible();
+    const origin = new URL(page.url()).origin;
+
+    // 协议相对形态是本次回归的唯一特征：钉住它比钉住链接条数更判得出修复前后
+    await expect(nav.locator('a[href^="//"]')).toHaveCount(0);
+    for (const item of NAV_ITEMS.filter((i) => i.mobileTab)) {
+      await expect(nav.locator(`a[href="${item.href}"]`)).toHaveCount(1);
+    }
+    // 高亮本身是类名（定位器契约禁止按它定位），aria-current 是同一判定的可测面
+    await expect(nav.locator('a[href="/dashboard"][aria-current="page"]')).toHaveCount(1);
+
+    await nav.locator('a[href="/portfolio"]').click();
+    await page.waitForURL('**/portfolio');
+    const after = new URL(page.url());
+    expect(
+      `${after.origin}${after.pathname}`,
+      `点击应留在本站一级页，实际落到 ${page.url()}`,
+    ).toBe(`${origin}/portfolio`);
+    await expect(nav.locator('a[href="/portfolio"][aria-current="page"]')).toHaveCount(1);
+  });
+});
+
+test.describe('移动端非 Tab 管理页的站内出口（#658 L2 Blocker 2 回归网）', () => {
+  test('经页内入口进入后可返回宿主页，不再「可达即被困」', async ({ page }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== 'mobile',
+      '移动端出口断言仅针对移动项目（桌面端这些页走侧边栏，无此形态）',
+    );
+
+    // 先走一遍真实入口：钉住组件里的 /m/* 字面量与 navItems 的 mobileEntryHost 仍对齐
+    await page.goto('/m/settings');
+    await page.getByRole('link', { name: '平台管理' }).click();
+    await page.waitForURL('**/m/platforms');
+
+    for (const exit of mobileExitPaths('/m')) {
+      await page.goto(exit.path);
+      const back = page.getByRole('link', { name: `返回${exit.label}` });
+      await expect(back, `${exit.path} 应有站内出口`).toBeVisible();
+      // 这些页不渲染底部导航，返回入口是页内唯一出路
+      await expect(page.getByTestId('bottom-nav')).toHaveCount(0);
+      await back.click();
+      await page.waitForURL(`**${exit.href}`);
+      expect(new URL(page.url()).pathname, `返回应落在 ${exit.href}`).toBe(exit.href);
+    }
   });
 });
