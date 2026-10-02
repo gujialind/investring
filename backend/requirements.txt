@@ -3,8 +3,8 @@
 # Runtime dependencies
 
 fastapi==0.141.1
-uvicorn[standard]==0.53.0
-SQLAlchemy==2.0.54
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.1
 pydantic==2.13.5
 pydantic-settings==2.15.0  # issue #252: GHSA-4xgf-cpjx-pc3j 修复版
 python-jose[cryptography]==3.5.0
@@ -34,7 +34,7 @@ tushare==1.4.29
 # 钉版原因：1.18.90+ 依赖 jsonpath（仅发布 sdist），构建侧需 Dockerfile
 # --no-binary jsonpath 豁免（已加）；钉版防上游后续版本再引入新 sdist 依赖
 # 破环镜像构建（issue #170 冒烟门禁发现，#196 引入 akshare 后构建即断）
-akshare==1.18.96
+akshare==1.18.97
 lxml==6.1.3
 simplejson==4.1.2
 
@@ -49,7 +49,7 @@ click==8.5.0
 # 注意：本行只闭合 starlette 一处。干净解析实测共 79 个包、本文件仅声明 30 个，
 # 其余 50 个传递依赖（anyio、typing_extensions、pydantic_core、cryptography、
 # h11/httptools/websockets 等）仍由构建时现场解析、仓库无记录，清单见 issue #314。
-starlette==1.6.0
+starlette==1.7.0
 
 # Auth
 python-dotenv==1.2.3
@@ -59,8 +59,8 @@ python-dotenv==1.2.3
 pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
-pytest-mock==3.15.1
+pytest-mock==3.16.0
 factory-boy==3.3.3
 # 增量覆盖率门禁（issue #464）：CI backend-test 对 coverage.xml + PR base 求改动行
 # 覆盖率并设硬阈值。同 pytest 系先例——requirements.txt 是镜像与 CI 的唯一安装来源。
-diff-cover==10.5.1
+diff-cover==10.6.0

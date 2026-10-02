@@ -124,10 +124,10 @@ def test_image_smoke_release_chain():
     # attestation 重新打开（ACR 个人版会拒推，#141）。
     # 取材带 cache-to scope=backend 上下文：`provenance: false` 在 docker-build-smoke
     # 里也出现，裸串 replace(…,1) 会改错块、反例空转成假绿。
-    ("cache-to: type=gha,mode=max,scope=backend\n"
+    ("cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,gzip=true,scope=backend' || '' }}\n"
      "          # ACR 个人版不支持 OCI attestation（issue #141）\n"
      "          provenance: false",
-     "cache-to: type=gha,mode=max,scope=backend\n"
+     "cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,gzip=true,scope=backend' || '' }}\n"
      "          # ACR 个人版不支持 OCI attestation（issue #141）\n"
      "          provenance: true"),
     # digest 拉回被摘：冒烟的不再是已发布制品
