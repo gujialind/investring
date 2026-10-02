@@ -734,7 +734,10 @@ jobs:
     name: "Image Smoke"
     needs: docker-build-smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 临时诊断（境外 runner → ACR 推送 10/1 起在 pushing layers 阶段 stall 满 30 分钟闸门）：
+    # #670 使后端全部层 digest 变新，首次 push 需真实上传整组新 blob，历史窗口内从未有过
+    # 这种量级的上行。放宽到 75 分钟以区分「慢但在传」与「彻底 stall」，确诊后回落。
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v7
