@@ -14,6 +14,8 @@
 
 * 复用三层：完全共享（`hooks/`、`stores/`、`components/ui/`、`types/`）→ 共享业务组件（`components/shared/`，以 `variant: "desktop" | "mobile"` + `basePath` 适配双端）→ 端侧独立（`components/mobile/`、`desktop/`、`layout/`、`charts/`）。
 
+* **`basePath` 是「前缀不带尾斜杠」，类型为 `"" | "/m"`**（#658）：数据里的路径自带前导 `/`，`${basePath}${href}` 若 `basePath="/" ` 会拼成 `"//dashboard"`——浏览器按**协议相对 URL** 解析成名为 `dashboard` 的 host，链接离开本站、`pathname === href` 的激活判定也恒假。这类错误 lint/tsc/build/E2E 四层都碰不到（chromium project 固定 1280 宽、该导航 `lg:hidden`；mobile project 走 `/m` 拼接恰好正确），故把契约写进**类型**而不是注释，并在 `e2e/regression.spec.ts` 的「桌面窄屏底部导航」用例里以 900px 视口钉住。新增分端前缀时沿用 `"" | "/m"`，不要接受任意字符串。
+
 * API 层 `src/lib/api/` 按域拆分、经 `index.ts` barrel 统一导出（`@/lib/api`）；`next.config.js` 将 `/api/:path*` rewrite 到 `API_BASE_URL`（默认 localhost:8000）。
 
 * **确认类弹窗统一走对应 `/preview` 端点**：`TradeConfirmDialog`（`useTradePreview`）、`SubscriptionConfirmDialog`（`useSubscriptionPreview`）、`EventConfirmDialog`（`useShareChangeEventPreview`，#424）。**不要直接渲染列表行的计算字段**——「用户填的字段」落库了，「确认时才算的字段」在 pending 阶段是 NULL，直接渲染会被格式化兜底成误导性的 `0.00`（#424 的成因正是这里一次例外）。约定的四条：① hook 用 `retry: false` + `staleTime: 0`（弹窗重开必 refetch，预览值即确认值，不得基于过期值确认）；② 加载态取 `isLoading || isFetching`；③ 错误经 `ConfirmInfoDialog` 的 `error` 通道展示并禁用确认按钮（`getErrorMessage` 已解出后端 `detail.message`，**不要再叠「预览失败：」前缀**）；④ 内容区加 `data?.preview` 守卫，避免重开命中缓存时先渲染上一次的值；⑤ **弹窗内的业务输入必须进 preview 的 query key**（#493：调仓确认的到账日/到账平台经 `queryKeys.trades.previewWith(id, options)` 分键），否则用户改了输入仍读旧预览、把过期值当确认值提交；与后端缺省同值的选项要**归一为「不传」**，避免同一有效选项分裂出多个缓存键。同域的**列表列**若该状态下方未计算，显示 `--` 而非 `0.00`。

@@ -15,16 +15,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Save, Calendar, Loader2, RefreshCw, CheckCircle, XCircle } from "lucide-react";
+import { Save, Calendar, Loader2, RefreshCw, CheckCircle, XCircle, Building2, PlayCircle } from "lucide-react";
+import Link from "next/link";
 import { getErrorMessage } from "@/lib/api";
 import { useUIStore } from "@/stores/uiStore";
-import { useChangePassword } from "@/hooks/useAuth";
+import { useChangePassword, useRoleCheck } from "@/hooks/useAuth";
 import { useTradingCalendar } from "@/hooks/useTradingCalendar";
 import { useDataSourceConfig, useUpdateDataSource, useSyncTradingCalendar } from "@/hooks/useSystem";
 
 export default function SettingsContent() {
   const addToast = useUIStore((state) => state.addToast);
   const changePassword = useChangePassword();
+  const { isAdmin } = useRoleCheck();
 
   // tushare_token 仅在用户输入时提交（服务端只返回脱敏值，不回填输入框，避免脱敏串覆盖真实 token）；
   // akshare_enabled 从服务端回填
@@ -152,6 +154,30 @@ export default function SettingsContent() {
 
   return (
     <div className="space-y-6">
+      {/* 移动端管理入口（#650）：平台/任务不进底部 Tab（位宽有限，见 navItems 的
+          mobileTab 说明），改从设置页这一移动一级 Tab 到达。
+          注意 lg:hidden 是**按视口宽度**分流、不是按端：桌面视口 <1024px 时本块同样显示
+          （而 Sidebar 是 hidden lg:block，此时也不显示），href 写死 /m/ 后靠 proxy.ts 按
+          UA 弹回 /platforms；反向缺口（移动 UA 且视口 ≥1024px）本块与底部 Tab 同时隐藏、
+          这两页重新无入口，属 #650 已登记的已知限制。返回出口在 MobileLayout 按
+          navItems 的 mobileEntryHost 统一补，不在这里各写一份。
+          形态照 ProductsContent 的「分类」入口（Link + outline Button） */}
+      {isAdmin && (
+        <div className="grid grid-cols-2 gap-2 lg:hidden">
+          <Link href="/m/platforms">
+            <Button variant="outline" size="sm" className="w-full">
+              <Building2 className="mr-2 h-4 w-4" />
+              平台管理
+            </Button>
+          </Link>
+          <Link href="/m/settings/tasks">
+            <Button variant="outline" size="sm" className="w-full">
+              <PlayCircle className="mr-2 h-4 w-4" />
+              任务管理
+            </Button>
+          </Link>
+        </div>
+      )}
       <div>
         <h1 className="text-2xl font-semibold">设置</h1>
         <p className="text-muted-foreground">系统设置和配置</p>
