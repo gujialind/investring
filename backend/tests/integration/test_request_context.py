@@ -136,7 +136,7 @@ class TestExceptionHandlers:
         resp = client.get("/api/portfolios")
 
         assert resp.status_code == 500
-        assert resp.json() == {"detail": "Internal server error"}
+        assert resp.json() == {"detail": "服务器内部错误，请稍后重试"}
 
         request_id = resp.headers[REQUEST_ID_HEADER]
         error = only_log_line(json_log_capture, message="未预期异常")
