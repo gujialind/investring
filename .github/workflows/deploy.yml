@@ -245,6 +245,31 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           echo "SSH_OPTS=-i $HOME/.ssh/id_deploy -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o BatchMode=yes" >> "$GITHUB_ENV"
 
+      - name: 部署前磁盘水位检查
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # SSH_OPTS 需要分词
+          # 必须在任何 mkdir/scp 之前拒绝：磁盘满时的失败落在 scp/mkdir，早于服务器端
+          # 状态机，既不留 .deploy-failed 现场也不写 accepted 记录，归因会被带偏（#662）。
+          # 阈值推导：单次发布名义 backend 752MB + frontend 307MB ≈ 1.03GB（nginx 基座跨
+          # 发布共享）；×2 覆盖「本次拉取 + 激活失败后按 digest 重拉上一发布」的最坏单程，
+          # 再留等量余量给连续失败时回收停摆。定位是「动手前响亮拒绝」的下界，不是增长
+          # 上界（上界由 server_deploy.sh 的发布保留窗口负责）；镜像体积翻倍时先复核
+          # KEEP_RELEASES，再复核这个数字。
+          # 只测 /：现状 /var/lib/docker 与 /opt/investring 同在根盘，data-root 若迁走须同步。
+          MIN_FREE_MB=4096
+          AVAIL_KB="$(ssh $SSH_OPTS "$SERVER" "df -Pk / | awk 'NR==2 {print \$4}'")"
+          # df 输出异常（locale/挂载变更）必须响亮失败，不把空串当 0 处理
+          [[ "$AVAIL_KB" =~ ^[0-9]+$ ]] \
+            || { echo "❌ 无法解析根盘可用空间: '${AVAIL_KB}'" >&2; exit 1; }
+          AVAIL_MB=$(( AVAIL_KB / 1024 ))
+          if (( AVAIL_MB < MIN_FREE_MB )); then
+            echo "❌ 服务器根盘可用不足：当前剩余 ${AVAIL_MB}MB，阈值 ${MIN_FREE_MB}MB" >&2
+            echo "   已在任何 mkdir/scp 之前停止；处置见 docs/runbooks/deploy-rollback.md §5" >&2
+            exit 1
+          fi
+          echo "✅ 磁盘水位 OK：当前剩余 ${AVAIL_MB}MB，阈值 ${MIN_FREE_MB}MB"
+
       - name: 同步部署脚本与发布包
         run: |
           set -euo pipefail
