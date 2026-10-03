@@ -14,6 +14,7 @@ CD 重写后的不变量，逐条变成可执行判据；每条判据配反例�
   9. 权限最小化：顶层 read，仅 deploy job 为 deploy/ tag 放宽 contents: write；
  10. deploy/ tag 仅 auto 与 migrate 打（rollback/redeploy 不打），tag 目标必须先解析为
      完整 commit，且已存在则跳过。
+ 11. 磁盘水位检查早于第一处远端写，且对四种 mode 都生效（#662-B）。
 """
 from pathlib import Path
 
@@ -158,10 +159,39 @@ def assert_tag_gated(text, source=SOURCE):
     assert 'git tag "$TAG" "$SHA"' in sec, f"{source}: tag 必须打在解析过的 commit 上"
 
 
+def assert_disk_preflight(text, source=SOURCE):
+    """磁盘水位检查的存在**与位置**（#662-B）。
+
+    位置是承重的：Actions 的执行序就是 steps: 的文件序，步骤名不参与调度。只断名字
+    对「preflight 被挪到同步步骤之后」完全无感，而那恰是最可能的顺手改法——闸门
+    仍在，却已经起不到「动手前拒绝」的作用。尾锚因此取第一处远端写的字面命令。
+    """
+    step = "- name: 部署前磁盘水位检查"
+    first_remote_write = "mkdir -p '$BASE/incoming'"
+    assert step in text, f"{source}: 缺少部署前磁盘水位检查（#662-B 闸门被删）"
+    assert first_remote_write in text, f"{source}: 第一处远端写的锚点变了，判据需同步修订"
+    assert text.index("- name: 配置 SSH") < text.index(step), \
+        f"{source}: 水位检查要用 SSH_OPTS，必须排在配置 SSH 之后"
+    assert text.index(step) < text.index(first_remote_write), \
+        f"{source}: 水位检查必须早于任何 mkdir/scp，否则撞墙点不变"
+    sec = section(text, step, first_remote_write)
+    for needle in ("df -Pk /", "MIN_FREE_MB=", "AVAIL_MB < MIN_FREE_MB", "exit 1",
+                   # 拒绝那一行必须**同时**报出剩余与阈值两个数字：运维拿到红还要拿到差多少。
+                   # 锚整行而不是两个短串——成功行里也印着同样的字样，拆开断会被它替掉。
+                   "服务器根盘可用不足：当前剩余 ${AVAIL_MB}MB，阈值 ${MIN_FREE_MB}MB"):
+        assert needle in sec, f"{source}: 磁盘水位判据缺失: {needle}"
+    assert "docker system df" not in sec, f"{source}: 判据应是根盘可用空间，不是可回收量"
+    # 四种 mode 都要过闸门：同步步骤本身无 if（只有步骤内门控 bundle 的 scp），
+    # 给 preflight 加 if 会让手动 redeploy/rollback/migrate 绕过它
+    assert sec.splitlines()[1].strip() == "run: |", \
+        f"{source}: 水位检查不得带 if 条件（须覆盖 auto/redeploy/rollback/migrate）"
+
+
 ALL_JUDGMENTS = [
     assert_no_build, assert_event_guard, assert_source_verification, assert_bundle_consumption,
     assert_ancestry_chain, assert_ssh_hardening, assert_input_hygiene, assert_lock_stale_args,
     assert_failure_guidance, assert_permissions, assert_manual_modes, assert_tag_gated,
+    assert_disk_preflight,
 ]
 
 
@@ -177,6 +207,16 @@ def _mutate(old, new):
         assert text.count(old) >= 1, f"变异锚点不存在: {old!r}"
         return text.replace(old, new, 1)
     return mutate
+
+
+def _move_preflight_after_sync(text):
+    """把水位检查整块挪到「同步部署脚本与发布包」之后（祖先校验之前）。"""
+    start = text.index("      - name: 部署前磁盘水位检查")
+    end = text.index("      - name: 同步部署脚本与发布包")
+    rest = text[:start] + text[end:]
+    anchor = "      - name: 读取服务器发布记录并验证祖先关系"
+    i = rest.index(anchor)
+    return rest[:i] + text[start:end] + rest[i:]
 
 
 MUTATIONS = [
@@ -215,6 +255,16 @@ MUTATIONS = [
     # 顶层权限被放宽
     (_mutate("permissions:\n  contents: read\n  actions: read",
              "permissions:\n  contents: write\n  actions: write"), assert_permissions),
+    # 水位检查被「顺手」挪到同步步骤之后：步骤还在，但撞墙点已在其之后（位置判据的正面靶子）
+    (_move_preflight_after_sync, assert_disk_preflight),
+    # 水位比较被改成恒假（闸门形同虚设，仍打印一行 OK）
+    (_mutate("if (( AVAIL_MB < MIN_FREE_MB ))", "if (( 0 < 0 ))"), assert_disk_preflight),
+    # 拒绝时不再报出两个数字（运维拿到红，拿不到差多少）
+    (_mutate("阈值 ${MIN_FREE_MB}MB", ""), assert_disk_preflight),
+    # 误以为只有自动部署会撞磁盘，给闸门加 if → 手动 redeploy/rollback/migrate 绕过
+    (_mutate("      - name: 部署前磁盘水位检查\n        run: |",
+             "      - name: 部署前磁盘水位检查\n        if: env.MODE == 'auto'\n        run: |"),
+     assert_disk_preflight),
 ]
 
 
