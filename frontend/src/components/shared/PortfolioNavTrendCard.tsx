@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import { useNavHistory } from "@/hooks/usePortfolio";
 import { toDateOnly } from "@/lib/utils";
 
@@ -51,7 +52,13 @@ export default function PortfolioNavTrendCard({
     const start = rangeStartDate(navRange);
     return start ? { start_date: start } : undefined;
   }, [navRange]);
-  const { data: navHistoryData, isPending } = useNavHistory(code, navParams);
+  const {
+    data: navHistoryData,
+    isPending,
+    isError,
+    error,
+    refetch,
+  } = useNavHistory(code, navParams);
   const navHistory = (navHistoryData || [])
     .filter((r) => r.unit_price !== null)
     .map((r) => ({ date: r.snapshot_date, nav: r.unit_price as number }));
@@ -93,8 +100,13 @@ export default function PortfolioNavTrendCard({
         {isPending ? (
           /* 加载期（首屏与切区间）不写空态文案——「还没拿到数据」被说成「没有数据」是错的
              语义（移动端抽取前整卡不渲染，故这也是本次新增形态）。占位与曲线同高，
-             避免换区间时布局跳动。读取失败仍走下方空态分支，与抽取前一致（失败态归 #647） */
+             避免换区间时布局跳动。 */
           <LoadingState height={`${curveHeight}px`} />
+        ) : isError ? (
+          /* 判序承重：失败必须排在「长度为 0」之前。不取 isError 时读取失败会直接落进
+             下面的空态分支，把「取不到」说成「这个区间没有净值」——页面上无从区分
+             （#663 第 5 处，本清单里形态最重的一处） */
+          <QueryErrorState error={error} onRetry={() => void refetch()} className="mt-3" />
         ) : navHistory.length > 0 ? (
           <NavCurve data={navHistory} height={curveHeight} initialNav={1.0} />
         ) : (

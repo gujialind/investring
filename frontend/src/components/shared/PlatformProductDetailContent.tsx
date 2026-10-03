@@ -122,7 +122,12 @@ export default function PlatformProductDetailContent({
   };
   const latestPrice = historyItems[0];
 
-  const { data: tradesData, isError: tradesError } = useTradeList({
+  const {
+    data: tradesData,
+    isError: tradesError,
+    error: tradesErr,
+    refetch: refetchTrades,
+  } = useTradeList({
     portfolio_code: portfolioCode,
     product_code: productCode,
     market: market || undefined,
@@ -365,7 +370,7 @@ export default function PlatformProductDetailContent({
         </Link>
       </div>
       {tradesError ? (
-        <p className="mt-3 text-sm text-muted-foreground">交易记录加载失败</p>
+        <QueryErrorState error={tradesErr} onRetry={refetchTrades} className="mt-3" />
       ) : (tradesData?.items ?? []).length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无交易记录</p>
       ) : (

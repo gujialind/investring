@@ -35,6 +35,7 @@ import { cn, formatNav } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import {
@@ -127,7 +128,8 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
     // 管理页展示全部（含 CASH/IN_TRANSIT 系统虚拟产品）；#327 起后端默认排除
     include_virtual: true,
   };
-  const { data, isLoading, isFetching, isError } = useProductList(listParams);
+  const { data, isLoading, isFetching, isError, error, refetch } =
+    useProductList(listParams);
 
   const deleteProduct = useDeleteProduct();
 
@@ -459,7 +461,7 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
         </Button>
       </Link>
 
-      <Card>
+      <Card data-testid="products-list-card">
         <CardHeader>
           <CardTitle>产品列表</CardTitle>
           <CardDescription>
@@ -587,11 +589,17 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
               </TableBody>
             </Table>
           </div>
-          {/* 空态三分：请求失败 ≠ 空数据（评审 #244；toast 已由 hook 弹出，此处内联区分）；
-              无筛选为空 = 暂无产品；有筛选为空 = 引导重置（规范 §8 变体②） */}
+          {/* 空态三分（评审 #244）：请求失败 ≠ 空数据 ≠ 筛选无结果；#663 把失败一支
+              从 EmptyState 收敛到 QueryErrorState（透出后端消息 + 可点重试）。
+              卡内锚点 data-testid 供 E2E 区分本页失败与同页 toast（hook 失败还会弹
+              标题为「产品列表加载失败」的 toast，页面级断言会串台）。
+              ⚠️ 本处保留 `products.length === 0` 前件：实测请求失败时 react-query 会清空
+              data（改筛选失败后旧行集不在屏上），故该前件当前恒真、判序不可观测。
+              若将来给 useProductList 配 errorUpdateAction/placeholder 让失败保留旧数据，
+              必须同批把判序改为「失败优先」，否则失败块会重新变成不可达分支。 */}
           {products.length === 0 &&
             (isError ? (
-              <EmptyState message="产品列表加载失败" description="请检查网络后重试" />
+              <QueryErrorState error={error} onRetry={refetch} />
             ) : hasNonDefaultFilter ? (
               <EmptyState
                 message="无符合筛选条件的记录"
