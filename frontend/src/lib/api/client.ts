@@ -120,7 +120,11 @@ export function handleApiError(error: unknown): ApiException {
     const code =
       (detail && typeof detail === "object" && detail.error) || "UNKNOWN_ERROR";
     // 有响应但 detail 解析不出（对象无 message 等异常形态）→ 本地化兜底文案；
-    // 仅无响应（网络/超时错误）才回 axios 原文，避免裸 HTTP 文案上桌（#655 L2 S2）
+    // 仅无响应（网络/超时错误）才回 axios 原文，避免裸 HTTP 文案上桌（#655 L2 S2）。
+    // 无响应一支**刻意保留英文原文**（"Network Error" / "timeout of …ms exceeded"）：
+    // 断网/超时与服务端故障在界面上就是靠这句区分——「加载失败：Network Error」把方向
+    // 指向客户端网络，而不是让人去翻后端日志。口径由 #664 定案、由本文件 test 的
+    // 「无响应 → axios 原文」两条断言钉住；要本地化必须同批改那两条，不得新旧并存。
     const message =
       detailMessage(detail) ||
       (axiosError.response ? "请求失败" : axiosError.message || "请求失败");

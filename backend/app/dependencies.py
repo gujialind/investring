@@ -60,7 +60,7 @@ def get_current_user(
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authentication token",
+            detail="缺少登录凭证，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -70,7 +70,7 @@ def get_current_user(
     if is_token_blacklisted(token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has been revoked",
+            detail="登录状态已失效，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -78,7 +78,7 @@ def get_current_user(
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail="登录凭证无效或已过期，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -86,7 +86,7 @@ def get_current_user(
     if not investor_code:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
+            detail="登录凭证内容异常，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -97,7 +97,7 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": "ACCOUNT_LOCKED",
-                "message": f"Account is locked until {locked_until.isoformat()}",
+                "message": f"账户已锁定，请 {locked_until.isoformat()} 后再试",
                 "locked_until": locked_until.isoformat(),
             },
         )
@@ -106,7 +106,7 @@ def get_current_user(
     if not investor:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
+            detail="登录用户不存在，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -136,7 +136,7 @@ def get_current_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": "FORBIDDEN",
-                "message": "Admin privileges required",
+                "message": "需要管理员权限",
             },
         )
     return current_user
