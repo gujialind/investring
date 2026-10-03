@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import HoldingProductCard from "./HoldingProductCard";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
@@ -86,7 +87,12 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
     return largestRemainderPercents(values);
   }, [platformProducts, cashProduct, platformCode]);
 
-  const { data: tradesData, isError: tradesError } = useTradeList({
+  const {
+    data: tradesData,
+    isError: tradesError,
+    error: tradesErr,
+    refetch: refetchTrades,
+  } = useTradeList({
     portfolio_code: portfolioCode,
     platform_code: platformCode,
     page: 1,
@@ -294,7 +300,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
         </Link>
       </div>
       {tradesError ? (
-        <p className="mt-3 text-sm text-muted-foreground">交易记录加载失败</p>
+        <QueryErrorState error={tradesErr} onRetry={refetchTrades} className="mt-3" />
       ) : tradeRows.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无交易记录</p>
       ) : (
