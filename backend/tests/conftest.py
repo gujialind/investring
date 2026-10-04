@@ -153,7 +153,7 @@ def _clear_auth_global_state():
 
     token_blacklist 为模块级内存集合：改密/登出测试会将当前 token 拉黑，
     而同一秒内生成的同 sub/role token 字节完全一致，导致后续无关测试
-    随机 401（Token has been revoked）。login_failure_tracker 同理。
+    随机 401（detail 为「登录状态已失效，请重新登录」）。login_failure_tracker 同理。
     """
     from app.utils.security import token_blacklist, login_failure_tracker
     token_blacklist.clear()
