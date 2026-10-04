@@ -22,6 +22,7 @@ import HoldingInTransitCard from "./HoldingInTransitCard";
 import HoldingProductCard from "./HoldingProductCard";
 import HoldingPlatformCard from "./HoldingPlatformCard";
 import LoadingState from "./LoadingState";
+import QueryErrorState from "./QueryErrorState";
 
 interface PortfolioHoldingsProps {
   portfolioCode: string;
@@ -247,9 +248,10 @@ export default function PortfolioHoldings({
       {activeQuery.isLoading ? (
         <LoadingState />
       ) : activeQuery.isError ? (
-        <div className="py-8 text-center text-muted-foreground">
-          加载失败，请刷新重试
-        </div>
+        <QueryErrorState
+          error={activeQuery.error}
+          onRetry={() => void activeQuery.refetch()}
+        />
       ) : view === "product" ? (
         productEmpty ? (
           <div className="py-8 text-center text-muted-foreground">暂无持仓记录</div>

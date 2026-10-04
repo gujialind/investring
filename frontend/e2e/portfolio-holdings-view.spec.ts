@@ -87,6 +87,32 @@ async function setupInTransitPortfolio(page: Page, testInfo: TestInfo): Promise<
 }
 
 test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
+  test('持仓明细读取失败 → 后端消息与重试入口，而非「暂无持仓记录」（#663③）', async ({ page }) => {
+    // 只钉默认的按产品视图：按平台走同一个 activeQuery.isError 分支（同一段代码），
+    // 未单独钉是刻意取舍而非静默省略——改坏那一支时本用例同样会红。
+    await page.route(
+      /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
+      (route) =>
+        route.fulfill({
+          status: 500,
+          json: { detail: { error: 'INTERNAL', message: '持仓聚合服务暂不可用' } },
+        })
+    );
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const area = page.getByTestId('portfolio-holdings');
+    await expect(area).toContainText('加载失败：持仓聚合服务暂不可用', { timeout: 10_000 });
+    // 旧文案「加载失败，请刷新重试」把重试动作交回用户手动刷新；现在必须有可点入口
+    await expect(area).not.toContainText('暂无持仓记录');
+    const retry = area.getByRole('button', { name: '重试' });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === 'GET' && /holdings\/by-product/.test(r.url()),
+      { timeout: 10_000 },
+    );
+    await retry.click();
+    await refetched;
+  });
+
   test('默认按产品视图：URL 无 view 参数，产品聚合卡与现金聚合卡渲染', async ({ page }) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });

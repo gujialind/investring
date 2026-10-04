@@ -157,6 +157,37 @@ test.describe("平台详情页", () => {
     ).toBeVisible();
   });
 
+  test("交易记录读取失败 → 透出后端消息与重试入口，而非空态（#663①）", async ({ page }) => {
+    // 本页的失败/空态**判序**是各写一份的（组件只统一了文案入口），而 components 不在
+    // vitest 覆盖率分母内——把 QueryErrorState 分支改回 `length === 0` 优先不会让任何
+    // 静态门禁变红，这条断言就是那张网（#655/#663 的教训）。
+    // URL 判据收口在列表本身：`/api/trades/{id}`、`/preview` 不得被误伤。
+    await page.route(/\/api\/trades(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: "INTERNAL", message: "交易服务暂不可用" } },
+      })
+    );
+    await page.goto(PLATFORM_PATH);
+    const card = page.getByTestId("platform-trades-card");
+    // 断的是后端 detail.message 上桌（不是本地兜底文案），且每端点用不同 message，
+    // 使红/绿能归因到具体卡片
+    await expect(card).toContainText("加载失败：交易服务暂不可用", { timeout: 10_000 });
+    await expect(card).not.toContainText("暂无交易记录");
+    const retry = card.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    // 同页持仓卡不受影响 → 证明 route 没有串台到 holdings 的两条请求
+    await expect(page.getByTestId("platform-holdings-section")).toContainText("沪深300ETF");
+    // 点重试确实重发 GET、且只有 GET（注册必须在失败态可见之后，否则会撞上
+    // react-query 的自动重试，在「没点重试」的情况下也算绿）
+    const refetched = page.waitForRequest(
+      (r) => r.method() === "GET" && /\/api\/trades(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    await retry.click();
+    await refetched;
+  });
+
   test("交易记录卡：该平台交易结对展示与查看全部链接", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
     const card = page.getByTestId("platform-trades-card");
@@ -331,6 +362,25 @@ test.describe("平台-产品详情页", () => {
     await expect(history).toContainText("加载失败", { timeout: 10_000 });
     await expect(history).not.toContainText("暂无净值数据");
     await expect(history.getByRole("button", { name: "重试" })).toBeVisible();
+  });
+
+  test("交易记录读取失败 → 失败态与重试，同页净值卡不受影响（#663②）", async ({ page }) => {
+    // 与上一条同形但落在另一页：两页各写一份判序，缺一条就等于那一页没有网。
+    // message 与上一条不同串，红的时候能直接看出是哪页的 route 生效了。
+    await page.route(/\/api\/trades(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: "INTERNAL", message: "产品交易服务暂不可用" } },
+      })
+    );
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    const card = page.getByTestId("platform-product-trades-card");
+    await expect(card).toContainText("加载失败：产品交易服务暂不可用", { timeout: 10_000 });
+    await expect(card).not.toContainText("暂无交易记录");
+    await expect(card.getByRole("button", { name: "重试" })).toBeVisible();
+    // 历史净值卡照常出数：两卡失败文案同以「加载失败」开头，没有这条正向对照，
+    // route 判据写宽（误伤 nav-history）也会被当成"本页失败态正常"而看不出来
+    await expect(page.getByTestId("platform-product-history-card")).toContainText("4.2000");
   });
 
   test("交易记录卡：该产品在该平台的交易（不含 CASH 腿）", async ({ page }) => {
@@ -600,5 +650,76 @@ test.describe("现金市值更新 Dialog", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(triggers.nth(0)).toContainText("选择转出平台");
     await expect(triggers.nth(1)).toContainText("华宝证券 (HBZQ)");
+  });
+
+  test("两支提交反馈的正向可见性：长文案 + 跳转按钮 与 ✓ 更新成功（#660）", async ({ page }, testInfo) => {
+    // 为什么必须自建组合：共享 E2E_ACTIVE 上两支的正向分支都不可达——它在写入日有 1 笔
+    // 已确认现金交易（warnings 恒非空 ⇒ 落 warnings 支，短文案永不渲染），而固定快照形态
+    // 使 regen 恒 false（长文案支永不渲染）。禁止对 E2E_ACTIVE 跑 recalculate/catch-up/
+    // generate-next 来凑形态（frontend/AGENTS.md §4 红线：固定快照与可编辑窗口是种子契约）。
+    // 选日依据：申购确认同样产生 confirmed CASH 腿，日期 = apply_date 的 T+1
+    // （backend/app/services/subscription_service.py 的 get_next_trading_day），所以
+    // 「不造交易」并不能让 warnings 为空，必须把写入日错开到确认日之后：
+    //   d1 申购 → d2 确认（CASH 腿落 d2）→ 快照 d2、d3 ⇒ 最新快照日 = d3
+    //   支 A 写 d3（≤ 最新快照日 ⇒ regen=true，长文案支）
+    //   支 B 写 d4（> 最新快照日 且 当日无 CASH 腿 ⇒ regen=false + warnings 空，短文案支）
+    // mobile/webkit 比 chromium 慢 3~4 倍（trade-in-transit.spec.ts 的 CI 实测与同款放宽）
+    test.setTimeout(60_000);
+    const code = `C660_${testInfo.project.name}_${testInfo.retry}`;
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const headers = await authHeaders(page);
+    const post = async <T = unknown>(path: string, data?: unknown): Promise<T> => {
+      const resp = await page.request.post(path, { headers, data });
+      await expect(resp, `${path} ${resp.status()} ${await resp.text()}`).toBeOK();
+      return resp.json();
+    };
+
+    const upto = await tradingDaysUptoToday(page);
+    expect(upto.length, "交易日历里取不到 4 个 ≤ 今天的交易日").toBeGreaterThanOrEqual(4);
+    const [d1, d2, d3, d4] = upto.slice(-4);
+    // 数据前提先钉住：错把 d2 当写入日会落进 warnings 支，用例该红在前提而不是文案上
+    expect(d1 < d2 && d2 < d3 && d3 < d4).toBe(true);
+
+    await post("/api/portfolios", { code, name: `#660 现金覆盖 ${code}` });
+    const sub = await post<{ id: number }>("/api/subscriptions", {
+      portfolio_code: code, investor_code: "ADMIN", platform_code: "HBZQ",
+      sub_type: "subscribe", amount: 100000, apply_date: d1,
+    });
+    await post(`/api/subscriptions/${sub.id}/confirm`);
+    await post("/api/snapshots/generate", { portfolio_code: code, target_date: d2 });
+    await post("/api/snapshots/generate", { portfolio_code: code, target_date: d3 });
+
+    await page.goto(`/portfolio/${code}/platforms/HBZQ/products/CASH?market=`);
+    await page.getByTestId("platform-product-action-row")
+      .getByRole("button", { name: "市值更新" }).click();
+    const dlg = dialogByTitle(page, "更新现金市值");
+    await expect(dlg).toBeVisible();
+    const amount = dlg.getByLabel("当前金额（元）");
+
+    // ---- 支 A：写入日 == 最新快照日 → 长文案 + 「前往快照管理」跳转 ----
+    await pickCalendarDay(page, dialogDateTrigger(dlg), d3);
+    await amount.fill("30000");
+    await dlg.getByRole("button", { name: "确认更新" }).click();
+    await expect(
+      dlg.getByText("覆盖已写入，需重新生成快照才能在持仓中生效。")
+    ).toBeVisible({ timeout: 10_000 });
+    // 判别性负向：分支条件写反时两支会同时出现或互换，只断正向的那条抓不住
+    await expect(dlg).not.toContainText("✓ 更新成功");
+    // modal 内的链接可以按 role 定位：Radix 的 aria-hidden 只加在 DialogContent **之外**
+    // 的子树（与文件末尾 toast 那条注释的口径相反面）
+    await expect(dlg.getByRole("link", { name: "前往快照管理" })).toBeVisible();
+
+    // ---- 支 B：写入日 > 最新快照日且当日无 confirmed CASH 腿 → 短文案 ----
+    // 不关开 Dialog：onSelect 已把上一支的 submitResult 清掉（省一次浮层开合，#524 面）；
+    // 但 onSuccess 会清空金额，必须重填
+    await pickCalendarDay(page, dialogDateTrigger(dlg), d4);
+    await amount.fill("30000");
+    await dlg.getByRole("button", { name: "确认更新" }).click();
+    // 带「✓ 」、且 scope 到 dlg：简化成「更新成功」会同时命中挂在 app root 的 toast
+    //（getByText 是 DOM 口径，不受 aria-hidden 保护），Dialog 内没渲染也算绿
+    await expect(dlg.getByText("✓ 更新成功")).toBeVisible({ timeout: 10_000 });
+    await expect(dlg).not.toContainText("需重新生成快照");
+    // 不再断成功 toast：它是无条件出口，已由上面「表单校验、成功反馈…」那条钉住
+    //（R-3 口径），且本用例提交过两次，同文案 toast 会有两条同时存活。
   });
 });

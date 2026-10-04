@@ -197,6 +197,67 @@ test.describe('组合净值走势卡双端一致（#649）', () => {
     await expect(card.getByText('暂无净值数据', { exact: true })).toBeVisible();
     await page.getByTestId('nav-range-1y').click();
     await expect(card.getByText('该区间暂无净值数据', { exact: true })).toBeVisible();
+    // 与本 spec 下一条失败用例互为负向：两条各自 route 各自页面，同页可区分性只能靠
+    // 「空态这条不含失败文案、失败那条不含空态文案」成对承载（#663④ 的判序要求）
+    await expect(card).not.toContainText('加载失败');
+  });
+
+  test('净值走势卡读取失败 → 失败态而非「暂无净值数据」（#663④，形态最重的一处）', async ({
+    page,
+  }) => {
+    // 抽取前后这里是同一个失效面：useNavHistory 不取 isError，失败直接落进空态分支，
+    // 把「取不到」说成「这个区间没有净值」——用户与排障者从页面上无从区分。
+    // 判据限定在组合侧 nav-history：产品侧同名端点前缀不同段，/returns 与 /performance
+    // 也在同页，写宽了会以错误理由变红或变绿（不复用本 spec 上面的 '**/nav-history**'，
+    // 那条同时命中两个端点，只是恰好没串台）。
+    await page.route(/\/api\/portfolios\/[^/]+\/nav-history(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: 'INTERNAL', message: '净值序列服务暂不可用' } },
+      })
+    );
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const card = page.getByTestId('portfolio-nav-trend-card');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('加载失败：净值序列服务暂不可用', { timeout: 10_000 });
+    // 承重的一条：失败不得伪装成空态（全量与区间两句都不许出现）
+    await expect(card).not.toContainText('暂无净值数据');
+    const retry = card.getByRole('button', { name: '重试' });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === 'GET' && /\/api\/portfolios\/[^/]+\/nav-history/.test(r.url()),
+      { timeout: 10_000 },
+    );
+    await retry.click();
+    await refetched;
+  });
+});
+
+test.describe('产品列表失败态（#663⑤）', () => {
+  test('产品列表读取失败 → 卡内失败态与重试，不与「暂无产品」同形', async ({ page }) => {
+    // 断言必须 scope 到卡内：useProductList 失败时 hook 还会弹标题为「产品列表加载失败」
+    // 的 toast，页面级 toContainText('加载失败') 会在 toast 存活期假绿、3s 后假红。
+    // 不额外断「旧行集仍在屏上」：实测请求失败时 react-query 会清空 data，那个前提
+    // 不成立（也因此本页的 `products.length === 0` 前件恒真、判序不可观测，见组件注释）。
+    await page.route(/\/api\/products(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: 'INTERNAL', message: '产品目录服务暂不可用' } },
+      })
+    );
+    await page.goto('/products');
+    const card = page.getByTestId('products-list-card');
+    await expect(card).toContainText('加载失败：产品目录服务暂不可用', { timeout: 10_000 });
+    // 承重负向：旧形态用 EmptyState 承载失败，与真·空态只差文案、共用同一视觉形态
+    await expect(card).not.toContainText('暂无产品');
+    const retry = card.getByRole('button', { name: '重试' });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === 'GET' && /\/api\/products(\?|$)/.test(r.url()),
+      { timeout: 10_000 },
+    );
+    await retry.click();
+    await refetched;
   });
 });
 
