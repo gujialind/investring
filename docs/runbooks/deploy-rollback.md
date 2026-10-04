@@ -36,7 +36,7 @@
 
 ## 3. 判定命令（服务器 /opt/investring 下执行）
 
-带显式初始化入口的镜像先运行 `python -m app.bootstrap status` / `check`，不得为探测运行 prepare；ready 也不证明业务数据向后兼容。发布以 `releases/<id>/` 整包保留（`images.env` digest 化引用三个镜像），判定用**目标发布自己的镜像**探测：
+带显式初始化入口的镜像先运行 `python -m app.bootstrap status` / `check`，不得为探测运行 prepare；ready 也不证明业务数据向后兼容。发布以 `releases/<id>/` 整包保留（`images.env` digest 化引用三个镜像），判定用**目标发布自己的镜像**探测。**镜像本身只随发布保留窗口驻留**（`KEEP_RELEASES` 条 accepted + `last-known-good` + 失败现场 + 本次）：不在任何幸存发布 `images.env` 引用内的 digest 会在部署成功后被回收，见 §5「回收与磁盘水位」。判定命令：
 
 ```bash
 cd /opt/investring
@@ -59,7 +59,8 @@ docker compose --project-name investring --project-directory "releases/$ID" \
 # 发布记录与现场：state/accepted-releases.log（追加式）、state/last-known-good、
 # releases/<id>/.deploy-failed（失败现场标记）、state/migrate/*.json（DDL 前持久记录）
 cat state/accepted-releases.log | tail -5
-# 各发布镜像引用（digest 化，可直接 docker pull 复现制品）
+# 各发布镜像引用（digest 化，可直接 docker pull 复现制品；
+# 较早发布的镜像若已随保留窗口回收，这里读到的 digest 需重拉才能 inspect）
 cat "releases/$ID/images.env"
 ```
 
@@ -127,11 +128,12 @@ commit）。
 
 CD 不构建（消费 CI `image-smoke` 产出并经 `release_bundle.py verify` 校验的发布包），服务器端由 `scripts/server_deploy.sh` 在 `flock` 内执行统一状态机：
 
-- **stage → preflight → activate → probe**：整包落地 `releases/<id>/`（自包含：Compose/nginx 文件、`images.env` digest 引用、bundle.json、manifest）；`sha256sum -c` 复核 + 包身份与 release-id 互证 + 按 digest 拉镜像后才进入 DB 判定；`current` 符号链接原子激活；三路探活（backend `/health`、nginx 容器内 frontend 连通、nginx HTTPS 入口）。
+- **stage → preflight → activate → probe**：整包落地 `releases/<id>/`（自包含：Compose/nginx 文件、`images.env` digest 引用、bundle.json、manifest）；`sha256sum -c` 复核 + 包身份与 release-id 互证 + 按 digest 拉镜像后才进入 DB 判定；`current` 符号链接原子激活；三路探活（backend `/health`、nginx 容器内 frontend 连通、nginx HTTPS 入口）。两条宿主侧 `curl` 探活带 `--noproxy "*"`，与主机代理设置**解耦**：sshd 以 `bash -c` 执行远程命令时仍会 source `~/.bashrc`，非交互 CD 会话因此继承 `ALL_PROXY`，而 curl 对数字 IP 也交给 SOCKS 代理远程解析——探测对象会变成「代理机的 127.0.0.1」（#661）。主机侧 `no_proxy` 只是历史止血项，**不是部署前提**，换机/重装不配它也不会让部署失败。
 - **自动部署停在写库之前**（exit 4）：preflight 用目标发布自己的镜像只读探测，要求 `state=ready` 且迁移内容指纹与发布包一致；待迁移、缺表、未知 revision、探测错误一律不激活、不写库，并提示走显式 migrate。普通无待迁移发布照常自动上线，无第二位 reviewer。
 - **migrate 是显式授权动作**（workflow_dispatch `action=migrate`）：授权绑定准确发布包（release-id）与预期 DB 状态（`--expect-state` = status 的 64 位 fingerprint）；锁内重验指纹未变，`prepare` 在 MySQL `GET_LOCK` 内还会再验一次；**DDL 开始前**把状态持久化到 `state/migrate/`。失败（exit 6）不做自动回滚、不自动 downgrade，现场与 DDL 前记录保留，按 §4 人工决策。注意：fingerprint 绑定连接身份（database_identity 含账号），`expect-state` 必须取自将执行 prepare 的同一账号的 status——服务器端单账号（.env）路径天然一致（2026-09-25 演练实测）。
 - **激活后失败统一处理**（exit 5）：先落 `failed` 记录并打 `.deploy-failed` 现场标记；仅当**数据库未被本次动作改变**且上一发布对当前 DB 探出 `ready` 时，才恢复整包并重新三路探活（`restored`）；恢复条件不成立或恢复也失败时保留现场（`restore-failed`），不盲翻。DB 已迁移后禁止自动回退镜像。
 - **记录与旧任务拒绝**：`state/accepted-releases.log` 追加式（tsv：ts/kind/release/sha/run/attempt），手动回滚**不降级** auto 记录；`state/last-known-good` 仅在探活通过后推进。auto 部署在 workflow 侧验证主线祖先关系（`deploy_ancestry.py`，docs-only 提交推进 main 不误挡），并在锁内重读记录比对 `--expect-accepted` 快照——排队期间被更新任务插队的旧部署按 exit 3 拒绝。
+- **回收与磁盘水位**：`mark_success` 在探活通过之后按「被删发布独占、且无幸存发布引用」的 digest 显式 `docker rmi`。`docker image prune -f` 单独不够——发布按 `images.env` 的 digest 引用拉取，落地镜像始终带 digest，而 prune 的判据是「无 tag 的 dangling 层」，对这类镜像恒不成立（#662 的生产形态：249 张 / 31.87GB 打满 40G 根盘）。`current`、`last-known-good` 与失败现场（`.deploy-failed`）的镜像恒被保护；回收全程只告警不回撤已健康的部署。**回滚或重部署一个镜像已被回收的保留发布时，`pull_images` 会按 digest 重拉——这是预期行为而非异常**，registry 不可达时按 exit 2 停在拉取前、未改动运行状态。CD 侧另有部署前磁盘水位检查（`deploy.yml`，在任何 `mkdir`/`scp` 之前按根盘可用空间拒绝，阈值见该步骤注释），把「跑到一半撞墙、不留现场」换成「动手前响亮拒绝」。
 - **秘密与证书永不进发布链**：`.env` 与 `certbot/www` 由服务器人工维护，发布目录只建符号链接；CD 不复制、不回滚、不重建它们。清理或打标记失败不撤回已健康的部署（只警告）。
 - **探测诊断**：bootstrap status/check 的 Compose 与进程 stderr 保存在服务器 `state/bootstrap-<action>-<release-id>.*.log`，每次执行独立建文件（0600，仅部署用户可读写），按目标发布与子命令分段追加；探测失败消息引用路径，不把原文转发到 CI。经授权登录服务器查阅，分享前先脱敏；重试不覆盖旧日志，故障处理后由部署用户按需清理。
 

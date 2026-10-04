@@ -187,10 +187,27 @@ stage_bundle() {
     log "已 stage 发布: $dir"
 }
 
+# 三个镜像引用的键名（pull 与回收共用同一份清单，避免两处各写一套）
+IMAGE_REF_KEYS=(BACKEND_IMAGE_REF FRONTEND_IMAGE_REF NGINX_IMAGE_REF)
+
+image_ref_of() { # images.env 里某个键的 digest 引用；文件或键缺失返回空串（回收侧要容错）
+    local dir="$1" key="$2"
+    [ -f "$dir/images.env" ] || return 0
+    sed -n "s/^${key}=//p" "$dir/images.env" | tail -1
+}
+
+image_refs_of() { # 发布目录的三个 digest 引用，每行一个（缺失静默跳过）
+    local dir="$1" key ref
+    for key in "${IMAGE_REF_KEYS[@]}"; do
+        ref="$(image_ref_of "$dir" "$key")"
+        if [ -n "$ref" ]; then printf '%s\n' "$ref"; fi
+    done
+}
+
 pull_images() {
-    local dir="$1" ref
-    for key in BACKEND_IMAGE_REF FRONTEND_IMAGE_REF NGINX_IMAGE_REF; do
-        ref="$(sed -n "s/^${key}=//p" "$dir/images.env")"
+    local dir="$1" key ref
+    for key in "${IMAGE_REF_KEYS[@]}"; do
+        ref="$(image_ref_of "$dir" "$key")"
         [ -n "$ref" ] || die 2 "images.env 缺少 $key"
         docker pull "$ref" >/dev/null || die 2 "镜像拉取失败: $ref（未改动任何运行状态）"
     done
@@ -263,11 +280,15 @@ probe_one() {
     return 1
 }
 
+# 两条 curl 必须带 --noproxy "*"：sshd 以 bash -c 执行远程命令时仍会 source
+# ~/.bashrc，非交互 CD 会话因此继承主机 ALL_PROXY，而 curl 对数字 IP 同样交给 SOCKS
+# 代理远程解析——探测对象会变成「代理机的 127.0.0.1」，与本机后端无关（#661）。
+# 主机侧 no_proxy 只是止血、不是部署前提；中间那条 wget 在 nginx 容器内执行，不吃主机代理。
 probe_three_way() { # 三路：后端回环 /health、nginx 容器内前端连通、nginx HTTPS 入口
     local dir="$1"
-    probe_one "backend /health" curl -sf http://127.0.0.1:8000/health || return 1
+    probe_one "backend /health" curl -sf --noproxy "*" http://127.0.0.1:8000/health || return 1
     probe_one "frontend via nginx" compose "$dir" exec -T nginx wget -qO- http://frontend:7860/ || return 1
-    probe_one "nginx HTTPS 入口" curl -skf https://127.0.0.1/health || return 1
+    probe_one "nginx HTTPS 入口" curl -skf --noproxy "*" https://127.0.0.1/health || return 1
 }
 
 dump_logs() {
@@ -337,21 +358,58 @@ mark_success() {
         printf '%s\n' "$RELEASE_ID" > "$LKG.tmp" && mv "$LKG.tmp" "$LKG"
     } || warn "写发布记录/LKG 失败；部署已健康，不回撤（请人工补记）"
     prune_releases || warn "清理旧发布失败；部署已健康，不回撤"
+    # 只收无 tag 的 dangling 层。上面 prune_releases 的 docker rmi 解掉 tag/digest 引用后
+    # 留下的层由这一步收走；单靠它收不走按 digest 拉下来的镜像（见 prune_releases 注释）。
     docker image prune -f >/dev/null 2>&1 || warn "镜像清理失败；部署已健康，不回撤"
 }
 
+# 目录与镜像按同一个保留窗口回收：KEEP_RELEASES 条 accepted + LKG + 本次 + 失败现场。
+# 必须显式 docker rmi——pull 走的是 images.env 里的 digest 引用，落地镜像**始终带
+# digest**，而 `docker image prune -f` 的判据是「无 tag 的 dangling 层」，对这类镜像
+# 恒不成立，一张都收不走（#662：249 张 / 31.87GB 打满 40G 根盘）。
+# 候选集刻意取「被删目录的引用 − 全部幸存目录的引用」，而不是「本机所有不在保留集内的
+# 镜像」：后者需要枚举镜像、会碰非本项目镜像，且 current/LKG 只在间接推断下才安全。
+# 保护集取全部幸存目录（含 .deploy-failed 现场）而不止 keep：失败现场不是自动回滚目标
+# （fail_after_activate 恢复的是 PREV_ID，现场只作取证保留），但它作为幸存目录仍可能被
+# redeploy 复核——目录在而镜像没了，就把「就地重跑」换成了「必须能连 registry」。
+# 回收全程 warn-only：此刻部署已探活通过，回收失败不该把成功染红并诱发重触发。
 prune_releases() {
-    local keep id
+    local keep id ref reclaimed=0 tmp
     keep="$( { tail -n "$KEEP_RELEASES" "$ACCEPTED_LOG" 2>/dev/null | cut -f3
                cat "$LKG" 2>/dev/null; printf '%s\n' "$RELEASE_ID"; } | sort -u )"
+    tmp="$(mktemp -d)" || { warn "无法创建回收清单；本轮跳过目录与镜像回收"; return 0; }
+    : > "$tmp/doomed"
+    : > "$tmp/protected"
     for id in $(ls -1 "$RELEASES" 2>/dev/null); do
         [ -d "$(release_dir "$id")" ] || continue
         # 注意：不能用 `[ … ] && continue`——set -e 下条件为假会直接终止脚本
         if [ -e "$(release_dir "$id")/.deploy-failed" ]; then continue; fi   # 失败现场不自动清理
         if printf '%s\n' "$keep" | grep -qx "$id"; then continue; fi
+        # 引用必须在 rm -rf **之前**记下：删完就读不到 images.env，届时候选集恒空、
+        # 回收静默退化成「一张都不删」，而目录照常清理——现象与从未实现无法区分
+        image_refs_of "$(release_dir "$id")" >> "$tmp/doomed"
         rm -rf -- "$(release_dir "$id")"
         log "已清理旧发布: $id"
     done
+    for id in $(ls -1 "$RELEASES" 2>/dev/null); do
+        [ -d "$(release_dir "$id")" ] || continue
+        image_refs_of "$(release_dir "$id")" >> "$tmp/protected"
+    done
+    while IFS= read -r ref; do
+        if [ -z "$ref" ]; then continue; fi
+        if grep -qxF "$ref" "$tmp/protected"; then continue; fi
+        # 不带 -f：镜像仍被任何容器（含已停止的）引用时由 docker 自己拒绝，是安全网
+        if docker rmi "$ref" >/dev/null 2>&1; then
+            reclaimed=$((reclaimed + 1))
+        else
+            warn "镜像回收失败（仍占盘，不影响本次部署）: $ref"
+        fi
+    done < "$tmp/doomed"
+    rm -rf -- "$tmp"
+    if [ "$reclaimed" -gt 0 ]; then
+        log "已回收镜像 $reclaimed 张（超出发布保留窗口且无幸存发布引用）"
+    fi
+    return 0
 }
 
 # ------------------------------------------------------------ 部署主链

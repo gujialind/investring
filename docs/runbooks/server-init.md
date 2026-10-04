@@ -71,6 +71,13 @@
   （digest 化 `images.env` 同包保留），目录约定见 `server_deploy.sh` 头部注释与
   [deploy-rollback runbook](deploy-rollback.md)。secrets 配置见部署文档。
 - RDS 白名单添加服务器内网 IP；应用经内网连接，不做公网直连。
+- **探活与主机代理设置无关**：CD 的两条宿主侧 `curl` 探活自带 `--noproxy "*"`，因此
+  `HTTP(S)_PROXY`/`ALL_PROXY` 不影响部署判定；主机侧 `no_proxy=127.0.0.1,localhost,::1`
+  只是历史止血项，**不是装机前提**，换机/重装不补也不会让部署失败（issue #661）。
+- **根盘留出可用空间**：`/`（现状兼放 `/var/lib/docker` 与 `/opt/investring`）须有 ≥4GB
+  可用，否则 CD 在任何 `mkdir`/`scp` 之前按磁盘水位拒绝（issue #662）。镜像随发布保留
+  窗口回收，占用有上界；回收与回滚的口径见
+  [deploy-rollback runbook 的自动化配合一节](deploy-rollback.md#5-自动化配合deployyml--server_deploysh)。
 - **首次数据库初始化须显式授权**：空库自动部署会以 exit 4 停止，未写库、未激活。
   从失败部署日志取得已 staged 的 release-id（此时尚无 accepted 记录），按
   [初始化与迁移流程](deploy-rollback.md#5-自动化配合deployyml--server_deploysh)
@@ -82,7 +89,7 @@
 - [ ] root 禁止密码登录；部署走非 root 用户
 - [ ] SSH 服务名/状态按 24.04 口径确认（`systemctl status ssh`）
 - [ ] 安全组与系统防火墙仅放行必需端口，数据库不对公网开放
-- [ ] Docker 日志轮转已配置；磁盘余量充足
+- [ ] Docker 日志轮转已配置；根盘可用 ≥4GB（`df -Pk /` 第二行第 4 列）
 - [ ] 自动安全更新已开启（`unattended-upgrades`）
 - [ ] 备份策略确认（RDS 自动备份 + 关键配置留存）
 
