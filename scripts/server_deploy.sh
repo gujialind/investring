@@ -369,8 +369,9 @@ mark_success() {
 # 恒不成立，一张都收不走（#662：249 张 / 31.87GB 打满 40G 根盘）。
 # 候选集刻意取「被删目录的引用 − 全部幸存目录的引用」，而不是「本机所有不在保留集内的
 # 镜像」：后者需要枚举镜像、会碰非本项目镜像，且 current/LKG 只在间接推断下才安全。
-# 保护集取全部幸存目录（含 .deploy-failed 现场）而不止 keep：失败现场的目录被保留、
-# 其镜像也必须保留，否则「离线回滚到失败发布」会被换成「必须能连 registry」。
+# 保护集取全部幸存目录（含 .deploy-failed 现场）而不止 keep：失败现场不是自动回滚目标
+# （fail_after_activate 恢复的是 PREV_ID，现场只作取证保留），但它作为幸存目录仍可能被
+# redeploy 复核——目录在而镜像没了，就把「就地重跑」换成了「必须能连 registry」。
 # 回收全程 warn-only：此刻部署已探活通过，回收失败不该把成功染红并诱发重触发。
 prune_releases() {
     local keep id ref reclaimed=0 tmp

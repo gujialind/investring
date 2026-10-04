@@ -833,9 +833,9 @@ def test_reclaim_protects_failed_scene_images(server, make_release):
     """保护集 = 全部幸存发布目录，而不是 keep 集合本身。
 
     rel1 留有失败现场（`.deploy-failed`，被保留但不进 keep），rel2 与它复用同一组
-    镜像；rel2 出窗被剪时，若保护集只按 keep 求差，这组仍在用的镜像会被删掉——
-    「离线回滚到失败发布」当场换成「必须能连 registry」。这条同时抓得住「根本不减
-    保护集」那种更粗糙的写法。
+    镜像；rel2 出窗被剪时，若保护集只按 keep 求差，现场仍在引用的这组镜像会被删掉——
+    留下一个跑不起来的现场，复核或重部署该发布就换成「必须能连 registry」。这条同时
+    抓得住「根本不减保护集」那种更粗糙的写法。
     """
     # 8 次部署：rel2（与现场共用镜像）先出窗、rel3 随后出窗作对照
     tags = ["scene", "scene"] + [f"t{i}" for i in range(2, 8)]
