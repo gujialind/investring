@@ -215,8 +215,10 @@ test.describe("产品详情页", () => {
     // `className` 让页级形态退回卡内，这条照样绿（E2E 只断定位与文本，视觉层归目检，
     // 见 frontend/AGENTS.md §4 与 §目检）。「不传 className」靠代码评审与三处渲染同一个
     // 组件缺省分支来保证。
-    // 判据 scoped 到 holdings/by-product，绝不写 `**/api/**`：本页还发 nav-history、
-    // trades 与 /api/platforms（usePlatformList 失败会弹 toast，页级文案唯一性前提随之作废）。
+    // 判据 scoped 到 holdings/by-product，绝不写 `**/api/**`：本页还发 nav-analysis、
+    // nav-history、trades 与 /api/platforms，写宽会把它们一并打成 500，用例就不再只对
+    // by-product 这一条聚合的失败呈现归因；`usePlatformList` 失败还会额外弹一条 toast
+    // （标题「平台列表加载失败」，与本条断言串不重叠、不会串台），多出一个无关失败出口。
     await page.route(
       /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
       (route) =>

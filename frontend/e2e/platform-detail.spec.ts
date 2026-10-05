@@ -193,14 +193,16 @@ test.describe("平台详情页", () => {
     // `isError = productError || platformError`（PlatformDetailContent.tsx:102），
     // 只要有一条聚合没重发，整页就仍留在失败态——所以「页面恢复了」对两个 refetch
     // 是**联合归因**的判据。issue #681 点名的退化（把 onRetry 写成 `refetchProduct`
-    // 单条）恰好是页面看起来仍正常、lint/tsc/build/单测四层全碰不到的那种；它给的
+    // 单条）不会让任何静态门禁变红（lint/tsc/build/单测四层全碰不到），页面上也只是
+    // 停在失败块、文案换成没重发那条——不报错，容易被当成「重试本来就这样」。它给的
     // 单 URL 配方在那种形态下依然绿，故这里两个端点各注册一条 waitForRequest，
     // 负责点名缺的是哪一条，恢复断言负责拦住它。
     let fail = true;
-    // 判据严格 scoped 到 holdings/by-*：写成 `**/api/**` 会连带打掉 useProduct/usePlatform
-    // 的端点，把「本页失败态无 toast 串台、故无需 data-testid」的前提整体作废。
-    // 放行侧用 route.continue() 而非 route.fallback()——后者是 Playwright 1.63 才加入的
-    // API，而 @playwright/test 正钉在 ^1.63.0 的下边界。
+    // 判据严格 scoped 到 holdings/by-*：本页整页只发这两条聚合加 `/api/trades`
+    // （`useTradeList`）。写宽会连交易卡一起打进失败态，而页级重试不重发 trades，恢复段
+    // 末尾那条 `getByText("加载失败")` 归零断言会命中交易卡文案——红点落在与被测缺陷无关
+    // 的地方。放行侧用 route.continue()：关掉开关后要把请求原样交回真实后端，本处没有
+    // 多级 handler，用不着 fallback()。
     const mockHoldings = (url: RegExp, message: string) =>
       page.route(url, (route) =>
         fail
@@ -481,7 +483,8 @@ test.describe("平台-产品详情页", () => {
   test("整页读取失败 → 页级失败态与重试，而非「未找到该平台产品持仓」空态（#681）", async ({ page }) => {
     // 本页整页 early return 由**单条**聚合决定（useHoldingsByProduct），所以一条
     // waitForRequest 已经密不透风，不必像平台详情页那样加恢复断言。
-    // message 与同文件其它用例逐条不同串（:369 立的惯例），红的时候能直接看出哪条 route 生效。
+    // message 与同文件其它用例逐条不同串（同 #663②「交易记录读取失败」那条立的惯例），
+    // 红的时候能直接看出哪条 route 生效。
     await page.route(
       /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
       (route) =>
