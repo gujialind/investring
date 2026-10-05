@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
-import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
+import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
@@ -149,15 +149,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   }
   // #638 L2 S1：请求失败不得渲染成「已清仓」空态（#214 惯例，同 PortfolioHoldings 文案）
   if (holdingsError) {
-    const msg = getErrorMessage(holdingsErr, "请刷新重试");
-    return (
-      <div className="py-8 text-center">
-        <p className="text-muted-foreground">加载失败：{msg}</p>
-        <Button variant="link" size="sm" onClick={() => refetchHoldings()}>
-          重试
-        </Button>
-      </div>
-    );
+    return <QueryErrorState error={holdingsErr} onRetry={refetchHoldings} />;
   }
   // R-4：非现金缺 market 单独提示（与平台-产品详情页 S4 同形态），避免把参数问题说成数据问题
   if (!isCash && !market) {

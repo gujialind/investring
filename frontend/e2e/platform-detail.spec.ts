@@ -188,6 +188,101 @@ test.describe("平台详情页", () => {
     await refetched;
   });
 
+  test("整页读取失败：重试必须两条聚合都重发，页面才恢复（#681）", async ({ page }) => {
+    // 本条的全部价值在最后三行「恢复」断言，而不是重试点击本身。页级守卫是
+    // `isError = productError || platformError`（PlatformDetailContent.tsx:102），
+    // 只要有一条聚合没重发，整页就仍留在失败态——所以「页面恢复了」对两个 refetch
+    // 是**联合归因**的判据。issue #681 点名的退化（把 onRetry 写成 `refetchProduct`
+    // 单条）恰好是页面看起来仍正常、lint/tsc/build/单测四层全碰不到的那种；它给的
+    // 单 URL 配方在那种形态下依然绿，故这里两个端点各注册一条 waitForRequest，
+    // 负责点名缺的是哪一条，恢复断言负责拦住它。
+    let fail = true;
+    // 判据严格 scoped 到 holdings/by-*：写成 `**/api/**` 会连带打掉 useProduct/usePlatform
+    // 的端点，把「本页失败态无 toast 串台、故无需 data-testid」的前提整体作废。
+    // 放行侧用 route.continue() 而非 route.fallback()——后者是 Playwright 1.63 才加入的
+    // API，而 @playwright/test 正钉在 ^1.63.0 的下边界。
+    const mockHoldings = (url: RegExp, message: string) =>
+      page.route(url, (route) =>
+        fail
+          ? route.fulfill({
+              status: 500,
+              json: { detail: { error: "INTERNAL", message } },
+            })
+          : route.continue()
+      );
+    mockHoldings(
+      /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
+      "平台持仓产品聚合服务暂不可用"
+    );
+    mockHoldings(
+      /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-platform(\?|$)/,
+      "平台概览聚合服务暂不可用"
+    );
+    await page.goto(PLATFORM_PATH);
+
+    // 整页 early return，页面上不可能有别处含该串，所以按文案直达、不补 testid（#678 的
+    // 分寸：testid 是长期维护的契约面，只在真有串台时才补）。断 by-product 的消息同时
+    // 钉住 `error={productErr ?? platformErr}` 的取序。
+    await expect(
+      page.getByText("加载失败：平台持仓产品聚合服务暂不可用")
+    ).toBeVisible({ timeout: 10_000 });
+    // 失败不得伪装成空态（§1.2 口径①）。platform-holdings-section 位于 early return
+    // **之后**（:193），失败态渲染时根本不存在——这条负向就是「为什么不能用它当 scope」。
+    await expect(page.getByText("未找到该平台持仓")).toHaveCount(0);
+    await expect(page.getByTestId("platform-holdings-section")).toHaveCount(0);
+
+    const retry = page.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    // 注册必须在失败态**已可见之后**：`retry: 1`（providers.tsx）的自动重试发生在可见
+    // 之前，注册早了会变成「没点重试也算绿」。两个 Promise 一起 await，最坏一次 10s。
+    const refetchedProduct = page.waitForRequest(
+      (r) => r.method() === "GET" && /holdings\/by-product(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    const refetchedPlatform = page.waitForRequest(
+      (r) => r.method() === "GET" && /holdings\/by-platform(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    // 翻转开关必须在点击**之前**：点击触发的才是真实 refetch，两条都放行页面才可能恢复。
+    fail = false;
+    await retry.click();
+    await Promise.all([refetchedProduct, refetchedPlatform]);
+
+    await expect(page.getByTestId("platform-overview-card")).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByTestId("platform-holdings-section")).toContainText(
+      "沪深300ETF"
+    );
+    await expect(page.getByText("加载失败")).toHaveCount(0);
+  });
+
+  test("整页读取失败：仅 by-platform 挂掉也整页替换，且透出的是失败那条的消息（#681）", async ({ page }) => {
+    // 钉住两件单侧失败时才暴露的事：
+    // ① `error={productErr ?? platformErr}` 的回退取序——写成 `error={productErr}` 时
+    //    productErr 为 null，页面**仍然渲染一个失败块**（本地兜底串「请刷新重试」），
+    //    双向对称的那条用例（上一条）抓不到这个错，只有失败侧不在首位时才显形；
+    // ② #681「本次刻意不做」的既有契约：by-product 已成功、by-platform 失败时整页仍被
+    //    替换，已取到的持仓随之消失。改成局部降级是需要业务判定的独立决策（另开条目），
+    //    届时这条会响亮地红，而不是让降级静默通过。
+    await page.route(
+      /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-platform(\?|$)/,
+      (route) =>
+        route.fulfill({
+          status: 500,
+          json: {
+            detail: { error: "INTERNAL", message: "平台概览聚合服务暂不可用" },
+          },
+        })
+    );
+    await page.goto(PLATFORM_PATH);
+    await expect(
+      page.getByText("加载失败：平台概览聚合服务暂不可用")
+    ).toBeVisible({ timeout: 10_000 });
+    // 页头平台名同样来自 by-platform，随整页一起消失 = 替换成立（而非局部降级）
+    await expect(page.getByRole("heading", { name: "华宝证券" })).toHaveCount(0);
+  });
+
   test("交易记录卡：该平台交易结对展示与查看全部链接", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
     const card = page.getByTestId("platform-trades-card");
@@ -381,6 +476,37 @@ test.describe("平台-产品详情页", () => {
     // 历史净值卡照常出数：两卡失败文案同以「加载失败」开头，没有这条正向对照，
     // route 判据写宽（误伤 nav-history）也会被当成"本页失败态正常"而看不出来
     await expect(page.getByTestId("platform-product-history-card")).toContainText("4.2000");
+  });
+
+  test("整页读取失败 → 页级失败态与重试，而非「未找到该平台产品持仓」空态（#681）", async ({ page }) => {
+    // 本页整页 early return 由**单条**聚合决定（useHoldingsByProduct），所以一条
+    // waitForRequest 已经密不透风，不必像平台详情页那样加恢复断言。
+    // message 与同文件其它用例逐条不同串（:369 立的惯例），红的时候能直接看出哪条 route 生效。
+    await page.route(
+      /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
+      (route) =>
+        route.fulfill({
+          status: 500,
+          json: {
+            detail: { error: "INTERNAL", message: "平台产品切片服务暂不可用" },
+          },
+        })
+    );
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await expect(
+      page.getByText("加载失败：平台产品切片服务暂不可用")
+    ).toBeVisible({ timeout: 10_000 });
+    // 负向取紧接其后的两个空态分支之一「未找到该平台产品持仓」（PlatformProductDetailContent
+    // 的 `!product || !slice` 分支）——把后端故障说成「没有持仓」正是 §1.2 口径①的本体。
+    await expect(page.getByText("未找到该平台产品持仓")).toHaveCount(0);
+    const retry = page.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === "GET" && /holdings\/by-product(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    await retry.click();
+    await refetched;
   });
 
   test("交易记录卡：该产品在该平台的交易（不含 CASH 腿）", async ({ page }) => {
