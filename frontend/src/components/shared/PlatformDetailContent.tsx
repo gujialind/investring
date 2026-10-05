@@ -13,7 +13,6 @@ import QueryErrorState from "@/components/shared/QueryErrorState";
 import HoldingProductCard from "./HoldingProductCard";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
-import { getErrorMessage } from "@/lib/api";
 import { groupTradeRows, cashSubMeta, cashLegArrived, isCashLeg, cashOrphanLabel } from "@/lib/tradePairs";
 import {
   formatCurrency,
@@ -104,14 +103,14 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
 
   if (isLoading) return <LoadingState />;
   if (isError) {
-    const msg = getErrorMessage(productErr ?? platformErr, "请刷新重试");
     return (
-      <div className="py-8 text-center">
-        <p className="text-muted-foreground">加载失败：{msg}</p>
-        <Button variant="link" size="sm" onClick={() => { refetchProduct(); refetchPlatform(); }}>
-          重试
-        </Button>
-      </div>
+      <QueryErrorState
+        error={productErr ?? platformErr}
+        onRetry={() => {
+          refetchProduct();
+          refetchPlatform();
+        }}
+      />
     );
   }
   if (!platform) {

@@ -15,7 +15,7 @@ import PlatformDistributionCard from "./PlatformDistributionCard";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
-import { productApi, getErrorMessage, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
+import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
@@ -138,15 +138,7 @@ export default function PlatformProductDetailContent({
 
   if (holdingsLoading) return <LoadingState />;
   if (holdingsError) {
-    const msg = getErrorMessage(holdingsErr, "请刷新重试");
-    return (
-      <div className="py-8 text-center">
-        <p className="text-muted-foreground">加载失败：{msg}</p>
-        <Button variant="link" size="sm" onClick={() => refetchHoldings()}>
-          重试
-        </Button>
-      </div>
-    );
+    return <QueryErrorState error={holdingsErr} onRetry={refetchHoldings} />;
   }
   // S4：market 缺失（非现金）单独提示，避免与「真的没有」混淆
   if (!isCash && !market) {

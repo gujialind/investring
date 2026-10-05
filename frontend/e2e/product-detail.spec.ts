@@ -209,6 +209,41 @@ test.describe("产品详情页", () => {
     await page.goto(`/portfolio/${E2E_ACTIVE}/product/510300.SH`);
     await expect(page.getByText("缺少 market 参数")).toBeVisible();
   });
+
+  test("整页读取失败 → 页级失败态与重试，而非「未找到该产品持仓」空态（#681）", async ({ page }) => {
+    // 本条断的是「后端消息上桌 / 不落空态 / 重试真重发」，**不**断言像素：多传紧凑
+    // `className` 让页级形态退回卡内，这条照样绿（E2E 只断定位与文本，视觉层归目检，
+    // 见 frontend/AGENTS.md §4 与 §目检）。「不传 className」靠代码评审与三处渲染同一个
+    // 组件缺省分支来保证。
+    // 判据 scoped 到 holdings/by-product，绝不写 `**/api/**`：本页还发 nav-analysis、
+    // nav-history、trades 与 /api/platforms，写宽会把它们一并打成 500，用例就不再只对
+    // by-product 这一条聚合的失败呈现归因；`usePlatformList` 失败还会额外弹一条 toast
+    // （标题「平台列表加载失败」，与本条断言串不重叠、不会串台），多出一个无关失败出口。
+    await page.route(
+      /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
+      (route) =>
+        route.fulfill({
+          status: 500,
+          json: {
+            detail: { error: "INTERNAL", message: "产品持仓聚合服务暂不可用" },
+          },
+        })
+    );
+    await page.goto(PRODUCT_PATH);
+    await expect(
+      page.getByText("加载失败：产品持仓聚合服务暂不可用")
+    ).toBeVisible({ timeout: 10_000 });
+    // 「已清仓」只出现在该空态分支的 description，断言取 message 文案
+    await expect(page.getByText("未找到该产品持仓")).toHaveCount(0);
+    const retry = page.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === "GET" && /holdings\/by-product(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    await retry.click();
+    await refetched;
+  });
 });
 
 // #595 §4.5：现金产品详情页操作行为转入/转出 + 市值更新
