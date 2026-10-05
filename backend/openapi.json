@@ -5096,7 +5096,7 @@
           "持仓管理"
         ],
         "summary": "Get Holdings By Product",
-        "description": "按产品聚合的持仓视图：跨平台合计 + 平台分布 + 维度元数据。\n\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
+        "description": "按产品聚合的持仓视图：跨平台合计 + 平台分布 + 维度元数据。\n\nsnapshot_date 缺省 = 组合级最新快照日；显式传入则严格校验，该日无持仓/\n市值快照报 404 NOT_FOUND（#672）。\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
         "operationId": "get_holdings_by_product_api_positions_portfolio__portfolio_code__holdings_by_product_get",
         "security": [
           {
@@ -5111,6 +5111,23 @@
             "schema": {
               "type": "string",
               "title": "Portfolio Code"
+            }
+          },
+          {
+            "name": "snapshot_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Snapshot Date"
             }
           }
         ],
@@ -5144,7 +5161,7 @@
           "持仓管理"
         ],
         "summary": "Get Holdings By Platform",
-        "description": "按平台聚合的持仓视图：市值/现金余额/产品数/收益合计。\n\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
+        "description": "按平台聚合的持仓视图：市值/现金余额/产品数/收益合计。\n\nsnapshot_date 缺省 = 组合级最新快照日；显式传入则严格校验，该日无持仓/\n市值快照报 404 NOT_FOUND（#672）。\n口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。",
         "operationId": "get_holdings_by_platform_api_positions_portfolio__portfolio_code__holdings_by_platform_get",
         "security": [
           {
@@ -5159,6 +5176,23 @@
             "schema": {
               "type": "string",
               "title": "Portfolio Code"
+            }
+          },
+          {
+            "name": "snapshot_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Snapshot Date"
             }
           }
         ],

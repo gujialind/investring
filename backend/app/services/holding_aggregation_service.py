@@ -1,7 +1,9 @@
 """持仓聚合读侧（#595）：组合详情页「按产品 / 按平台」双视图的数据装配。
 
 口径要点（端点 docstring 不重复，改口径只改这里）：
-- 数据源为组合级最新快照日的 `portfolio_position` 行；清仓行不落在快照中
+- 数据源为组合级最新快照日的 `portfolio_position` 行；调用方显式传
+  `snapshot_date` 时数据源为该日行，该日无持仓快照报 `NOT_FOUND`（#672）。
+  清仓行不落在快照中
   （生成侧对净值型行跳过 shares<=0 且现金为 0 的行；零额现金行是生成侧
   的正常产物），在此基础上仍显式过滤市值/份额为 0 的聚合，防御脏数据。
 - 行市值口径与快照生成一致：现金行（`cash_amount IS NOT NULL`，含 CASH 与在途）
@@ -23,7 +25,8 @@
   不另起口径。行级缺份额/成本时该行收益不计入聚合，聚合记缺口并整体置 None，
   不发布「看似完整的部分和」（WARNING 留痕）。
 - 累计收益（含已实现）接 #598 `compute_cumulative_profits` 的产品市场/平台/
-  平台-产品三粒度；当日无组合市值快照时降级为 None（前端按可空占位渲染），
+  平台-产品三粒度；**默认最新日路径**无当日组合市值快照时降级为 None（前端按
+  可空占位渲染），显式快照日不降级、`NOT_FOUND` 上抛（#672），
   `INVALID_AMOUNT` 等存量数据错误不吞。
 - 过滤规则只隐藏卡，不改变合计基数：被过滤行的市值仍留在
   `total_market_value` 与平台市值里（防御性过滤的残差口径）。
@@ -34,7 +37,9 @@
 """
 
 import logging
+from datetime import date
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -68,6 +73,14 @@ def _row_value(row: PortfolioPosition) -> Decimal:
     return Decimal(str(row.market_value or 0))
 
 
+def _load_rows_for_date(db: Session, portfolio_code: str, snapshot_date: date) -> list:
+    """指定快照日的全部持仓行（显式日期与最新日共用同一行加载）。"""
+    return db.query(PortfolioPosition).filter(
+        PortfolioPosition.portfolio_code == portfolio_code,
+        PortfolioPosition.snapshot_date == snapshot_date,
+    ).all()
+
+
 def _load_latest_rows(db: Session, portfolio_code: str):
     """组合级最新快照日 + 当日全部持仓行；无快照返回 (None, [])。"""
     latest = db.query(func.max(PortfolioPosition.snapshot_date)).filter(
@@ -75,11 +88,7 @@ def _load_latest_rows(db: Session, portfolio_code: str):
     ).scalar()
     if latest is None:
         return None, []
-    rows = db.query(PortfolioPosition).filter(
-        PortfolioPosition.portfolio_code == portfolio_code,
-        PortfolioPosition.snapshot_date == latest,
-    ).all()
-    return latest, rows
+    return latest, _load_rows_for_date(db, portfolio_code, latest)
 
 
 def _load_product_meta(db: Session, rows) -> dict:
@@ -147,11 +156,21 @@ def _load_platform_names(db: Session, rows) -> dict:
     }
 
 
-def _load_cumulative_maps(db: Session, portfolio_code: str, snapshot_date) -> tuple:
-    """#598 三粒度累计收益 → 三张映射；无市值快照降级空映射（字段输出 None）。"""
+def _load_cumulative_maps(
+    db: Session, portfolio_code: str, snapshot_date, *, strict: bool = False,
+) -> tuple:
+    """#598 三粒度累计收益 → 三张映射。
+
+    strict=False（默认最新日路径）：无当日组合市值快照时降级空映射（字段输出
+    None，前端按可空占位渲染），#595 既有语义；strict=True（调用方显式传快照日，
+    #672）：NotFoundError 原样上抛（404），不降级。INVALID_AMOUNT 等存量数据
+    错误两种模式都不吞。
+    """
     try:
         result = compute_cumulative_profits(db, portfolio_code, snapshot_date)
     except NotFoundError:
+        if strict:
+            raise
         return {}, {}, {}
     by_platform_product = {
         (r["product_code"], r["market"], r["platform_code"]): r["cumulative_profit"]
@@ -177,20 +196,34 @@ def _dim_payload(meta: dict, product_code: str, market: str) -> dict:
     return payload
 
 
-def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
-    """按产品聚合视图：跨平台合计 + 平台分布切片 + 维度元数据。口径见模块 docstring。"""
+def aggregate_holdings_by_product(
+    db: Session, portfolio_code: str, snapshot_date: Optional[date] = None,
+) -> dict:
+    """按产品聚合视图：跨平台合计 + 平台分布切片 + 维度元数据。口径见模块 docstring。
+
+    snapshot_date 缺省 = 组合级最新快照日；显式传入则该日无持仓快照报
+    NOT_FOUND，累计收益不降级（#672）。
+    """
     if db.query(Portfolio.code).filter(Portfolio.code == portfolio_code).first() is None:
         raise NotFoundError("NOT_FOUND", f"组合 {portfolio_code} 不存在")
 
-    snapshot_date, rows = _load_latest_rows(db, portfolio_code)
-    if snapshot_date is None:
-        return {
-            "portfolio_code": portfolio_code,
-            "snapshot_date": None,
-            "total_market_value": _ZERO,
-            "in_transit_market_value": _ZERO,
-            "products": [],
-        }
+    explicit = snapshot_date is not None
+    if explicit:
+        rows = _load_rows_for_date(db, portfolio_code, snapshot_date)
+        if not rows:
+            raise NotFoundError(
+                "NOT_FOUND", f"组合 {portfolio_code} 在 {snapshot_date} 无持仓快照"
+            )
+    else:
+        snapshot_date, rows = _load_latest_rows(db, portfolio_code)
+        if snapshot_date is None:
+            return {
+                "portfolio_code": portfolio_code,
+                "snapshot_date": None,
+                "total_market_value": _ZERO,
+                "in_transit_market_value": _ZERO,
+                "products": [],
+            }
 
     total = sum((_row_value(r) for r in rows), _ZERO)
     meta = _load_product_meta(db, rows)
@@ -202,7 +235,9 @@ def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
     card_rows = [r for r in rows if (r.product_code, r.market) not in transit_keys]
     platform_names = _load_platform_names(db, card_rows)
     derived = compute_derived_fields(db, card_rows)
-    cum_by_key, cum_by_product, _ = _load_cumulative_maps(db, portfolio_code, snapshot_date)
+    cum_by_key, cum_by_product, _ = _load_cumulative_maps(
+        db, portfolio_code, snapshot_date, strict=explicit,
+    )
 
     aggregates: dict = {}
     for row in card_rows:
@@ -362,19 +397,33 @@ def aggregate_holdings_by_product(db: Session, portfolio_code: str) -> dict:
     }
 
 
-def aggregate_holdings_by_platform(db: Session, portfolio_code: str) -> dict:
-    """按平台聚合视图：市值（含现金与在途）、现金余额、非现金产品数。口径见模块 docstring。"""
+def aggregate_holdings_by_platform(
+    db: Session, portfolio_code: str, snapshot_date: Optional[date] = None,
+) -> dict:
+    """按平台聚合视图：市值（含现金与在途）、现金余额、非现金产品数。口径见模块 docstring。
+
+    snapshot_date 缺省 = 组合级最新快照日；显式传入则该日无持仓快照报
+    NOT_FOUND，累计收益不降级（#672）。
+    """
     if db.query(Portfolio.code).filter(Portfolio.code == portfolio_code).first() is None:
         raise NotFoundError("NOT_FOUND", f"组合 {portfolio_code} 不存在")
 
-    snapshot_date, rows = _load_latest_rows(db, portfolio_code)
-    if snapshot_date is None:
-        return {
-            "portfolio_code": portfolio_code,
-            "snapshot_date": None,
-            "total_market_value": _ZERO,
-            "platforms": [],
-        }
+    explicit = snapshot_date is not None
+    if explicit:
+        rows = _load_rows_for_date(db, portfolio_code, snapshot_date)
+        if not rows:
+            raise NotFoundError(
+                "NOT_FOUND", f"组合 {portfolio_code} 在 {snapshot_date} 无持仓快照"
+            )
+    else:
+        snapshot_date, rows = _load_latest_rows(db, portfolio_code)
+        if snapshot_date is None:
+            return {
+                "portfolio_code": portfolio_code,
+                "snapshot_date": None,
+                "total_market_value": _ZERO,
+                "platforms": [],
+            }
 
     total = sum((_row_value(r) for r in rows), _ZERO)
     transit_keys = _load_transit_keys(db, rows)
@@ -388,7 +437,9 @@ def aggregate_holdings_by_platform(db: Session, portfolio_code: str) -> dict:
     derived = compute_derived_fields(db, [
         r for r in rows if (r.product_code, r.market) not in transit_keys
     ])
-    _, _, cum_by_platform = _load_cumulative_maps(db, portfolio_code, snapshot_date)
+    _, _, cum_by_platform = _load_cumulative_maps(
+        db, portfolio_code, snapshot_date, strict=explicit,
+    )
 
     aggregates: dict = {}
     # 在途行贡献平台市值与平台级在途合计（#641），不贡献产品数/现金/收益
