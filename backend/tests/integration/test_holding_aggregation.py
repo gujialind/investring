@@ -4,7 +4,8 @@
 #598 累计收益三粒度接入与无市值快照降级（其余字段不受影响）、过滤规则、
 双日 daily_profit 跨平台求和、LOF 一码多市场独立成卡（#461）、行级缺成本
 时持有收益整体置 None、INVALID_AMOUNT 存量数据错误原样 422、
-空组合 / 未知组合 / viewer 读权限。
+空组合 / 未知组合 / viewer 读权限、显式 snapshot_date 查询参数（#672：
+有效历史日返回该日数据、无数据日 404、格式非法 422、缺省仍取最新日）。
 """
 
 import pytest
@@ -19,12 +20,15 @@ from tests.factories import (
     create_value_snapshot,
 )
 
+D0 = date(2025, 11, 2)
 D1 = date(2025, 11, 3)
 D2 = date(2025, 11, 4)
+D3_FUTURE = date(2025, 11, 5)
 PORT = "HAGG_PORT"
 PA, PB = "HAGG_A", "HAGG_B"
 F1, F1M = "HAGG_F1", "CN_OTC"
 F2, F2M = "HAGG_F2", "CN_EXCHANGE"
+SD_PORT, SD_PLAT = "HAGG_SD", "HAGG_SD_PLAT"
 
 
 @pytest.fixture
@@ -95,16 +99,48 @@ def base_portfolio(test_db):
     return PORT
 
 
-def _by_product(client, headers, code=PORT):
+@pytest.fixture
+def two_day_portfolio(test_db):
+    """#672 独立组合：D1/D2 两日各有持仓行 + 市值快照 + confirmed 买入。
+
+    D1：F1 100 份、市值 100、当日 confirmed 买入 100 → 累计收益 0；
+    D2：F1 150 份、市值 165、当日再 confirmed 买入 50 → 累计收益 165−150=15。
+    两日市值与累计收益均可区分，且 D0（首快照前一日）无任何数据。
+    """
+    create_portfolio(test_db, code=SD_PORT, status="active")
+    create_platform(test_db, code=SD_PLAT)
+    create_product(test_db, code=F1, market=F1M)
+    for day, shares, mv, unit in ((D1, 100.0, 100.0, 1.0), (D2, 150.0, 165.0, 1.1)):
+        create_position_snapshot(
+            test_db, SD_PORT, F1, F1M, snapshot_date=day, shares=shares,
+            cost_price=1.0, unit_price=unit, market_value=mv,
+            platform_code=SD_PLAT,
+        )
+        create_value_snapshot(
+            test_db, portfolio_code=SD_PORT, snapshot_date=day,
+            total_value=mv, total_shares=mv, unit_price=1.0,
+        )
+    for day, amount in ((D1, 100.0), (D2, 50.0)):
+        create_trade(
+            test_db, portfolio_code=SD_PORT, product_code=F1, market=F1M,
+            platform_code=SD_PLAT, trade_type="buy", status="confirmed",
+            trade_date=day, confirm_date=day, amount=amount, actual_amount=amount,
+        )
+    return SD_PORT
+
+
+def _by_product(client, headers, code=PORT, snapshot_date=None):
+    params = {"snapshot_date": snapshot_date.isoformat()} if snapshot_date else None
     resp = client.get(f"/api/positions/portfolio/{code}/holdings/by-product",
-                      headers=headers)
+                      headers=headers, params=params)
     assert resp.status_code == 200
     return resp.json()
 
 
-def _by_platform(client, headers, code=PORT):
+def _by_platform(client, headers, code=PORT, snapshot_date=None):
+    params = {"snapshot_date": snapshot_date.isoformat()} if snapshot_date else None
     resp = client.get(f"/api/positions/portfolio/{code}/holdings/by-platform",
-                      headers=headers)
+                      headers=headers, params=params)
     assert resp.status_code == 200
     return resp.json()
 
@@ -179,15 +215,19 @@ class TestByProduct:
         assert data["in_transit_market_value"] == 300.0  # 单独发布，供前端在途聚合卡
 
     def test_cumulative_none_without_value_snapshot(
-        self, client, admin_headers, test_db, base_portfolio
+        self, client, admin_headers, test_db, base_portfolio, caplog
     ):
-        # 删掉市值快照后累计收益降级 None，视图其余字段不受影响
+        # 删掉市值快照后累计收益降级 None，视图其余字段不受影响；
+        # 该降级不是哑的——#672 S1：非 strict 路径记 WARNING（含组合码与日期）
+        import logging
         from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
         test_db.query(PortfolioValueSnapshot).filter(
             PortfolioValueSnapshot.portfolio_code == PORT
         ).delete()
         test_db.commit()
-        data = _by_product(client, admin_headers)
+        with caplog.at_level(logging.WARNING):
+            data = _by_product(client, admin_headers)
+        assert f"组合 {PORT} 在 {D1} 有持仓行但无组合市值快照" in caplog.text
         assert data["total_market_value"] == 2280.0
         f1 = next(p for p in data["products"] if p["product_code"] == F1)
         assert f1["holding_profit"] == 30.0       # 持有收益不受降级影响
@@ -388,14 +428,17 @@ class TestByPlatform:
         assert platform_sum == by_product["in_transit_market_value"] == 300.0
 
     def test_cumulative_none_without_value_snapshot(
-        self, client, admin_headers, test_db, base_portfolio
+        self, client, admin_headers, test_db, base_portfolio, caplog
     ):
+        import logging
         from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
         test_db.query(PortfolioValueSnapshot).filter(
             PortfolioValueSnapshot.portfolio_code == PORT
         ).delete()
         test_db.commit()
-        data = _by_platform(client, admin_headers)
+        with caplog.at_level(logging.WARNING):
+            data = _by_platform(client, admin_headers)
+        assert f"组合 {PORT} 在 {D1} 有持仓行但无组合市值快照" in caplog.text
         a = next(p for p in data["platforms"] if p["platform_code"] == PA)
         assert a["holding_profit"] == -80.0          # 持有收益不受降级影响
         for p in data["platforms"]:
@@ -435,3 +478,197 @@ class TestByPlatform:
         resp = client.get(f"/api/positions/portfolio/{PORT}/holdings/by-platform",
                           headers=viewer_headers)
         assert resp.status_code == 200
+
+
+class TestExplicitSnapshotDate:
+    """#672：显式 snapshot_date 返回该日数据；无数据日 404；格式非法 422；缺省仍取最新日。"""
+
+    def test_by_product_valid_history_date(self, client, admin_headers, two_day_portfolio):
+        data = _by_product(client, admin_headers, code=SD_PORT, snapshot_date=D1)
+        assert data["snapshot_date"] == str(D1)
+        assert data["total_market_value"] == 100.0
+        f1 = data["products"][0]
+        assert f1["market_value"] == 100.0
+        assert f1["shares"] == 100.0
+        assert f1["cumulative_profit"] == 0.0   # 截至 D1：100 − 100，不含 D2 流水
+        # S7：历史日的当日收益基准是**行级**前一日，不是组合最新日——
+        # D1 是首快照日、无前日基准；若基准被改成组合级最新日会在此翻红
+        assert f1["daily_profit"] is None
+
+    def test_by_product_explicit_latest_equals_default(
+        self, client, admin_headers, two_day_portfolio
+    ):
+        # 钉「显式最新日 == 缺省」的一致性（修复前参数被忽略时两者也同源，
+        # 本用例防的是日后把显式分支改出不同结果）
+        default = _by_product(client, admin_headers, code=SD_PORT)
+        explicit = _by_product(client, admin_headers, code=SD_PORT, snapshot_date=D2)
+        assert default == explicit
+        assert default["snapshot_date"] == str(D2)
+
+    def test_by_platform_default_returns_latest_and_explicit_equals_default(
+        self, client, admin_headers, two_day_portfolio
+    ):
+        default = _by_platform(client, admin_headers, code=SD_PORT)
+        assert default["snapshot_date"] == str(D2)
+        assert default["total_market_value"] == 165.0
+        plat = default["platforms"][0]
+        assert plat["cumulative_profit"] == 15.0   # 165 − 150
+        explicit = _by_platform(client, admin_headers, code=SD_PORT, snapshot_date=D2)
+        assert default == explicit
+
+    def test_by_product_default_returns_latest(self, client, admin_headers, two_day_portfolio):
+        data = _by_product(client, admin_headers, code=SD_PORT)
+        assert data["snapshot_date"] == str(D2)
+        assert data["total_market_value"] == 165.0
+        f1 = data["products"][0]
+        assert f1["cumulative_profit"] == 15.0  # 165 − 150
+
+    def test_by_product_date_before_first_snapshot_404(
+        self, client, admin_headers, two_day_portfolio
+    ):
+        resp = client.get(
+            f"/api/positions/portfolio/{SD_PORT}/holdings/by-product",
+            headers=admin_headers, params={"snapshot_date": str(D0)},
+        )
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "NOT_FOUND"
+        assert SD_PORT in detail["message"]
+        assert str(D0) in detail["message"]
+
+    def test_by_platform_valid_history_date(self, client, admin_headers, two_day_portfolio):
+        data = _by_platform(client, admin_headers, code=SD_PORT, snapshot_date=D1)
+        assert data["snapshot_date"] == str(D1)
+        assert data["total_market_value"] == 100.0
+        plat = data["platforms"][0]
+        assert plat["platform_code"] == SD_PLAT
+        assert plat["market_value"] == 100.0
+        assert plat["cumulative_profit"] == 0.0
+
+    def test_by_platform_date_before_first_snapshot_404(
+        self, client, admin_headers, two_day_portfolio
+    ):
+        resp = client.get(
+            f"/api/positions/portfolio/{SD_PORT}/holdings/by-platform",
+            headers=admin_headers, params={"snapshot_date": str(D0)},
+        )
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "NOT_FOUND"
+        assert SD_PORT in detail["message"]
+        assert str(D0) in detail["message"]
+
+    def test_explicit_date_without_value_snapshot_404(
+        self, client, admin_headers, test_db, base_portfolio
+    ):
+        """有持仓行但无市值快照：strict 模式下 NotFoundError 上抛，不降级 None。
+
+        与既有 TestByProduct::test_cumulative_none_without_value_snapshot /
+        TestByPlatform::test_cumulative_none_without_value_snapshot（缺省路径降级）对照。
+        """
+        from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
+        test_db.query(PortfolioValueSnapshot).filter(
+            PortfolioValueSnapshot.portfolio_code == PORT
+        ).delete()
+        test_db.commit()
+        for path in ("by-product", "by-platform"):
+            resp = client.get(
+                f"/api/positions/portfolio/{PORT}/holdings/{path}",
+                headers=admin_headers, params={"snapshot_date": str(D1)},
+            )
+            assert resp.status_code == 404
+            detail = resp.json()["detail"]
+            assert detail["error"] == "NOT_FOUND"
+            assert "无市值快照" in detail["message"]
+
+    def test_invalid_date_format_422(self, client, admin_headers, two_day_portfolio):
+        for path in ("by-product", "by-platform"):
+            resp = client.get(
+                f"/api/positions/portfolio/{SD_PORT}/holdings/{path}",
+                headers=admin_headers, params={"snapshot_date": "abc"},
+            )
+            assert resp.status_code == 422
+            # FastAPI RequestValidationError：响应体是数组，确认 422 来自本参数
+            assert resp.json()["detail"][0]["loc"] == ["query", "snapshot_date"]
+
+    def test_default_path_no_fallback_when_latest_lacks_value_snapshot(
+        self, client, admin_headers, test_db, two_day_portfolio
+    ):
+        """最新日（D2）缺市值快照、更早日（D1）有：缺省路径降级 None，**不回退 D1**。
+
+        静默回退历史日会让前端拿到「更早日期的收益数字」而非无数据提示；
+        同一用例并列钉 #672 非对称语义：同日不传 → 200+None，显式传 → 404。
+        """
+        from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
+        test_db.query(PortfolioValueSnapshot).filter(
+            PortfolioValueSnapshot.portfolio_code == SD_PORT,
+            PortfolioValueSnapshot.snapshot_date == D2,
+        ).delete()
+        test_db.commit()
+        data = _by_product(client, admin_headers, code=SD_PORT)
+        assert data["snapshot_date"] == str(D2)          # 不回退到更早快照日
+        f1 = data["products"][0]
+        assert f1["market_value"] == 165.0               # 持仓视图照常
+        assert f1["cumulative_profit"] is None           # 降级，不得输出 D1 的 0.0
+        resp = client.get(
+            f"/api/positions/portfolio/{SD_PORT}/holdings/by-product",
+            headers=admin_headers, params={"snapshot_date": str(D2)},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"] == "NOT_FOUND"
+
+    def test_future_and_out_of_range_dates_404(
+        self, client, admin_headers, two_day_portfolio
+    ):
+        """晚于最新快照日（未来日）显式传 → 404，不「超界静默给最新日」（两端点）。"""
+        for path in ("by-product", "by-platform"):
+            for bad in (str(D3_FUTURE), str(D0)):
+                resp = client.get(
+                    f"/api/positions/portfolio/{SD_PORT}/holdings/{path}",
+                    headers=admin_headers, params={"snapshot_date": bad},
+                )
+                assert resp.status_code == 404
+                assert resp.json()["detail"]["error"] == "NOT_FOUND"
+
+    def test_explicit_date_invalid_amount_still_422(
+        self, client, admin_headers, test_db, base_portfolio
+    ):
+        """strict 只上抛 NotFoundError：缺 actual_amount 的 INVALID_AMOUNT 显式日同样原样 422。"""
+        create_trade(
+            test_db, portfolio_code=PORT, product_code=F1, market=F1M,
+            platform_code=PA, trade_type="buy", status="confirmed",
+            trade_date=D1, confirm_date=D1, amount=100.0, actual_amount=None,
+        )
+        for path in ("by-product", "by-platform"):
+            resp = client.get(
+                f"/api/positions/portfolio/{PORT}/holdings/{path}",
+                headers=admin_headers, params={"snapshot_date": str(D1)},
+            )
+            assert resp.status_code == 422
+            assert resp.json()["detail"]["error"] == "INVALID_AMOUNT"
+
+    def test_explicit_date_only_zero_rows_returns_empty_200(
+        self, client, admin_headers, test_db
+    ):
+        """当日仅剩零额行 → 200 + 空列表（与「无行 → 404」并列钉死两种空态）。"""
+        create_portfolio(test_db, code="HAGG_ZE", status="active")
+        create_platform(test_db, code="HAGG_ZE_A")
+        create_position_snapshot(
+            test_db, "HAGG_ZE", "CASH", "", snapshot_date=D1, cash_amount=0.0,
+            unit_price=None, cost_price=None, market_value=0.0,
+            platform_code="HAGG_ZE_A",
+        )
+        create_value_snapshot(
+            test_db, portfolio_code="HAGG_ZE", snapshot_date=D1,
+            total_value=0.0, total_shares=1000.0, unit_price=0.0,
+        )
+        for path, key in (("by-product", "products"), ("by-platform", "platforms")):
+            resp = client.get(
+                f"/api/positions/portfolio/HAGG_ZE/holdings/{path}",
+                headers=admin_headers, params={"snapshot_date": str(D1)},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["snapshot_date"] == str(D1)
+            assert data["total_market_value"] == 0.0
+            assert data[key] == []
