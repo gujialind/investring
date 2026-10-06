@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/ap
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
+  cn,
   formatCurrency,
   formatDate,
   formatMarketName,
@@ -98,7 +99,16 @@ export default function PlatformProductDetailContent({
   const slice = product?.platforms.find((s) => s.platform_code === platformCode);
 
   const [range, setRange] = useState<NavAnalysisRange>("6m");
-  const { data: analysis } = useNavAnalysis(productCode, market, range);
+  const {
+    data: analysis,
+    isError: analysisError,
+    error: analysisErr,
+    refetch: refetchAnalysis,
+    // #683 D-1：换区间在途时 react-query 用 placeholder 保留**上一个区间**的值
+    // （keepPreviousData），此时 isRefetching 为真而 isError 仍为假。库自带具名字段，
+    // 首屏在途为假（isPending 时 isRefetching=false），故不必再造派生谓词。
+    isRefetching: analysisRevalidating,
+  } = useNavAnalysis(productCode, market, range);
 
   const [visiblePages, setVisiblePages] = useState(1);
   // S1：现金产品无净值端点（market="" 会 404），非现金且 market 非空时才请求
@@ -257,8 +267,17 @@ export default function PlatformProductDetailContent({
 
   // 净值相关卡片仅非现金产品显示
   const curveCard = !isCash && (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-curve-card">
+    <section
+      className="relative rounded-lg border border-border bg-card p-4"
+      data-testid="platform-product-curve-card"
+      // #683 D-1：重取期（含 placeholder 生效的换区间在途）标为 busy。断言按属性而非
+      // opacity 类名——定位器契约禁止按 Tailwind 工具类定位（手法同 #650 的 aria-current）
+      aria-busy={analysisRevalidating ? "true" : "false"}
+    >
       <h3 className="text-lg font-semibold">累计净值走势</h3>
+      {analysisRevalidating && (
+        <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
+      )}
       <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
         {NAV_RANGE_TABS.map((tab) => (
           <button
@@ -277,28 +296,49 @@ export default function PlatformProductDetailContent({
           </button>
         ))}
       </div>
-      <div className="mt-2">
-        <NavCurve data={(analysis?.curve ?? []).map((p) => ({ date: p.date, nav: p.accumulated_nav }))} height={isMobile ? 220 : 300} />
-      </div>
+      {/* #683 D-2：失败 ≠「这个区间没净值」。失败臂必须排在 NavCurve 之前，否则后端故障被
+          NavCurve 的内置空态文案吞掉（与 ProductDetailContent 的同名卡片同形，两页各一份判序）。
+          D-1：重取期保留 placeholder 的**上一个区间**数值，但整块压暗 + 右上角 spinner
+          （docs/design/visual-spec.md §14 局部加载态），不得为消除该观感而删 keepPreviousData。 */}
+      {analysisError ? (
+        <QueryErrorState error={analysisErr} onRetry={refetchAnalysis} className="mt-3" />
+      ) : (
+        <div className={cn("mt-2", analysisRevalidating && "opacity-50")}>
+          <NavCurve data={(analysis?.curve ?? []).map((p) => ({ date: p.date, nav: p.accumulated_nav }))} height={isMobile ? 220 : 300} />
+        </div>
+      )}
     </section>
   );
 
   const returnsCard = !isCash && (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-returns-card">
+    <section
+      className="relative rounded-lg border border-border bg-card p-4"
+      data-testid="platform-product-returns-card"
+      aria-busy={analysisRevalidating ? "true" : "false"}
+    >
       <h3 className="text-lg font-semibold">区间收益率</h3>
-      <div className="mt-3 grid grid-cols-3 gap-3">
-        {RETURN_WINDOWS.map((w) => {
-          const value = analysis?.interval_returns?.[w.field];
-          return (
-            <div key={w.field} data-testid={`return-${w.field}`}>
-              <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(value)}`}>
-                {formatReturnRate(value)}
+      {analysisRevalidating && (
+        <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
+      )}
+      {/* 失败臂整块替换六窗（不是塞进 grid 子位）：失败时六个 return-<field> 都不存在，
+          「全为 --」的形态随之消失，后端故障不再被读成「这些窗口没有净值」 */}
+      {analysisError ? (
+        <QueryErrorState error={analysisErr} onRetry={refetchAnalysis} className="mt-3" />
+      ) : (
+        <div className={cn("mt-3 grid grid-cols-3 gap-3", analysisRevalidating && "opacity-50")}>
+          {RETURN_WINDOWS.map((w) => {
+            const value = analysis?.interval_returns?.[w.field];
+            return (
+              <div key={w.field} data-testid={`return-${w.field}`}>
+                <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(value)}`}>
+                  {formatReturnRate(value)}
+                </div>
+                <div className="text-xs text-muted-foreground">{w.label}</div>
               </div>
-              <div className="text-xs text-muted-foreground">{w.label}</div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 

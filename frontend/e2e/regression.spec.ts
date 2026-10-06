@@ -5,7 +5,17 @@
  * 每个用例注明其防止复发的具体问题。
  */
 import { test, expect } from '@playwright/test';
-import { E2E_ACTIVE, E2E_PORT, collectPageErrors, gotoPortfolioDetail, gotoPortfolioSubpage } from './helpers';
+import {
+  E2E_ACTIVE,
+  E2E_PORT,
+  collectPageErrors,
+  gotoPortfolioDetail,
+  gotoPortfolioSubpage,
+  openFilterPanelIfMobile,
+  openPopover,
+  portfolioPath,
+  settlePopovers,
+} from './helpers';
 // 运行时导入导航单源：断言清单与返回出口由同一份数据派生，不在 spec 里抄第三份（#650）
 import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
 
@@ -320,5 +330,106 @@ test.describe('移动端非 Tab 管理页的站内出口（#658 L2 Blocker 2 回
       await page.waitForURL(`**${exit.href}`);
       expect(new URL(page.url()).pathname, `返回应落在 ${exit.href}`).toBe(exit.href);
     }
+  });
+});
+
+// #683 A/C：两处读侧路径**从未接入失败态**（不是「有 QueryErrorState 副本没收敛」）。
+// 补的是缺掉的失败分支，病是「后端 5xx 被渲染成这里没有数据」。
+test.describe('读侧失败伪装成空态（#683 A 平台页 / C 交易列表页）', () => {
+  test('平台列表读取失败 → 失败态优先于「暂无平台」，重试真重发（#683 A1）', async ({ page }) => {
+    // PlatformsContent 原先只解 data/isLoading：5xx 时 hook 弹一条几秒即消失的 toast
+    // （#214 车道，本批按维护者判定**保留**、不撤，撤它会连带撤掉 5 处选择框的失败提示），
+    // 页面主体却照旧断言「环境里没有平台」——用户会去重复新建（同 code 撞 ALREADY_EXISTS）。
+    // 断言取**完整前缀串**：toast 标题「平台列表加载失败」+ 正文 message 拼接后不含带全角
+    // 冒号的「加载失败：」，故页面级直达该串即唯一命中，本页 <Card> 无需新增 data-testid。
+    await page.route(/\/api\/platforms(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: 'INTERNAL', message: '平台目录服务暂不可用' } },
+      }),
+    );
+    await page.goto('/platforms');
+    await expect(page.getByText('加载失败：平台目录服务暂不可用')).toBeVisible({ timeout: 10_000 });
+    // 承重负向：失败不得伪装成空态
+    await expect(page.getByText('暂无平台')).toHaveCount(0);
+    const retry = page.getByRole('button', { name: '重试' });
+    await expect(retry).toBeVisible();
+    // waitForRequest 必须在失败态可见之后注册，否则 retry:1 的自动重试会在「没点重试」时也命中
+    const refetched = page.waitForRequest(
+      (r) => r.method() === 'GET' && /\/api\/platforms(\?|$)/.test(r.url()),
+      { timeout: 10_000 },
+    );
+    await retry.click();
+    await refetched;
+  });
+
+  test('平台列表正常态仍渲染行集、两句兜底文案都不出现（#683 A2，防把空态改坏）', async ({ page }) => {
+    // 不 mock。本批只把「失败」从「空态」里分出来，真·有数据与真·空的形态都不许被顺带改坏。
+    await page.goto('/platforms');
+    await expect(page.getByRole('cell', { name: '华宝证券' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('cell', { name: '蚂蚁财富' })).toBeVisible();
+    await expect(page.getByText('暂无平台')).toHaveCount(0);
+    await expect(page.getByText('加载失败')).toHaveCount(0);
+  });
+
+  test('调仓交易列表读取失败 → 失败态优先于两个空态、不给出「重置筛选」（#683 C1）', async ({ page }) => {
+    // 本页失败原先落「暂无交易记录」；带任何筛选时更糟——落「无符合筛选条件的记录」**外加一个
+    // 「重置筛选」按钮**，把后端故障引导成「你筛错了」（C2 专门钉这一形态）。
+    // useTradeList 不弹 toast（与 usePlatformList 不同），失败块是本唯一出口，因此判据必须
+    // scoped 到 /api/trades：写宽会把同页 /api/platforms 也 mock 掉，多出一个不相干出口。
+    await page.route(/\/api\/trades(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: 'INTERNAL', message: '调仓交易列表服务暂不可用' } },
+      }),
+    );
+    // 用 portfolioPath 而非 gotoPortfolioSubpage：后者的渲染信号是页内按钮，失败态下不必依赖
+    await page.goto(portfolioPath(E2E_ACTIVE, 'trades'));
+    await expect(page.getByText('加载失败：调仓交易列表服务暂不可用')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('暂无交易记录')).toHaveCount(0);
+    await expect(page.getByText('无符合筛选条件的记录')).toHaveCount(0);
+    // 锚定正则不可省：getByRole 的 name 默认是大小写不敏感**子串**匹配（helpers.ts 已把该事实
+    // 写成本仓惯例），裸 '重置' 与「重置筛选」互相命中。这里要断的是 EmptyState 里那个缺席，
+    // 而筛选栏的「重置」按钮**该在场**（故障期不没收用户的退出口），故不能用它做失败判据。
+    await expect(page.getByRole('button', { name: /^重置筛选$/ })).toHaveCount(0);
+    const retry = page.getByRole('button', { name: '重试' });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === 'GET' && /\/api\/trades(\?|$)/.test(r.url()),
+      { timeout: 10_000 },
+    );
+    await retry.click();
+    await refetched;
+  });
+
+  test('带筛选时交易列表读取失败仍落失败态，不落「无符合筛选条件的记录」（#683 C2）', async (
+    { page },
+    testInfo,
+  ) => {
+    // 口径③要求的**可观测形态**：只有「失败且带筛选」才能让「失败排在长度为 0 之前」这个判序
+    // 在屏上显形——默认筛选下失败只落「暂无交易记录」，看不出前件位置。
+    // 实测结论（react-query 5.102.8，首取/换键失败）：失败时 data 被清空、旧行集**不在屏上**，
+    // 故组件里 `trades.length === 0` 前件恒真、原样保留（口径③不顺手重排）；但失败臂写在外层
+    // 三元而非塞进该前件之内——同键**后台重取**失败时 data 保留（isRefetchError），嵌套形在那
+    // 一态下会让失败块变成不可达分支。
+    await page.route(/\/api\/trades(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: 'INTERNAL', message: '带筛选交易查询服务暂不可用' } },
+      }),
+    );
+    await page.goto(portfolioPath(E2E_ACTIVE, 'trades'));
+    await expect(page.getByText('加载失败：带筛选交易查询服务暂不可用')).toBeVisible({ timeout: 10_000 });
+    // 先确认无筛选形态，再激活状态筛选（移动端筛选栏默认折叠，桌面 no-op，#383 口径）
+    await openFilterPanelIfMobile(page, testInfo);
+    const statusTrigger = page.getByRole('combobox').filter({ hasText: '全部状态' });
+    const pendingOption = page.getByRole('option', { name: '待确认' });
+    await openPopover(page, statusTrigger, pendingOption);
+    await pendingOption.click({ timeout: 10_000 });
+    await settlePopovers(page);
+    // 换筛选键后再次 500：仍是失败块，且**绝不**得到「无符合筛选条件的记录」+「重置筛选」
+    await expect(page.getByText('加载失败：带筛选交易查询服务暂不可用')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('无符合筛选条件的记录')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^重置筛选$/ })).toHaveCount(0);
   });
 });

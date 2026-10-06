@@ -76,6 +76,7 @@ import { usePlatformList } from "@/hooks/usePlatform";
 import { useUIStore } from "@/stores/uiStore";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import ProductCell from "@/components/shared/ProductCell";
@@ -198,7 +199,14 @@ export default function TradesContent({
     confirm_date_start: confirmRange?.from ? toDateOnly(confirmRange.from) : undefined,
     confirm_date_end: confirmRange?.to ? toDateOnly(confirmRange.to) : undefined,
   };
-  const { data, isLoading, isFetching } = useTradeList(listParams);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isError: tradesError,
+    error: tradesErr,
+    refetch: refetchTrades,
+  } = useTradeList(listParams);
   const createTrade = useCreateTrade();
   const confirmTrade = useConfirmTrade();
   const cancelTrade = useCancelTrade();
@@ -1056,8 +1064,19 @@ export default function TradesContent({
               </TableBody>
             </Table>
           </div>
-          {/* 空态：默认筛选集下为空 = 暂无记录；非默认筛选下为空 = 引导重置（规范 §8 变体②） */}
-          {trades.length === 0 &&
+          {/* #683C 判序承重：失败 → 有筛选为空 → 无筛选为空，三支各自成立，**失败不并入任一 EmptyState**。
+              本页失败若落进带筛选那一支，会连带给出「重置筛选」按钮——把后端故障引导成「你筛错了」，
+              比同页无筛选的形态更具误导性。
+              `trades.length === 0` 前件原样保留（#663⑤ 口径：实测首取/换键失败时 react-query 清空 data，
+              前件恒真、判序不可观测）；但失败臂写在外层三元而非塞进该前件之内——同键后台重取失败时
+              data **保留**，嵌套形在那一态下失败块不可达。
+              不传 className（区块级缺省，与相邻两个 EmptyState 同尺寸，docs/design/visual-spec.md §14）。
+              筛选栏那个「重置」按钮不因失败隐藏：它与「重试」是两个动作（改参数重查 vs 原参数重查），
+              故障期没收退出口更糟。PaginationBar 失败期自行不渲染（total 塌成 0 ≤ pageSize）。 */}
+          {tradesError ? (
+            <QueryErrorState error={tradesErr} onRetry={refetchTrades} />
+          ) : (
+            trades.length === 0 &&
             (hasNonDefaultFilter ? (
               <EmptyState
                 message="无符合筛选条件的记录"
@@ -1069,7 +1088,8 @@ export default function TradesContent({
               />
             ) : (
               <EmptyState message="暂无交易记录" />
-            ))}
+            ))
+          )}
           <PaginationBar
             page={page}
             pageSize={pageSize}

@@ -299,3 +299,105 @@ test.describe("现金产品详情页", () => {
     await expect(page.getByTestId("product-history-card")).not.toBeVisible();
   });
 });
+
+// #683 B/D：本页交易卡与两页共用的 useNavAnalysis 从未接入失败态。
+// 每条新用例各取一个互不重复的后端 message 串（platform-detail.spec.ts 立的惯例），
+// 红的时候能直接看出哪条 route 生效；判据一律 scoped，绝不写 **/api/**。
+test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析）", () => {
+  test("交易记录卡读取失败 → 卡内失败态与重试，而非「暂无交易记录」（#683 B1）", async ({ page }) => {
+    // 同形的 PlatformDetailContent 交易卡早在 #663① 就接了失败态，本页是漏掉的那一个。
+    // 该组合明明有已确认交易（E2E_ACTIVE 即如此），5xx 时卡里却说「暂无交易记录」——
+    // 用户读成「这个产品没成交过」，可能重复录入一笔买入。
+    await page.route(/\/api\/trades(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: "INTERNAL", message: "产品交易列表服务暂不可用" } },
+      })
+    );
+    await page.goto(PRODUCT_PATH);
+    const card = page.getByTestId("product-trades-card");
+    await expect(card).toContainText("加载失败：产品交易列表服务暂不可用", { timeout: 10_000 });
+    await expect(card).not.toContainText("暂无交易记录");
+    const retry = card.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === "GET" && /\/api\/trades(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    await retry.click();
+    await refetched;
+    // 正向对照：同页历史净值卡仍拿到种子净值，证明判据没串台到 nav 系请求
+    await expect(page.getByTestId("product-history-card")).toContainText("4.2000");
+  });
+
+  test("净值分析读取失败 → 曲线卡与区间收益率卡都不落空态/全 --（#683 D-2）", async ({ page }) => {
+    // 两个卡消费同一个查询，各卡各一个失败块（判定 2）。失败原先落两处：曲线进 NavCurve 内置的
+    // 「暂无净值数据」，六窗经 formatReturnRate(undefined) 全塌成「--」——后端故障被说成
+    // 「这个区间没净值」。判据取 nav-analysis 末段，与既有 nav-history 的 glob 不重叠。
+    await page.route(/\/nav-analysis(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: "INTERNAL", message: "净值分析服务暂不可用" } },
+      })
+    );
+    await page.goto(PRODUCT_PATH);
+    const curve = page.getByTestId("product-curve-card");
+    const returns = page.getByTestId("product-returns-card");
+    await expect(curve).toContainText("加载失败：净值分析服务暂不可用", { timeout: 10_000 });
+    await expect(curve).not.toContainText("暂无净值数据");
+    // 反证②的落点：失败块若只接了曲线卡，下面两句红在未被覆盖的收益率卡
+    await expect(returns).toContainText("加载失败：净值分析服务暂不可用");
+    await expect(returns.getByTestId("return-m1")).toHaveCount(0);
+    const retry = curve.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === "GET" && /\/nav-analysis(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    await retry.click();
+    await refetched;
+    // 同页 nav-history 系不受这条 route 影响（历史净值卡仍出种子值）
+    await expect(page.getByTestId("product-history-card")).toContainText("4.2000");
+  });
+
+  test("切换区间在途不得把上一个区间的数据当成当前区间呈现（#683 D-1）", async ({ page }) => {
+    // useNavAnalysis 配 placeholderData: keepPreviousData，换 range 键时先保留上一个键的返回值
+    // （筛选/翻页不闪烁的既有行为，本批按判定**不动它**）。实测 query-core 5.102.8 的时序：
+    // 点「近1个月」后该请求在途期间 isError=false、isPlaceholderData=true、isFetching=true，
+    // data 仍是 6m 的值——chip 的 aria-pressed 已切到 1m，而六窗数值仍是 6m 的旧值，屏上原本
+    // 没有任何「这不是当前区间」的标记。对记账系统这是「把旧数读成新数」，比落空态更严重。
+    // 形态取 docs/design/visual-spec.md §14 既有的局部加载态（容器 opacity-50 + 右上角 Loader2），
+    // 并把该状态显式写成 aria-busy 供断言：定位器契约禁止按 Tailwind 工具类定位（同 #650 用
+    // aria-current 而不按高亮类名断言的手法）。**旧值仍在屏上是刻意的**，本用例不断它缺席。
+    const SIX_M = {
+      curve: [
+        { date: "2020-01-02", accumulated_nav: 1.0 },
+        { date: "2020-06-30", accumulated_nav: 9.8765 },
+      ],
+      // m1 取一个可识别值作旧值基线（六窗是同一查询的另一个消费点，且是纯 DOM 文本；
+      // 曲线数值落在 recharts 的 SVG 刻度里、不保证以文本呈现，故不作基线）
+      interval_returns: { m1: 1.11, m3: 2.0, m6: 3.0, y1: 4.0, ytd: 5.0, all: 6.0 },
+    };
+    await page.route(/\/nav-analysis\?range=6m/, (route) =>
+      route.fulfill({ status: 200, json: SIX_M })
+    );
+    // 1m 既不 fulfill 也不 continue：请求恒在途，唯一可见形态就是 placeholder，不依赖竞态
+    await page.route(/\/nav-analysis\?range=1m/, async () => {
+      await new Promise(() => undefined);
+    });
+    await page.goto(PRODUCT_PATH);
+    const curve = page.getByTestId("product-curve-card");
+    const returns = page.getByTestId("product-returns-card");
+    // 基线：6m 的独有值已上桌，且 settled 态不标 busy
+    await expect(returns.getByTestId("return-m1")).toContainText("+1.11%", { timeout: 10_000 });
+    await expect(curve).toHaveAttribute("aria-busy", "false");
+    await expect(returns).toHaveAttribute("aria-busy", "false");
+
+    await page.getByTestId("nav-range-1m").click();
+    await expect(page.getByTestId("nav-range-1m")).toHaveAttribute("aria-pressed", "true");
+    // 承重：两卡都必须显式标出「本区间正在重取」，不得让旧值无标记地冒充当前区间
+    // 反证③的落点：删掉组件里 isRefetching 门控，这两句红
+    await expect(curve).toHaveAttribute("aria-busy", "true");
+    await expect(returns).toHaveAttribute("aria-busy", "true");
+  });
+});
