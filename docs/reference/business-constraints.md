@@ -111,7 +111,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-cumulative-profit"></a>
 ## 累计收益（全历史净流量口径）
 
-独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；经 #595 组合详情页聚合端点（`GET /positions/portfolio/{code}/holdings/by-product|by-platform`）接入。**服务函数**只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`；confirmed 交易缺 `actual_amount` 报 `INVALID_AMOUNT`——属存量数据不完整，见[错误码总表](#错误码总表)），固定批量查询、只读不 commit。**聚合端点**的 `snapshot_date` 为可选查询参数（#672，偏离 #598 原措辞、已回填）：不传 = 组合最新快照日，该日无组合市值快照时响应字段降级为 None（前端按可空占位渲染）；显式传入则严格校验、不降级，该日无持仓快照或无组合市值快照均报 `NOT_FOUND`（消息含组合代码与日期）。
+独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；经 #595 组合详情页聚合端点（`GET /positions/portfolio/{code}/holdings/by-product|by-platform`）接入。**服务函数**只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`；confirmed 交易缺 `actual_amount` 报 `INVALID_AMOUNT`——属存量数据不完整，见[错误码总表](#错误码总表)），固定批量查询、只读不 commit。**聚合端点**的 `snapshot_date` 为可选查询参数（#672，偏离 #598 原措辞、已回填）：不传 = 最新**持仓**快照日（`portfolio_position` max，与 `get_latest_snapshot_date` 的市值快照日不是同一个日期），该日无组合市值快照时响应字段降级为 None（前端按可空占位渲染）；显式传入则严格校验、不降级，该日无持仓快照或无组合市值快照均报 `NOT_FOUND`（消息含组合代码与日期）。
 
 - **基金（平台-产品键）**＝ D 日市值 ＋ confirmed 基金卖出腿实际到手（`actual_amount`）－ confirmed 基金买入腿含费支出 ＋ confirmed 平台/子记录事件现金净额（按 `ex_date` 应计）。强制调整的份额增减由市值体现，**不虚构本金投入抵消**；再投资/拆分/合并不另计外部投入、不重复分红。
 - **CASH**＝ D 日现金 － confirmed CASH 腿净流入 － 基金事件**已到账**现金（有效现金日 ≤ D，#522）；CASH 自身强制现金调整与手动重估差额留在现金损益、不伪装成本金；转移与买卖回款不再赚一次收益，基金与 CASH 不双计。在途（含分红在途）不产生独立收益。

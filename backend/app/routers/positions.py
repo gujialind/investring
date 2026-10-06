@@ -210,8 +210,9 @@ def get_holdings_by_product(
 ):
     """按产品聚合的持仓视图：跨平台合计 + 平台分布 + 维度元数据。
 
-    snapshot_date 缺省 = 组合级最新快照日；显式传入则严格校验，该日无持仓/
-    市值快照报 404 NOT_FOUND（#672）。
+    snapshot_date 缺省 = 组合级最新快照日；显式传入则该日无持仓/市值快照即
+    404 NOT_FOUND（不校验交易日或未来日，同样落 404），响应 snapshot_date
+    与入参一致（#672）。
     口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。
     """
     result = aggregate_holdings_by_product(db, portfolio_code, snapshot_date)
@@ -236,8 +237,9 @@ def get_holdings_by_platform(
 ):
     """按平台聚合的持仓视图：市值/现金余额/产品数/收益合计。
 
-    snapshot_date 缺省 = 组合级最新快照日；显式传入则严格校验，该日无持仓/
-    市值快照报 404 NOT_FOUND（#672）。
+    snapshot_date 缺省 = 组合级最新快照日；显式传入则该日无持仓/市值快照即
+    404 NOT_FOUND（不校验交易日或未来日，同样落 404），响应 snapshot_date
+    与入参一致（#672）。
     口径（过滤/在途/降级/部分和置 None）见 holding_aggregation_service 模块 docstring。
     """
     result = aggregate_holdings_by_platform(db, portfolio_code, snapshot_date)

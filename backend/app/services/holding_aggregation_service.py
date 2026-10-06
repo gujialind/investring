@@ -1,11 +1,11 @@
 """持仓聚合读侧（#595）：组合详情页「按产品 / 按平台」双视图的数据装配。
 
 口径要点（端点 docstring 不重复，改口径只改这里）：
-- 数据源为组合级最新快照日的 `portfolio_position` 行；调用方显式传
-  `snapshot_date` 时数据源为该日行，该日无持仓快照报 `NOT_FOUND`（#672）。
-  清仓行不落在快照中
+- 数据源为组合级最新快照日的 `portfolio_position` 行；清仓行不落在快照中
   （生成侧对净值型行跳过 shares<=0 且现金为 0 的行；零额现金行是生成侧
-  的正常产物），在此基础上仍显式过滤市值/份额为 0 的聚合，防御脏数据。
+  的正常产物），在此基础上仍显式过滤市值/份额为 0 的聚合，防御脏数据；
+  调用方显式传 `snapshot_date` 时数据源为该日行，该日无持仓快照报
+  `NOT_FOUND`（#672）。
 - 行市值口径与快照生成一致：现金行（`cash_amount IS NOT NULL`，含 CASH 与在途）
   取 `cash_amount`，净值型行取 `market_value`（快照生成对现金行同写两列，此处按
   业务判据读取，不依赖该同写巧合）。
@@ -91,6 +91,26 @@ def _load_latest_rows(db: Session, portfolio_code: str):
     return latest, _load_rows_for_date(db, portfolio_code, latest)
 
 
+def _resolve_snapshot_rows(db: Session, portfolio_code: str, snapshot_date):
+    """解析取数快照日与行集，返回 (生效快照日, rows, strict)；两聚合入口共用（#672）。
+
+    - 显式日期：该日无持仓快照抛 NOT_FOUND（消息含组合代码与日期），strict=True，
+      累计收益不降级；不校验日期本身（非交易日/未来日同样落 404）。
+    - 缺省：取组合级最新**持仓**快照日（portfolio_position max，与
+      trading_utils.get_latest_snapshot_date 的市值快照日不同源）；无任何快照
+      返回 (None, [], False)，空视图由调用方决定。
+    """
+    if snapshot_date is None:
+        latest, rows = _load_latest_rows(db, portfolio_code)
+        return latest, rows, False
+    rows = _load_rows_for_date(db, portfolio_code, snapshot_date)
+    if not rows:
+        raise NotFoundError(
+            "NOT_FOUND", f"组合 {portfolio_code} 在 {snapshot_date} 无持仓快照"
+        )
+    return snapshot_date, rows, True
+
+
 def _load_product_meta(db: Session, rows) -> dict:
     """批量装配产品名称、五维度 code/name（防 N+1，口径同 positions 列表读侧）。
 
@@ -161,16 +181,22 @@ def _load_cumulative_maps(
 ) -> tuple:
     """#598 三粒度累计收益 → 三张映射。
 
-    strict=False（默认最新日路径）：无当日组合市值快照时降级空映射（字段输出
-    None，前端按可空占位渲染），#595 既有语义；strict=True（调用方显式传快照日，
-    #672）：NotFoundError 原样上抛（404），不降级。INVALID_AMOUNT 等存量数据
-    错误两种模式都不吞。
+    strict=False（默认最新日路径）：无当日组合市值快照时记 WARNING 并降级空映射
+    （字段输出 None，前端按可空占位渲染）——该形态正常快照生成不可达（两表同批
+    落库），只在脏数据/部分失败时出现；strict=True（调用方显式传快照日，#672）：
+    NotFoundError 原样上抛（404），不自记日志以免与全局 handler 双记。
+    INVALID_AMOUNT 等存量数据错误两种模式都不吞。
     """
     try:
         result = compute_cumulative_profits(db, portfolio_code, snapshot_date)
     except NotFoundError:
         if strict:
             raise
+        logger.warning(
+            "持仓聚合：组合 %s 在 %s 有持仓行但无组合市值快照，累计收益字段降级 None"
+            "（正常生成两表同批落库，此形态属脏数据/部分失败）",
+            portfolio_code, snapshot_date,
+        )
         return {}, {}, {}
     by_platform_product = {
         (r["product_code"], r["market"], r["platform_code"]): r["cumulative_profit"]
@@ -207,23 +233,15 @@ def aggregate_holdings_by_product(
     if db.query(Portfolio.code).filter(Portfolio.code == portfolio_code).first() is None:
         raise NotFoundError("NOT_FOUND", f"组合 {portfolio_code} 不存在")
 
-    explicit = snapshot_date is not None
-    if explicit:
-        rows = _load_rows_for_date(db, portfolio_code, snapshot_date)
-        if not rows:
-            raise NotFoundError(
-                "NOT_FOUND", f"组合 {portfolio_code} 在 {snapshot_date} 无持仓快照"
-            )
-    else:
-        snapshot_date, rows = _load_latest_rows(db, portfolio_code)
-        if snapshot_date is None:
-            return {
-                "portfolio_code": portfolio_code,
-                "snapshot_date": None,
-                "total_market_value": _ZERO,
-                "in_transit_market_value": _ZERO,
-                "products": [],
-            }
+    snapshot_date, rows, strict = _resolve_snapshot_rows(db, portfolio_code, snapshot_date)
+    if snapshot_date is None:
+        return {
+            "portfolio_code": portfolio_code,
+            "snapshot_date": None,
+            "total_market_value": _ZERO,
+            "in_transit_market_value": _ZERO,
+            "products": [],
+        }
 
     total = sum((_row_value(r) for r in rows), _ZERO)
     meta = _load_product_meta(db, rows)
@@ -236,7 +254,7 @@ def aggregate_holdings_by_product(
     platform_names = _load_platform_names(db, card_rows)
     derived = compute_derived_fields(db, card_rows)
     cum_by_key, cum_by_product, _ = _load_cumulative_maps(
-        db, portfolio_code, snapshot_date, strict=explicit,
+        db, portfolio_code, snapshot_date, strict=strict,
     )
 
     aggregates: dict = {}
@@ -408,22 +426,14 @@ def aggregate_holdings_by_platform(
     if db.query(Portfolio.code).filter(Portfolio.code == portfolio_code).first() is None:
         raise NotFoundError("NOT_FOUND", f"组合 {portfolio_code} 不存在")
 
-    explicit = snapshot_date is not None
-    if explicit:
-        rows = _load_rows_for_date(db, portfolio_code, snapshot_date)
-        if not rows:
-            raise NotFoundError(
-                "NOT_FOUND", f"组合 {portfolio_code} 在 {snapshot_date} 无持仓快照"
-            )
-    else:
-        snapshot_date, rows = _load_latest_rows(db, portfolio_code)
-        if snapshot_date is None:
-            return {
-                "portfolio_code": portfolio_code,
-                "snapshot_date": None,
-                "total_market_value": _ZERO,
-                "platforms": [],
-            }
+    snapshot_date, rows, strict = _resolve_snapshot_rows(db, portfolio_code, snapshot_date)
+    if snapshot_date is None:
+        return {
+            "portfolio_code": portfolio_code,
+            "snapshot_date": None,
+            "total_market_value": _ZERO,
+            "platforms": [],
+        }
 
     total = sum((_row_value(r) for r in rows), _ZERO)
     transit_keys = _load_transit_keys(db, rows)
@@ -438,7 +448,7 @@ def aggregate_holdings_by_platform(
         r for r in rows if (r.product_code, r.market) not in transit_keys
     ])
     _, _, cum_by_platform = _load_cumulative_maps(
-        db, portfolio_code, snapshot_date, strict=explicit,
+        db, portfolio_code, snapshot_date, strict=strict,
     )
 
     aggregates: dict = {}
