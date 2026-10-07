@@ -134,7 +134,7 @@ class TestQuietArtifactContract:
     def test_cancel_unconfirm_quiet_emits_message(self, group, sub):
         _, out, _ = _run(
             [group, sub, "7", "--quiet"],
-            handler=lambda path: {"message": "Subscription cancelled successfully"},
+            handler=lambda path: {"message": "申赎记录取消成功"},
         )
         doc = json.loads(out)
         # 逐字等于文档承诺：只有 message，没有 null 占位的 id/status/confirm_date
@@ -157,6 +157,6 @@ class TestQuietArtifactContract:
     def test_cancel_without_quiet_returns_backend_body_unchanged(self):
         _, out, _ = _run(
             ["trade", "cancel", "7"],
-            handler=lambda path: {"message": "Trade cancelled successfully"},
+            handler=lambda path: {"message": "交易取消成功"},
         )
-        assert json.loads(out)["data"] == {"message": "Trade cancelled successfully"}
+        assert json.loads(out)["data"] == {"message": "交易取消成功"}
