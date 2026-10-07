@@ -81,10 +81,10 @@ def run_task(
 
     task = db.query(ScheduledTask).filter(ScheduledTask.code == code).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"任务 {code} 不存在")
 
     if not task.is_enabled:
-        raise HTTPException(status_code=400, detail="Task is disabled")
+        raise HTTPException(status_code=400, detail="任务未启用，请先启用后再执行")
 
     try:
         result = run_task_service(db, code, trigger_type=TRIGGER_MANUAL)
@@ -113,7 +113,7 @@ def enable_task(
 ):
     task = db.query(ScheduledTask).filter(ScheduledTask.code == code).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"任务 {code} 不存在")
 
     task.is_enabled = True
     db.commit()
@@ -128,7 +128,7 @@ def disable_task(
 ):
     task = db.query(ScheduledTask).filter(ScheduledTask.code == code).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"任务 {code} 不存在")
 
     task.is_enabled = False
     db.commit()
@@ -169,7 +169,7 @@ def get_task(
     """查看任务详情：任务全字段 + 最近一次执行记录（last_execution 可为 null）"""
     task = db.query(ScheduledTask).filter(ScheduledTask.code == code).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"任务 {code} 不存在")
 
     last_execution = (
         db.query(TaskExecutionLog)

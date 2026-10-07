@@ -104,7 +104,7 @@ def preview_subscription_confirm(
     """确认前预览：返回真实确认将写入的净值/份额/金额/确认日，不落库（与 confirm 共用计算实现）"""
     subscription = db.query(Subscription).filter(Subscription.id == id).first()
     if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
 
     preview = calculate_subscription_confirm_preview(db, subscription)
     preview.pop("portfolio", None)  # ORM 对象仅供 confirm 复用，不进响应 schema
@@ -122,9 +122,9 @@ def get_subscription(
 ):
     subscription = db.query(Subscription).filter(Subscription.id == id).first()
     if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
     if current_user.role != "admin" and subscription.investor_code != current_user.code:
-        raise HTTPException(status_code=403, detail="Permission denied")
+        raise HTTPException(status_code=403, detail="无权查看该申赎记录")
     return subscription
 
 
@@ -137,7 +137,7 @@ def confirm_subscription(
 ):
     subscription = db.query(Subscription).filter(Subscription.id == id).with_for_update().first()
     if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
 
     confirm_single_subscription(db, subscription)
 
@@ -166,7 +166,7 @@ def cancel_subscription(
 ):
     subscription = db.query(Subscription).filter(Subscription.id == id).with_for_update().first()
     if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
 
     cancel_subscription_service(db, subscription)
     db.commit()
@@ -181,7 +181,7 @@ def unconfirm_subscription(
 ):
     subscription = db.query(Subscription).filter(Subscription.id == id).with_for_update().first()
     if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
 
     unconfirm_single_subscription(db, subscription)
 
@@ -198,7 +198,7 @@ def update_subscription(
 ):
     db_subscription = db.query(Subscription).filter(Subscription.id == id).first()
     if not db_subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
 
     # 业务校验单一实现于 service 层（issue #202：apply_date 编辑支持）
     update_subscription_service(db, db_subscription, subscription.dict(exclude_unset=True))
@@ -216,7 +216,7 @@ def delete_subscription(
 ):
     subscription = db.query(Subscription).filter(Subscription.id == id).first()
     if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise HTTPException(status_code=404, detail="申赎记录不存在")
 
     delete_subscription_service(db, subscription)
     db.commit()
