@@ -99,4 +99,4 @@ def delete_platform(
 
     db.delete(platform)
     db.commit()
-    return {"message": "Platform deleted successfully"}
+    return {"message": f"平台 {code} 删除成功"}

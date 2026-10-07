@@ -145,7 +145,7 @@ def confirm_subscription(
     db.refresh(subscription)
     resp = SubscriptionResponse.from_orm(subscription)
     return {
-        "message": "Subscription confirmed successfully",
+        "message": "申赎记录确认成功",
         "id": resp.id,
         "portfolio_code": resp.portfolio_code,
         "sub_type": resp.sub_type,
@@ -170,7 +170,7 @@ def cancel_subscription(
 
     cancel_subscription_service(db, subscription)
     db.commit()
-    return {"message": "Subscription cancelled successfully"}
+    return {"message": "申赎记录取消成功"}
 
 
 @router.post("/{id}/unconfirm")
@@ -186,7 +186,7 @@ def unconfirm_subscription(
     unconfirm_single_subscription(db, subscription)
 
     db.commit()
-    return {"message": "Subscription unconfirmed successfully"}
+    return {"message": "申赎记录取消确认成功"}
 
 
 @router.put("/{id}", response_model=SubscriptionResponse)
@@ -220,4 +220,4 @@ def delete_subscription(
 
     delete_subscription_service(db, subscription)
     db.commit()
-    return {"message": "Subscription deleted successfully"}
+    return {"message": "申赎记录删除成功"}

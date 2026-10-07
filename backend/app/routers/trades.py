@@ -249,7 +249,7 @@ def confirm_trade(
         build_paired_cash_leg_map(db, [trade]),
     )
     return {
-        "message": "Trade confirmed successfully",
+        "message": "交易确认成功",
         "id": resp.id,
         "portfolio_code": resp.portfolio_code,
         "trade_type": resp.trade_type,
@@ -270,7 +270,7 @@ def cancel_trade(
         raise HTTPException(status_code=404, detail="交易不存在")
     cancel_trade_service(db, trade)
     db.commit()
-    return {"message": "Trade cancelled successfully"}
+    return {"message": "交易取消成功"}
 
 
 @router.post("/{id}/unconfirm")
@@ -284,7 +284,7 @@ def unconfirm_trade(
         raise HTTPException(status_code=404, detail="交易不存在")
     unconfirm_trade_service(db, trade)
     db.commit()
-    return {"message": "Trade unconfirmed successfully"}
+    return {"message": "交易取消确认成功"}
 
 
 @router.put("/{id}", response_model=TradeResponse)
@@ -319,4 +319,4 @@ def delete_trade(
 
     delete_trade_service(db, trade)
     db.commit()
-    return {"message": "Trade deleted successfully"}
+    return {"message": "交易删除成功"}

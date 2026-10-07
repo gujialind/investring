@@ -88,4 +88,4 @@ def delete_investor(
 ):
     investor_service.delete_investor(db, code)
     db.commit()
-    return {"message": "Investor deleted successfully"}
+    return {"message": f"投资人 {code} 删除成功"}

@@ -111,7 +111,7 @@ def close_portfolio(
 ):
     portfolio_service.close_portfolio(db, code)
     db.commit()
-    return {"message": "Portfolio closed successfully"}
+    return {"message": f"组合 {code} 关闭成功"}
 
 
 @router.post("/{code}/reactivate")
@@ -122,7 +122,7 @@ def reactivate_portfolio(
 ):
     portfolio_service.reactivate_portfolio(db, code)
     db.commit()
-    return {"message": "Portfolio reactivated successfully"}
+    return {"message": f"组合 {code} 激活成功"}
 
 
 @router.get("/{code}/nav-history", response_model=list[NavHistoryRecord])
