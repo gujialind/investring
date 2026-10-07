@@ -35,7 +35,10 @@ from app.constants.audit_actions import (
     ACTION_GENERATE, ACTION_RECALCULATE, ACTION_DELETE, ACTION_CASCADE_UNCONFIRM,
     RESOURCE_SNAPSHOT, RESOURCE_SHARE_CHANGE_EVENT,
 )
-from app.constants.share_change_events import CASH_EFFECT_EVENT_TYPES
+from app.constants.share_change_events import (
+    CAPITAL_FREE_SHARE_EVENT_TYPES,
+    CASH_EFFECT_EVENT_TYPES,
+)
 from app.models.manual_market_value import ManualMarketValue
 from app.utils.quantize import quantize_nav, quantize_shares
 
@@ -1336,6 +1339,26 @@ def _generate_portfolio_position(
         if event.shares_change is not None:
             new_shares = old_shares + Decimal(str(event.shares_change))
             positions[fund_key]["shares"] = new_shares
+
+            # 无本金额事件摊薄成本价（#673）：这类事件的份额变动不携带外部资金进出，
+            # 成本基数（shares × cost_price）必须守恒，否则免成本份额被按原成本价计入
+            # 本金，holding_profit 系统性低估（口径见 CAPITAL_FREE_SHARE_EVENT_TYPES）。
+            # 三重守卫各有实指：cost_price 为空的历史持仓行无基数可守恒、
+            # old_shares 为 0 会零除、new_shares <= 0 交给下面的打空告警路径处理。
+            # 用 quantize_nav 而非 .quantize()：本模块在 test_quantize.py 的
+            # _FINANCIAL_GUARD_MODULES 内，且在产生点量化可让 SQLite（不强制列标度）
+            # 与 MySQL（Numeric(10,4) 舍入）落同一个值。
+            old_cost = positions[fund_key]["cost_price"]
+            if (
+                event.event_type in CAPITAL_FREE_SHARE_EVENT_TYPES
+                and old_cost is not None
+                and old_shares > 0
+                and new_shares > 0
+            ):
+                positions[fund_key]["cost_price"] = quantize_nav(
+                    old_shares * old_cost / new_shares
+                )
+
             if new_shares <= 0:
                 # issue #278：负向调整打空持仓行——清零是合法场景（如调仓清零后补录调整），
                 # 但不得静默消失，仿 #71 负现金产出可观测 warning（不阻断生成）
