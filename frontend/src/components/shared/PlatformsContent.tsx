@@ -25,6 +25,7 @@ import {
 import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 import { Platform, PlatformCreate } from "@/lib/api";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import {
   usePlatformList,
   useCreatePlatform,
@@ -33,7 +34,13 @@ import {
 } from "@/hooks/usePlatform";
 
 export default function PlatformsContent() {
-  const { data, isLoading } = usePlatformList({ page_size: 100 });
+  const {
+    data,
+    isLoading,
+    isError: platformsError,
+    error: platformsErr,
+    refetch: refetchPlatforms,
+  } = usePlatformList({ page_size: 100 });
 
   const createPlatform = useCreatePlatform();
   const updatePlatform = useUpdatePlatform();
@@ -214,11 +221,19 @@ export default function PlatformsContent() {
               ))}
             </TableBody>
           </Table>
-          {platforms.length === 0 && (
+          {/* #683A 判序承重：失败必须排在「长度为 0」之前，否则后端故障被说成「环境里没有平台」，
+              用户会去重复新建（同 code 撞 ALREADY_EXISTS）。usePlatformList 的 isError→addToast 按 #214
+              保留，但 toast 几秒即消失，不能当失败的唯一出口。失败优先写在**外层三元**而非 ProductsContent
+              的 `length === 0 &&` 嵌套形：同键后台重取失败时 react-query 保留 data，嵌套形在那一态下
+              失败块不可达。不传 className（缺省 py-8 text-center）——该槽位的空态本就是 py-8 居中，
+              传 mt-3 会让同一槽位在两态间跳尺寸（docs/design/visual-spec.md §14）。 */}
+          {platformsError ? (
+            <QueryErrorState error={platformsErr} onRetry={refetchPlatforms} />
+          ) : platforms.length === 0 ? (
             <div className="text-center text-muted-foreground py-8">
               暂无平台
             </div>
-          )}
+          ) : null}
         </CardContent>
       </Card>
 

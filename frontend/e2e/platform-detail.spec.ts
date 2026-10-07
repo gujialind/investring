@@ -852,3 +852,35 @@ test.describe("现金市值更新 Dialog", () => {
     //（R-3 口径），且本用例提交过两次，同文案 toast 会有两条同时存活。
   });
 });
+
+// #683 D-2 的另一页：两页共用 useNavAnalysis 却各写一份判序，缺一条就等于那一页没有网
+//（#663② 立的「同形两页各一条」口径）。message 与本文件其它用例逐条不同串。
+test.describe("净值分析失败态落在平台-产品详情页（#683 D-2）", () => {
+  test("净值分析读取失败 → 曲线卡与区间收益率卡都不落空态/全 --（#683 D-2b）", async ({ page }) => {
+    // 判据取 nav-analysis 末段：本文件既有的 nav-history glob（`**/market-data/products/**/
+    // nav-history*`）末段不同，两条互不误伤——下面那条历史净值正向对照就是这个非串台证明。
+    await page.route(/\/nav-analysis(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: "INTERNAL", message: "平台产品净值分析服务暂不可用" } },
+      })
+    );
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    const curve = page.getByTestId("platform-product-curve-card");
+    const returns = page.getByTestId("platform-product-returns-card");
+    await expect(curve).toContainText("加载失败：平台产品净值分析服务暂不可用", { timeout: 10_000 });
+    await expect(curve).not.toContainText("暂无净值数据");
+    // 反证②的落点：失败块若只接了曲线卡，这两句红在未被覆盖的收益率卡
+    await expect(returns).toContainText("加载失败：平台产品净值分析服务暂不可用");
+    await expect(returns.getByTestId("return-m1")).toHaveCount(0);
+    const retry = curve.getByRole("button", { name: "重试" });
+    await expect(retry).toBeVisible();
+    const refetched = page.waitForRequest(
+      (r) => r.method() === "GET" && /\/nav-analysis(\?|$)/.test(r.url()),
+      { timeout: 10_000 }
+    );
+    await retry.click();
+    await refetched;
+    await expect(page.getByTestId("platform-product-history-card")).toContainText("4.2000");
+  });
+});
