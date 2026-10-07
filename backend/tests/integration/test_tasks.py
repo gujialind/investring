@@ -190,7 +190,7 @@ class TestRunTaskEndpoint:
         resp = client.post("/api/system/tasks/nav_sync/run", headers=admin_headers)
 
         assert resp.status_code == 400
-        assert resp.json()["detail"] == "Task is disabled"
+        assert resp.json() == {"detail": "任务未启用，请先启用后再执行"}
         assert test_db.query(TaskExecutionLog).count() == 0
 
     def test_unknown_code_returns_404_and_no_log(self, client, admin_headers, test_db):
