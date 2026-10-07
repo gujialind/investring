@@ -244,6 +244,15 @@ test.describe("产品详情页", () => {
     await retry.click();
     await refetched;
   });
+
+  test("未知产品 → 真·空态「未找到该产品持仓」，不是失败态（#682 待确认项 4）", async ({ page }) => {
+    // 与上一条配对：那条钉「失败不落空态」，本条钉「真空不落失败态」。平台两页早有同形用例
+    // （platform-detail.spec.ts 的「未知平台」「未知产品」），产品页此前缺位——把该空集合分支
+    // 改成报错、或把「未找到」文案改掉，都不会让任何用例变红。不 mock，走真实后端的空结果。
+    await page.goto(`/portfolio/${E2E_ACTIVE}/product/NONEXISTENT?market=CN_EXCHANGE`);
+    await expect(page.getByText("未找到该产品持仓")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("加载失败")).toHaveCount(0);
+  });
 });
 
 // #595 §4.5：现金产品详情页操作行为转入/转出 + 市值更新
