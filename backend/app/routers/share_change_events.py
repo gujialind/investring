@@ -153,7 +153,7 @@ def preview_share_change_event(
     """
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
     if not event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
     preview = compute_share_change_event_preview(db, event)
     return ShareChangeEventPreviewResponse(preview=preview)
 
@@ -166,7 +166,7 @@ def get_share_change_event(
 ):
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
     if not event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
     return event
 
 
@@ -178,7 +178,7 @@ def confirm_share_change_event(
 ):
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).with_for_update().first()
     if not event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
     confirm_event_service(db, event)
     db.commit()
     db.refresh(event)
@@ -193,7 +193,7 @@ def cancel_share_change_event(
 ):
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).with_for_update().first()
     if not event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
     cancel_event_service(db, event)
     db.commit()
     return {"message": "Share change event cancelled successfully"}
@@ -215,7 +215,7 @@ def unconfirm_share_change_event(
     """
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).with_for_update().first()
     if not event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
     unconfirm_event_service(db, event)
     db.commit()
     db.refresh(event)
@@ -231,7 +231,7 @@ def update_share_change_event(
 ):
     db_event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
     if not db_event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
 
     # confirmed 阻断、日期重校验均在 service 单点实现（REST/CLI 共用）
     update_event_service(db, db_event, event.dict(exclude_unset=True))
@@ -249,7 +249,7 @@ def delete_share_change_event(
 ):
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
     if not event:
-        raise HTTPException(status_code=404, detail="Share change event not found")
+        raise HTTPException(status_code=404, detail="份额变动事件不存在")
 
     delete_event_service(db, event)
     db.commit()

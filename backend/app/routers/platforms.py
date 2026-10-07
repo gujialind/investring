@@ -42,7 +42,7 @@ def create_platform(
 ):
     db_platform = db.query(Platform).filter(Platform.code == platform.code).first()
     if db_platform:
-        raise HTTPException(status_code=400, detail="Platform already exists")
+        raise HTTPException(status_code=400, detail=f"平台 {platform.code} 已存在")
 
     new_platform = Platform(**platform.dict())
     db.add(new_platform)
@@ -59,7 +59,7 @@ def get_platform(
 ):
     platform = db.query(Platform).filter(Platform.code == code).first()
     if not platform:
-        raise HTTPException(status_code=404, detail="Platform not found")
+        raise HTTPException(status_code=404, detail=f"平台 {code} 不存在")
     return platform
 
 
@@ -72,7 +72,7 @@ def update_platform(
 ):
     db_platform = db.query(Platform).filter(Platform.code == code).first()
     if not db_platform:
-        raise HTTPException(status_code=404, detail="Platform not found")
+        raise HTTPException(status_code=404, detail=f"平台 {code} 不存在")
 
     updates = platform.dict(exclude_unset=True)
     # 显式 null 收口（#579 无悔子集，与 #573 同口径）：name 是 NOT NULL 列，
@@ -95,7 +95,7 @@ def delete_platform(
 ):
     platform = db.query(Platform).filter(Platform.code == code).first()
     if not platform:
-        raise HTTPException(status_code=404, detail="Platform not found")
+        raise HTTPException(status_code=404, detail=f"平台 {code} 不存在")
 
     db.delete(platform)
     db.commit()

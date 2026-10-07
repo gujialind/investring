@@ -289,7 +289,7 @@ def get_position(
 ):
     position = db.query(PortfolioPosition).filter(PortfolioPosition.id == id).first()
     if not position:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail="持仓记录不存在")
     return position
 
 
@@ -337,7 +337,7 @@ def get_available_cash(
 
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
-        raise HTTPException(status_code=404, detail="Portfolio not found")
+        raise HTTPException(status_code=404, detail=f"组合 {portfolio_code} 不存在")
 
     cash = calculate_available_cash(db, portfolio_code, platform_code, as_of_date=date.today())
     result = {"portfolio_code": portfolio_code, "available_cash": float(cash)}
@@ -358,7 +358,7 @@ def get_available_shares(
 
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
-        raise HTTPException(status_code=404, detail="Portfolio not found")
+        raise HTTPException(status_code=404, detail=f"组合 {portfolio_code} 不存在")
 
     shares = calculate_available_shares(db, portfolio_code, product_code, market)
     return {
@@ -381,10 +381,10 @@ def get_investor_available_shares(
 
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
-        raise HTTPException(status_code=404, detail="Portfolio not found")
+        raise HTTPException(status_code=404, detail=f"组合 {portfolio_code} 不存在")
     investor = db.query(Investor).filter(Investor.code == investor_code).first()
     if not investor:
-        raise HTTPException(status_code=404, detail="Investor not found")
+        raise HTTPException(status_code=404, detail=f"投资人 {investor_code} 不存在")
 
     shares = calculate_investor_available_shares(db, portfolio_code, investor_code)
     return {

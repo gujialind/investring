@@ -158,7 +158,7 @@ def preview_trade_confirm(
     """
     trade = db.query(Trade).filter(Trade.id == id).first()
     if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
     if trade.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -171,7 +171,7 @@ def preview_trade_confirm(
         .first()
     )
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail=f"产品 {trade.product_code}({trade.market}) 不存在")
 
     price_decimal = Decimal(str(price)) if price is not None else None
     preview = compute_confirm_plan(
@@ -201,7 +201,7 @@ def get_trade(
 ):
     trade = db.query(Trade).filter(Trade.id == id).first()
     if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
     return _fill_derived_cash_fields(
         TradeResponse.model_validate(trade), trade,
         build_paired_cash_leg_map(db, [trade]),
@@ -221,7 +221,7 @@ def confirm_trade(
 ):
     trade = db.query(Trade).filter(Trade.id == id).with_for_update().first()
     if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
     if trade.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -234,7 +234,7 @@ def confirm_trade(
         .first()
     )
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail=f"产品 {trade.product_code}({trade.market}) 不存在")
 
     price_decimal = Decimal(str(price)) if price is not None else None
     confirm_single_trade(
@@ -267,7 +267,7 @@ def cancel_trade(
 ):
     trade = db.query(Trade).filter(Trade.id == id).with_for_update().first()
     if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
     cancel_trade_service(db, trade)
     db.commit()
     return {"message": "Trade cancelled successfully"}
@@ -281,7 +281,7 @@ def unconfirm_trade(
 ):
     trade = db.query(Trade).filter(Trade.id == id).with_for_update().first()
     if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
     unconfirm_trade_service(db, trade)
     db.commit()
     return {"message": "Trade unconfirmed successfully"}
@@ -296,7 +296,7 @@ def update_trade(
 ):
     db_trade = db.query(Trade).filter(Trade.id == id).with_for_update().first()
     if not db_trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
 
     update_trade_service(db, db_trade, trade.dict(exclude_unset=True))
     db.commit()
@@ -315,7 +315,7 @@ def delete_trade(
 ):
     trade = db.query(Trade).filter(Trade.id == id).with_for_update().first()
     if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+        raise HTTPException(status_code=404, detail="交易不存在")
 
     delete_trade_service(db, trade)
     db.commit()

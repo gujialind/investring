@@ -62,7 +62,7 @@ def get_investor(
 ):
     investor = db.query(Investor).filter(Investor.code == code).first()
     if not investor:
-        raise HTTPException(status_code=404, detail="Investor not found")
+        raise HTTPException(status_code=404, detail=f"投资人 {code} 不存在")
     return investor
 
 

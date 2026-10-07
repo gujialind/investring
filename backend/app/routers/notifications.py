@@ -48,11 +48,11 @@ def mark_notification_as_read(
 ):
     notification = db.query(Notification).filter(Notification.id == id).first()
     if not notification:
-        raise HTTPException(status_code=404, detail="Notification not found")
+        raise HTTPException(status_code=404, detail="通知不存在")
 
     if current_user.role != "admin":
         if notification.recipient is not None and notification.recipient != current_user.code:
-            raise HTTPException(status_code=403, detail="Permission denied")
+            raise HTTPException(status_code=403, detail="无权操作该通知")
 
     notification.status = "read"
     from datetime import datetime

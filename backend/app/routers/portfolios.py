@@ -58,7 +58,7 @@ def get_portfolio(
 ):
     portfolio = db.query(Portfolio).filter(Portfolio.code == code).first()
     if not portfolio:
-        raise HTTPException(status_code=404, detail="Portfolio not found")
+        raise HTTPException(status_code=404, detail=f"组合 {code} 不存在")
     # 并入读侧派生字段（issue #99）：total_value / total_profit，无快照时为 None
     totals = portfolio_service._derive_portfolio_totals(db, code)
     portfolio.total_value = totals["total_value"]

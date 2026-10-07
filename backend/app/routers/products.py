@@ -135,7 +135,7 @@ def get_product(
         Product.market == market
     ).first()
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail=f"产品 {code}({market}) 不存在")
     return product
 
 
@@ -153,7 +153,7 @@ def get_product_auto_market(
         Product.market == market
     ).first()
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail=f"产品 {code}({market}) 不存在")
     return product
 
 
@@ -184,7 +184,7 @@ def delete_product(
         Product.market == market
     ).first()
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail=f"产品 {code}({market}) 不存在")
 
     db.delete(product)
     db.commit()
