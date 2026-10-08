@@ -1351,9 +1351,13 @@ def _generate_portfolio_position(
             # 白得份额时基数本就是 0，摊出 0 成本价才守恒，挡住它会让白得份额贴上
             # 卖出前的旧单价（即 #673 的症状本身）。0 成本价是可表示的合法状态，
             # 写库与次日读回都按 is not None 判定，不得按真值折叠成 NULL。
-            # 用 quantize_nav 而非 .quantize()：本模块在 test_quantize.py 的
-            # _FINANCIAL_GUARD_MODULES 内，且 .quantize() 缺省 HALF_EVEN 与 MySQL
-            # Numeric(10,4) 列标度的 half-away-from-zero 在第 5 位边界上会分叉。
+            # 用 quantize_nav 而非 .quantize()、也不裸交给数据库收口：① 本模块在
+            # test_quantize.py 的 _FINANCIAL_GUARD_MODULES 内，直接量化即红；② .quantize()
+            # 缺省 HALF_EVEN，与 MySQL Numeric(10,4) 的 half-away-from-zero 在第 5 位恰为 5
+            # 时结果不同（#428）；③ 不量化则由各方言自行收口，而 MySQL 在 INSERT 时按
+            # DECIMAL(10,4) 舍入、SQLite 不强制列标度故存成二进制 float 于读回时收口，
+            # float 表示误差会让同一值两侧落不同结果（45 个边界值实测分叉 26 个，机制与
+            # 实例见 #691）。在产生点量化则两侧必然同值。
             old_cost = positions[fund_key]["cost_price"]
             if (
                 event.event_type in CAPITAL_FREE_SHARE_EVENT_TYPES
