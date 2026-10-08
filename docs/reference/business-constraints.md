@@ -179,7 +179,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 * **分红再投资**是唯一“金额 → 份额”的事件（#425）：先 `quantize_amount(基数份额 × div_cash)` 确定到分的红利金额，再除以再投资净值并量化份额到 2 位，与现金分红及基金公司台账同口径；跳过中间金额量化可能跨舍入边界差 0.01 份。拆分/合并/送股仅为“份额 × 比例”。
 * **无本金额事件必须摊薄产品持仓成本价**（#673）：再投资/拆分/合并/送股改变份额时**没有外部资金进出**，`portfolio_position.cost_price` 按成本基数守恒摊薄或浓缩——`新成本价 = 旧份额 × 旧成本价 / 新份额`（`quantize_nav` 到 4 位），使 `份额 × 成本价` 只反映外部投入的本金。否则免成本份额被按原成本价计入，`holding_profit` 系统性低估（2:1 拆分下 1000 份 @1.0 会凭空产生 −1000 的假亏损）。这与读侧的「现金分红加回」是同一复权口径的两种形态：现金分红靠市值不涨 + 加回 `cash_change`，再投资靠市值涨 + 基数不涨，两者不得互相串味或重复计入。
   - 适用类型清单以 `constants/share_change_events.py::CAPITAL_FREE_SHARE_EVENT_TYPES` 为准，**刻意不与** `share_change_event_service.py::STRUCTURAL_SHARE_TYPES` 合并（两者集合当前相同、语义无关，后者是现金型产品拒绝份额变动的判据）。`forced_adjustment` 排除：`shares_change` 由用户直填，可能是数据纠错也可能是外部转入，无单一客观本金口径；现金分红份额不变，天然无影响。
-  - 买入路径的加权平均是**基数可加**、本摊薄是**基数守恒**，故两者可交换：同一生成窗口内「先买入后事件」与「先事件后买入」终值相同，不产生顺序依赖。
+  - 买入路径的加权平均是**基数可加**、本摊薄是**基数守恒**。两者各自在产生点收口到 4 位（买入加权平均 #691、摊薄 #673），故同一生成窗口内「先买入后事件」与「先事件后买入」的终值**不再严格相等，至多差一个 4 位末位**（实测 432 组配比中 20.6% 出现差异、最大 `0.0001`；#691 之前中间值不收口，两序严格相等）。该差异只在估值/展示口径，不进现金账本、不改变守恒的经济实质；若将来需要严格可交换，得把两段收口合并到窗口末尾一次做完，而不是撤掉产生点量化。
   - 成本价按列标度 4 位落库，由它反推的成本基数带 `份额 × 5e-5` 的固有量化误差，故 `holding_profit` 与 `cumulative_profit` 的残差**按该上界判定、不按固定分值判定**（走全历史净流量、完全不读成本价的 `cumulative_profit` 是精确侧）。存量历史快照不回算，修正走 `recalculate_snapshots` 逐日重建（该函数自动向后扩展到最新快照日），无迁移。
   - **基数为 0 是合法状态，不得折叠成 NULL**：权益登记日之后清仓、白得份额仍在同一生成窗口到账时（红利再投份额按登记日持仓派发，与之后是否卖出无关），摊薄结果是 `cost_price = 0`、持有收益等于市值。写库与次日读回一律按 `is not None` 判定——0 折成 NULL 会让该行退出持有收益聚合（读侧对 NULL 成本价一律置未知），真实收益从界面上消失。
 * **确认时才计算变动量**（#424）：自动计算型事件在 pending 时 shares_change / shares_after / cash_change 为 NULL，读取方不得当 0 展示。确认从权益登记日快照回写基数份额；现金分红确认 `cash_change` 金额、按有效现金日入现金账本（此前按下文规则计分红在途），再投资只增加成分基金份额。
@@ -336,7 +336,9 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * **金额产生点**（`quantize_amount`）：卖出与赎回确认 `shares×nav`、买入金额与手续费的用户输入、申赎金额、现金分红 `cash_change`、`forced_adjustment` 用户填写、`manual_market_value` 写入、现金转移金额、trade PUT 直改。
 
-* **净值/估值产生点**（`quantize_nav`，#428）：`_generate_portfolio_value_snapshot` 构造快照行的 `total_value` / `unit_price` / `unit_price_change_pct` / `in_transit_total`；`_generate_investor_holding` 的 `cost_per_share`；`_generate_portfolio_position` 的产品持仓 `cost_price` 无本金额事件摊薄（#673，见[份额变动事件](#rule-event)）；以及**确认对账比较**——场外传入价与 T 日净值两侧归一到 4 位后精确比较（`PRICE_NAV_MISMATCH`，无容差）。
+* **净值/估值产生点**（`quantize_nav`，#428）：`_generate_portfolio_value_snapshot` 构造快照行的 `total_value` / `unit_price` / `unit_price_change_pct` / `in_transit_total`；`_generate_investor_holding` 的 `cost_per_share`；`_generate_portfolio_position` 的产品持仓 `cost_price` 无本金额事件摊薄（#673，见[份额变动事件](#rule-event)）与**买入路径的加权平均 `cost_price`**、持仓 `market_value = 份额 × 净值`（#691）；以及**确认对账比较**——场外传入价与 T 日净值两侧归一到 4 位后精确比较（`PRICE_NAV_MISMATCH`，无容差）。
+
+* **列标度不是收口点**（#691）：写入路径必须自行量化到列标度，不得把收口交给数据库方言。MySQL 在 INSERT 时按 `DECIMAL` 标度 half-away-from-zero 舍入，SQLite 不强制列标度——SQLAlchemy 把值存成二进制 float、读回时按列标度收口，而十进制半数存不进双精度，偏哪边逐值而定，同一份代码 + 同一份数据两侧可差一个末位（实测等份额两笔买入的 60 组构造 27 组分叉、2 位份额 × 4 位净值的 12 万组 2.5% 分叉）。生产（MySQL）落值恰好等于 `quantize_nav` 口径，来自驱动以 `repr()` 送字面量、服务端因此看到精确半数——是巧合不是保证，换驱动或列类型即静默漂移。`market_value` 逐行收口后 `total_value` 成为「Σ 行市值」而非「未收口乘积求和后一次舍入」，与读侧按行聚合（`holding_aggregation_service`、`/api/positions` 的持有收益）同口径。
 
 * 估值口径（`market_value` / `total_value` / `unit_price` / `cost_per_share`）保持 4 位、不进现金账本；DB 字段精度收紧留作后续迁移。
 
