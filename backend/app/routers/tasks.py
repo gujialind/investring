@@ -117,7 +117,7 @@ def enable_task(
 
     task.is_enabled = True
     db.commit()
-    return {"message": f"Task {code} enabled"}
+    return {"message": f"任务 {code} 启用成功"}
 
 
 @router.post("/{code}/disable")
@@ -132,7 +132,7 @@ def disable_task(
 
     task.is_enabled = False
     db.commit()
-    return {"message": f"Task {code} disabled"}
+    return {"message": f"任务 {code} 禁用成功"}
 
 
 @router.get("/{code}/logs", response_model=PaginatedTaskLogResponse)

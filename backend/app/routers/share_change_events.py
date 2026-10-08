@@ -182,7 +182,7 @@ def confirm_share_change_event(
     confirm_event_service(db, event)
     db.commit()
     db.refresh(event)
-    return {"message": "Share change event confirmed successfully", "event": ShareChangeEventResponse.from_orm(event)}
+    return {"message": "份额变动事件确认成功", "event": ShareChangeEventResponse.from_orm(event)}
 
 
 @router.post("/{id}/cancel")
@@ -196,7 +196,7 @@ def cancel_share_change_event(
         raise HTTPException(status_code=404, detail="份额变动事件不存在")
     cancel_event_service(db, event)
     db.commit()
-    return {"message": "Share change event cancelled successfully"}
+    return {"message": "份额变动事件取消成功"}
 
 
 @router.post("/{id}/unconfirm")
@@ -219,7 +219,7 @@ def unconfirm_share_change_event(
     unconfirm_event_service(db, event)
     db.commit()
     db.refresh(event)
-    return {"message": "Share change event unconfirmed successfully", "event": ShareChangeEventResponse.from_orm(event)}
+    return {"message": "份额变动事件取消确认成功", "event": ShareChangeEventResponse.from_orm(event)}
 
 
 @router.put("/{id}", response_model=ShareChangeEventResponse)
@@ -253,4 +253,4 @@ def delete_share_change_event(
 
     delete_event_service(db, event)
     db.commit()
-    return {"message": "Share change event deleted successfully"}
+    return {"message": "份额变动事件删除成功"}

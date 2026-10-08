@@ -58,7 +58,7 @@ def mark_notification_as_read(
     from datetime import datetime
     notification.read_at = datetime.utcnow()
     db.commit()
-    return {"message": "Notification marked as read"}
+    return {"message": "通知已标记为已读"}
 
 
 @router.post("/read-all")
@@ -75,4 +75,4 @@ def mark_all_notifications_as_read(
     from datetime import datetime
     query.update({"status": "read", "read_at": datetime.utcnow()}, synchronize_session=False)
     db.commit()
-    return {"message": "All notifications marked as read"}
+    return {"message": "全部通知已标记为已读"}

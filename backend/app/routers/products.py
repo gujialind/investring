@@ -188,4 +188,4 @@ def delete_product(
 
     db.delete(product)
     db.commit()
-    return {"message": "Product deleted successfully"}
+    return {"message": f"产品 {code}({market}) 删除成功"}
