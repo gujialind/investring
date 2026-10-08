@@ -1191,7 +1191,9 @@ def _generate_portfolio_position(
             positions[key] = {
                 "shares": Decimal(str(pos.shares or 0)),
                 "cash_amount": Decimal(str(pos.cash_amount or 0)) if pos.cash_amount is not None else None,
-                "cost_price": Decimal(str(pos.cost_price or 0)) if pos.cost_price else None,
+                # 按 is not None 判定：0 成本价是合法状态（基数已全部收回），
+                # 按真值折叠会让隔日重建把 0 读成 NULL、持有收益退化为未知
+                "cost_price": Decimal(str(pos.cost_price)) if pos.cost_price is not None else None,
             }
     
     # 应用期间内的已确认交易（从prev_snapshot次日到target_date）
@@ -1343,16 +1345,20 @@ def _generate_portfolio_position(
             # 无本金额事件摊薄成本价（#673）：这类事件的份额变动不携带外部资金进出，
             # 成本基数（shares × cost_price）必须守恒，否则免成本份额被按原成本价计入
             # 本金，holding_profit 系统性低估（口径见 CAPITAL_FREE_SHARE_EVENT_TYPES）。
-            # 三重守卫各有实指：cost_price 为空的历史持仓行无基数可守恒、
-            # old_shares 为 0 会零除、new_shares <= 0 交给下面的打空告警路径处理。
+            # 三条守卫各管一件事：cost_price 为 NULL 的历史行无基数可守恒；
+            # new_shares <= 0 是**除数**（零除），交给下面的打空告警路径；
+            # old_shares 只豁免负份额脏数据，**为 0 必须放行**——同窗口先卖光再来
+            # 白得份额时基数本就是 0，摊出 0 成本价才守恒，挡住它会让白得份额贴上
+            # 卖出前的旧单价（即 #673 的症状本身）。0 成本价是可表示的合法状态，
+            # 写库与次日读回都按 is not None 判定，不得按真值折叠成 NULL。
             # 用 quantize_nav 而非 .quantize()：本模块在 test_quantize.py 的
-            # _FINANCIAL_GUARD_MODULES 内，且在产生点量化可让 SQLite（不强制列标度）
-            # 与 MySQL（Numeric(10,4) 舍入）落同一个值。
+            # _FINANCIAL_GUARD_MODULES 内，且 .quantize() 缺省 HALF_EVEN 与 MySQL
+            # Numeric(10,4) 列标度的 half-away-from-zero 在第 5 位边界上会分叉。
             old_cost = positions[fund_key]["cost_price"]
             if (
                 event.event_type in CAPITAL_FREE_SHARE_EVENT_TYPES
                 and old_cost is not None
-                and old_shares > 0
+                and old_shares >= 0
                 and new_shares > 0
             ):
                 positions[fund_key]["cost_price"] = quantize_nav(
@@ -1465,7 +1471,7 @@ def _generate_portfolio_position(
             cash_amount=float(pos_data["cash_amount"]) if is_cash and pos_data["cash_amount"] is not None else None,
             frozen_shares=float(frozen_shares) if frozen_shares > 0 else 0,
             frozen_amount=float(frozen_amount) if frozen_amount > 0 else 0,
-            cost_price=float(pos_data["cost_price"]) if pos_data["cost_price"] else None,
+            cost_price=float(pos_data["cost_price"]) if pos_data["cost_price"] is not None else None,
             unit_price=float(unit_price) if unit_price else None,
             market_value=float(market_value) if market_value is not None else None,
             snapshot_date=target_date

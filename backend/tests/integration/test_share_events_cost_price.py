@@ -50,14 +50,22 @@ MARKET = "CN_EXCHANGE"
 # cost_price 列标度 4 位 → 反推成本基数的误差上界 = 份额 × 半个标度单位
 SCALE_BOUND_PER_SHARE = Decimal("0.00005")
 
+# _env 的 position_cost_price 哨兵：区分「未传（跟随 cost_price）」与「显式传 None」
+_SAME = object()
 
-def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None):
+
+def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_price=_SAME):
     """建一个 BASE 日已就绪的组合：一笔基金买入（含配对 CASH 腿）+ 等额申购入金。
 
     现金净流为 0（申购入金 == 买入出金），避免快照生成的负现金阻断（#203）；
     买入腿必须真实落库，`cumulative_profit` 的全历史净流量口径才有分母。
+
+    `position_cost_price` 只改 BASE 快照行的成本价、不改买入价，用于构造
+    「成本价维护上线前落库的历史行」（cost_price 为 NULL）；快照行不可 ORM 更新
+    （`models/portfolio_position.py` 的 before_update 守卫），只能建时就指定。
     """
     nav_ex = nav if nav_ex is None else nav_ex
+    snapshot_cost = cost_price if position_cost_price is _SAME else position_cost_price
     port, plat, fund = f"CD_{suffix}", f"CDP_{suffix}", f"CDF_{suffix}"
     # 本金量化到分：真实系统的交易金额走 quantize_amount，cumulative_profit 的
     # 全历史净流量口径吃的就是这个 2 位值，不量化会与 issue 复现例差 0.0014
@@ -69,7 +77,8 @@ def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None):
     create_position_snapshot(
         db, port, fund, MARKET, snapshot_date=BASE, platform_code=plat,
         shares=float(shares), market_value=float(Decimal(str(shares)) * Decimal(str(nav))),
-        unit_price=float(nav), cost_price=float(cost_price),
+        unit_price=float(nav),
+        cost_price=None if snapshot_cost is None else float(snapshot_cost),
     )
     create_position_snapshot(
         db, port, "CASH", "", snapshot_date=BASE,
@@ -256,7 +265,7 @@ def test_buy_and_capital_free_event_compose_to_same_basis(
     port, plat, fund = _env(
         test_db, "COMPOSE", shares=100, cost_price=1.0, nav=1.0, nav_ex=2.0,
     )
-    group = f"rebal_cd_COMPOSE2"
+    group = "rebal_cd_COMPOSE2"
     # EX 日的追加买入需要现金。入金腿必须落在**本次生成窗口内**（confirm_date >= BASE+1）：
     # 现金基线取自 BASE 快照行的 cash_amount=0，窗口外的流水不会被重新应用。
     create_trade(
@@ -282,6 +291,53 @@ def test_buy_and_capital_free_event_compose_to_same_basis(
     assert Decimal(str(row.shares)) == Decimal("210")
     assert Decimal(str(row.cost_price)) == Decimal("1.4286")
     assert abs(_basis(row) - Decimal("300")) <= Decimal(str(row.shares)) * SCALE_BOUND_PER_SHARE
+
+
+def test_capital_free_shares_after_same_window_full_sell_get_zero_basis(
+    client, admin_headers, test_db,
+):
+    """同窗口「先清仓、再白得份额」：基数为 0，成本价摊成 0 而不是沿用卖出前的旧单价。
+
+    白得份额按**权益登记日**持仓派发，与登记日之后是否清仓无关，故这条路径真实可达
+    （生成窗口跨多日时更容易命中）。修复前 `old_shares > 0` 守卫挡住摊薄，10 份白得
+    份额被贴上 1.0 的旧单价，凭空多出 10 元本金、持有收益少算 10 元——正是 #673 的症状。
+    """
+    port, plat, fund = _env(
+        test_db, "SELLZERO", shares=1000, cost_price=1.0, nav=1.0, nav_ex=1.0,
+    )
+    group = "rebal_cd_SELLZERO"
+    # 清仓腿落在本次生成窗口内（confirm_date >= BASE+1），现金腿是卖出到账
+    create_trade(
+        test_db, port, "CASH", "", trade_type="buy", platform_code=plat,
+        trade_date=EX, confirm_date=EX, status="confirmed",
+        amount=1000, actual_amount=1000, price=1, transfer_group=group,
+    )
+    create_trade(
+        test_db, port, fund, MARKET, trade_type="sell", platform_code=plat,
+        trade_date=EX, confirm_date=EX, status="confirmed",
+        amount=1000, actual_amount=1000, price=1.0, shares=1000,
+        transfer_group=group,
+    )
+    # 送股 1%：登记日基数 1000 份 → 白得 10 份
+    _event(test_db, port, fund, event_type="bonus_share", ratio=Decimal("0.01"))
+
+    _generate(client, admin_headers, port, EX)
+    row = _fund_row(test_db, port, fund, EX)
+
+    assert Decimal(str(row.shares)) == Decimal("10")
+    # 事件前基数已是 0（1000 份全部卖出），守恒要求成本价为 0 而不是 NULL
+    assert row.cost_price is not None, "0 成本价被折叠成 NULL，基数信息丢失"
+    assert Decimal(str(row.cost_price)) == Decimal("0")
+    assert _basis(row) == Decimal("0")
+    # 读侧：无本金 → 持有收益等于市值（修复前这里是 0.0）
+    assert _derived(client, admin_headers, port, EX)[fund]["profit_loss"] == 10.0
+
+    # 次日逐日重建要读回前一日持仓行：0 不得在继承时退化成 NULL，否则收益又变未知
+    _generate(client, admin_headers, port, MONDAY)
+    next_row = _fund_row(test_db, port, fund, MONDAY)
+    assert next_row.cost_price is not None, "0 成本价在次日读回时被折叠成 NULL"
+    assert _basis(next_row) == Decimal("0")
+    assert _derived(client, admin_headers, port, MONDAY)[fund]["profit_loss"] == 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -477,29 +533,67 @@ def test_dilution_propagates_to_later_snapshots(client, admin_headers, test_db):
 
 
 # ---------------------------------------------------------------------------
-# 守卫：负向调整打空持仓时不摊薄（零除 / 负成本价）
+# 守卫：无基数可守恒 / 打空持仓时不摊薄
 # ---------------------------------------------------------------------------
 
 
-def test_zeroing_adjustment_does_not_dilute(client, admin_headers, test_db):
-    """打空持仓行走既有 event_zeroed_position 告警，不得触发零除或负成本价。
+def test_null_cost_price_row_is_left_untouched(client, admin_headers, test_db):
+    """cost_price 为 NULL 的历史行无基数可守恒：份额照改、成本价保持 NULL。
 
-    forced_adjustment 本就不在摊薄白名单内，此例钉的是 new_shares <= 0 这条守卫：
-    若日后把负向结构型事件纳入白名单，零除会直接炸掉快照生成。
+    钉住 `old_cost is not None`——删掉它会在 `old_shares * None` 上抛 TypeError，
+    整个快照生成变 500。
     """
     port, plat, fund = _env(
-        test_db, "ZERO", shares=1000, cost_price=1.0, nav=1.0,
+        test_db, "NULLCOST", shares=1000, cost_price=1.0, nav=1.0,
+        position_cost_price=None,
     )
-    _event(
-        test_db, port, fund, event_type="forced_adjustment", platform=plat,
-        shares_change=Decimal("-1000"),
+    assert _fund_row(test_db, port, fund, BASE).cost_price is None
+
+    _event(test_db, port, fund, event_type="share_split", ratio=Decimal("2"))
+
+    _generate(client, admin_headers, port, EX)
+    row = _fund_row(test_db, port, fund, EX)
+
+    assert Decimal(str(row.shares)) == Decimal("2000")
+    assert row.cost_price is None
+    # 读侧对缺成本价的行不猜收益
+    assert _derived(client, admin_headers, port, EX)[fund]["profit_loss"] is None
+
+
+def test_whitelisted_event_zeroing_position_skips_dilution(
+    client, admin_headers, test_db,
+):
+    """白名单内事件把份额打到 0 时，`new_shares > 0` 守卫拦住零除，仍走既有打空告警。
+
+    可达路径靠份额 2 位量化：期初 1.00 份 + share_merge ratio=1000 →
+    `shares_after = quantize_shares(1.00/1000) = 0.00`、`shares_change = -1.00`。
+    **不要用 forced_adjustment 构造打空来测这条守卫**——它不在摊薄白名单内，整个分支
+    被跳过，删掉守卫也照样绿（该形态的告警由
+    `test_snapshot_forced_adjustment.py::test_negative_adjustment_zeroed_position_warning` 钉住）。
+    """
+    port, plat, fund = _env(
+        test_db, "ZERO", shares=1, cost_price=1.0, nav=1.0,
     )
+    event = _event(
+        test_db, port, fund, event_type="share_merge", ratio=Decimal("1000"),
+    )
+    assert Decimal(str(event.shares_change)) == Decimal("-1.00")
 
     response = client.post(
         "/api/snapshots/generate", headers=admin_headers,
         json={"portfolio_code": port, "target_date": EX.isoformat()},
     )
     assert response.status_code == 200, response.text
+    # 告警带的是基金级事件确认时拆出的**子记录** id（快照只读 platform_code 非空的行），
+    # 故按产品/平台/份额归零三项定位，不与父记录 id 比较
+    zeroed = [
+        w for w in (response.json()["warnings"] or [])
+        if w["type"] == "event_zeroed_position"
+    ]
+    assert len(zeroed) == 1
+    assert zeroed[0]["product_code"] == fund
+    assert zeroed[0]["platform_code"] == plat
+    assert Decimal(str(zeroed[0]["shares_after"])) == Decimal("0")
     # 份额归零的行被跳过，不落库
     assert test_db.query(PortfolioPosition).filter_by(
         portfolio_code=port, product_code=fund, market=MARKET, snapshot_date=EX,
