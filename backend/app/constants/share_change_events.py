@@ -17,3 +17,25 @@
 # 其余类型（reinvest_dividend / share_split / share_merge / bonus_share）的 cash_change
 # 恒为 0，只动份额。
 CASH_EFFECT_EVENT_TYPES = ("cash_dividend", "forced_adjustment")
+
+# 这四类事件增加（或减少）份额时**没有对应的外部资金进出**（#673）：再投资用的是
+# 基金自己派发的红利，拆分/合并只改份额与净值、送股是白给。故持仓的成本基数
+# （shares × cost_price）必须守恒，`cost_price` 随份额反向摊薄/浓缩——否则免成本份额
+# 被按原成本价计入本金，holding_profit 系统性低估（2:1 拆分下 1000 份 @1.0 会凭空
+# 产生 −1000 的假亏损）。
+#
+# **刻意不复用 `share_change_event_service.STRUCTURAL_SHARE_TYPES`**：两者集合当前恰好
+# 相同，但语义无关——那个常量是「现金型产品无条件拒绝份额变动」（#279）的判据，
+# 本常量是「份额变动不携带外部本金」的记账判据。合并成一个会让日后任一侧增删类型时
+# 静默改变另一侧行为。
+#
+# `forced_adjustment` 刻意排除：shares_change 由用户直填，可能是数据纠错（不该动基数）
+# 也可能是外部转入（该动但无客观成本价可用），无单一正确口径，维持既有行为。
+#
+# 引用方：`snapshot_service` 的事件应用段。
+CAPITAL_FREE_SHARE_EVENT_TYPES = (
+    "reinvest_dividend",
+    "share_split",
+    "share_merge",
+    "bonus_share",
+)

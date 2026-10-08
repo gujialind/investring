@@ -26,7 +26,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 - 份额记在 `investor_holding`，唯一约束 `(portfolio, investor, snapshot_date)`；**投资人份额不分平台**，平台只决定现金归属，确认后与投资人不再关联。
 - 份额只因申赎变化；产品/平台维度的份额事件不并入投资人账本，分红再投资只改成分基金份额。
-- 市值 = 份额 × 组合净值。成本价首次取组合净值，后续为 `(old×cost + new×price)/(old + new)`。
+- 市值 = 份额 × 组合净值。投资人成本价 `investor_holding.cost_per_share` 首次取组合净值，后续为 `(old×cost + new×price)/(old + new)`；产品持仓的 `portfolio_position.cost_price` 是另一套口径，见[份额变动事件](#rule-event)。
 - 可用份额必须实时计算（#277），不能只读快照冻结份额，见[可用量口径](#可用量口径)。份额为 0 才能删除投资人，不支持强制物理删除。
 
 <a id="rule-product"></a>
@@ -177,6 +177,11 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 分红、拆合、送股、强制调整等外部事实只改变产品份额和现金，不改变组合份额或投资人份额。
 
 * **分红再投资**是唯一“金额 → 份额”的事件（#425）：先 `quantize_amount(基数份额 × div_cash)` 确定到分的红利金额，再除以再投资净值并量化份额到 2 位，与现金分红及基金公司台账同口径；跳过中间金额量化可能跨舍入边界差 0.01 份。拆分/合并/送股仅为“份额 × 比例”。
+* **无本金额事件必须摊薄产品持仓成本价**（#673）：再投资/拆分/合并/送股改变份额时**没有外部资金进出**，`portfolio_position.cost_price` 按成本基数守恒摊薄或浓缩——`新成本价 = 旧份额 × 旧成本价 / 新份额`（`quantize_nav` 到 4 位），使 `份额 × 成本价` 只反映外部投入的本金。否则免成本份额被按原成本价计入，`holding_profit` 系统性低估（2:1 拆分下 1000 份 @1.0 会凭空产生 −1000 的假亏损）。这与读侧的「现金分红加回」是同一复权口径的两种形态：现金分红靠市值不涨 + 加回 `cash_change`，再投资靠市值涨 + 基数不涨，两者不得互相串味或重复计入。
+  - 适用类型清单以 `constants/share_change_events.py::CAPITAL_FREE_SHARE_EVENT_TYPES` 为准，**刻意不与** `share_change_event_service.py::STRUCTURAL_SHARE_TYPES` 合并（两者集合当前相同、语义无关，后者是现金型产品拒绝份额变动的判据）。`forced_adjustment` 排除：`shares_change` 由用户直填，可能是数据纠错也可能是外部转入，无单一客观本金口径；现金分红份额不变，天然无影响。
+  - 买入路径的加权平均是**基数可加**、本摊薄是**基数守恒**，故两者可交换：同一生成窗口内「先买入后事件」与「先事件后买入」终值相同，不产生顺序依赖。
+  - 成本价按列标度 4 位落库，由它反推的成本基数带 `份额 × 5e-5` 的固有量化误差，故 `holding_profit` 与 `cumulative_profit` 的残差**按该上界判定、不按固定分值判定**（走全历史净流量、完全不读成本价的 `cumulative_profit` 是精确侧）。存量历史快照不回算，修正走 `recalculate_snapshots` 逐日重建（该函数自动向后扩展到最新快照日），无迁移。
+  - **基数为 0 是合法状态，不得折叠成 NULL**：权益登记日之后清仓、白得份额仍在同一生成窗口到账时（红利再投份额按登记日持仓派发，与之后是否卖出无关），摊薄结果是 `cost_price = 0`、持有收益等于市值。写库与次日读回一律按 `is not None` 判定——0 折成 NULL 会让该行退出持有收益聚合（读侧对 NULL 成本价一律置未知），真实收益从界面上消失。
 * **确认时才计算变动量**（#424）：自动计算型事件在 pending 时 shares_change / shares_after / cash_change 为 NULL，读取方不得当 0 展示。确认从权益登记日快照回写基数份额；现金分红确认 `cash_change` 金额、按有效现金日入现金账本（此前按下文规则计分红在途），再投资只增加成分基金份额。
 * **分级**：基金级（`share_split`/`share_merge`/`bonus_share`，`platform_code` 空，确认时在 `event.market` 内按平台自动拆子记录）；平台级（`cash_dividend`/`reinvest_dividend`/`forced_adjustment`，每个有持仓 `(market, 平台)` 各录 1 条）。两类事件均以 `event.market` 为边界（#461）：LOF 一码多市场时另一市场的持仓不参与计算与覆盖校验，两市场须分别录入。
 
@@ -331,7 +336,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * **金额产生点**（`quantize_amount`）：卖出与赎回确认 `shares×nav`、买入金额与手续费的用户输入、申赎金额、现金分红 `cash_change`、`forced_adjustment` 用户填写、`manual_market_value` 写入、现金转移金额、trade PUT 直改。
 
-* **净值/估值产生点**（`quantize_nav`，#428）：`_generate_portfolio_value_snapshot` 构造快照行的 `total_value` / `unit_price` / `unit_price_change_pct` / `in_transit_total`；`_generate_investor_holding` 的 `cost_per_share`；以及**确认对账比较**——场外传入价与 T 日净值两侧归一到 4 位后精确比较（`PRICE_NAV_MISMATCH`，无容差）。
+* **净值/估值产生点**（`quantize_nav`，#428）：`_generate_portfolio_value_snapshot` 构造快照行的 `total_value` / `unit_price` / `unit_price_change_pct` / `in_transit_total`；`_generate_investor_holding` 的 `cost_per_share`；`_generate_portfolio_position` 的产品持仓 `cost_price` 无本金额事件摊薄（#673，见[份额变动事件](#rule-event)）；以及**确认对账比较**——场外传入价与 T 日净值两侧归一到 4 位后精确比较（`PRICE_NAV_MISMATCH`，无容差）。
 
 * 估值口径（`market_value` / `total_value` / `unit_price` / `cost_per_share`）保持 4 位、不进现金账本；DB 字段精度收紧留作后续迁移。
 
