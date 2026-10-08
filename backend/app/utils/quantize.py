@@ -20,9 +20,13 @@
   forced_adjustment 用户填写 cash_change、manual_market_value 写入、
   现金转移金额
 - 净值/估值：组合快照三表的 `total_value` / `unit_price` /
-  `unit_price_change_pct` / `in_transit_total`、投资人 `cost_per_share`
-  与产品持仓 `cost_price` 的无本金额事件摊薄点（#673）——均按列标度 4 位；
-  场外确认时传入价与 T 日净值的对账比较
+  `unit_price_change_pct` / `in_transit_total`、投资人 `cost_per_share`、
+  产品持仓 `cost_price` 的无本金额事件摊薄（#673）；持仓 `cost_price` 的买入路径
+  加权平均与持仓 `market_value`（份额 × 净值）——这两处是 #691 补登记的。
+  以上均按列标度 4 位；场外确认时传入价与 T 日净值的对账比较。落库列的标度
+  **不是**收口点：MySQL 按 `DECIMAL` 标度舍入、SQLite 存二进制 float 后按标度读回，
+  两侧可差一个末位，口径正文与尚未登记的同类写入点见
+  business-constraints.md 的「列标度不是收口点」。
 
 **「金额 → 份额」的转换必须先量化金额到分**（#425）：`reinvest_dividend`（分红再投资）
 是全系统唯一此类场景——先 `quantize_amount(权益份额 × div_cash)` 定出应得红利，再除以
