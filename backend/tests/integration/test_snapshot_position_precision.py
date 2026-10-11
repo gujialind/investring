@@ -174,8 +174,9 @@ def test_buy_average_already_exact_side_is_not_regressed(client, admin_headers, 
 def test_first_buy_takes_price_unchanged(client, admin_headers, test_db):
     """首笔买入（窗口内无基数）直接取成交价，不产生长小数，也不被量化改动
 
-    `else` 分支的 `Trade.price` 来自 `Numeric(10,4)`，恒 ≤4 位；本用例钉住「修复没有
-    顺手动它」——用 4 位满标的价格，任何多余处理都会显形。
+    `else` 分支的 `Trade.price` 来自 `Numeric(10,4)`，恒 ≤4 位。本用例挡得住的是「换
+    helper / 改精度」这类会改变 4 位满标值落库形态的改动；挡不住「在 `else` 分支补一次
+    `quantize_nav`」——4 位值量化幂等，补了照样绿（那也确属无害，故不为此加断言）。
     """
     env = _env(test_db, "BUY4", legs=[("0", "0", "1.2345")], cash="123.45")
     # BASE 行为 0 份额占位行，窗口内这笔是组合里该产品的第一笔有效买入
