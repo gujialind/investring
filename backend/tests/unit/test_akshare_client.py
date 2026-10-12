@@ -134,8 +134,10 @@ class TestHkMutualNavParsing:
         rows = akshare_client.get_fund_hk_mutual(HK, "20260914", "20260915")
 
         assert rows == [
-            {"trade_date": "20260915", "unit_price": 10.54, "accumulated_nav": None},
-            {"trade_date": "20260914", "unit_price": 10.55, "accumulated_nav": None},
+            {"trade_date": "20260915", "unit_price": 10.54, "accumulated_nav": None,
+             "pct_change": -0.4762},
+            {"trade_date": "20260914", "unit_price": 10.55, "accumulated_nav": None,
+             "pct_change": -0.4762},
         ]
 
     def test_result_is_independent_of_key_insertion_order(self, hk_pages):
@@ -145,8 +147,10 @@ class TestHkMutualNavParsing:
         ]
         hk_pages([shuffled])
 
+        # 这一行没有 NAVCHGRT：缺键只能是 None，不得被伪造成 0.0
         assert akshare_client.get_fund_hk_mutual(HK, "20260914", "20260914") == [
-            {"trade_date": "20260914", "unit_price": 10.55, "accumulated_nav": None}
+            {"trade_date": "20260914", "unit_price": 10.55, "accumulated_nav": None,
+             "pct_change": None}
         ]
 
     def test_missing_pdate_raises_and_leaves_locatable_error(
@@ -401,10 +405,14 @@ class TestHkMutualNavTransport:
 
 
 class _RowFrame:
-    """最小 DataFrame 替身：被测代码只用到 `len()` 与 `iterrows()`。
+    """最小 DataFrame 替身：被测代码只用到 `len()`、`iterrows()` 与 `columns`。
 
     刻意不 import pandas——本仓测试此前零处构造 DataFrame，取数层改用 dict 替身后
     也不必为两条 CN 用例破例（#651 的解析改动同样不需要 pandas）。
+
+    `columns`（#692）按各行键的并集推导：真实 DataFrame 的列是矩形对齐的，替身从
+    dict 行反推即可，且必须存在——场外路径靠 `_OTC_PCT_COLUMN in df.columns` 区分
+    「上游没给这列」与「给了但这行是空值」，替身缺该属性会让漂移判据整条测不到。
     """
 
     def __init__(self, rows):
@@ -412,6 +420,15 @@ class _RowFrame:
 
     def __len__(self):
         return len(self._rows)
+
+    @property
+    def columns(self):
+        seen = []
+        for row in self._rows:
+            for key in row:
+                if key not in seen:
+                    seen.append(key)
+        return seen
 
     def iterrows(self):
         return enumerate(self._rows)
@@ -444,14 +461,16 @@ class TestCnAkshareRowsAreScreened:
         monkeypatch.setattr(
             "akshare.fund_open_fund_info_em",
             lambda **kw: _RowFrame([
-                {"净值日期": "2026-09-15", "单位净值": 1.234},
-                {"净值日期": "2026-09-14", "单位净值": ""},
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.1215},
+                {"净值日期": "2026-09-14", "单位净值": "", "日增长率": ""},
             ]),
         )
 
         rows = akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
 
-        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None}]
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+                         "pct_change": 0.1215}]
+        # 恰好一条：坏净值行的局部漂移 WARNING。列在、值坏，不得再叠一条列漂移告警。
         only_log_line(json_log_capture, level="WARNING", operation="fetch_fund_nav_otc")
 
     def test_otc_accepts_date_objects_from_pandas(self, monkeypatch):
@@ -460,11 +479,13 @@ class TestCnAkshareRowsAreScreened:
 
         monkeypatch.setattr(
             "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([{"净值日期": _date(2026, 9, 14), "单位净值": 1.0}]),
+            lambda **kw: _RowFrame([
+                {"净值日期": _date(2026, 9, 14), "单位净值": 1.0, "日增长率": 0.5},
+            ]),
         )
 
         assert akshare_client.get_fund_nav_otc("000051") == [
-            {"trade_date": "20260914", "unit_nav": 1.0, "accum_nav": None}
+            {"trade_date": "20260914", "unit_nav": 1.0, "accum_nav": None, "pct_change": 0.5}
         ]
 
     def test_etf_windowed_empty_is_benign(self, monkeypatch):
@@ -547,6 +568,115 @@ class TestCnAkshareRowsAreScreened:
                 "pct_change": 0.57,
             }
         ]
+
+
+class TestPctChangePassthrough:
+    """#692：日涨跌走上游字段透传（场外「日增长率」/ 港互认 `NAVCHGRT`）。
+
+    三件事必须分开：平盘 `0.0` 是真实涨跌、不得折成 None；坏值只能是 None、不得
+    计入 malformed（否则一列展示字段的漂移就能打死整段可用历史）；整列缺失要响亮
+    留一条 column_drift WARNING，但仍照常返回可用行。
+    """
+
+    def test_otc_flat_day_zero_is_preserved(self, monkeypatch):
+        """平盘日 0.0 折成 None 会让前端读成「无数据」而不是 0%。"""
+        monkeypatch.setattr(
+            "akshare.fund_open_fund_info_em",
+            lambda **kw: _RowFrame([
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.0},
+            ]),
+        )
+
+        assert akshare_client.get_fund_nav_otc("000051") == [
+            {"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+             "pct_change": 0.0}
+        ]
+
+    def test_otc_bad_pct_value_is_none_and_not_malformed(self, monkeypatch, json_log_capture):
+        """坏值 → None，且不进 malformed：局部漂移 WARNING 只由净值/日期坏行触发。"""
+        monkeypatch.setattr(
+            "akshare.fund_open_fund_info_em",
+            lambda **kw: _RowFrame([
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": "元"},
+                {"净值日期": "2026-09-14", "单位净值": 1.230, "日增长率": float("nan")},
+            ]),
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
+
+        assert [r["pct_change"] for r in rows] == [None, None]
+        assert [r["trade_date"] for r in rows] == ["20260915", "20260914"]
+        # 列在、只是值坏 ⇒ 一条日志都不该有（无 malformed、无列漂移）
+        assert log_lines(json_log_capture) == []
+
+    def test_otc_missing_column_warns_once_and_still_returns_rows(
+        self, monkeypatch, json_log_capture
+    ):
+        """整列被改名：可用历史照常返回，另留一条 column_drift 线索。"""
+        monkeypatch.setattr(
+            "akshare.fund_open_fund_info_em",
+            lambda **kw: _RowFrame([
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日涨幅": 0.12},
+            ]),
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000051")
+
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+                         "pct_change": None}]
+        line = only_log_line(
+            json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
+            column_drift=True,
+        )
+        assert line["missing_column"] == akshare_client._OTC_PCT_COLUMN
+        assert line["upstream_rows"] == 1
+        assert line["market"] == "CN_OTC"
+
+    def test_otc_empty_frame_does_not_warn_about_drift(self, monkeypatch, json_log_capture):
+        """合法空窗（周末、净值未发布）不该顺带报一条列漂移——那是假报警。"""
+        monkeypatch.setattr("akshare.fund_open_fund_info_em", lambda **kw: _RowFrame([]))
+
+        assert akshare_client.get_fund_nav_otc("000051", "20260926", "20260927") == []
+        assert log_lines(json_log_capture) == []
+
+    def test_otc_drift_warning_survives_a_total_parse_failure(
+        self, monkeypatch, json_log_capture
+    ):
+        """整段解析不出来时列漂移正是最可能的成因，必须先于抛错留痕。"""
+        monkeypatch.setattr(
+            "akshare.fund_open_fund_info_em",
+            lambda **kw: _RowFrame([
+                {"净值日期": "元", "单位净值": 342652919208.0},
+                {"净值日期": "元", "单位净值": 342652919209.0},
+            ]),
+        )
+
+        with pytest.raises(AkshareAPIError, match="无一行可解析"):
+            akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
+
+        only_log_line(
+            json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
+            column_drift=True,
+        )
+        only_log_line(json_log_capture, level="ERROR", operation="fetch_fund_nav_otc")
+
+    def test_hk_flat_day_zero_is_preserved(self, hk_pages):
+        hk_pages([[_hk_row("2026-09-15", 10.54, NAVCHGRT=0.0)]])
+
+        assert akshare_client.get_fund_hk_mutual(HK, "20260915", "20260915") == [
+            {"trade_date": "20260915", "unit_price": 10.54, "accumulated_nav": None,
+             "pct_change": 0.0}
+        ]
+
+    def test_hk_bad_pct_value_is_none_and_not_malformed(self, hk_pages, json_log_capture):
+        """NAVCHGRT 坏值只让该字段为 None，不牵连同行的净值、不算解析失败。"""
+        hk_pages([[_hk_row("2026-09-15", 10.54, NAVCHGRT="元")]])
+
+        rows = akshare_client.get_fund_hk_mutual(HK, "20260915", "20260915")
+
+        assert rows == [{"trade_date": "20260915", "unit_price": 10.54,
+                         "accumulated_nav": None, "pct_change": None}]
+        assert log_lines(json_log_capture) == []
 
 
 class TestHkMutualCodeResolution:

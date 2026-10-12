@@ -5,6 +5,7 @@ Tushare 客户端限流增强测试（P5.1）
 - per-API-call sleep（每次 pro.xxx() 调用前 sleep）
 - 限频退避（10s→30s→60s 指数退避）
 - 重试耗尽后抛 TushareAPIError
+- fund_daily 行映射：平盘日 pct_chg=0.0 不被 truthiness 折成缺值（#692）
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -119,3 +120,45 @@ class TestMaxRetriesExhausted:
         assert result == [], "重试成功后返回空列表"
 
         get_settings.cache_clear()
+
+
+class TestFundDailyRowMapping:
+    """#692 附带项：同一字段的 `0.0` 与「上游没给」必须可区分。
+
+    平盘日 `pct_chg` 恰为 0.0，被 truthiness（`if row.get(...)`）折成 None 之后，
+    前端读成「无数据」而不是 0%——场内平盘日并不罕见，这是一列会长期显示错的展示字段。
+    """
+
+    @staticmethod
+    def _frame(rows):
+        df = MagicMock()
+        df.empty = False
+        df.iterrows.return_value = list(enumerate(rows))
+        return df
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_flat_day_zero_pct_is_preserved(self, mock_get_pro, mock_sleep):
+        mock_pro = MagicMock()
+        mock_pro.fund_daily.return_value = self._frame([
+            {"trade_date": "20260915", "close": 4.6, "pre_close": 4.6, "pct_chg": 0.0},
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        assert tushare_client.get_fund_daily("510300.SH", "20260915", "20260915") == [
+            {"trade_date": "20260915", "close": 4.6, "pre_close": 4.6, "pct_chg": 0.0}
+        ]
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_missing_and_zero_close_are_also_distinguished(self, mock_get_pro, mock_sleep):
+        """同族三列一起收口：`close`/`pre_close` 的 0.0 同样不得被折成缺值。"""
+        mock_pro = MagicMock()
+        mock_pro.fund_daily.return_value = self._frame([
+            {"trade_date": "20260915", "close": 0.0, "pre_close": None, "pct_chg": None},
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        assert tushare_client.get_fund_daily("510300.SH", "20260915", "20260915") == [
+            {"trade_date": "20260915", "close": 0.0, "pre_close": None, "pct_chg": None}
+        ]

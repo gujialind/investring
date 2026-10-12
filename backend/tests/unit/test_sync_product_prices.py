@@ -9,6 +9,7 @@ sync_product_prices 改造测试（P5.2）
 - 不支持的数据源 → skipped
 - 无单价行的写入侧过滤（#580）：跳过 + WARNING，整批无价不是失败
 - 港互认净值故障的响亮与良性边界（#651）：取数层抛错→failed，合法空窗→仍 success
+- 日涨跌的产生点收口（#692）：上游透传、tushare 场外就地推导、平盘 0.0 不折成缺值
 """
 import logging
 
@@ -19,9 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.models.price_record import PriceRecord
 from app.models.product import Product
+from decimal import Decimal
+
 from app.services.market_data_service import (
     sync_product_prices, _normalize_raw, _bulk_upsert_prices,
     _mark_failed, _mark_skipped, _usable_price,
+    _derive_otc_pct_change, _db_prev_accum_nav, _optional_pct,
 )
 
 MARKET_DATA_LOGGER = "app.services.market_data_service"
@@ -405,3 +409,352 @@ class TestHkMutualNavFailureIsLoud:
                             start_date=date(2026, 9, 14), end_date=date(2026, 9, 22))
 
         mock_fetch.assert_called_once_with("1001767344", "20260914", "20260922")
+
+
+# ============================================================================
+# #692：日涨跌（pct_change）的产生点收口
+# ============================================================================
+
+OTC = "000300.OF"
+
+
+def _norm_row(td, *, unit=None, accum=None, pct=None):
+    """构造一条已过 `_normalize_raw` 形态的场外行（推导就地改这个 dict）。"""
+    return {"trade_date": td, "unit_price": unit, "accumulated_nav": accum,
+            "pct_change": pct}
+
+
+def _seed_price(db, code, market, day, *, unit=1.0, accum=None, source="tushare", pct=None):
+    db.add(PriceRecord(product_code=code, market=market, price_date=day,
+                       unit_price=unit, accumulated_nav=accum, source=source,
+                       pct_change=pct))
+    db.flush()
+
+
+def _pct(row):
+    """读回值统一成 Decimal 再比：SQLite 的 Numeric 落 float，MySQL 落 Decimal。"""
+    return None if row is None else Decimal(str(row))
+
+
+class TestNormalizeRawPctKeys:
+    """`_normalize_raw` 的键集与 pct 归一（透传路径的唯一收口点）。
+
+    两分支键集不同是上游能力差异，不是遗漏；`pct_change` 是百分数，在产生点量化到
+    4 位 HALF_UP，读取路径不再量化。
+    """
+
+    def test_exchange_branch_key_set(self):
+        rows = _normalize_raw(
+            [{"trade_date": "20260915", "close": 4.6, "pre_close": 4.5, "pct_chg": 2.22222}],
+            "CN_EXCHANGE",
+        )
+        assert set(rows[0]) == {"trade_date", "unit_price", "pre_close", "pct_change"}
+        assert rows[0]["pct_change"] == Decimal("2.2222")
+
+    def test_nav_branch_key_set(self):
+        rows = _normalize_raw(
+            [{"trade_date": "20260915", "unit_nav": 1.2, "accum_nav": 1.5,
+              "pct_change": -0.47619}],
+            "CN_OTC",
+        )
+        assert set(rows[0]) == {"trade_date", "unit_price", "accumulated_nav", "pct_change"}
+        assert rows[0]["pct_change"] == Decimal("-0.4762")
+
+    @pytest.mark.parametrize("market", ["CN_EXCHANGE", "CN_OTC", "HK_MUTUAL"])
+    def test_flat_day_zero_is_not_folded_into_missing(self, market):
+        """平盘日 0.0 折成 None 会让前端读成「无数据」而不是 0%（附带项，#692）。"""
+        key = "pct_chg" if market == "CN_EXCHANGE" else "pct_change"
+        raw = {"trade_date": "20260915", key: 0.0}
+        raw.update({"close": 4.6} if market == "CN_EXCHANGE" else {"unit_nav": 1.2})
+
+        assert _normalize_raw([raw], market)[0]["pct_change"] == Decimal("0.0000")
+
+    def test_zero_accumulated_nav_is_not_folded_into_missing(self):
+        """`accumulated_nav = 0.0` 被 `or` 链折掉会毒化日涨跌的推导基准。"""
+        rows = _normalize_raw(
+            [{"trade_date": "20260915", "unit_nav": 1.2, "accum_nav": 0.0}], "CN_OTC"
+        )
+        assert rows[0]["accumulated_nav"] == 0.0
+
+    def test_exchange_accepts_pct_change_alias(self):
+        """场内上游两种键名都收（tushare 给 pct_chg，akshare 给 pct_change）。"""
+        assert _normalize_raw(
+            [{"trade_date": "20260915", "close": 4.6, "pct_change": 1.25}], "CN_EXCHANGE"
+        )[0]["pct_change"] == Decimal("1.2500")
+
+    @pytest.mark.parametrize("bad", [None, "", float("nan"), float("inf"), "元", object()])
+    def test_bad_pct_becomes_none_without_raising(self, bad):
+        """NaN 若直穿 `quantize_nav` 会抛 InvalidOperation，把一次同步整体打成 failed。"""
+        assert _optional_pct(bad) is None
+
+    def test_missing_pct_stays_missing_not_zero(self):
+        assert _normalize_raw([{"trade_date": "20260915", "unit_nav": 1.2}], "CN_OTC")[0][
+            "pct_change"
+        ] is None
+
+
+class TestOtcPctChangeDerivation:
+    """tushare 场外就地推导：`日涨跌 = (accum_d / accum_prev − 1) × 100`，百分数 4 位。
+
+    为什么盯这么紧：这一列此前恒为 NULL（生产 244373 行），修好后它是详情页唯一
+    「本地算出来」的行情字段——口径错了不会有任何异常，只会安静地显示错的百分比。
+    """
+
+    def test_consecutive_rows_derive_from_previous_accum(self, test_db: Session,
+                                                        sample_otc_product: Product):
+        rows = [
+            _norm_row("20260914", unit=1.5000, accum=1.5000),
+            _norm_row("20260915", unit=1.5300, accum=1.5300),
+            _norm_row("20260916", unit=1.5147, accum=1.5147),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert [r["pct_change"] for r in rows] == [None, Decimal("2.0000"), Decimal("-1.0000")]
+
+    def test_ex_dividend_day_is_flat_not_a_fake_crash(self, test_db: Session,
+                                                      sample_otc_product: Product):
+        """除息日 unit_nav 下调 0.03、accum_nav 连续 ⇒ 0.0000 而不是 −1.9608。
+
+        这正是选 accum 基准的全部理由：按 unit_nav 推导会把现金分红算成假暴跌，而
+        修正需要产品级 ex_date 表（本仓没有）。
+        """
+        rows = [
+            _norm_row("20260915", unit=1.5300, accum=1.6000),
+            _norm_row("20260916", unit=1.5000, accum=1.6000),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[1]["pct_change"] == Decimal("0.0000")
+        # 反面口径的期望值一并写死，防止有人「顺手改成 unit 基准」后本用例仍然通过
+        unit_basis = Decimal("1.5000") / Decimal("1.5300") * 100 - 100
+        assert round(unit_basis, 4) == Decimal("-1.9608")
+
+    def test_first_row_of_a_batch_uses_the_db_baseline(self, test_db: Session,
+                                                       sample_otc_product: Product):
+        """增量窗首行接得上存量历史，跨批不留缺口。"""
+        _seed_price(test_db, OTC, "CN_OTC", date(2026, 9, 14), unit=1.5, accum=1.5)
+        rows = [_norm_row("20260915", unit=1.5300, accum=1.5300)]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[0]["pct_change"] == Decimal("2.0000")
+
+    def test_db_baseline_skips_rows_without_accum(self, test_db: Session,
+                                                  sample_otc_product: Product):
+        """基准是「最近一条 accum 非空行」，不是「上一交易日那条行」。"""
+        _seed_price(test_db, OTC, "CN_OTC", date(2026, 9, 11), unit=1.5, accum=1.5)
+        _seed_price(test_db, OTC, "CN_OTC", date(2026, 9, 14), unit=1.51, accum=None)
+        rows = [_norm_row("20260915", unit=1.5300, accum=1.5300)]
+
+        assert _db_prev_accum_nav(test_db, OTC, "CN_OTC", date(2026, 9, 15)) is not None
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[0]["pct_change"] == Decimal("2.0000")
+
+    def test_flat_day_is_zero_not_null(self, test_db: Session, sample_otc_product: Product):
+        """平盘是真实的 0%，与「无基准」必须可区分。"""
+        rows = [
+            _norm_row("20260915", unit=1.5000, accum=1.5000),
+            _norm_row("20260916", unit=1.5000, accum=1.5000),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[1]["pct_change"] == Decimal("0.0000")
+
+    def test_non_positive_baseline_stays_none(self, test_db: Session,
+                                              sample_otc_product: Product):
+        """基准 <= 0 无从计算比值，保持 None，绝不伪造成 0.00%。
+
+        守卫只看**基准**：当日 accum 为负而基准为正时照样出值（-200.0000），那是数据
+        本身的形状，不是本函数该拦的。
+        """
+        rows = [
+            _norm_row("20260915", unit=1.0, accum=0.0),
+            _norm_row("20260916", unit=1.0, accum=1.5),
+            _norm_row("20260917", unit=1.0, accum=-1.5),
+            _norm_row("20260918", unit=1.0, accum=1.6),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[0]["pct_change"] is None              # 无基准
+        assert rows[1]["pct_change"] is None              # 基准 0
+        assert rows[2]["pct_change"] == Decimal("-200.0000")  # 基准 1.5 为正，照常出值
+        assert rows[3]["pct_change"] is None              # 基准为负
+
+    def test_negative_accum_yields_a_value_but_a_negative_baseline_does_not(
+        self, test_db: Session, sample_otc_product: Product
+    ):
+        """把「基准非正」与「当日值为负」分开：守卫只看基准。"""
+        rows = [
+            _norm_row("20260915", unit=1.0, accum=1.5),
+            _norm_row("20260916", unit=1.0, accum=1.4),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[1]["pct_change"] == Decimal("-6.6667")
+
+    def test_rounding_is_half_up_on_the_fifth_decimal(self, test_db: Session,
+                                                      sample_otc_product: Product):
+        """8.0000 → 8.0001 得 0.00125：HALF_UP → 0.0013（Decimal 缺省的 HALF_EVEN 会给
+        0.0012）。这条钉的是舍入模式，不是精度位数。
+        """
+        rows = [
+            _norm_row("20260915", unit=8.0, accum="8.0000"),
+            _norm_row("20260916", unit=8.0, accum="8.0001"),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[1]["pct_change"] == Decimal("0.0013")
+
+    def test_descending_upstream_order_is_reordered(self, test_db: Session,
+                                                    sample_otc_product: Product):
+        """tushare 实测多为降序返回：链式推导前必须排序，否则基准取成后一天。"""
+        rows = [
+            _norm_row("20260916", unit=1.5147, accum=1.5147),
+            _norm_row("20260915", unit=1.5300, accum=1.5300),
+            _norm_row("20260914", unit=1.5000, accum=1.5000),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        by_date = {r["trade_date"]: r["pct_change"] for r in rows}
+        assert by_date == {"20260914": None, "20260915": Decimal("2.0000"),
+                           "20260916": Decimal("-1.0000")}
+
+    @pytest.mark.parametrize("bad", [None, "", float("nan")])
+    def test_unusable_accum_is_skipped_and_breaks_nothing(self, test_db: Session,
+                                                          sample_otc_product: Product, bad):
+        """accum 坏值行自身算不出涨跌，也不作后续基准（与迁移 LAG 非空子集同口径）。"""
+        rows = [
+            _norm_row("20260914", unit=1.5, accum=1.5),
+            _norm_row("20260915", unit=1.51, accum=bad),
+            _norm_row("20260916", unit=1.53, accum=1.53),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[1]["pct_change"] is None
+        assert rows[2]["pct_change"] == Decimal("2.0000")  # 基准跨过坏值行取 1.5
+
+    def test_upstream_pct_is_overwritten_by_derivation(self, test_db: Session,
+                                                       sample_otc_product: Product):
+        """tushare `fund_nav` 不给涨跌幅；万一将来给了，也以本地 accum 口径为准。"""
+        rows = [
+            _norm_row("20260915", unit=1.5, accum=1.5, pct=Decimal("9.9999")),
+            _norm_row("20260916", unit=1.53, accum=1.53, pct=Decimal("9.9999")),
+        ]
+
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[0]["pct_change"] == Decimal("9.9999")   # 无基准：不覆盖成 None
+        assert rows[1]["pct_change"] == Decimal("2.0000")
+
+    def test_empty_batch_does_not_hit_the_db(self, test_db: Session):
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", [])
+
+
+class TestUpsertPctCoverage:
+    """端到端：三条源各自的 pct 都真的落库（口径正确但没写进去，症状一模一样）。"""
+
+    def _read(self, db, code, market):
+        return {
+            r.price_date: r.pct_change
+            for r in db.query(PriceRecord).filter(
+                PriceRecord.product_code == code, PriceRecord.market == market
+            ).all()
+        }
+
+    @patch("app.services.market_data_service.get_fund_nav")
+    def test_tushare_otc_persists_derived_pct(self, mock_nav, test_db: Session,
+                                              sample_otc_product: Product):
+        mock_nav.return_value = [
+            {"trade_date": "20260915", "unit_nav": 1.5000, "accum_nav": 1.5000},
+            {"trade_date": "20260916", "unit_nav": 1.5300, "accum_nav": 1.5300},
+        ]
+
+        result = sync_product_prices(test_db, OTC, "CN_OTC",
+                                     start_date=date(2026, 9, 15), end_date=date(2026, 9, 16))
+
+        assert result["success"] is True and result["synced_count"] == 2
+        got = self._read(test_db, OTC, "CN_OTC")
+        assert got[date(2026, 9, 15)] is None
+        assert _pct(got[date(2026, 9, 16)]) == Decimal("2.0000")
+
+    @patch("app.services.akshare_client.get_fund_nav_otc")
+    def test_akshare_otc_persists_upstream_pct_verbatim(self, mock_nav, test_db: Session,
+                                                        sample_otc_product: Product):
+        """akshare 场外走上游透传，不得被本地推导覆盖成 accum 口径。"""
+        sample_otc_product.data_source = "akshare"
+        test_db.flush()
+        mock_nav.return_value = [
+            {"trade_date": "20260915", "unit_nav": 1.5000, "accum_nav": None,
+             "pct_change": 0.1215},
+            {"trade_date": "20260916", "unit_nav": 1.4700, "accum_nav": None,
+             "pct_change": -2.0},
+        ]
+
+        sync_product_prices(test_db, OTC, "CN_OTC",
+                            start_date=date(2026, 9, 15), end_date=date(2026, 9, 16))
+
+        got = self._read(test_db, OTC, "CN_OTC")
+        assert _pct(got[date(2026, 9, 15)]) == Decimal("0.1215")
+        assert _pct(got[date(2026, 9, 16)]) == Decimal("-2.0000")
+
+    @patch("app.services.akshare_client.get_fund_hk_mutual")
+    def test_hk_mutual_persists_upstream_pct(self, mock_fetch, test_db: Session):
+        mock_fetch.return_value = [
+            {"trade_date": "20260915", "unit_price": 10.5700, "accumulated_nav": None,
+             "pct_change": -0.4762},
+        ]
+
+        sync_product_prices(test_db, "1001767344", "HK_MUTUAL",
+                            start_date=date(2026, 9, 15), end_date=date(2026, 9, 15))
+
+        got = self._read(test_db, "1001767344", "HK_MUTUAL")
+        assert _pct(got[date(2026, 9, 15)]) == Decimal("-0.4762")
+
+    @patch("app.services.market_data_service.get_fund_daily")
+    def test_exchange_flat_day_persists_zero(self, mock_daily, test_db: Session,
+                                             sample_etf_product: Product):
+        """附带项端到端：场内平盘日落 0.0000，不是 NULL。"""
+        mock_daily.return_value = [
+            {"trade_date": "20260915", "close": 4.6, "pre_close": 4.6, "pct_chg": 0.0},
+        ]
+
+        sync_product_prices(test_db, "510300.SH", "CN_EXCHANGE",
+                            start_date=date(2026, 9, 15), end_date=date(2026, 9, 15))
+
+        got = self._read(test_db, "510300.SH", "CN_EXCHANGE")
+        assert _pct(got[date(2026, 9, 15)]) == Decimal("0.0000")
+
+    @patch("app.services.market_data_service.get_fund_nav")
+    def test_resync_overwrites_pct_unconditionally(self, mock_nav, test_db: Session,
+                                                   sample_otc_product: Product):
+        """`ON DUPLICATE KEY UPDATE` 是无条件覆盖（`VALUES()` 而非 COALESCE）。
+
+        这条把「写侧修复与回填迁移必须同批上线」的约束钉成可执行事实：只上迁移不修
+        写侧，下一次同步就把回填值抹回 NULL。上游列漂移导致 pct 变 None 时同样会被
+        抹掉——漂移有 WARNING 留痕（akshare_client），修正路径见迁移 0020 头注释。
+        """
+        mock_nav.return_value = [
+            {"trade_date": "20260915", "unit_nav": 1.5, "accum_nav": 1.5},
+            {"trade_date": "20260916", "unit_nav": 1.53, "accum_nav": 1.53},
+        ]
+        sync_product_prices(test_db, OTC, "CN_OTC",
+                            start_date=date(2026, 9, 15), end_date=date(2026, 9, 16))
+        assert _pct(self._read(test_db, OTC, "CN_OTC")[date(2026, 9, 16)]) == Decimal("2.0000")
+
+        # 上游这批不再给 accum（列漂移形态）：已有值被覆盖成 NULL，而不是被保留
+        mock_nav.return_value = [
+            {"trade_date": "20260916", "unit_nav": 1.53, "accum_nav": None},
+        ]
+        sync_product_prices(test_db, OTC, "CN_OTC",
+                            start_date=date(2026, 9, 16), end_date=date(2026, 9, 16))
+
+        assert self._read(test_db, OTC, "CN_OTC")[date(2026, 9, 16)] is None
