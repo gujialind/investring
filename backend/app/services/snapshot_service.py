@@ -1228,9 +1228,13 @@ def _generate_portfolio_position(
         old_shares = positions[key]["shares"]
         old_cost = positions[key]["cost_price"] or Decimal("0")
 
-        # 加权平均成本价
+        # 加权平均成本价在产生点 quantize_nav，不把 4 位收口外包给方言默认行为（#691；
+        # 分叉机制与完整论据见下方无本金额事件摊薄点的注释）。else 分支的 new_price
+        # 来自 Trade.price = Numeric(10,4)，恒不超过 4 位，无需量化。
         if old_shares > 0:
-            positions[key]["cost_price"] = (old_shares * old_cost + new_shares * new_price) / (old_shares + new_shares)
+            positions[key]["cost_price"] = quantize_nav(
+                (old_shares * old_cost + new_shares * new_price) / (old_shares + new_shares)
+            )
         else:
             positions[key]["cost_price"] = new_price
 
@@ -1449,7 +1453,10 @@ def _generate_portfolio_position(
 
             if price_record:
                 unit_price = Decimal(str(price_record.unit_price))
-                market_value = pos_data["shares"] * unit_price
+                # 市值同为产生点量化（#691 并入）：2 位份额 × 4 位净值最长按 6 位落库，
+                # 交给方言收口会与 cost_price 同样分叉。逐行收口后 total_value 从「求和
+                # 后一次舍入」变为「Σ 行市值」，与读侧按行聚合的口径一致。
+                market_value = quantize_nav(pos_data["shares"] * unit_price)
             else:
                 missing_nav.append(f"{product_code}({market}) [{nav_rule}={nav_date}]")
         

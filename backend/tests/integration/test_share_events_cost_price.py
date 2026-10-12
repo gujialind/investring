@@ -252,13 +252,17 @@ def test_bonus_share_dilutes_cost_price(client, admin_headers, test_db):
     assert abs(_basis(row) - Decimal("1000")) <= Decimal(str(row.shares)) * SCALE_BOUND_PER_SHARE
 
 
-def test_buy_and_capital_free_event_compose_to_same_basis(
+def test_buy_and_capital_free_event_compose_in_fixed_order(
     client, admin_headers, test_db,
 ):
-    """同一窗口内「买入 + 事件」的终值与「事件 + 买入」相同。
+    """同一窗口内「买入 + 事件」在实现固定顺序下的组合结果。
 
-    实现里买入按批先应用、事件后应用，两者必须可交换才不产生顺序依赖：
-    加权平均是基数可加（+ n×p），摊薄是基数守恒（× s_old/s_new），故可交换。
+    买入按批先应用、事件后应用，换序无法经入口构造，本用例钉的是**这一个顺序**的终值，
+    不构成「顺序无关」的保证：加权平均是基数可加（+ n×p），摊薄是基数守恒
+    （× s_old/s_new），两序只在未舍入的代数意义等价（终值 = Σ基数 / Σ份额）。#691 把
+    两段都收口到 4 位后，换序的**成本价**不再逐位复现（误差被份额比放大，上界约
+    `5e-5 × 旧份额/新份额`，见 business-constraints.md 的份额变动事件节）——可对账的是
+    成本基数，因此下面的守恒断言按 `_basis` 而非成本价差判定。
     100 份 @1.0（基数 100）→ EX 买 100 份 @2.0（基数 300、200 份、成本 1.5）
     → 送股 10%（210 份）→ 成本 300/210 = 1.4286。
     """
