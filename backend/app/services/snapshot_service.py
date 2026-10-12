@@ -1729,9 +1729,13 @@ def _generate_investor_holding(
             db, portfolio_code, investor.code, target_date
         )
         
-        # 派生字段（#40 改进1）
-        market_value = prev_shares * Decimal(str(value_snapshot.unit_price))
-        total_cost = prev_shares * prev_cost
+        # 派生字段（#40 改进1）：三列在产生点收口，不把 4 位舍入外包给方言（#696；
+        # 分叉机制见 business-constraints.md「列标度不是收口点」）。total_cost 用
+        # 落库口径的 cost_q 派生，行内自洽 total_cost == quantize_nav(份额×成本价)
+        # （模型注释即此语义）；profit 为两个精确 4 位值之差，本身精确 4 位，无需再量化。
+        cost_q = quantize_nav(prev_cost) if prev_cost > 0 else Decimal("0")
+        market_value = quantize_nav(prev_shares * Decimal(str(value_snapshot.unit_price)))
+        total_cost = quantize_nav(prev_shares * cost_q)
         profit = market_value - total_cost
         
         holding = InvestorHolding(
@@ -1742,10 +1746,12 @@ def _generate_investor_holding(
             frozen_shares=float(frozen_shares) if frozen_shares > 0 else 0,
             # #428：4 位口径经 quantize_nav（显式 HALF_UP），且不再 float()——#421 已把
             # 另一个构造点从 float 改回保标度 Decimal，此处同口径（列是 Numeric(10,4)）
-            cost_per_share=quantize_nav(prev_cost) if prev_cost > 0 else 0,
-            market_value=float(market_value),
-            total_cost=float(total_cost),
-            profit=float(profit),
+            cost_per_share=cost_q if prev_cost > 0 else 0,
+            # #696：三列同 #428 口径写标度 Decimal，MySQL 侧参数变精确字面量、
+            # SQLite 侧行为不变（列是 Numeric(15,4)）
+            market_value=market_value,
+            total_cost=total_cost,
+            profit=profit,
         )
         result_holdings.append(holding)
     
