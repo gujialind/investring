@@ -24,7 +24,9 @@
   产品持仓 `cost_price` 的无本金额事件摊薄（#673）；持仓 `cost_price` 的买入路径
   加权平均与持仓 `market_value`（份额 × 净值）——这两处是 #691 补登记的；
   投资人份额快照的 `market_value` / `total_cost` / `profit` 三列（#696：
-  `total_cost` 由落库收口值 `cost_per_share` 派生、`profit` 为两收口值之差）。
+  `total_cost` 由落库收口值 `cost_per_share` 派生、`profit` 为两收口值之差）；
+  行情日涨跌 `price_record.pct_change`（#692，**百分数**而非比值：
+  `_normalize_raw` 收口上游透传值、`_derive_otc_pct_change` 收口 tushare 场外推导）。
   以上均按列标度 4 位；场外确认时传入价与 T 日净值的对账比较。落库列的标度
   **不是**收口点：MySQL 按 `DECIMAL` 标度舍入、SQLite 存二进制 float 后按标度读回，
   两侧可差一个末位，口径正文见 business-constraints.md 的「列标度不是收口点」。

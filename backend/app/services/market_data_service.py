@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 import logging
 import math
 from typing import List, Dict, Any, Optional, Tuple
@@ -11,6 +12,7 @@ from app.models.product import Product
 from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.tushare_client import get_fund_daily, get_fund_nav, TushareAPIError
+from app.utils.quantize import quantize_nav
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +387,10 @@ def sync_product_prices(
         return {"success": True, "message": "无新数据", "synced_count": 0, "source": data_source}
 
     normalized = _normalize_raw(raw_data, market)
+    if market == "CN_OTC" and data_source == "tushare":
+        # 上游 fund_nav 无涨跌幅字段，只能就地推导；akshare 场外与港互认走上游透传，
+        # 口径与限制见 _derive_otc_pct_change（#692）。
+        _derive_otc_pct_change(db, product_code, market, normalized)
     synced_count = _bulk_upsert_prices(db, product_code, market, normalized, data_source)
 
     product.data_source_status = "success"
@@ -423,26 +429,142 @@ def _mark_skipped(db: Session, product: Product, reason: str):
 
 
 def _normalize_raw(raw_data: List[dict], market: str) -> List[dict]:
-    """统一适配：tushare/akshare 返回 -> {trade_date(YYYYMMDD), unit_price, accumulated_nav, pre_close, pct_change}"""
+    """统一适配 tushare/akshare 返回 → upsert 行（按 trade_date 去重，后到者覆盖）。
+
+    两个分支的键集不同，这是上游能力差异而非遗漏（#692 更正此前声称「五键统一」的失真
+    docstring）：
+    - CN_EXCHANGE：`{trade_date, unit_price, pre_close, pct_change}`——场内是行情源，
+      给收盘价与前收、不给累计净值；
+    - 其余（CN_OTC / HK_MUTUAL）：`{trade_date, unit_price, accumulated_nav, pct_change}`
+      ——净值源给单位/累计净值与日涨跌、不给前收。
+
+    `pct_change` 是**百分数**（1.2195 即 1.2195%），在产生点经 `quantize_nav` 收口到
+    4 位 HALF_UP（#692）。缺值、坏值（含 NaN）与 `0.0` 必须区分：0.0 是平盘这一天的
+    真实涨跌，折成 None 会让前端读成「无数据」；反之缺值不得伪造成 0.0。同分支的单位
+    净值/累计净值同样改判 `is not None`——本函数只做保真映射，不在这里用 `or` 链把
+    `0.0` 与缺值混成一件事；「`0.0` 不是合法净值」由取数层与写入判据各自处置
+    （tushare 场外的 `get_fund_nav` 折成缺值，`_bulk_upsert_prices` 的 #580 判据只看
+    可用性、不看正负），详见 `test_zero_accumulated_nav_is_not_folded_into_missing`。
+    """
     seen: dict[str, dict] = {}
     for r in raw_data:
         td = r.get("trade_date")
         if not td:
             continue
         if market == "CN_EXCHANGE":
+            pct = r.get("pct_chg")
+            if pct is None:
+                pct = r.get("pct_change")
             seen[td] = {
                 "trade_date": td,
                 "unit_price": r.get("close"),
                 "pre_close": r.get("pre_close"),
-                "pct_change": r.get("pct_chg") or r.get("pct_change"),
+                "pct_change": _optional_pct(pct),
             }
         else:
+            unit = r.get("unit_nav")
+            if unit is None:
+                unit = r.get("unit_price")
+            accum = r.get("accum_nav")
+            if accum is None:
+                accum = r.get("accumulated_nav")
             seen[td] = {
                 "trade_date": td,
-                "unit_price": r.get("unit_nav") or r.get("unit_price"),
-                "accumulated_nav": r.get("accum_nav") or r.get("accumulated_nav"),
+                "unit_price": unit,
+                "accumulated_nav": accum,
+                "pct_change": _optional_pct(r.get("pct_change")),
             }
     return list(seen.values())
+
+
+def _optional_pct(value: Any) -> Optional[Decimal]:
+    """日涨跌原值 → 4 位百分数 Decimal；缺值/坏值（None、空串、NaN、Inf、非数字）→ None。
+
+    坏值判据复用 `_usable_price`（#580）：与单价是同一族上游缺值形态，刻意不另立一套。
+    不经这道过滤直接 `quantize_nav` 的话，pandas 的 NaN 会让 `Decimal.quantize` 抛
+    InvalidOperation，把一次同步整体打成 failed。
+    """
+    if not _usable_price(value):
+        return None
+    return quantize_nav(value)
+
+
+def _db_prev_accum_nav(
+    db: Session,
+    product_code: str,
+    market: str,
+    before: date,
+) -> Optional[Decimal]:
+    """该产品同市场 `price_date` 更早的最近一条 accumulated_nav 非空行（#692）。
+
+    刻意不引交易日历倒推「上一交易日」：停牌、缺行、净值尚未发布都会让上一交易日无
+    记录，此时基准应是**实际存在的上一条**，而不是一个查不到行的日期。与迁移 0020 的
+    `LAG(accumulated_nav) OVER (… ORDER BY price_date)`（跑在非空子集上）同口径。
+    由 `uix_price_record (product_code, market, price_date)` 前缀支撑，每产品每次同步
+    最多一次查询。
+    """
+    row = (
+        db.query(PriceRecord.accumulated_nav)
+        .filter(
+            PriceRecord.product_code == product_code,
+            PriceRecord.market == market,
+            PriceRecord.price_date < before,
+            PriceRecord.accumulated_nav.is_not(None),
+        )
+        .order_by(PriceRecord.price_date.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
+def _derive_otc_pct_change(
+    db: Session,
+    product_code: str,
+    market: str,
+    rows: List[dict],
+) -> None:
+    """就地补 tushare 场外行的 `pct_change`（#692）。上游 `fund_nav` 无涨跌幅字段。
+
+    **成文口径**：`日涨跌 = (accum_nav_d / accum_nav_prev − 1) × 100`，百分数，
+    `quantize_nav` 收口（4 位 HALF_UP）。基准 prev = 该产品同市场更早的最近一条
+    accumulated_nav 非空行；批内首行的基准取自 DB（`_db_prev_accum_nav`），增量窗首行
+    因此接得上存量历史，跨批不留缺口。
+
+    用累计净值而非单位净值：现金分红除息日 unit_nav 直接下调 div_cash，按 unit_nav
+    相邻比值会把分红算成假暴跌，而修正需要产品级 ex_date 表——本仓没有
+    （`task_runner._detect_dividends` 只为有持仓的组合建组合级事件，港互认无任何事件
+    源）。accum_nav 在除息日不跳变（现金分红同步计入累计分红），推导值连续，且与同页
+    「区间收益率」（`_nav_interval_return`，同为 accum 比值）同源，两列可互相印证。
+
+    已知限制（成文，不做自动检测）：
+    - **份额折算日**基金公司按比例同时缩放 unit_nav 与 accum_nav，当日推导值失真一天，
+      次日以新基准自动恢复（一次性、不累积）。事后修正路径 = 人工把受影响行 pct_change
+      置 NULL 后重跑迁移 0020（幂等只补 NULL），或等上游勘误后 sync-history 覆盖。
+    - 港互认与 akshare 场外走上游字段透传，语义是**单位净值**日涨跌（除息日含跳水），
+      与此处的总收益口径在除息日存在一次性口径差。
+
+    无基准（产品首条记录）、基准非正、accum 缺失或坏值时保持 None，**不伪造 0.00%**：
+    首行无基准与平盘是两件事。
+    """
+    if not rows:
+        return
+    # tushare 不保证返回顺序（实测多为降序），链式推导前先按日期升序排。
+    ordered = sorted(rows, key=lambda r: r["trade_date"])
+    first = ordered[0]["trade_date"]
+    prev = _db_prev_accum_nav(
+        db, product_code, market,
+        date(int(first[:4]), int(first[4:6]), int(first[6:8])),
+    )
+    for r in ordered:
+        accum = r.get("accumulated_nav")
+        if not _usable_price(accum):
+            # 缺失/坏值行既算不出涨跌，也不作后续基准（与迁移的 LAG 非空子集同口径）
+            continue
+        if prev is not None and prev > 0:
+            r["pct_change"] = quantize_nav(
+                (Decimal(str(accum)) / Decimal(str(prev)) - 1) * 100
+            )
+        prev = Decimal(str(accum))
 
 
 def _bulk_upsert_prices(

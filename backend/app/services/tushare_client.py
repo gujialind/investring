@@ -188,11 +188,13 @@ def get_fund_daily(
 
     result = []
     for _, row in df.iterrows():
+        # `is not None` 而非 truthiness（#692，与下方 get_fund_div 的 div_cash 同写法）：
+        # 平盘日 pct_chg 恰为 0.0，被 truthiness 折成 None 后前端读成「无数据」而非 0%。
         result.append({
             "trade_date": str(row["trade_date"]),
-            "close": float(row["close"]) if row.get("close") else None,
-            "pre_close": float(row["pre_close"]) if row.get("pre_close") else None,
-            "pct_chg": float(row["pct_chg"]) if row.get("pct_chg") else None,
+            "close": float(row["close"]) if row.get("close") is not None else None,
+            "pre_close": float(row["pre_close"]) if row.get("pre_close") is not None else None,
+            "pct_chg": float(row["pct_chg"]) if row.get("pct_chg") is not None else None,
         })
 
     return result

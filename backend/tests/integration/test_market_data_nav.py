@@ -15,15 +15,15 @@ _CODE = "510300.SH"
 _MARKET = "CN_EXCHANGE"
 
 
-def _seed_nav(test_db, rows):
+def _seed_nav(test_db, rows, *, code=_CODE, market=_MARKET, source="test"):
     """rows: (date, unit_price, accumulated_nav, pct_change) 元组列表；可空用 None。"""
     for d, unit, acc, pct in rows:
         test_db.add(PriceRecord(
-            product_code=_CODE, market=_MARKET, price_date=d,
+            product_code=code, market=market, price_date=d,
             unit_price=Decimal(str(unit)),
             accumulated_nav=Decimal(str(acc)) if acc is not None else None,
             pct_change=Decimal(str(pct)) if pct is not None else None,
-            source="test",
+            source=source,
         ))
     test_db.commit()
 
@@ -86,7 +86,8 @@ class TestNavHistoryPage:
         assert body["items"][0]["price_date"] == "2025-07-01"
 
     def test_nullable_fields_pass_through(self, client, viewer_headers, test_db):
-        # 首条记录累计净值/日涨跌为空（场内行情源形态）
+        # 首条记录累计净值/日涨跌为空。两列的可空原因不同（#692 更正归因）：累计净值
+        # 是场内行情源压根不给；日涨跌是这条行本身无基准/上游未提供，与是不是场内无关。
         _seed_nav(test_db, [
             (date(2025, 6, 3), "4.2000", None, None),
             (date(2025, 6, 4), "4.2100", "4.2100", "0.2381"),
@@ -127,6 +128,67 @@ class TestNavHistoryPage:
         )
         assert resp.status_code == 200
         assert resp.json() == {"items": [], "total": 0, "page": 1, "page_size": 5}
+
+
+class TestNavHistoryPctByMarket:
+    """#692：日涨跌的可空性按市场分别成立，且分页翻页后仍有值。
+
+    修复前场外与港互认的 `pct_change` 恒为 NULL（写侧从未写入），历史页该列全是 `--`；
+    这里按三种上游形态各钉一条，防止「只在第一页有值」或「某一市场又退回全空」。
+    """
+
+    @staticmethod
+    def _page(client, viewer_headers, code, market, page):
+        resp = client.get(
+            f"/api/market-data/products/{code}/{market}/nav-history",
+            params={"page": page, "page_size": 3},
+            headers=viewer_headers,
+        )
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_cn_otc_tushare_rows_carry_derived_pct(self, client, viewer_headers, test_db):
+        """tushare 场外：accum 连续、日涨跌由写侧推导，首条无基准为 None。"""
+        rows = [
+            (date(2026, 9, 14), "1.5000", "1.5000", None),
+            (date(2026, 9, 15), "1.5300", "1.5300", "2.0000"),
+            (date(2026, 9, 16), "1.5147", "1.5147", "-1.0000"),
+            (date(2026, 9, 17), "1.5200", "1.5200", "0.3516"),
+        ]
+        _seed_nav(test_db, rows, code="000300.OF", market="CN_OTC", source="tushare")
+
+        first = self._page(client, viewer_headers, "000300.OF", "CN_OTC", 1)
+        assert first["total"] == 4
+        assert [item["pct_change"] for item in first["items"]] == [0.3516, -1.0, 2.0]
+        # 翻到第二页仍有值：分页不是「只有首页被回填」的遮羞布
+        second = self._page(client, viewer_headers, "000300.OF", "CN_OTC", 2)
+        assert second["items"][0]["price_date"] == "2026-09-14"
+        assert second["items"][0]["pct_change"] is None  # 首条无基准，不是丢值
+
+    def test_cn_otc_flat_day_reads_zero_not_null(self, client, viewer_headers, test_db):
+        """平盘日必须读成 0.0：折成 None 前端会显示 `--`，与「无数据」无法区分。"""
+        _seed_nav(test_db, [
+            (date(2026, 9, 15), "1.5000", "1.5000", None),
+            (date(2026, 9, 16), "1.5000", "1.5000", "0.0000"),
+        ], code="000300.OF", market="CN_OTC", source="tushare")
+
+        body = self._page(client, viewer_headers, "000300.OF", "CN_OTC", 1)
+        assert body["items"][0]["pct_change"] == 0.0
+
+    def test_hk_mutual_rows_carry_upstream_pct_without_accum(
+        self, client, viewer_headers, test_db
+    ):
+        """港互认：日涨跌来自上游 NAVCHGRT，累计净值上游不给、恒为 None。"""
+        _seed_nav(test_db, [
+            (date(2026, 9, 14), "10.5700", None, None),
+            (date(2026, 9, 15), "10.5400", None, "-0.4762"),
+        ], code="1001767344", market="HK_MUTUAL", source="akshare")
+
+        body = self._page(client, viewer_headers, "1001767344", "HK_MUTUAL", 1)
+        by_date = {item["price_date"]: item for item in body["items"]}
+        assert by_date["2026-09-15"]["pct_change"] == -0.4762
+        assert by_date["2026-09-14"]["pct_change"] is None
+        assert all(item["accumulated_nav"] is None for item in body["items"])
 
 
 class TestNavAnalysis:

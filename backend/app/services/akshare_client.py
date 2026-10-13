@@ -36,6 +36,12 @@ _HK_SKIPPED_SAMPLE_CAP = 10
 _DASHED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COMPACT_DATE_RE = re.compile(r"^\d{8}$")
 
+# 东财场外「单位净值走势」的日涨跌列（akshare 已 to_numeric，百分数形态）。#692：
+# 缺列只降级成 WARNING，不参与「是否净值行」判据，理由见 _screen_nav_rows。
+_OTC_PCT_COLUMN = "日增长率"
+# 东财港互认响应里的日涨跌率键（百分数形态，如 -0.4762 = -0.4762%）。
+_HK_PCT_KEY = "NAVCHGRT"
+
 
 class AkshareAPIError(Exception):
     """AkShare API 调用错误"""
@@ -110,13 +116,20 @@ def _screen_nav_rows(
     *,
     start_date: Optional[str],
     end_date: Optional[str],
-) -> Tuple[List[Tuple[str, float]], List[str]]:
-    """把 (日期原值, 价格原值) 序列筛成 (YYYYMMDD, price)，并回报无法解析的样本。
+    extras: Optional[List[Any]] = None,
+) -> Tuple[List[Tuple[str, float, Optional[float]]], List[str]]:
+    """把 (日期原值, 价格原值) 序列筛成 (YYYYMMDD, price, extra)，并回报无法解析的样本。
 
     日期先于区间判定：坏日期无法比较区间，把它记成 malformed 而不是默默丢掉，
     「上游给了行却零可解析」这条判据才有输入。落在区间外是正常剔除，不算 malformed。
+
+    `extras`（#692）是与 `pairs` 等长的第三列原值（场外「日增长率」/ 港互认
+    `NAVCHGRT`），按 `_finite_number` 归一成 float 或 None，缺省整列为 None。它
+    **刻意不计入 malformed**：「这一行是不是净值行」的判据仍只看日期 + 价格。日涨跌
+    是纯展示列，把它的坏值算进去等于让 #651 的响亮判据由展示列驱动——一列漂移就会
+    打死整段可用历史。
     """
-    usable: List[Tuple[str, float]] = []
+    usable: List[Tuple[str, float, Optional[float]]] = []
     malformed: List[str] = []
     for index, (raw_date, raw_price) in enumerate(pairs):
         td = _compact_date(raw_date)
@@ -131,12 +144,13 @@ def _screen_nav_rows(
             continue
         if end_date and td > end_date:
             continue
-        usable.append((td, price))
+        extra = _finite_number(extras[index]) if extras is not None else None
+        usable.append((td, price, extra))
     return usable, malformed
 
 
 def _finalize_nav_rows(
-    usable: List[Tuple[str, float]],
+    usable: List[Tuple[str, float, Optional[float]]],
     malformed: List[str],
     *,
     upstream_rows: int,
@@ -213,7 +227,11 @@ def get_fund_nav_otc(
     场外基金净值（CN_OTC）。
     symbol: 基金代码（如 '000051' 或 '000051.OF'，取 . 前部分）
     start_date/end_date: YYYYMMDD 格式
-    返回: [{trade_date: 'YYYYMMDD', unit_nav, accum_nav}]
+    返回: [{trade_date: 'YYYYMMDD', unit_nav, accum_nav, pct_change}]
+
+    `pct_change` 是上游「日增长率」原值（百分数，1.2195 即 1.2195%，#692）：语义为
+    单位净值日涨跌、除息日含跳水，与天天基金展示一致。上游缺该列或该行坏值时为 None
+    ——`accum_nav` 同样恒为 None（东财这条接口不给累计净值）。
     """
     try:
         import akshare as ak
@@ -227,12 +245,30 @@ def get_fund_nav_otc(
         # akshare 在此按位置重命名 4 列，与港互认同族；但它重命名前已引用 temp_df["x"]，
         # 键被改名会先抛 KeyError（响亮）。位置错位若只调换尾部列，本路径不受影响。
         pairs = [(row["净值日期"], row["单位净值"]) for _, row in df.iterrows()]
+        # 用 .get 而不是 row["日增长率"]：缺列时的 KeyError 会被 `_retry` 当成瞬时故障
+        # 重试三次，再抛 AkshareAPIError——一个展示列的漂移就把整段可用历史打死。
+        extras = [row.get(_OTC_PCT_COLUMN) for _, row in df.iterrows()]
         usable, malformed = _screen_nav_rows(
-            pairs, start_date=start_date, end_date=end_date
+            pairs, start_date=start_date, end_date=end_date, extras=extras,
         )
-        return usable, malformed, len(pairs)
+        return usable, malformed, len(pairs), _OTC_PCT_COLUMN in df.columns
 
-    usable, malformed, upstream_rows = _retry(_fetch, "获取场外基金净值失败")
+    usable, malformed, upstream_rows, has_pct_column = _retry(_fetch, "获取场外基金净值失败")
+    if upstream_rows and not has_pct_column:
+        # 早于 _finalize_nav_rows：整段解析失败时，列漂移正是最可能的成因，不能因为
+        # 随后抛错就把这条线索吞掉。
+        logger.warning(
+            "东财场外净值响应缺少「%s」列，本批日涨跌全为空（#692）",
+            _OTC_PCT_COLUMN,
+            extra={
+                "operation": "fetch_fund_nav_otc",
+                "product_code": code,
+                "market": "CN_OTC",
+                "upstream_rows": upstream_rows,
+                "missing_column": _OTC_PCT_COLUMN,
+                "column_drift": True,
+            },
+        )
     _finalize_nav_rows(
         usable, malformed,
         upstream_rows=upstream_rows, product_code=code, market="CN_OTC",
@@ -240,8 +276,8 @@ def get_fund_nav_otc(
         unwindowed_empty_is_error=start_date is None,
     )
     return [
-        {"trade_date": td, "unit_nav": price, "accum_nav": None}
-        for td, price in usable
+        {"trade_date": td, "unit_nav": price, "accum_nav": None, "pct_change": pct}
+        for td, price, pct in usable
     ]
 
 
@@ -446,12 +482,16 @@ def get_fund_hk_mutual(
     香港互认基金净值（HK_MUTUAL）。
     code: 库内 product.code，即 10 位香港基金代码；6 位内地销售代码经排名表映射
     start_date/end_date: YYYYMMDD 格式
-    返回: [{trade_date: 'YYYYMMDD', unit_price, accumulated_nav}]
+    返回: [{trade_date: 'YYYYMMDD', unit_price, accumulated_nav, pct_change}]
 
     直连东财海外接口并按 `PDATE`/`NAV` **键名**取数，不再用 akshare 的
     `fund_hk_fund_hist_em`：它把上游 JSON 按固定位置重命名成中文列，2026-09 键序
     一变即把日期列错位成币种串（#651）。原键名在 akshare 里已被整体替换 columns
     标签销毁，事后无法从 DataFrame 找回，故只能自带请求。
+
+    `pct_change` 取上游 `NAVCHGRT`（#692），已是百分数（-0.4762 即 -0.4762%），
+    原值透传、不做推导：语义为单位净值日涨跌、除息日含跳水，与上游展示一致。同族的
+    `NAVCHG`（涨跌额）不消费——API 不暴露 `pre_close`，无消费方。
     """
     hk10 = _resolve_hk10(code)
     # 入参校验也留在 _retry 之外：格式不对是调用方契约错误，重试三次只会白打上游。
@@ -464,8 +504,9 @@ def get_fund_hk_mutual(
         "获取香港互认基金净值失败",
     )
     pairs = [(row.get("PDATE"), row.get("NAV")) for row in rows]
+    extras = [row.get(_HK_PCT_KEY) for row in rows]
     usable, malformed = _screen_nav_rows(
-        pairs, start_date=start_date, end_date=end_date
+        pairs, start_date=start_date, end_date=end_date, extras=extras,
     )
     _finalize_nav_rows(
         usable, malformed,
@@ -476,6 +517,6 @@ def get_fund_hk_mutual(
     # accumulated_nav 恒为 None：上游 ACCNAV 实测为空串，且改这里会连带改变 #595
     # 净值曲线的取数形态，属另一决策（见 #651 follow-up）。
     return [
-        {"trade_date": td, "unit_price": price, "accumulated_nav": None}
-        for td, price in usable
+        {"trade_date": td, "unit_price": price, "accumulated_nav": None, "pct_change": pct}
+        for td, price, pct in usable
     ]
