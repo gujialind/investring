@@ -68,6 +68,11 @@ export interface PortfolioInvestorItem {
   profit_percent: number | null;
   /** shares / 当日市值快照 total_shares；无当日市值快照行时 null */
   ratio: number | null;
+  /** 累计收益（#694 方案 A：D 日市值 + Σconfirmed 赎回 − Σconfirmed 申购）；
+   * 缺省路径无市值快照时 null；与 profit「持仓收益」口径不同，界面带 * 注记 */
+  cumulative_profit: number | null;
+  /** 清仓行标记：当日无持仓行、份额/市值计 0、保留累计收益 */
+  is_liquidated: boolean;
 }
 
 // GET /portfolios/{code}/nav-history 返回项

@@ -5,18 +5,23 @@ import { E2E_ACTIVE, authHeaders, gotoPortfolioDetail, toISODate } from './helpe
  * #693 组合投资人列表（?tab=investors）：表格化暴露 investor_holding 已落库的
  * 派生列（市值/总成本/成本价/持仓收益/收益率/冻结份额）+ 占比经最大余数法。
  *
- * 数据说明：不用共享种子——E2E_ACTIVE 仅 ADMIN 一个投资人（无多占比形态），
- * 且禁止对共享种子推进快照。经 API 自建隔离组合 E693INV_*：纯现金（不买入
+ * 数据说明：不用共享种子——E2E_ACTIVE 仅 ADMIN 一个投资人（无多占比/清仓形态），
+ * 且禁止对共享种子推进快照。经 API 自建隔离组合 E693INV*：纯现金（不买入
  * 产品，首窗计价 1.0000 无需行情，unit_price 恒 1.0），三投资人
  * （ADMIN 10 万 / VIEWER 6 万 / 自建 4 万）apply=d1 → confirm（confirm_date
  * 恒 T+1 = d2）→ d2 快照。期望形态：ratio 0.5/0.3/0.2 → 占比 50.0/30.0/20.0，
  * profit 全 0（纯现金无净值波动，「真 0」显示 ¥0.00 而非 --）。
+ * withRedeems（#694）：d3 造 VIEWER 全额赎回 + 第三人部分赎回（apply=d3、
+ * confirm_date=d4）→ d3 快照 → confirm → d4 快照；终态 = 2 持仓行 + 1 清仓行，
+ * 纯现金口径下三者累计收益均 0（真 0 显示 ¥0.00）。
  * 数值精算断言留给后端集成测试（test_portfolios.py），本 spec 钉结构与展示口径。
  * code 区分 tag/project/retry（组合无 DELETE 端点、投资人表全局唯一，同 spec
  * 内每个自建用例须各自 code；残留由每轮重建的 E2E 库吸收）。
  */
 
-async function setupInvestorsPortfolio(page: Page, testInfo: TestInfo, tag: string): Promise<string> {
+async function setupInvestorsPortfolio(
+  page: Page, testInfo: TestInfo, tag: string, withRedeems = false,
+): Promise<string> {
   const code = `E693INV${tag}_${testInfo.project.name}_${testInfo.retry}`;
   const third = `E693I3${tag}_${testInfo.project.name}_${testInfo.retry}`;
   await gotoPortfolioDetail(page, E2E_ACTIVE);
@@ -40,7 +45,9 @@ async function setupInvestorsPortfolio(page: Page, testInfo: TestInfo, tag: stri
     .sort();
   const uptoToday = days.filter((d) => d <= today);
   expect(uptoToday.length, '种子日历须覆盖今天之前的至少两个交易日').toBeGreaterThanOrEqual(2);
-  const [apply, target] = uptoToday.slice(-2);
+  const [d1, d2, d3, d4] = withRedeems
+    ? uptoToday.slice(-4)
+    : [...uptoToday.slice(-2), '', ''];
 
   const post = async <T = unknown>(path: string, data?: unknown): Promise<T> => {
     const resp = await page.request.post(path, { headers, data });
@@ -63,12 +70,37 @@ async function setupInvestorsPortfolio(page: Page, testInfo: TestInfo, tag: stri
       platform_code: 'HBZQ',
       sub_type: 'subscribe',
       amount,
-      apply_date: apply,
+      apply_date: d1,
     });
     await post(`/api/subscriptions/${sub.id}/confirm`);
   }
   // 首快照日 == 最早 confirm_date（#180）
-  await post('/api/snapshots/generate', { portfolio_code: code, target_date: target });
+  await post('/api/snapshots/generate', { portfolio_code: code, target_date: d2 });
+
+  if (withRedeems) {
+    // #694：d3 录入赎回（confirm_date = d4，创建期闸门要求晚于最新快照 d2）→
+    // d3 快照（赎回仍 pending，仅冻结份额）→ confirm → d4 快照（VIEWER 清仓无行）
+    const redeemFull = await post<{ id: number }>('/api/subscriptions', {
+      portfolio_code: code,
+      investor_code: 'VIEWER',
+      platform_code: 'HBZQ',
+      sub_type: 'redeem',
+      shares: 60000,
+      apply_date: d3,
+    });
+    const redeemPart = await post<{ id: number }>('/api/subscriptions', {
+      portfolio_code: code,
+      investor_code: third,
+      platform_code: 'HBZQ',
+      sub_type: 'redeem',
+      shares: 10000,
+      apply_date: d3,
+    });
+    await post('/api/snapshots/generate', { portfolio_code: code, target_date: d3 });
+    await post(`/api/subscriptions/${redeemFull.id}/confirm`);
+    await post(`/api/subscriptions/${redeemPart.id}/confirm`);
+    await post('/api/snapshots/generate', { portfolio_code: code, target_date: d4 });
+  }
   return code;
 }
 
@@ -132,5 +164,44 @@ test.describe('#693 组合投资人列表（?tab=investors）', () => {
     await expect(page.getByTestId('investor-ratio')).toHaveText('--');
     await expect(table).toContainText('--');
     await expect(table).not.toContainText('¥0.00');
+  });
+
+  test('#694 清仓行合并：2 持仓 + 1 清仓（Badge 与 testid）、占比加总含 0.0% 仍 100.0', async ({ page }, testInfo) => {
+    const code = await setupInvestorsPortfolio(page, testInfo, 'c', true);
+    await gotoInvestorsTab(page, code);
+
+    await expect(page.getByTestId('investor-row')).toHaveCount(2);
+    const liquidated = page.getByTestId('investor-row-liquidated');
+    await expect(liquidated).toHaveCount(1);
+    await expect(liquidated).toContainText('已清仓');
+
+    // 占比加总含清仓行 0.0% 仍恒 100.0（§4 最大余数法）
+    const ratioTexts = await page.getByTestId('investor-ratio').allInnerTexts();
+    expect(ratioTexts).toHaveLength(3);
+    const sum = ratioTexts.reduce((s, t) => s + Number(t.replace('%', '')), 0);
+    expect(Math.abs(sum - 100.0), `占比加总应恒为 100.0，实际 ${ratioTexts.join(' + ')}`).toBeLessThanOrEqual(0.05);
+  });
+
+  test('#694 累计收益*列与 text-warning 口径注记可见', async ({ page }, testInfo) => {
+    const code = await setupInvestorsPortfolio(page, testInfo, 'd', true);
+    await gotoInvestorsTab(page, code);
+
+    const table = page.getByTestId('portfolio-investors-table');
+    await expect(table.getByRole('columnheader', { name: '累计收益*' })).toBeVisible();
+    const note = page.getByTestId('investor-cumulative-note');
+    await expect(note).toBeVisible();
+    await expect(note).toContainText('与「持仓收益」');
+  });
+
+  test('#694 清仓行累计收益真零显示 ¥0.00（非 --）', async ({ page }, testInfo) => {
+    const code = await setupInvestorsPortfolio(page, testInfo, 'e', true);
+    await gotoInvestorsTab(page, code);
+
+    // 纯现金口径：VIEWER 赎回 6 万 − 申购 6 万 = 0，真零显示 ¥0.00（§12 边界）
+    const liquidated = page.getByTestId('investor-row-liquidated');
+    await expect(liquidated.getByTestId('investor-cumulative')).toHaveText('¥0.00');
+    // 清仓行份额/市值为真 0，派生列（成本价等 NULL）为 --
+    await expect(liquidated).toContainText('0.00 份');
+    await expect(liquidated).toContainText('--');
   });
 });
