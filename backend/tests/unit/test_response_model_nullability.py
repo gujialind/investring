@@ -40,6 +40,7 @@ from pydantic import TypeAdapter, ValidationError
 from app.models.asset_classification import AssetClassification
 from app.models.audit_log import AuditLog
 from app.models.investor import Investor
+from app.models.investor_holding import InvestorHolding
 from app.models.login_log import LoginLog
 from app.models.nav_sync_detail import NavSyncDetail
 from app.models.notification import Notification
@@ -65,6 +66,7 @@ from app.schemas.notification import NotificationResponse
 from app.schemas.platform import PlatformResponse
 from app.schemas.portfolio import (
     NavHistoryRecord,
+    PortfolioInvestorItem,
     PortfolioResponse,
     PortfolioValueSnapshotResponse,
 )
@@ -120,6 +122,11 @@ ORM_SCHEMA_PAIRS: list[tuple[type, type]] = [
     (PortfolioValueSnapshot, NavHistoryRecord),
     (PortfolioValueSnapshot, SnapshotGenerationResult),
     (PortfolioValueSnapshot, SnapshotGenerateNextResult),
+    # #693 纳入：GET /api/portfolios/{code}/investors 由 3 字段扩到 10 个，同名字段
+    # 达 7 个触发收录完整性断言。frozen_shares 可空且仅有 ORM default、
+    # market_value/total_cost/profit/cost_per_share 均 nullable，正是本守门管的
+    # 列形态；实测收录后无违规、EXCEPTIONS 台账不增不减
+    (InvestorHolding, PortfolioInvestorItem),
 ]
 
 # (模型名, 字段名) -> (kind, 理由)。kind 的机制必须能被 MECHANISM_CHECKERS 机器复核。
