@@ -65,6 +65,8 @@ export default function PortfolioInvestorsList({
           <div className="py-8 text-center text-muted-foreground">暂无投资人</div>
         ) : (
           <div className={variant === "mobile" ? "overflow-x-auto" : undefined}>
+            {/* min-w 是移动横滚壳下限（#693 八列形态定）；实际宽度由表格内容自然
+                宽度撑开（#694 九列实测 918），加列后目检见挤压再同步上调 */}
             <Table
               data-testid="portfolio-investors-table"
               className={variant === "mobile" ? "min-w-[900px]" : undefined}
