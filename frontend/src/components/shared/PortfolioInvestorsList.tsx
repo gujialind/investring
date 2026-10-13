@@ -33,6 +33,10 @@ function ratioText(ratio: number | null, percent: number | undefined): string {
   return `${(percent ?? 0).toFixed(1)}%`;
 }
 
+// getNumberCellClass() 未含 #394 给 .number-cell 工具类的 nowrap，窄列下
+// 「100,000.00 份」与 CJK 表头会折行/竖排（#355 同族），故本表显式补 nowrap
+const NUM_CELL = cn(getNumberCellClass(), "whitespace-nowrap");
+
 /**
  * 组合投资人列表（issue #99 抽出双端复用；#693 卡片改表格，暴露
  * investor_holding 已落库的派生列）：供 ?tab=investors 视图（双端）使用。
@@ -67,14 +71,14 @@ export default function PortfolioInvestorsList({
             >
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-muted-foreground">投资人</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>份额</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>占比</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>市值</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>总成本</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>成本价</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>持仓收益</TableHead>
-                  <TableHead className={cn("text-muted-foreground", getNumberCellClass())}>冻结</TableHead>
+                  <TableHead className="whitespace-nowrap text-muted-foreground">投资人</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>份额</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>占比</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>市值</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>总成本</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>成本价</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>持仓收益</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>冻结</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -85,22 +89,22 @@ export default function PortfolioInvestorsList({
                       <TableCell>
                         <NameCodeCell code={investor.investor_code} nameMap={nameMap} />
                       </TableCell>
-                      <TableCell className={getNumberCellClass()}>
+                      <TableCell className={NUM_CELL}>
                         {formatSharesUnit(investor.shares)}
                       </TableCell>
-                      <TableCell className={getNumberCellClass()} data-testid="investor-ratio">
+                      <TableCell className={NUM_CELL} data-testid="investor-ratio">
                         {ratioText(investor.ratio, percents[i])}
                       </TableCell>
-                      <TableCell className={getNumberCellClass()}>
+                      <TableCell className={NUM_CELL}>
                         {formatCurrency(investor.market_value)}
                       </TableCell>
-                      <TableCell className={getNumberCellClass()}>
+                      <TableCell className={NUM_CELL}>
                         {formatCurrency(investor.total_cost)}
                       </TableCell>
-                      <TableCell className={getNumberCellClass()}>
+                      <TableCell className={NUM_CELL}>
                         {formatNav(investor.cost_per_share)}
                       </TableCell>
-                      <TableCell className={getNumberCellClass()}>
+                      <TableCell className={NUM_CELL}>
                         {/* 持仓收益 = market_value − total_cost（当前在手份额浮动盈亏）；
                             主行金额、副行收益率（#693，副行形态同 SnapshotsContent 涨跌列） */}
                         <div>
@@ -112,7 +116,7 @@ export default function PortfolioInvestorsList({
                           <span className={ret.colorClass}>{ret.text}</span>
                         </div>
                       </TableCell>
-                      <TableCell className={getNumberCellClass()}>
+                      <TableCell className={NUM_CELL}>
                         {formatSharesUnit(investor.frozen_shares)}
                       </TableCell>
                     </TableRow>
