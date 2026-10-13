@@ -77,8 +77,19 @@ def save_store(items):
     json.dump(items, open(STORE, "w"))
 
 if argv and argv[0] == "pull":
-    if argv[1] in scenario.get("pull_fail", []):
+    ref = argv[1]
+    if ref in scenario.get("pull_fail", []):
         done(1, "", "pull access denied\n")
+    # 瞬时故障注入：前 N 次失败、之后成功（外部 mirror 502 的形态，#706 复盘）。
+    # 计数落盘而不是内存——脚本每次调用都是新进程，没有持久化就只能测「恒失败」。
+    inject = int(scenario.get("pull_fail_transient", {}).get(ref, 0))
+    if inject:
+        tpath = os.path.join(state_dir, "pull-attempts.json")
+        tried = json.load(open(tpath)) if os.path.exists(tpath) else {}
+        if tried.get(ref, 0) < inject:
+            tried[ref] = tried.get(ref, 0) + 1
+            json.dump(tried, open(tpath, "w"))
+            done(1, "", "502 Bad Gateway from mirror\n")
     store = load_store()
     if argv[1] not in store:
         store.append(argv[1])
@@ -211,7 +222,8 @@ def default_scenario():
     ready = {"rc": 0, "json": status_json()}
     return {"bootstrap": {"status": ready, "status_after_prepare": ready,
                           "check": ready, "check_after_prepare": ready, "prepare": ready},
-            "bootstrap_by_release": {}, "pull_fail": [], "rmi_fail": [],
+            "bootstrap_by_release": {}, "pull_fail": [], "pull_fail_transient": {},
+            "rmi_fail": [],
             "up_fail_ids": [], "restart_fail_ids": [], "wget_fail_ids": []}
 
 
@@ -280,6 +292,9 @@ def server(tmp_path):
         "FAKE_DOCKER_STATE": str(state_dir),
         "FAKE_CURL": str(curl_cfg_path), "FAKE_CURL_LOG": str(curl_log),
         "PROBE_ATTEMPTS": "2", "PROBE_INTERVAL": "0",
+        # 拉取重试的尝试次数写死为 3（不继承开发者机器上可能存在的同名变量），间隔置 0
+        # 让「重试三次」的断言不必等真实退避——退避时长不是被测语义，次数才是。
+        "PULL_ATTEMPTS": "3", "PULL_INTERVAL": "0",
     })
 
     def set_bootstrap(op, payload, *, release=None):
@@ -492,6 +507,39 @@ def test_pull_failure_stops_before_activation(server, make_release):
     assert proc.returncode == 2 and "拉取失败" in proc.stderr
     assert server.current_id() is None
     assert not server.calls_for(rel.id, "up")
+
+
+def pull_refs(server):
+    """按调用顺序列出的拉取引用（重试用例的判据就是**次数**）。"""
+    return [c[1] for c in server.docker_calls() if c and c[0] == "pull"]
+
+
+def test_pull_transient_failure_is_retried(server, make_release):
+    """外部 mirror 的瞬时故障不该把整次部署停在拉取前（#706 那次生产形态）。
+
+    注入「前两次失败、第三次成功」：判别力在 pull 次数与最终结果上——脚本没有重试时
+    这条以 rc=2 判红，而不是恒绿。
+    """
+    rel = make_release()
+    server.set_scenario_field("pull_fail_transient", {NGINX_REF: 2})
+    proc = deploy(server, rel)
+    assert proc.returncode == 0, proc.stderr
+    assert pull_refs(server) == [BACKEND_REF, FRONTEND_REF, NGINX_REF, NGINX_REF, NGINX_REF]
+    assert NGINX_REF in server.images()
+    assert server.current_id() == rel.id and server.kinds() == ["auto"]
+
+
+def test_pull_retry_is_bounded_and_keeps_exit_2(server, make_release):
+    """重试有上界，耗尽后判定不变，且把最后一次失败原文留给核对的人。"""
+    rel = make_release()
+    server.set_scenario_field("pull_fail", [BACKEND_REF])
+    proc = deploy(server, rel)
+    assert proc.returncode == 2 and "拉取失败" in proc.stderr
+    assert pull_refs(server) == [BACKEND_REF] * 3, "重试次数不是 PULL_ATTEMPTS，或退避后仍在拉其它镜像"
+    assert "已尝试 3 次" in proc.stderr
+    assert "pull access denied" in proc.stderr             # 失败原因可见，不被重试吞掉
+    assert server.current_id() is None and not server.calls_for(rel.id, "up")
+    assert not server.accepted()                           # 停在拉取前 ⇒ 零记录、零激活
 
 
 # ------------------------------------------------------------------ DB 兼容判据

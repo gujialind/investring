@@ -46,6 +46,8 @@ PROJECT=investring
 KEEP_RELEASES=5
 PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-60}"
 PROBE_INTERVAL="${PROBE_INTERVAL:-2}"
+PULL_ATTEMPTS="${PULL_ATTEMPTS:-3}"
+PULL_INTERVAL="${PULL_INTERVAL:-5}"
 RELEASE_ID_RE='^[0-9a-f]{7}-[0-9]+\.[0-9]+$'
 FP_RE='^[0-9a-f]{64}$'
 
@@ -205,11 +207,27 @@ image_refs_of() { # 发布目录的三个 digest 引用，每行一个（缺失�
 }
 
 pull_images() {
-    local dir="$1" key ref
+    local dir="$1" key ref out attempt
     for key in "${IMAGE_REF_KEYS[@]}"; do
         ref="$(image_ref_of "$dir" "$key")"
         [ -n "$ref" ] || die 2 "images.env 缺少 $key"
-        docker pull "$ref" >/dev/null || die 2 "镜像拉取失败: $ref（未改动任何运行状态）"
+        # 按 digest 拉取是内容寻址且幂等，重试只吸收外部 registry mirror 的瞬时故障：
+        # #706 那次部署里 mirror 对 OCI referrers 接口返回 502，snapshotter 随之报
+        # unexpected media type，而同一 digest 事后重试第一次就成功。全部尝试失败仍按
+        # exit 2 停在拉取前，不改判定、并把最后一次失败原文留在 stderr 供核对。
+        attempt=1
+        while :; do
+            if out="$(docker pull "$ref" 2>&1)"; then
+                break
+            fi
+            if [ "$attempt" -ge "$PULL_ATTEMPTS" ]; then
+                printf '%s\n' "$out" >&2
+                die 2 "镜像拉取失败: $ref（已尝试 $attempt 次，未改动任何运行状态）"
+            fi
+            warn "镜像拉取失败，第 $((attempt + 1))/$PULL_ATTEMPTS 次尝试: $ref"
+            attempt=$((attempt + 1))
+            sleep "$PULL_INTERVAL"
+        done
     done
 }
 
