@@ -101,6 +101,13 @@ def _finite_number(raw: Any) -> Optional[float]:
     与写入侧 `market_data_service._usable_price`（#580）判的是同一族坏值，但这里
     还兼作「这一行是否真的是净值」的分类输入，故刻意各留一处：把 DB 层 service
     引进叶子数据源模块会反转分层（且依赖对方恰好函数体内 import）。两处改动需同步。
+
+    **本层不判正负**，且不能判：同一个 helper 既喂价格也喂 `extras`（场外「日增长率」
+    / 港互认 `NAVCHGRT`，见 `_screen_nav_rows`），平盘的 `0.0` 必须原样留下。净值列
+    「必须为正」的判据在写入侧 `market_data_service._usable_nav`（#701），它只覆盖
+    `unit_price` 与 `accumulated_nav`，不覆盖日涨跌——所以三层各判各的：本层判「是不是
+    一个有限数」，`_usable_price` 判「上游给没给值」，`_usable_nav` 在此之上再判「像不像
+    净值」。放宽其中任一侧都要同时复核另两侧。
     """
     if raw is None or raw == "":
         return None
