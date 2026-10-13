@@ -34,13 +34,21 @@ Create Date: 2026-10-13
 UPDATE 报 errno 1264 并拖垮部署（一个展示列不值得阻断发布）；被跳过的行保持 NULL，由
 issue #692 的部署后抽查 SQL 暴露。
 
-`source IS NULL` 的存量场外行两条分支都不命中，刻意保持 NULL：`source <> 'tushare'`
-在 SQL 三值逻辑下对 NULL 为假，而无从判断该行来自哪个源，也就无从选基准列——按
-unit_price 兜底会给 tushare 源的行套上除息日假暴跌。这类行由重同步（写侧已修）补齐。
+`source IS NULL` 的存量**场外（CN_OTC）**行两条分支都不命中，刻意保持 NULL：
+`source <> 'tushare'` 在 SQL 三值逻辑下对 NULL 为假，而无从判断该行来自哪个源，也就
+无从选基准列——按 unit_price 兜底会给 tushare 源的行套上除息日假暴跌。这类行由重同步
+（写侧已修）补齐。HK_MUTUAL 不受此限：分支 2 的谓词不引用 `source`，NULL-source 的港
+互认行照常按 unit_price 回填——该市场只有 akshare 一个上游，不存在选错基准列的问题。
 
-舍入口径：MySQL 的 `ROUND(DECIMAL, 4)` 是 half-away-from-zero，与写侧 `quantize_nav`
-的 HALF_UP 同口径，生产落值与写侧推导逐位一致。SQLite 的 `ROUND` 走二进制 float，末位
-可能与 HALF_UP 差一个单位——只影响本地/CI 的展示列，故迁移测试避开半数边界值。
+舍入口径：MySQL 的 `ROUND(DECIMAL, 4)` 是 half-away-from-zero（实测 8.4），与写侧
+`quantize_nav` 的 HALF_UP 同模式。两侧落值一致是**实测性质、不是 MySQL 的文档保证**：
+`×100` 结果的声明标度只有 8 位小数，但服务端在随后的 `ROUND` 里保留了高于该标度的内部
+精度，故与写侧「按 Decimal 上下文 28 位有效数字算完再收口」逐位相同——本地 docker
+`mysql:8.4` 上 20 万组随机 4 位净值对 0 例分叉，4 位输入能构造出的最贴边界穿越对
+（`4.9287 → 4.9465`，真值距 4 位半数边界 1.014e-9）两侧同为 `0.3611`。改中间量标度或
+`div_precision_increment` 后须重新实测，不得拿这句话当逐位对账的凭据。SQLite 的 `ROUND`
+走二进制 float，末位可能与 HALF_UP 差一个单位——只影响本地/CI 的展示列，故迁移测试避开
+半数边界值。
 
 自包含：不 import app 代码（#128 教训，同 0007 头注释惯例）。
 """

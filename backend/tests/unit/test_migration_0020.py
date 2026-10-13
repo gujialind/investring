@@ -61,6 +61,7 @@ OTC_AKSHARE = "021551.OF"      # 场外，非 tushare：unit_price 基准
 HK = "968000"                  # 港互认：unit_price 基准
 OTC_TUSHARE_EDGE = "021553.OF"  # 场外，tushare：仅供 MySQL 半数边界用例造行
 OTC_NO_SOURCE = "021554.OF"    # 场外，source 为 NULL：两条分支都不该认领
+HK_NO_SOURCE = "968001"        # 港互认，source 为 NULL：分支 2 不引用 source，仍应回填
 EXCHANGE = "510301.SH"         # 场内：两条分支都不该碰
 
 PRODUCTS = (
@@ -70,6 +71,7 @@ PRODUCTS = (
     (OTC_NO_SOURCE, "CN_OTC", None),
     (OTC_AKSHARE, "CN_OTC", "akshare"),
     (HK, "HK_MUTUAL", "akshare"),
+    (HK_NO_SOURCE, "HK_MUTUAL", None),
     (EXCHANGE, "CN_EXCHANGE", "tushare"),
 )
 
@@ -100,6 +102,9 @@ ROWS = (
     # --- 港互认：单位净值基准，含下跌日 ---
     (HK, "HK_MUTUAL", date(2026, 9, 29), 10.5700, None, "akshare", None),
     (HK, "HK_MUTUAL", date(2026, 9, 30), 10.5600, None, "akshare", None),
+    # --- source 为 NULL 的港互认行：分支 2 谓词不引用 source，仍按 unit_price 回填 ---
+    (HK_NO_SOURCE, "HK_MUTUAL", date(2026, 9, 29), 10.0000, None, None, None),
+    (HK_NO_SOURCE, "HK_MUTUAL", date(2026, 9, 30), 10.0200, None, None, None),
     # --- 场内：分支谓词都不命中，一行都不能动 ---
     (EXCHANGE, "CN_EXCHANGE", date(2026, 9, 29), 4.0000, None, "tushare", None),
     (EXCHANGE, "CN_EXCHANGE", date(2026, 9, 30), 4.0400, None, "tushare", None),
@@ -123,6 +128,8 @@ EXPECTED = {
     (OTC_NO_SOURCE, date(2026, 9, 30)): None,      # source NULL：不认领
     (HK, date(2026, 9, 29)): None,                 # 首行无基准
     (HK, date(2026, 9, 30)): -0.0946,              # 10.5600/10.5700-1
+    (HK_NO_SOURCE, date(2026, 9, 29)): None,       # 首行无基准（source NULL 不影响认领）
+    (HK_NO_SOURCE, date(2026, 9, 30)): 0.2,        # 10.0200/10.0000-1
     (EXCHANGE, date(2026, 9, 29)): None,
     (EXCHANGE, date(2026, 9, 30)): None,
 }
@@ -259,8 +266,11 @@ class TestBranchPredicates:
         assert rows, "种子行缺失，本用例失去判据"
         for code, market, source, accum_null, in_otc, in_upstream in rows:
             hits = in_otc + in_upstream
-            if market == "CN_EXCHANGE" or source is None:
-                # 场内走上游透传；source 缺失则无从选基准列，一律不认领
+            if market == "CN_EXCHANGE" or (market == "CN_OTC" and source is None):
+                # 场内走上游透传；场外 source 缺失则无从选基准列（分支 2 的
+                # `source <> 'tushare'` 对 NULL 为假），一律不认领。HK_MUTUAL 不在此列：
+                # 其分支谓词不引用 source，NULL-source 行照常按 unit_price 回填（该市场
+                # 只有 akshare 一个上游，无基准列歧义）。
                 assert hits == 0, (code, market, source)
             elif market == "CN_OTC" and source == "tushare":
                 # unit_price 基准对该源不成立（上游无涨跌幅字段），只有 accum 可推导
@@ -271,7 +281,7 @@ class TestBranchPredicates:
         # 自有行必须被逐条覆盖到，否则上面的判据可能一条都没检查到本用例造的形态
         own = {code for code, market, _, accum_null, in_otc, in_upstream in rows
                if code in OWN_CODES and (in_otc + in_upstream) == 1}
-        assert {OTC_TUSHARE, OTC_AKSHARE, HK} <= own, own
+        assert {OTC_TUSHARE, OTC_AKSHARE, HK, HK_NO_SOURCE} <= own, own
 
 
 # ---------------------------------------------------------------------------

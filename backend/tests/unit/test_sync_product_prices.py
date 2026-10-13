@@ -470,7 +470,16 @@ class TestNormalizeRawPctKeys:
         assert _normalize_raw([raw], market)[0]["pct_change"] == Decimal("0.0000")
 
     def test_zero_accumulated_nav_is_not_folded_into_missing(self):
-        """`accumulated_nav = 0.0` 被 `or` 链折掉会毒化日涨跌的推导基准。"""
+        """`_normalize_raw` 只做保真映射：`0.0` 与「上游没给」不得混成一件事。
+
+        钉的是**这一层自身**的判空，不是端到端形态：tushare 场外路径的取数层
+        `get_fund_nav` 仍按 truthiness 把 `0.0` 折成缺值，故 `accum_nav = 0.0` 到不了
+        这里。那个折法刻意保留（#699 L2 评审核实结论）——`0.0` 不是合法净值，让它以
+        缺值形态落到 `_bulk_upsert_prices` 的 #580 跳过 + WARNING 比直穿更安全：直穿会
+        让 `_derive_otc_pct_change` 按 `(0/prev − 1) × 100` 算出 −100.0000 的假暴跌，
+        `unit_nav = 0.0` 更会被 `_usable_price` 放行、把 0 价写进 `unit_price` 毒化快照
+        市值（该判据只看可用性、不看正负）。
+        """
         rows = _normalize_raw(
             [{"trade_date": "20260915", "unit_nav": 1.2, "accum_nav": 0.0}], "CN_OTC"
         )

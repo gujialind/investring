@@ -440,9 +440,11 @@ def _normalize_raw(raw_data: List[dict], market: str) -> List[dict]:
 
     `pct_change` 是**百分数**（1.2195 即 1.2195%），在产生点经 `quantize_nav` 收口到
     4 位 HALF_UP（#692）。缺值、坏值（含 NaN）与 `0.0` 必须区分：0.0 是平盘这一天的
-    真实涨跌，折成 None 会让前端读成「无数据」；反之缺值不得伪造成 0.0。同分支的
-    单位净值/累计净值取值同样改判 `is not None`——`accumulated_nav = 0.0` 被 `or` 链
-    折掉会毒化日涨跌的推导基准。
+    真实涨跌，折成 None 会让前端读成「无数据」；反之缺值不得伪造成 0.0。同分支的单位
+    净值/累计净值同样改判 `is not None`——本函数只做保真映射，不在这里用 `or` 链把
+    `0.0` 与缺值混成一件事；「`0.0` 不是合法净值」由取数层与写入判据各自处置
+    （tushare 场外的 `get_fund_nav` 折成缺值，`_bulk_upsert_prices` 的 #580 判据只看
+    可用性、不看正负），详见 `test_zero_accumulated_nav_is_not_folded_into_missing`。
     """
     seen: dict[str, dict] = {}
     for r in raw_data:
