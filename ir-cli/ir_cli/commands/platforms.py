@@ -65,8 +65,14 @@ def update(
 
 
 @app.command("delete")
-def delete(code: str = typer.Argument(..., help="平台代码")):
+def delete(
+    code: str = typer.Argument(..., help="平台代码"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
+):
     """删除平台"""
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"删除平台 {code} 不可逆：请追加 --yes 确认，先用 ir platform get {code} 核实对象与持仓引用")
     client = APIClient.from_config()
     result = client.delete(f"/api/platforms/{code}")
     success(data=result["data"])

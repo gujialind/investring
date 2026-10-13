@@ -131,8 +131,12 @@ def status(
 def delete(
     portfolio_code: str = typer.Argument(..., help="组合代码"),
     snapshot_date: str = typer.Argument(..., help="快照日期(YYYY-MM-DD)"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
 ):
     """删除指定日期快照"""
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"删除 {portfolio_code} {snapshot_date} 快照会级联回退依赖它的已确认申赎与份额事件，不可逆：请追加 --yes 确认，先用 ir snapshot status {portfolio_code} 与 ir snapshot validate --portfolio-code {portfolio_code} --target-date {snapshot_date} 核实影响面")
     client = APIClient.from_config()
     result = client.delete(f"{PREFIX}/{portfolio_code}/{snapshot_date}")
     success(data=result["data"])
@@ -155,7 +159,12 @@ def delete_bulk(
             hints=[f"确认无误后执行: ir snapshot delete-bulk {portfolio_code} {from_date} --yes"],
         )
     if not yes:
-        error("CONFIRM_REQUIRED", "批量删除快照不可逆，请追加 --yes 确认，可先用 --dry-run 预览")
+        # CONFIRM_REQUIRED 由 7 个命令共用，静态表只给通用文案；--dry-run 只有本命令有（#629）
+        error(
+            "CONFIRM_REQUIRED",
+            "批量删除快照不可逆，请追加 --yes 确认，可先用 --dry-run 预览",
+            hints=["ir snapshot delete-bulk 不可逆：真删除需追加 --yes 确认；可先加 --dry-run 预览将删除的快照日期"],
+        )
     client = APIClient.from_config()
     result = client.delete(f"{PREFIX}/{portfolio_code}/bulk/{from_date}", params={"confirm": True})
     success(data=result["data"])

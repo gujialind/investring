@@ -71,8 +71,14 @@ def update(
 
 
 @app.command("delete")
-def delete(code: str = typer.Argument(..., help="投资人代码")):
+def delete(
+    code: str = typer.Argument(..., help="投资人代码"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
+):
     """删除投资人"""
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"删除投资人 {code} 不可逆：请追加 --yes 确认，先用 ir investor get {code} 核实对象")
     client = APIClient.from_config()
     result = client.delete(f"/api/investors/{code}")
     success(data=result["data"])

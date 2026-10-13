@@ -145,8 +145,14 @@ def update(
 
 
 @app.command("close")
-def close(code: str = typer.Argument(..., help="组合代码")):
+def close(
+    code: str = typer.Argument(..., help="组合代码"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
+):
     """关闭组合"""
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"关闭组合 {code} 会阻断其申赎与调仓：请追加 --yes 确认，先用 ir portfolio context {code} 核实，误关可用 ir portfolio reactivate {code} 回退")
     client = APIClient.from_config()
     result = client.post(f"/api/portfolios/{code}/close")
     success(data=result["data"])

@@ -80,7 +80,10 @@ class TestGetHint:
         assert "catch-up" in ERROR_HINTS["SNAPSHOT_NOT_CONTINUOUS"]
         assert "catch-up" in ERROR_HINTS["NAV_NOT_AVAILABLE"]
         assert "calendar-sync" in ERROR_HINTS["CALENDAR_NOT_SYNCED"]
-        assert "--dry-run" in ERROR_HINTS["CONFIRM_REQUIRED"]
+        # #629：CONFIRM_REQUIRED 改由 7 个命令产出，静态表只留通用 --yes 文案；
+        # --dry-run 仅 delete-bulk 有，由该命令调用点显式传 hints（见 test_destructive_confirm）
+        assert "--yes" in ERROR_HINTS["CONFIRM_REQUIRED"]
+        assert "--dry-run" not in ERROR_HINTS["CONFIRM_REQUIRED"]
         assert "--portfolio-code" in ERROR_HINTS["INSUFFICIENT_CASH"]
         assert "--portfolio-code" in ERROR_HINTS["INSUFFICIENT_SHARES"]
 

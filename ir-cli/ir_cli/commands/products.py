@@ -110,8 +110,12 @@ def update(
 def delete(
     code: str = typer.Argument(..., help="产品代码"),
     market: str = typer.Argument(..., help="市场类型"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
 ):
     """删除产品"""
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"删除产品 {code}({market}) 不可逆：请追加 --yes 确认，先用 ir product get {code} {market} 核实对象与被引用情况")
     client = APIClient.from_config()
     result = client.delete(f"/api/products/{code}/{market}")
     success(data=result["data"])
