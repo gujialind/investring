@@ -228,23 +228,31 @@ def get_nav_analysis(
     """产品净值分析：所选区间净值曲线 + 六窗区间收益率 + 本批口径 `nav_basis`。
 
     **两段式取数（#703）**：先取累计净值非空的记录（`nav_basis="accumulated"`，原口
-    径）；整段为空时回退到单位净值非空的记录（`nav_basis="unit"`）。此前只认累计净值，
-    而港互认缺值基金与场内行情源该列**恒 NULL**，1773 行完好的 `unit_price` 被整段
-    过滤掉，两张卡永久空白且响应仍是 200（前端失败态不触发）。皆空才返回空曲线与
-    全 None 六窗，此时 `nav_basis` 报 `accumulated`（空态与口径无关，不给前端第三种
-    取值）。六窗与曲线取自同一份 `records` 与同一个 `column`，口径一致由结构保证。
+    径）；累计净值覆盖不足单位净值半数时回退到单位净值记录（`nav_basis="unit"`）。此前
+    只认累计净值，而港互认缺值基金与场内行情源该列**恒 NULL**，1773 行完好的
+    `unit_price` 被整段过滤掉，两张卡永久空白且响应仍是 200（前端失败态不触发）。回退
+    判据用「覆盖度过半」而非「整列为空」：写侧改逐行读 ACCNAV 后，存量未回补的增量同步
+    与 ACCNAV 稀疏的基金会呈现「零星几行有累计净值」，若仍钉在 accumulated，曲线只剩那
+    几行、「成立以来」错按部署日（首个有累计净值的交易日）为基准、五个窗口因历史不足全
+    None。用覆盖度而非严格计数相等，是为 #701 非正丢列留容差——OTC 产品偶发个别
+    `accumulated_nav` 非正被丢，覆盖度仍近满，个别坏值不应把整支产品切到单位净值口径。
+    皆空才返回空曲线与全 None 六窗，此时 `nav_basis` 报 `accumulated`（空态与口径无关，
+    不给前端第三种取值）。六窗与曲线取自同一份 `records` 与同一个 `column`，口径一致由
+    结构保证。
 
     回退口径的语义差异（不含分红再投资、场内为市价）由前端按 `nav_basis` 明示，本层
     不做换算：把单位净值「补成」累计净值需要逐日分红数据，本地没有。
     """
     column = _NAV_COLUMN_BY_BASIS["accumulated"]
     records = _nav_records(db, product_code, market, column)
+    unit_records = _nav_records(db, product_code, market, _NAV_COLUMN_BY_BASIS["unit"])
     nav_basis = "accumulated"
-    if not records:
+    # 累计净值非空行数不足单位净值半数 → 序列过于破碎，回退单位净值（#703 L2 Blocker 2）。
+    # 进入此分支必有 unit_records 非空（否则 2*len(records) < 0 恒假），故 records 不会变空。
+    if len(records) * 2 < len(unit_records):
         column = _NAV_COLUMN_BY_BASIS["unit"]
-        records = _nav_records(db, product_code, market, column)
-        if records:
-            nav_basis = "unit"
+        records = unit_records
+        nav_basis = "unit"
 
     curve: List[dict] = []
     interval_returns: Dict[str, Optional[float]] = {

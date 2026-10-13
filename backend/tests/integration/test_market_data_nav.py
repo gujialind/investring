@@ -335,7 +335,9 @@ class TestNavAnalysis:
     def test_partial_accum_keeps_accumulated_basis(
         self, client, viewer_headers, test_db
     ):
-        """部分行有累计净值时维持原语义（#703）：不按行混用两种口径。"""
+        """覆盖度过半维持 accumulated（#703 L2 Blocker 2 的阈值边界）：2 行里 1 行有
+        累计净值恰在「不足半数」之上（2*1 < 2 为假），不回退；不按行混用两种口径。
+        稀疏与未回补形态（覆盖远不足半数）由下面三条钉住。"""
         _seed_nav(test_db, [
             (date(2025, 11, 3), "4.1000", None, None),
             (date(2025, 12, 1), "4.1500", "5.2500", None),
@@ -348,6 +350,89 @@ class TestNavAnalysis:
         # 只有一条累计净值记录：基准不足，六窗全 None（原语义，回退不由此触发）
         assert body["interval_returns"]["all"] is None
         assert body["interval_returns"]["m1"] is None
+
+    def test_incremental_backfill_gap_falls_back_to_unit(
+        self, client, viewer_headers, test_db
+    ):
+        """存量 NULL + 新行有值（#703 L2 Blocker 2 的增量同步形态）→ 回退单位净值。
+
+        模拟部署后：日同步只写新行（`task_runner` 的 `start_date = latest + 1`），存量
+        历史行的 `accumulated_nav` 仍是 NULL，只有部署后新增的几行有累计净值。旧判据
+        （累计净值集合非空即钉 accumulated）会让曲线只剩那两行、「成立以来」错按部署日
+        为基准。覆盖度判据把这一形态切回 unit，用完整的 `unit_price` 历史算曲线与六窗。
+        两列取值刻意拉开：unit 走 4.10/4.15、accum 走 5.00/5.25，串列立刻可见。
+        """
+        _seed_nav(test_db, [
+            (date(2020, 1, 2), "1.0000", None, None),
+            (date(2020, 6, 1), "1.1000", None, None),
+            (date(2021, 1, 4), "1.2000", None, None),
+            (date(2022, 1, 3), "1.3000", None, None),
+            (date(2023, 1, 3), "1.4000", None, None),
+            # 部署后新增：accum 有值（2 行），存量 5 行 accum 仍 NULL → 2*2 < 7 触发回退
+            (date(2025, 11, 3), "4.1000", "5.0000", None),
+            (date(2025, 12, 1), "4.1500", "5.2500", "1.2195"),
+        ])
+
+        body = self._analysis(client, viewer_headers, "6m")
+
+        assert body["nav_basis"] == "unit"
+        # 曲线装的是单位净值（4.10/4.15），不是累计净值（5.00/5.25）
+        assert [p["date"] for p in body["curve"]] == ["2025-11-03", "2025-12-01"]
+        assert [p["accumulated_nav"] for p in body["curve"]] == [4.1, 4.15]
+        # 「成立以来」以最早的单位净值行（2020-01-02，1.00）为基准，而非部署日：
+        # 4.15/1.00-1 = 315.0%；若错钉 accumulated 会算成 5.25/5.00-1 = 5.0%。
+        assert body["interval_returns"]["all"] == 315.0
+
+    def test_sparse_accum_falls_back_to_unit(
+        self, client, viewer_headers, test_db
+    ):
+        """稀疏 ACCNAV（#703 L2 Blocker 2，issue 表格 968015 形态）→ 回退单位净值。
+
+        累计净值非空但只覆盖零星几行（此处 2/6，远低于半数）。旧判据会因「集合非空」
+        钉死 accumulated、曲线只剩两点、六窗按这两点算；覆盖度判据切回 unit。这一支即使
+        做过全量回补也不会好转（上游本就稀疏），故必须由读侧兜住。
+        """
+        _seed_nav(test_db, [
+            (date(2024, 1, 2), "2.0000", None, None),
+            (date(2024, 4, 1), "2.1000", "9.9000", None),   # 稀疏 accum
+            (date(2024, 7, 1), "2.2000", None, None),
+            (date(2024, 10, 1), "2.3000", None, None),
+            (date(2025, 1, 2), "2.4000", "9.9500", None),   # 稀疏 accum
+            (date(2025, 4, 1), "2.5000", None, None),
+        ])
+
+        body = self._analysis(client, viewer_headers, "1y")
+
+        assert body["nav_basis"] == "unit"
+        # 「成立以来」用完整单位净值历史：2.50/2.00-1 = 25.0%；
+        # 若错钉 accumulated 会按两条稀疏累计净值算成 9.95/9.90-1 ≈ 0.5051%。
+        assert body["interval_returns"]["all"] == 25.0
+
+    def test_dropped_accum_column_tolerated_keeps_accumulated(
+        self, client, viewer_headers, test_db
+    ):
+        """#701 非正丢列容差反例：个别累计净值缺值不得触发回退。
+
+        写侧 `_bulk_upsert_prices` 对非正的 `accumulated_nav` 只丢这一列（unit_price 已
+        合格，这一天确实有价），于是 OTC 产品会出现个别行 accum 为 NULL。覆盖度判据用
+        「过半」而非严格计数相等：此处 6/7 行有累计净值（远高于半数），维持 accumulated，
+        不因个别坏值把整支产品误切到单位净值口径。
+        """
+        _seed_nav(test_db, [
+            (date(2025, 6, 2), "3.0000", "3.0000", None),
+            (date(2025, 7, 1), "3.1000", "3.1000", None),
+            (date(2025, 8, 1), "3.2000", None, None),        # #701 非正丢列 → 个别缺值
+            (date(2025, 9, 1), "3.3000", "3.3000", None),
+            (date(2025, 10, 8), "3.4000", "3.4000", None),
+            (date(2025, 11, 3), "3.5000", "3.5000", None),
+            (date(2025, 12, 1), "3.6000", "3.6000", "2.8571"),
+        ])
+
+        body = self._analysis(client, viewer_headers, "6m")
+
+        assert body["nav_basis"] == "accumulated"
+        # 「成立以来」按累计净值序列（跳过缺值行）：3.60/3.00-1 = 20.0%。
+        assert body["interval_returns"]["all"] == 20.0
 
     def test_invalid_range_422(self, client, viewer_headers):
         resp = client.get(
