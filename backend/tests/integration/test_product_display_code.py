@@ -4,10 +4,14 @@
 #   - 产品列表 keyword 命中 hk_sale_code（968050 搜到 10 位码产品）
 #   - 行级读模型 display_code 与 product_name 同批填充（trades 列表）
 #   - 港互认录入归一：6 位→10 位入库 + hk_sale_code 落 6 位；映射查不到 422；
-#     10 位反查失败不阻断创建（hk_sale_code 落 NULL）
+#     排名表上游不可达同样 422（不漏 500）；10 位反查失败不阻断创建（hk_sale_code 落 NULL）
+
+import sys
+from types import SimpleNamespace
 
 import pytest
 
+from app.models.product import Product
 from app.services import akshare_client
 from app.services.exceptions import BusinessError
 from app.services.product_service import create_product
@@ -177,3 +181,52 @@ class TestHkCreateNormalization:
         test_db.commit()
         assert product.code == HK_NEW
         assert product.hk_sale_code is None
+
+
+class TestHkUpstreamUnavailable:
+    """排名表上游不可达时的建档口径（#705 评审 Blocker）。
+
+    与「表里查无此码」同归 422 `HK_CODE_UNMAPPED`：归一发生在 `akshare_client`
+    的取数点（`_retry`），service 层不漏非领域异常，故不会冒到全局 handler 变 500。
+    刻意打桩最外层上游（`akshare.fund_hk_rank_em`）而不是 `_ensure_hk_code_map`——
+    桩在后者上就绕过了被测的归一环节，异常形态也不再是「上游原样抛出」。
+    """
+
+    @pytest.fixture
+    def unreachable_rank_table(self, monkeypatch):
+        def unreachable():
+            raise RuntimeError("上游 fund_hk_rank_em 超时/连接失败")
+
+        monkeypatch.setitem(
+            sys.modules, "akshare", SimpleNamespace(fund_hk_rank_em=unreachable)
+        )
+        monkeypatch.setattr(akshare_client, "_hk_code_map", None)
+        # `_retry` 的限流与指数退避是真 sleep（3 次尝试 ≈ 6s），本用例只关心归一结果
+        monkeypatch.setattr(akshare_client, "_rate_limit_sleep", lambda: None)
+        monkeypatch.setattr(akshare_client.time, "sleep", lambda seconds: None)
+
+    def test_six_digit_create_returns_422_not_500(
+        self, client, admin_headers, test_db, unreachable_rank_table
+    ):
+        resp = client.post(
+            "/api/products",
+            json={
+                "code": HK6, "market": "HK_MUTUAL", "name": "摩根国际债券",
+                "product_type": "OEF", **DIMS,
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "HK_CODE_UNMAPPED"
+
+    def test_rejected_create_writes_nothing(
+        self, test_db, unreachable_rank_table
+    ):
+        with pytest.raises(BusinessError) as exc:
+            create_product(
+                test_db, code=HK6, market="HK_MUTUAL", name="摩根国际债券",
+                product_type="OEF", **DIMS,
+            )
+        assert exc.value.code == "HK_CODE_UNMAPPED"
+        test_db.rollback()
+        assert test_db.query(Product).filter(Product.hk_sale_code == HK6).count() == 0

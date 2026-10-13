@@ -985,7 +985,7 @@ ir product create --code <代码> --market <市场> --name <名称> --product-ty
 
 | 参数 | 必填 | 说明 |
 |------|:----:|------|
-| `--code` | 是 | 产品代码（如 `000051.OF`）。`--market HK_MUTUAL` 时可填 6 位内地销售码（如 `968050`），后端按东财港基排名表解析为 10 位香港基金代码入库并回填 `hk_sale_code`；填 10 位码时反查销售码（反查失败不阻断创建，`hk_sale_code` 留空）。解析不到（不在排名表内）返回 422 `HK_CODE_UNMAPPED`，不落库（#705） |
+| `--code` | 是 | 产品代码（如 `000051.OF`）。`--market HK_MUTUAL` 时可填 6 位内地销售码（如 `968050`），后端按东财港基排名表解析为 10 位香港基金代码入库并回填 `hk_sale_code`；填 10 位码时反查销售码（反查失败不阻断创建，`hk_sale_code` 留空）。解析不到（不在排名表内，或排名表暂不可得——上游不可达 / akshare 未安装）返回 422 `HK_CODE_UNMAPPED`，不落库（#705） |
 | `--market` | 是 | 市场：`CN_EXCHANGE` / `CN_OTC` / `HK_MUTUAL` |
 | `--name` | 是 | 产品名称 |
 | `--product-type` | 是 | 类型：`ETF` / `OEF` / `LOF` / `CASH` / `IN_TRANSIT` |

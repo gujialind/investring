@@ -354,16 +354,24 @@ def _ensure_hk_code_map(ak) -> Dict[str, str]:
 
     键是排名表 `基金代码`（968050 这类 6 位码）。库内 `product.code` 存的是 10 位
     `香港基金代码`，故港互认主路径不经此处（见 `_resolve_hk10`）。
+
+    取数走 `_retry`（本模块唯一的「上游任何异常 → 归一 AkshareAPIError」单点，#705
+    评审）：直调 `fund_hk_rank_em` 会让超时/连接失败/上游结构变化以非领域异常冒出
+    service 层，落到全局 handler 变 500，而建档侧承诺的是 422 `HK_CODE_UNMAPPED`。
     """
     global _hk_code_map
     if _hk_code_map is None:
-        df = ak.fund_hk_rank_em()
-        _hk_code_map = {}
-        for _, row in df.iterrows():
-            code6 = str(row["基金代码"]).strip()
-            code10 = str(row["香港基金代码"]).strip()
-            if code6 and code10:
-                _hk_code_map[code6] = code10
+        def _fetch() -> Dict[str, str]:
+            df = ak.fund_hk_rank_em()
+            mapping: Dict[str, str] = {}
+            for _, row in df.iterrows():
+                code6 = str(row["基金代码"]).strip()
+                code10 = str(row["香港基金代码"]).strip()
+                if code6 and code10:
+                    mapping[code6] = code10
+            return mapping
+
+        _hk_code_map = _retry(_fetch, "获取东财港基排名表失败")
     return _hk_code_map
 
 
