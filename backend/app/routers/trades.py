@@ -15,7 +15,10 @@ from app.schemas.trade import (
     TradePreviewResponse,
 )
 from app.dependencies import get_current_user, get_current_admin
-from app.services.product_service import build_product_name_map
+from app.services.product_service import (
+    build_product_display_code_map,
+    build_product_name_map,
+)
 from app.services.trade_service import (
     confirm_single_trade,
     compute_confirm_plan,
@@ -90,12 +93,17 @@ def get_trades(
     # 读侧派生 product_name（#175）：(code, market) 双键天然覆盖 LOF 与 CASH 虚拟产品
     pairs = {(t.product_code, t.market) for t in items}
     name_map = build_product_name_map(db, pairs)
+    # 显示码（#705）：与 product_name 同批同键，单点口径见 product_service
+    display_map = build_product_display_code_map(db, pairs)
     # #493 派生现金信息：一次批量查询（不受本页 status/platform 筛选截断）
     paired_legs = build_paired_cash_leg_map(db, items)
     enriched = [
         _fill_derived_cash_fields(
             TradeResponse.model_validate(t).model_copy(
-                update={"product_name": name_map.get((t.product_code, t.market))}
+                update={
+                    "product_name": name_map.get((t.product_code, t.market)),
+                    "display_code": display_map.get((t.product_code, t.market)),
+                }
             ),
             t,
             paired_legs,

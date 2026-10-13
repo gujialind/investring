@@ -128,7 +128,9 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       .getByTestId('holding-product-card')
       .filter({ hasText: '沪深300ETF' });
     await expect(productCard).toBeVisible();
-    await expect(productCard).toContainText('510300.SH');
+    // #705 卡片次行出显示码（去 tushare 后缀），机器码不再直吐
+    await expect(productCard).toContainText('510300 · ');
+    await expect(productCard).not.toContainText('510300.SH');
     await expect(productCard).toContainText('持有份额');
     await expect(productCard).toContainText('占比');
 

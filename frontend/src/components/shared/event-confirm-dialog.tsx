@@ -51,7 +51,8 @@ export function EventConfirmDialog({
   const preview = data?.preview;
   // 产品名直接取列表行自带的 product_name（#342 后端读侧派生）：
   // 替代原按单条事件懒加载 useProduct 的权宜（#257）；缺失时回退裸代码
-  const getProductName = () => formatProductName(event?.product_name, event?.product_code);
+  const getProductName = () =>
+    formatProductName(event?.product_name, event?.product_code, event?.display_code);
 
   return (
     <ConfirmInfoDialog

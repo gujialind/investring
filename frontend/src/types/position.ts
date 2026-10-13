@@ -3,6 +3,8 @@ export interface Position {
   portfolio_code: string;
   product_code: string;
   product_name?: string;
+  /** 读侧派生显示码（#705）：标识符用途仍用 product_code */
+  display_code?: string | null;
   market?: string;
   platform_code?: string;
   platform_name?: string | null;

@@ -377,12 +377,44 @@ export function formatMarketName(market: string | undefined | null): string {
 }
 
 /**
- * 格式化产品展示名（#342）：`名称（代码）` 双信息；名称缺失回退裸代码，代码缺失 "--"
+ * 格式化产品显示码（#705）：剥 tushare 后缀（`510300.SH` → `510300`），港互认原样返回。
+ * 港互认的 6 位内地销售码只有后端映射能给出，前端无来源、不猜测；
+ * 因此本函数只是行级 `display_code` 缺失时的兜底，有后端字段一律优先消费后端字段。
+ */
+export function formatProductDisplayCode(
+  productCode: string | undefined | null,
+  market?: string | null
+): string {
+  if (!productCode) return "--";
+  if (market === "HK_MUTUAL") return productCode;
+  return productCode.split(".")[0];
+}
+
+/**
+ * 显示码与原始机器码不同（港互认 6 位内地销售码 vs 10 位码，#705）时并列 `968050（1001767344）`，
+ * 便于人工与上游核对；其余市场显示码只是剥后缀，并列是噪音 → 只出显示码。
+ * 后端给了 display_code 优先用，缺位（单对象接口）走 formatProductDisplayCode 兜底。
+ */
+export function formatProductCodeLabel(
+  displayCode: string | undefined | null,
+  productCode: string | undefined | null,
+  market?: string | null
+): string {
+  if (!productCode) return "--";
+  const shown = displayCode || formatProductDisplayCode(productCode, market);
+  return market === "HK_MUTUAL" && shown !== productCode ? `${shown}（${productCode}）` : shown;
+}
+
+/**
+ * 格式化产品展示名（#342）：`名称（代码）` 双信息；名称缺失回退裸代码，代码缺失 "--"。
+ * displayCode（#705）给定时括号内用显示码；标识符用途（路由/键/入参）仍须用原始 code。
  */
 export function formatProductName(
   productName: string | undefined | null,
-  productCode: string | undefined | null
+  productCode: string | undefined | null,
+  displayCode?: string | null
 ): string {
   if (!productCode) return "--";
-  return productName ? `${productName}（${productCode}）` : productCode;
+  const shown = displayCode || productCode;
+  return productName ? `${productName}（${shown}）` : shown;
 }

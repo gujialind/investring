@@ -21,6 +21,7 @@ from app.models.share_change_event import ShareChangeEvent
 from app.models.trade import Trade
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.null_guard import reject_explicit_nulls
+from app.utils.product_code import HK_MUTUAL_MARKET, display_code
 
 # issue #232：product_type 合法枚举（create/update 共用校验）；
 # market 枚举仅 update 守卫使用（create 不校验 market）
@@ -209,6 +210,22 @@ def build_product_name_map(db: Session, pairs: set) -> dict:
     return {
         (p.code, p.market): p.name
         for p in db.query(Product.code, Product.market, Product.name)
+        .filter(Product.code.in_(codes))
+        .all()
+        if (p.code, p.market) in pairs
+    }
+
+
+def build_product_display_code_map(db: Session, pairs: set) -> dict:
+    """读侧派生公共助手（#705，同 build_product_name_map 模式）：批量建
+    (code, market) -> 显示码映射（防 N+1）。显示码口径单点见
+    app.utils.product_code.display_code。"""
+    if not pairs:
+        return {}
+    codes = {c for c, _ in pairs if c}
+    return {
+        (p.code, p.market): display_code(p.code, p.market, p.hk_sale_code)
+        for p in db.query(Product.code, Product.market, Product.hk_sale_code)
         .filter(Product.code.in_(codes))
         .all()
         if (p.code, p.market) in pairs
@@ -443,7 +460,23 @@ def create_product(
 
     sync_history=True 时（issue #90）创建后立即回填历史净值；
     同步失败不回滚产品创建，结果挂在返回对象的瞬态属性 sync_result。
+
+    港互认录入归一（#705）：market=HK_MUTUAL 时 6 位内地销售码经排名表解析为
+    10 位香港基金码入 `code`、6 位码落 `hk_sale_code`；映射查不到抛
+    HK_CODE_UNMAPPED（422，入库码不能靠猜）。
     """
+    hk_sale_code: Optional[str] = None
+    if market == HK_MUTUAL_MARKET:
+        from app.services.akshare_client import AkshareAPIError, resolve_hk_code_pair
+
+        try:
+            code, hk_sale_code = resolve_hk_code_pair(code)
+        except AkshareAPIError as e:
+            raise BusinessError(
+                "HK_CODE_UNMAPPED",
+                f"代码 {code} 未能解析为香港基金代码（不在东财港基排名表内）",
+                details={"product_code": code, "market": market},
+            ) from e
     existing = db.query(Product).filter(
         Product.code == code, Product.market == market
     ).first()
@@ -472,6 +505,7 @@ def create_product(
         market=market or "",
         name=name,
         product_type=product_type,
+        hk_sale_code=hk_sale_code,
         confirm_days=confirm_days,
         nav_lag_days=nav_lag_days,
         is_qdii=is_qdii,

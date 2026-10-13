@@ -18,6 +18,7 @@ import {
   formatCurrency,
   formatDate,
   formatNav,
+  formatProductCodeLabel,
   formatSharesUnit,
   formatSignedCurrency,
   getReturnColorClass,
@@ -271,7 +272,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
             {/* R4-S1：CASH 孤儿行走 cashOrphanLabel（「现金 · 申赎确认」等），与 TradesContent 同口径 */}
             {isCashLeg(trade)
               ? cashOrphanLabel(trade)
-              : `${TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type} · ${trade.product_name ?? trade.product_code ?? "--"}`}
+              : `${TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type} · ${trade.product_name ?? formatProductCodeLabel(trade.display_code, trade.product_code, trade.market)}`}
           </span>
         </div>
         <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">

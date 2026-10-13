@@ -112,7 +112,7 @@ export function EventEditDialog({
     onSubmit(payload);
   };
 
-  const productName = formatProductName(event.product_name, event.product_code);
+  const productName = formatProductName(event.product_name, event.product_code, event.display_code);
   const platformName = event.platform_code
     ? platformNameMap.get(event.platform_code) ?? event.platform_code
     : "全部";

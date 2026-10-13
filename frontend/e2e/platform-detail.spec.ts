@@ -373,7 +373,9 @@ test.describe("平台-产品详情页", () => {
     await expect(
       page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
     ).toBeVisible();
-    await expect(page.getByText("510300.SH")).toBeVisible();
+    // #705：副行代码位显显示码（去交易所后缀）+ 市场名，机器码不再出现在屏上
+    await expect(page.getByText("510300 · A股场内")).toBeVisible();
+    await expect(page.getByText("510300.SH")).toHaveCount(0);
 
     const overview = page.getByTestId("platform-product-overview-card");
     await expect(overview).toBeVisible();
@@ -404,7 +406,9 @@ test.describe("平台-产品详情页", () => {
     const dlg = dialogByTitle(page, "提交交易");
     await dlg.waitFor({ timeout: 10_000 });
     await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
-    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    // #705：预填回显走显示码（URL 入参仍是机器码，见上一条断言）
+    await expect(productTrigger(dlg, "510300.SH")).toHaveCount(0);
+    await expect(productTrigger(dlg, "510300")).toBeVisible();
     await expect(productTrigger(dlg, "A股场内")).toBeVisible();
     // 扣款平台按 #646 契约不预填（用户自选），仍显示占位/特殊项文案
     await expect(platformTrigger(dlg, "同交易平台")).toBeVisible();
@@ -420,7 +424,9 @@ test.describe("平台-产品详情页", () => {
     const dlg = dialogByTitle(page, "新建份额变动事件");
     await dlg.waitFor({ timeout: 10_000 });
     await expect(platformTrigger(dlg, "HBZQ")).toBeVisible();
-    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    // #705：预填回显走显示码（URL 入参仍是机器码，见上一条断言）
+    await expect(productTrigger(dlg, "510300.SH")).toHaveCount(0);
+    await expect(productTrigger(dlg, "510300")).toBeVisible();
   });
 
   test("净值曲线空态与六窗区间收益率占位", async ({ page }) => {

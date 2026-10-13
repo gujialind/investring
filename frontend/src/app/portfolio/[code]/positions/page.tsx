@@ -24,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatCurrency, formatSharesUnit, formatNav, formatReturnRate, getReturnColorClass, toDateOnly } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatProductCodeLabel, formatReturnRate, getReturnColorClass, toDateOnly } from "@/lib/utils";
 import { Plus, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { ApiException } from "@/lib/api";
@@ -327,7 +327,14 @@ export default function PositionsPage() {
                   <TableBody>
                     {positions.map((position) => (
                       <TableRow key={position.id}>
-                        <TableCell className="font-medium">{position.product_code}</TableCell>
+                        {/* #705 代码列出显示码；港互认双码并列。行 key 仍用 position.id */}
+                        <TableCell className="font-medium">
+                          {formatProductCodeLabel(
+                            position.display_code,
+                            position.product_code,
+                            position.market
+                          )}
+                        </TableCell>
                         <TableCell>{position.product_name}</TableCell>
                         <TableCell>{position.market || "--"}</TableCell>
                         <TableCell className="number-cell">

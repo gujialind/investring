@@ -122,6 +122,7 @@ commit）。
 | 0018 | 恢复 6 张表 `product_code` NOT NULL（#537，修复 0006 的 MODIFY 剥离漂移）：两段式——先全量核查 NULL（任一违规即 `RuntimeError` 且零 DDL），再统一 `MODIFY ... NOT NULL` | 已实现（恢复可空） | 无损：仅放宽/收紧约束，不动数据。NULL 违规时诊断：逐表 `SELECT COUNT(*) FROM <表> WHERE product_code IS NULL`（涉及 portfolio_position / trade / price_record / manual_market_value / nav_sync_detail / share_change_event），人工核对来源并清理后重跑 |
 | 0019 | `share_change_event.cash_pay_date`（#522 现金分红到账日）+ 种子虚拟产品 `IN_TRANSIT_DIVIDEND` | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提：downgrade 先探测「存在非空 `cash_pay_date`」与「`IN_TRANSIT_DIVIDEND` 被外键引用」，任一命中即 `RuntimeError`，且拒绝发生在任何 DELETE/DROP 之前（形态不同于 0014/0015 的「跳过该表 + WARNING 继续」）。功能一旦被使用（录入过到账日，或已生成过在途持仓行）即不可回退，只能走前滚（§4.1）或 RDS 快照恢复；未使用的库（含 CI 的空库往返）完整可逆 |
 | 0020 | `price_record.pct_change` 存量回填（#692 场外/港互认日涨跌；只补 NULL、幂等，约 24.4 万行） | **刻意 no-op**（不反向置 NULL） | 无损：回填值可由同表 `accumulated_nav` / `unit_price` 重新推导（重跑本迁移即可），没有任何数据被销毁。反向置 NULL 反而会连带删掉上线后新同步写入的合法值——库里无从区分「迁移补的」与「同步写的」。`pct_change` 是纯展示列（消费方仅 nav-history 端点与两个前端页面），无账务下游，回滚功能本身不需要动数据。⚠️ 本仓第一条**非采纳型** no-op：0013/0016 的 `upgrade()` 对已存在的库近乎 no-op，而 0020 真写了数据，故执行 downgrade 后库里仍留着回填值，不要按「已回到 0019 状态」理解 |
+| 0021 | `product.hk_sale_code`（#705 港互认 6 位内地销售码）+ 存量两只港基回填（`1001767344→968050`、`1001767346→968052`，静态映射取自 2026-10-13 实测东财 `fund_hk_rank_em`；迁移期不联网） | 已实现 | 无损：downgrade 直接 `drop_column`。回填值可按同一静态映射重跑迁移恢复；上线后经界面/CLI 人工改过的 `hk_sale_code` 不可恢复（该列只服务展示与搜索命中，不参与取价、份额或现金口径，回退后港互认显示码回落到 10 位机器码、`968050` 搜索不再命中，功能降级但账务无影响）。`add_column` 带存在性守卫（`create_all` 建库的测试库幂等） |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 

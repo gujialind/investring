@@ -54,6 +54,8 @@ class ShareChangeEventResponse(ShareChangeEventBase):
     # product_name 读侧派生（非 DB 列）：仅 list 端点批量 join 产品表填充，
     # create/get/update/confirm/unconfirm 响应恒为 None；同 positions 模式（#175/#342）
     product_name: Optional[str] = None
+    # 显示码读侧派生（#705，非 DB 列）：与 product_name 同批填充（仅 list 端点）
+    display_code: Optional[str] = None
 
     class Config:
         from_attributes = True

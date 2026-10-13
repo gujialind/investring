@@ -388,6 +388,28 @@ def _resolve_hk10(code: str) -> str:
     return hk10
 
 
+def resolve_hk_code_pair(code: str) -> Tuple[str, Optional[str]]:
+    """港互认录入归一（#705）：返回 ``(入库 code, hk_sale_code)``。
+
+    6 位内地销售码经排名表解析为 10 位香港基金码（查不到抛 AkshareAPIError，
+    由调用方转业务错误——入库码不能靠猜）；10 位码原样入库并**尽力**反查 6 位
+    （反查失败不抛：展示码缺失由读侧 `display_code` 回退原码，不值得阻断录入）；
+    其他形态原样返回 ``(code, None)``。
+    """
+    stripped = code.strip()
+    if stripped.isdigit() and len(stripped) == 6:
+        return _resolve_hk10(stripped), stripped
+    if stripped.isdigit() and len(stripped) == 10:
+        try:
+            import akshare as ak
+
+            reverse = {v: k for k, v in _ensure_hk_code_map(ak).items()}
+            return stripped, reverse.get(stripped)
+        except Exception:  # 反查是展示码锦上添花：网络/依赖/清单缺失都不阻断录入
+            return stripped, None
+    return stripped, None
+
+
 def _dashed_bound(value: Optional[str], field: str) -> str:
     """YYYYMMDD → 接口要的 YYYY-MM-DD；空值返回空串（= 该侧不设界）。
 

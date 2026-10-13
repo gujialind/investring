@@ -21,7 +21,9 @@ test.describe("产品详情页", () => {
     await expect(
       page.getByRole("heading", { name: "沪深300ETF" })
     ).toBeVisible();
-    await expect(page.getByText("510300.SH")).toBeVisible();
+    // #705 页头副行出显示码（去 tushare 后缀），不再直吐机器码 510300.SH
+    await expect(page.getByText("510300 · A股场内")).toBeVisible();
+    await expect(page.getByText("510300.SH")).toHaveCount(0);
 
     const overview = page.getByTestId("product-overview-card");
     await expect(overview).toBeVisible();
@@ -150,15 +152,17 @@ test.describe("产品详情页", () => {
     // 方向=买入：买入/卖出各有专属提示 Alert，据此判定（不靠按钮 variant 样式）
     await expect(dlg.getByTestId("buy-deduct-hint")).toBeVisible();
     await expect(dlg.getByTestId("sell-arrival-hint")).not.toBeVisible();
-    // 产品与市场已预填：触发框回显「…510300.SH · A股场内」。名称缓存未命中时只回显
-    // code（SearchableProductSelect 懒加载），故断 code 与市场后缀两段、不断产品名
-    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    // 产品与市场已预填：触发框回显「…510300 · A股场内」（#705 显示码去后缀）。名称缓存
+    // 未命中时只回显显示码（SearchableProductSelect 懒加载），故断显示码与市场后缀两段、不断产品名
+    const prefilledTrigger = productTrigger(dlg, "510300");
+    await expect(prefilledTrigger).toBeVisible();
+    await expect(prefilledTrigger).not.toContainText("510300.SH");
     await expect(productTrigger(dlg, "A股场内")).toBeVisible();
     // 预填值仍可当场改选（验收第 5 条）：预填只作 useState 初值、无 effect 回灌，
     // 故改方向后既有预填不被重置
     await dlg.getByRole("button", { name: "卖出" }).click();
     await expect(dlg.getByTestId("sell-arrival-hint")).toBeVisible();
-    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    await expect(productTrigger(dlg, "510300")).toBeVisible();
   });
 
   test("操作行卖出：录入方向为卖出，不被重置成买入（#646）", async ({ page }) => {
@@ -170,7 +174,7 @@ test.describe("产品详情页", () => {
     await dlg.waitFor({ timeout: 10_000 });
     await expect(dlg.getByTestId("sell-arrival-hint")).toBeVisible();
     await expect(dlg.getByTestId("buy-deduct-hint")).not.toBeVisible();
-    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    await expect(productTrigger(dlg, "510300")).toBeVisible();
   });
 
   test("操作行事件：落事件录入页并开 Dialog，产品已预填（#646）", async ({ page }) => {
@@ -192,7 +196,7 @@ test.describe("产品详情页", () => {
     expect(page.url()).toContain("action=create");
     const dlg = dialogByTitle(page, "新建份额变动事件");
     await dlg.waitFor({ timeout: 10_000 });
-    await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
+    await expect(productTrigger(dlg, "510300")).toBeVisible();
   });
 
   test("从组合详情产品卡点击进入（深链起点）", async ({ page }) => {

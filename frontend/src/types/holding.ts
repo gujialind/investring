@@ -19,6 +19,8 @@ export interface HoldingProductAggregate {
   product_code: string;
   market: string;
   product_name: string | null;
+  /** 读侧派生显示码（#705）：港互认为 6 位内地销售码；标识符用途仍用 product_code */
+  display_code?: string | null;
   // 五维度标签（前端大类/维度分组元数据）
   asset_class_code: string | null;
   asset_class_name: string | null;

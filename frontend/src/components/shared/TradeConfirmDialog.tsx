@@ -115,7 +115,11 @@ export function TradeConfirmDialog({
     if (preview?.confirm_date) setEffectiveConfirmDate(preview.confirm_date);
   }, [preview?.confirm_date, open, trade?.id]);
 
-  const productName = formatProductName(trade?.product_name, trade?.product_code);
+  const productName = formatProductName(
+    trade?.product_name,
+    trade?.product_code,
+    trade?.display_code
+  );
   // 有效值以预览回传为准（用户未选时即后端缺省：A = C、平台 = 基金腿平台）
   const shownDate = requestedDate ?? preview?.cash_confirm_date ?? defaultCashDate;
   const shownPlatform =

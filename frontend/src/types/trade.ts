@@ -20,6 +20,8 @@ export interface Trade {
   updated_at?: string;
   /** 读侧派生（#175）：仅 list 响应有值；create/get/update 恒为 undefined */
   product_name?: string;
+  /** 读侧派生显示码（#705）：仅 list 响应有值；标识符用途仍用 product_code */
+  display_code?: string | null;
   /**
    * 读侧派生现金信息（#493）：**只读、不落库、仅基金腿填充**——后端按
    * `(portfolio_code, transfer_group)` 批量查反向 CASH 腿，因此不受列表的

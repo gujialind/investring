@@ -14,7 +14,10 @@ from app.schemas.share_change_event import (
 )
 from app.dependencies import get_current_user, get_current_admin
 from app.services.exceptions import BusinessError
-from app.services.product_service import build_product_name_map
+from app.services.product_service import (
+    build_product_display_code_map,
+    build_product_name_map,
+)
 from app.services.share_change_event_service import (
     create_share_change_event as create_event_service,
     update_share_change_event as update_event_service,
@@ -92,9 +95,14 @@ def get_share_change_events(
     # 读侧派生 product_name（#342，同 trades #175 模式）
     pairs = {(e.product_code, e.market) for e in items}
     name_map = build_product_name_map(db, pairs)
+    # 显示码（#705）：与 product_name 同批同键
+    display_map = build_product_display_code_map(db, pairs)
     enriched = [
         ShareChangeEventResponse.model_validate(e).model_copy(
-            update={"product_name": name_map.get((e.product_code, e.market))}
+            update={
+                "product_name": name_map.get((e.product_code, e.market)),
+                "display_code": display_map.get((e.product_code, e.market)),
+            }
         ) for e in items
     ]
     return PaginatedShareEventResponse(items=enriched, total=total, page=page, page_size=page_size)

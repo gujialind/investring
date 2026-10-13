@@ -8239,6 +8239,17 @@
             ],
             "title": "Product Name"
           },
+          "display_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Code"
+          },
           "asset_class_code": {
             "anyOf": [
               {
@@ -10732,6 +10743,17 @@
             ],
             "title": "Product Name"
           },
+          "display_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Code"
+          },
           "profit_loss": {
             "anyOf": [
               {
@@ -11537,6 +11559,22 @@
               }
             ],
             "title": "Market Change Hint"
+          },
+          "hk_sale_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hk Sale Code"
+          },
+          "display_code": {
+            "type": "string",
+            "title": "Display Code",
+            "default": ""
           }
         },
         "type": "object",
@@ -12320,6 +12358,17 @@
               }
             ],
             "title": "Product Name"
+          },
+          "display_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Code"
           }
         },
         "type": "object",
@@ -14423,6 +14472,17 @@
               }
             ],
             "title": "Product Name"
+          },
+          "display_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Code"
           },
           "cash_platform_code": {
             "anyOf": [

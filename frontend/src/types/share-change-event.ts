@@ -14,6 +14,8 @@ export interface ShareChangeEvent {
   market?: string;
   /** 读侧派生（非 DB 列）：仅 list 端点填充，单对象端点恒为 undefined（#342） */
   product_name?: string;
+  /** 读侧派生显示码（#705）：填充面同 product_name；标识符用途仍用 product_code */
+  display_code?: string | null;
   event_source?: string; // manual / tushare
   entitlement_shares?: number;
   shares_before?: number;
