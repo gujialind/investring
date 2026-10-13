@@ -234,10 +234,15 @@ def get_fund_nav(
 
     result = []
     for _, row in df.iterrows():
+        # `unit_nav`/`accum_nav` 判 `is not None` 而非 truthiness（#701，与上方
+        # get_fund_daily 的 close 同写法）：这一层曾把 `0.0` 静默折成缺值，是全路径上
+        # 唯一挡住 0 价的地方。现在净值列的正负由写入判据 `market_data_service._usable_nav`
+        # 收口，坏值在那里落成「跳过 + WARNING + 计 0 条」，比在这里无声消失可查——
+        # 取数层只负责「上游给没给值」，不负责判断这个值像不像净值。
         result.append({
             "trade_date": str(row["nav_date"]) if row.get("nav_date") else None,
-            "unit_nav": float(row["unit_nav"]) if row.get("unit_nav") else None,
-            "accum_nav": float(row["accum_nav"]) if row.get("accum_nav") else None,
+            "unit_nav": float(row["unit_nav"]) if row.get("unit_nav") is not None else None,
+            "accum_nav": float(row["accum_nav"]) if row.get("accum_nav") is not None else None,
         })
 
     return result

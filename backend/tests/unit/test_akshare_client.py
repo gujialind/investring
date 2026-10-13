@@ -570,6 +570,31 @@ class TestCnAkshareRowsAreScreened:
         ]
 
 
+class TestFetchLayerDoesNotJudgeSign:
+    """#701 的分层边界：取数层只判「是不是有限数」，正负由写入判据 `_usable_nav` 收口。
+
+    这条不是多余的存在性检查。若有人在 `_finite_number` 里顺手加 `> 0`，0 价行会被计成
+    malformed，#651 的「上游给了行却零可解析」响亮判据会把一次同步整体打成 **failed**；
+    写侧判规则把同一批落成**跳过 + WARNING + 计 0 条**。两者都"正确"地拒绝了 0 价，但只有
+    后者是设计意图——同步任务里 failed 会连带产品状态与告警，跳过不会。故本层职责单独钉。
+    """
+
+    def test_zero_and_negative_nav_stay_parseable_rows(self, monkeypatch):
+        monkeypatch.setattr(
+            "akshare.fund_open_fund_info_em",
+            lambda **kw: _RowFrame([
+                {"净值日期": "2026-09-15", "单位净值": 0.0, "日增长率": -100.0},
+                {"净值日期": "2026-09-14", "单位净值": -1.5, "日增长率": 0.0},
+            ]),
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000051")
+
+        assert len(rows) == 2, "非正净值在本层仍是「解析得出的行」，拒绝发生在写侧"
+        assert [r["unit_nav"] for r in rows] == [0.0, -1.5]
+        assert [r["pct_change"] for r in rows] == [-100.0, 0.0]
+
+
 class TestPctChangePassthrough:
     """#692：日涨跌走上游字段透传（场外「日增长率」/ 港互认 `NAVCHGRT`）。
 

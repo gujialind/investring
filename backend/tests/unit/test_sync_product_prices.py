@@ -10,6 +10,7 @@ sync_product_prices 改造测试（P5.2）
 - 无单价行的写入侧过滤（#580）：跳过 + WARNING，整批无价不是失败
 - 港互认净值故障的响亮与良性边界（#651）：取数层抛错→failed，合法空窗→仍 success
 - 日涨跌的产生点收口（#692）：上游透传、tushare 场外就地推导、平盘 0.0 不折成缺值
+- 净值列的非正形态过滤（#701）：0.0/负单价与坏值同族跳过，非正累计净值只丢这一列
 """
 import logging
 
@@ -24,18 +25,22 @@ from decimal import Decimal
 
 from app.services.market_data_service import (
     sync_product_prices, _normalize_raw, _bulk_upsert_prices,
-    _mark_failed, _mark_skipped, _usable_price,
-    _derive_otc_pct_change, _db_prev_accum_nav, _optional_pct,
+    _mark_failed, _mark_skipped, _usable_price, _usable_nav,
+    _derive_otc_pct_change, _db_prev_accum_nav, _optional_pct, get_nav_coverage,
 )
 
 MARKET_DATA_LOGGER = "app.services.market_data_service"
 
 
 def _skip_warnings(caplog) -> list:
-    """「跳过无单价的行情行」的 WARNING 记录（静默丢弃正是 #580 要消除的形态）。"""
+    """写入侧跳过/丢列那道 WARNING 的记录（静默丢弃正是 #580 要消除的形态）。
+
+    按结构化 `operation` 筛而不按 message 子串筛：文案改一个字就让整组用例失去断言对象
+    是脆弱的耦合，而 `operation="bulk_upsert_prices"` 是这条日志的身份。
+    """
     return [
         r for r in caplog.records
-        if r.name == MARKET_DATA_LOGGER and "跳过无单价" in r.getMessage()
+        if r.name == MARKET_DATA_LOGGER and getattr(r, "operation", None) == "bulk_upsert_prices"
     ]
 
 
@@ -225,23 +230,50 @@ class TestUnusablePriceFiltered:
     恰好无感，所以本地全绿也抓不到。下面用 `_session_on_mysql_dialect()` 顶一个自报
     MySQL 方言的假 session 把这条分叉钉死（`test_all_rows_unusable_returns_zero` 在 CI 的
     MySQL job 上则是真身回归）。
+
+    #701 把这道防线从「只判可用性」扩成「可用性 + 必须为正」，判据换成 `_usable_nav`：
+    `0.0`/负单价落库后是「有价的一天」而不是缺行——快照把市值算成 0、`nav_coverage`
+    把这天计为已覆盖，比 NULL 更难从现场定位。参数表两侧都补齐，不再新起一套。
     """
 
-    @pytest.mark.parametrize("value", [None, "", float("nan"), float("inf"), "abc", "N/A"])
+    @pytest.mark.parametrize("value", [
+        None, "", float("nan"), float("inf"), "abc", "N/A",
+        # #701 补齐的 0/负形态：此前两侧参数表都没有它们，摘掉「必须为正」判据也不会
+        # 有任何用例变红——这正是该缺口能潜伏到今天的直接原因。
+        0.0, -1.5, 0, "0.0",
+    ])
     def test_unusable_values_are_rejected(self, value):
-        assert _usable_price(value) is False, f"{value!r} 不该被当作可入库单价"
+        assert _usable_nav(value) is False, f"{value!r} 不该被当作可入库净值"
 
-    @pytest.mark.parametrize("value", [3.5, "3.5", 1])
+    @pytest.mark.parametrize("value", [3.5, "3.5", 1, 0.0001])
     def test_usable_values_are_accepted(self, value):
-        assert _usable_price(value) is True, f"{value!r} 是可入库单价"
+        assert _usable_nav(value) is True, f"{value!r} 是可入库净值"
+
+    @pytest.mark.parametrize("value", [0.0, -1.5, 0, "0.0"])
+    def test_availability_guard_keeps_zero_and_negative(self, value):
+        """`_usable_price` 只管「上游给没给值」，正负判据在 `_usable_nav`（#701 分表）。
+
+        这条不是冗余：`pct_change` 经 `_optional_pct` 共用 `_usable_price`，平盘那天的
+        `0.0` 是 #692 专门保住的真实值。把判据「一刀切」改成判正会当场弄红平盘套件，
+        所以两侧判据的差集必须显式钉住，不能只靠 docstring。
+        """
+        assert _usable_price(value) is True, f"{value!r} 仍是合格的比率输入"
+        assert _optional_pct(value) is not None, "平盘 0.0 不得被折成缺值"
+
+    def test_value_collapsing_to_zero_at_column_scale_is_rejected(self):
+        """判正比的是**会落库的那个值**：列标度 4 位，`0.00001` 落库即 `0.0000`。"""
+        assert _usable_nav(0.00001) is False
+        assert _usable_nav(0.0001) is True
 
     def test_mixed_rows_write_only_usable_ones(self, test_db: Session, sample_etf_product: Product, caplog):
-        """混合批次：只有可价行入库、计数只算它们，被跳过的交易日进 WARNING"""
+        """混合批次：只有合格单价的行入库、计数只算它们，被跳过的交易日进 WARNING"""
         rows = [
             {"trade_date": "20250106", "unit_price": 3.5, "pre_close": 3.4},
             {"trade_date": "20250107", "unit_price": None, "pre_close": 3.5},
             {"trade_date": "20250108", "unit_price": "", "pre_close": 3.5},
             {"trade_date": "20250109", "unit_price": float("nan"), "pre_close": 3.5},
+            {"trade_date": "20250110", "unit_price": 0.0, "pre_close": 3.5},
+            {"trade_date": "20250113", "unit_price": -1.5, "pre_close": 3.5},
         ]
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
             count = _bulk_upsert_prices(test_db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
@@ -257,7 +289,9 @@ class TestUnusablePriceFiltered:
 
         warnings = _skip_warnings(caplog)
         assert warnings, "跳过无价行却没打 WARNING——又变回静默丢弃"
-        assert warnings[-1].skipped == ["20250107", "20250108", "20250109"]
+        assert warnings[-1].skipped == [
+            "20250107", "20250108", "20250109", "20250110", "20250113",
+        ], "0 价与负价必须和无值同族被点名，否则事后无从分辨缺的是哪几天"
         assert warnings[-1].product_code == "510300.SH"
 
     def test_all_rows_unusable_returns_zero(self, test_db: Session, sample_etf_product: Product, caplog):
@@ -265,6 +299,7 @@ class TestUnusablePriceFiltered:
         rows = [
             {"trade_date": "20250106", "unit_price": None},
             {"trade_date": "20250107", "unit_price": ""},
+            {"trade_date": "20250108", "unit_price": 0.0},
         ]
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
             count = _bulk_upsert_prices(test_db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
@@ -276,8 +311,68 @@ class TestUnusablePriceFiltered:
             PriceRecord.market == "CN_EXCHANGE",
         ).count() == 0
         warnings = _skip_warnings(caplog)
-        assert warnings and warnings[-1].skipped == ["20250106", "20250107"], \
+        assert warnings and warnings[-1].skipped == ["20250106", "20250107", "20250108"], \
             "整批被跳过时仍要留下全部交易日，否则事后无从定位缺哪几天"
+
+    def test_mysql_branch_skips_a_whole_batch_of_zero_prices(self, caplog):
+        """整批 0 价在 MySQL 分支同样是「跳过 + 计 0 条」，不是 StatementError（#701 × #613）。
+
+        判据一放宽，落到「整批被滤空」这个形态的概率就变了：上游一次故障给出一段
+        `close=0.0` 即整批为空，而空列表进 `db.execute(sql, [])` 会抛 SQLAlchemy 内部文案，
+        把「跳过」记成 failed——正是 #613 那条只在 MySQL 上显形的分叉。CI 的 MySQL job
+        上这条是真身回归。
+        """
+        db = _session_on_mysql_dialect()
+        rows = [
+            {"trade_date": "20250106", "unit_price": 0.0},
+            {"trade_date": "20250107", "unit_price": -1.5},
+        ]
+
+        with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
+            count = _bulk_upsert_prices(db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
+
+        assert count == 0
+        db.execute.assert_not_called()
+        assert _skip_warnings(caplog), "整批 0 价也得留下 WARNING，不能静默计 0 条"
+
+    def test_zero_accumulated_nav_drops_only_that_column(self, test_db: Session,
+                                                        sample_otc_product: Product, caplog):
+        """累计净值非正**只丢这一列**：单价合格的一天仍然入库，不该降级成「没有净值」。
+
+        与整行跳过的分界：`unit_price` 决定这一天有没有价（快照取价的输入），
+        `accumulated_nav` 只是 tushare 场外推导日涨跌的分子/基准与展示列。把后者判坏
+        连带丢行，会让快照报 `MISSING_NAV`——那是把一个派生口径的缺值升级成账务缺口。
+        """
+        rows = [
+            {"trade_date": "20260915", "unit_price": 1.2, "accumulated_nav": 0.0},
+            {"trade_date": "20260916", "unit_price": 1.3, "accumulated_nav": -1.5},
+            {"trade_date": "20260917", "unit_price": 1.4, "accumulated_nav": 1.5},
+        ]
+        with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
+            count = _bulk_upsert_prices(test_db, OTC, "CN_OTC", rows, "tushare")
+        test_db.commit()
+
+        assert count == 3, "单价合格的三行都得入库"
+        written = test_db.query(PriceRecord).filter(
+            PriceRecord.product_code == OTC, PriceRecord.market == "CN_OTC"
+        ).order_by(PriceRecord.price_date).all()
+        assert [r.accumulated_nav for r in written] == [None, None, Decimal("1.5000")], \
+            "非正累计净值必须被丢弃而不是落库成 0/负值"
+        assert [r.unit_price for r in written] == [Decimal("1.2000"), Decimal("1.3000"), Decimal("1.4000")]
+
+        warnings = _skip_warnings(caplog)
+        assert warnings and warnings[-1].skipped == [], "整行都没被跳过"
+        assert warnings[-1].accumulated_nav_dropped == ["20260915", "20260916"], \
+            "丢了哪几列也要留痕，否则该日涨跌恒空无从解释"
+
+    def test_none_accumulated_nav_is_not_reported_as_dropped(self, test_db: Session,
+                                                             sample_otc_product: Product, caplog):
+        """上游本来就没给累计净值（NULL）不算「丢弃」，不进 WARNING。"""
+        rows = [{"trade_date": "20260915", "unit_price": 1.2, "accumulated_nav": None}]
+        with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
+            assert _bulk_upsert_prices(test_db, OTC, "CN_OTC", rows, "tushare") == 1
+
+        assert not _skip_warnings(caplog), "缺值是正常形态，别把每场外一天都记成一条告警"
 
     def test_mysql_branch_never_executes_an_empty_batch(self, caplog):
         """MySQL 分支的空批次早退：`db.execute(sql, [])` 会抛 StatementError（Blocker 本体）"""
@@ -305,6 +400,42 @@ class TestUnusablePriceFiltered:
         assert db.execute.call_count == 1
         values = db.execute.call_args.args[1]
         assert [v["price_date"] for v in values] == [date(2025, 1, 6)]
+
+
+class TestZeroPriceNotCountedAsCovered:
+    """#701 端到端：上游给 0 价的那一天，从「看起来很确定的有价日」回到「缺价日」。
+
+    判据收紧的直接后果不是「少写一行」，而是**盘点口径不再假绿**：0 价行不入库 ⇒
+    该日落 `missing_dates` ⇒ 快照按既有严格取价报 `MISSING_NAV`（缺行侧的后果由
+    `tests/integration/test_snapshot_nav_strict.py` 钉）。这里钉的是中间那段——
+    `nav_coverage` 只按 `price_date` 计数，坏值行一旦入库它就永远看不见。
+    """
+
+    @patch("app.services.market_data_service.get_fund_daily")
+    def test_zero_day_is_missing_not_covered(self, mock_daily, test_db: Session,
+                                             sample_etf_product: Product):
+        mock_daily.return_value = [
+            {"trade_date": "20250106", "close": 4.0, "pre_close": 3.9, "pct_chg": 2.56},
+            {"trade_date": "20250107", "close": 0.0, "pre_close": 4.0, "pct_chg": 0.0},
+            {"trade_date": "20250108", "close": -1.5, "pre_close": 4.0, "pct_chg": 0.0},
+        ]
+
+        result = sync_product_prices(test_db, "510300.SH", "CN_EXCHANGE",
+                                     start_date=date(2025, 1, 6), end_date=date(2025, 1, 8))
+        test_db.commit()
+
+        assert result["success"] is True, "坏值是一段里被跳过的行，不是整段故障"
+        assert result["synced_count"] == 1
+        assert test_db.query(PriceRecord).filter(
+            PriceRecord.product_code == "510300.SH",
+            PriceRecord.price_date.in_([date(2025, 1, 7), date(2025, 1, 8)]),
+        ).count() == 0, "0 价与负价都不落库"
+
+        coverage = get_nav_coverage(test_db, "510300.SH", "CN_EXCHANGE",
+                                    date(2025, 1, 6), date(2025, 1, 8))
+        assert coverage["synced_days"] == 1
+        assert coverage["missing_dates"] == ["2025-01-07", "2025-01-08"], \
+            "坏值日不得再计为已覆盖，否则快照把市值算成 0 而这里说一切正常"
 
 
 # 实测的港互认故障窗口（#651，2026-09-14~09-22 共 7 个交易日，已与东财 PDATE/NAV 逐日核对）
@@ -472,13 +603,11 @@ class TestNormalizeRawPctKeys:
     def test_zero_accumulated_nav_is_not_folded_into_missing(self):
         """`_normalize_raw` 只做保真映射：`0.0` 与「上游没给」不得混成一件事。
 
-        钉的是**这一层自身**的判空，不是端到端形态：tushare 场外路径的取数层
-        `get_fund_nav` 仍按 truthiness 把 `0.0` 折成缺值，故 `accum_nav = 0.0` 到不了
-        这里。那个折法刻意保留（#699 L2 评审核实结论）——`0.0` 不是合法净值，让它以
-        缺值形态落到 `_bulk_upsert_prices` 的 #580 跳过 + WARNING 比直穿更安全：直穿会
-        让 `_derive_otc_pct_change` 按 `(0/prev − 1) × 100` 算出 −100.0000 的假暴跌，
-        `unit_nav = 0.0` 更会被 `_usable_price` 放行、把 0 价写进 `unit_price` 毒化快照
-        市值（该判据只看可用性、不看正负）。
+        钉的是**这一层自身**的判空。#701 起取数层 `get_fund_nav` 也不再折 0（改判
+        `is not None`），「`0.0` 不是合法净值」统一由写入判据 `_usable_nav` 处置：
+        `unit_price=0.0` 整行跳过 + WARNING，`accumulated_nav=0.0` 只丢这一列。
+        保真映射因此比从前更有意义——坏值能一路走到唯一那道判据并被点名，而不是
+        在取数层就变成「没给值」从而查不到来源。
         """
         rows = _normalize_raw(
             [{"trade_date": "20260915", "unit_nav": 1.2, "accum_nav": 0.0}], "CN_OTC"
@@ -573,12 +702,14 @@ class TestOtcPctChangeDerivation:
 
         assert rows[1]["pct_change"] == Decimal("0.0000")
 
-    def test_non_positive_baseline_stays_none(self, test_db: Session,
-                                              sample_otc_product: Product):
-        """基准 <= 0 无从计算比值，保持 None，绝不伪造成 0.00%。
+    def test_non_positive_accum_neither_derives_nor_serves_as_baseline(self, test_db: Session,
+                                                                      sample_otc_product: Product):
+        """非正 accum 既不算涨跌、也不作后续基准（#701 起与写侧 `_usable_nav` 同判据）。
 
-        守卫只看**基准**：当日 accum 为负而基准为正时照样出值（-200.0000），那是数据
-        本身的形状，不是本函数该拦的。
+        此前本用例钉的是相反口径（「守卫只看基准，当日值为负照样出值」）。改判的理由
+        不是算术而是自洽：同一行 `accumulated_nav` 在 `_bulk_upsert_prices` 已被判坏、
+        不会落库，却用它推导出一个会被落库的百分比，等于让派生列比它的输入更宽松。
+        `0.0` 作分子更会直接推出 −100.0000 的假暴跌。
         """
         rows = [
             _norm_row("20260915", unit=1.0, accum=0.0),
@@ -589,15 +720,34 @@ class TestOtcPctChangeDerivation:
 
         _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
 
-        assert rows[0]["pct_change"] is None              # 无基准
-        assert rows[1]["pct_change"] is None              # 基准 0
-        assert rows[2]["pct_change"] == Decimal("-200.0000")  # 基准 1.5 为正，照常出值
-        assert rows[3]["pct_change"] is None              # 基准为负
+        assert rows[0]["pct_change"] is None            # 当日值非正：无推导、不作基准
+        assert rows[1]["pct_change"] is None            # 无基准（首条合格行）
+        assert rows[2]["pct_change"] is None            # 当日值非正：不再出 −200.0000
+        assert rows[3]["pct_change"] == Decimal("6.6667"), \
+            "坏值行要整条跳过、不能把基准污染成 0/负——否则后一天算不出真实涨跌"
 
-    def test_negative_accum_yields_a_value_but_a_negative_baseline_does_not(
-        self, test_db: Session, sample_otc_product: Product
-    ):
-        """把「基准非正」与「当日值为负」分开：守卫只看基准。"""
+    def test_non_positive_db_baseline_stays_none(self, test_db: Session,
+                                                 sample_otc_product: Product):
+        """DB 基准非正时无从算比值，保持 None，绝不伪造成 0.00%。
+
+        写侧判正后新库不再有非正基准行，但**存量**行不经写判据（`_seed_price` 直插，
+        生产上迁移 0017 之前也留过形态），读侧这条守卫不得因此删掉。
+        """
+        _seed_price(test_db, OTC, "CN_OTC", date(2026, 9, 14), unit=1.0, accum=0.0)
+        rows = [_norm_row("20260915", unit=1.0, accum=1.5)]
+
+        assert _db_prev_accum_nav(test_db, OTC, "CN_OTC", date(2026, 9, 15)) == Decimal("0.0000")
+        _derive_otc_pct_change(test_db, OTC, "CN_OTC", rows)
+
+        assert rows[0]["pct_change"] is None
+
+    def test_negative_pct_is_legitimate_when_both_navs_are_positive(self, test_db: Session,
+                                                                    sample_otc_product: Product):
+        """净值为负是坏值（上一条用例拒收），日涨跌为负是真实下跌——两件事不得混为一谈。
+
+        这正是判据分表在推导侧的镜像：`_usable_nav` 管 accum，`_optional_pct` 走
+        `_usable_price` 管涨跌，后者判正会把 −6.6667% 这样的正常跌幅一起判坏。
+        """
         rows = [
             _norm_row("20260915", unit=1.0, accum=1.5),
             _norm_row("20260916", unit=1.0, accum=1.4),

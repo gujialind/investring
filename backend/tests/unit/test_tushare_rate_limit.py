@@ -6,7 +6,10 @@ Tushare 客户端限流增强测试（P5.1）
 - 限频退避（10s→30s→60s 指数退避）
 - 重试耗尽后抛 TushareAPIError
 - fund_daily 行映射：平盘日 pct_chg=0.0 不被 truthiness 折成缺值（#692）
+- fund_nav 行映射：unit_nav/accum_nav 的 0.0 同样不折成缺值，判正交给写入侧（#701）
 """
+import math
+
 import pytest
 from unittest.mock import patch, MagicMock
 from app.services import tushare_client
@@ -162,3 +165,55 @@ class TestFundDailyRowMapping:
         assert tushare_client.get_fund_daily("510300.SH", "20260915", "20260915") == [
             {"trade_date": "20260915", "close": 0.0, "pre_close": None, "pct_chg": None}
         ]
+
+
+class TestFundNavRowMapping:
+    """#701：tushare 场外的 `unit_nav`/`accum_nav` 不再用 truthiness 折 0。
+
+    这一度是全路径上唯一挡住 0 价的地方（`0.0` 静默变成「上游没给」）。判正收口移到
+    写入侧 `_usable_nav` 之后，本层只回答「上游给没给值」——坏值于是能一路走到那道
+    唯一判据并被 WARNING 点名，比在这里无声消失可查。
+
+    本组用例只钉**取数层输出形态**，不钉终态：`0.0`/NaN 落库与否由
+    `test_sync_product_prices.py::TestUnusablePriceFiltered` 断言，两层各钉各的，
+    改判据时才会有一处变红并指向该改的那处。
+    """
+
+    @staticmethod
+    def _frame(rows):
+        df = MagicMock()
+        df.empty = False
+        df.iterrows.return_value = list(enumerate(rows))
+        return df
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_zero_nav_is_preserved_not_folded_into_missing(self, mock_get_pro, mock_sleep):
+        mock_pro = MagicMock()
+        mock_pro.fund_nav.return_value = self._frame([
+            {"nav_date": "20260915", "unit_nav": 0.0, "accum_nav": 0.0},
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        assert tushare_client.get_fund_nav("000300.OF", "20260915", "20260915") == [
+            {"trade_date": "20260915", "unit_nav": 0.0, "accum_nav": 0.0}
+        ]
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_missing_and_zero_nav_are_distinguished(self, mock_get_pro, mock_sleep):
+        """pandas 缺值是 NaN 不是 None：`is not None` 让它以 NaN 下传，终态仍由写侧判定。"""
+        nan = float("nan")
+        mock_pro = MagicMock()
+        mock_pro.fund_nav.return_value = self._frame([
+            {"nav_date": "20260915", "unit_nav": nan, "accum_nav": None},
+            {"nav_date": "20260916", "unit_nav": 1.5, "accum_nav": 0.0},
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        result = tushare_client.get_fund_nav("000300.OF", "20260915", "20260916")
+
+        assert result[0]["trade_date"] == "20260915"
+        assert math.isnan(result[0]["unit_nav"]), "缺值不再被折成 None，交给写侧判坏"
+        assert result[0]["accum_nav"] is None
+        assert result[1] == {"trade_date": "20260916", "unit_nav": 1.5, "accum_nav": 0.0}

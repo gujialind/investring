@@ -18,11 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 def _usable_price(value: Any) -> bool:
-    """单价是否可入库（#580）。
+    """上游原值是否是「一个值」（#580 可用性判据）。
 
     数据源缺值时给的是 None/空串，pandas 转换还说不准给 NaN——三者都不能作为
     「这一天的价格」落库。它们一旦进了 price_record，`unit_price` 就从此不再可靠：
     读取侧 `float(None)` 直接 500，快照取价反过来把 NULL 当成说好吧有价。
+
+    **只回答「上游有没有给值」，不回答「给的值像不像净值」**（#701）：净值列还要过
+    `_usable_nav` 的正值判据；`pct_change` 则必须停在本题——日涨跌是比率，平盘那天的
+    `0.0` 是真实值（#692 专门保住它），判正会把平盘一起判坏。
 
     取数层 `akshare_client._finite_number` 判的是同一族坏值，刻意各留一处（把 DB 层
     service 引回叶子数据源模块会反转分层）；放宽一侧的口径必须同时复核另一侧。
@@ -33,6 +37,31 @@ def _usable_price(value: Any) -> bool:
         return math.isfinite(float(value))
     except (TypeError, ValueError):
         return False
+
+
+def _usable_nav(value: Any) -> bool:
+    """净值型单价是否够格入库（#701：在 #580 的可用性之上再加「必须为正」）。
+
+    适用 `price_record.unit_price`（行级判据：不合格整行不入库）与
+    `accumulated_nav`（列级判据：只丢这一列，不连累已合格的价格）。
+
+    `0.0` 与负数是有限值，因而不是 `_usable_price` 的拒绝对象；但它们在业务上不是
+    任何一天的净值——真实上游给 0 只可能是脏数据、上游故障或新市场接入。它一旦落库，
+    这一行是「有价的一天」而不是缺行：快照把市值算成 0（或负），`nav_coverage` 把这天
+    计为已覆盖，缺口从此无法在这里定位——与迁移 0017 描述 NULL 行同一条错法
+    （「未知的伪装成已知的」）。负价还多一层：读取侧的 truthiness 判空挡不住它，
+    调仓买入会算出负份额落库。
+
+    判正比的是**会落库的那个值**：列标度 `Numeric(10,4)`，`0.00001` 之类过 `float > 0`
+    即放行、落库塌成 `0.0000`，正是要消灭的形态，故先经 `quantize_nav` 收口再比——
+    「落库列的标度不是收口点」（口径见 `app/utils/quantize.py`），判据也不能比它宽。
+
+    与 `_usable_price` 分表而不是加参数：两类输入的判据集合本就不同，共用一个函数
+    参数会把「平盘 0.0 必须留」这条反证变成调用点的口头约定。
+    """
+    if not _usable_price(value):
+        return False
+    return quantize_nav(value) > 0
 
 
 def get_price_records(
@@ -442,9 +471,10 @@ def _normalize_raw(raw_data: List[dict], market: str) -> List[dict]:
     4 位 HALF_UP（#692）。缺值、坏值（含 NaN）与 `0.0` 必须区分：0.0 是平盘这一天的
     真实涨跌，折成 None 会让前端读成「无数据」；反之缺值不得伪造成 0.0。同分支的单位
     净值/累计净值同样改判 `is not None`——本函数只做保真映射，不在这里用 `or` 链把
-    `0.0` 与缺值混成一件事；「`0.0` 不是合法净值」由取数层与写入判据各自处置
-    （tushare 场外的 `get_fund_nav` 折成缺值，`_bulk_upsert_prices` 的 #580 判据只看
-    可用性、不看正负），详见 `test_zero_accumulated_nav_is_not_folded_into_missing`。
+    `0.0` 与缺值混成一件事。「`0.0` 不是合法净值」由**写入判据独自**处置（#701：
+    `_bulk_upsert_prices` 对 `unit_price`/`accumulated_nav` 走 `_usable_nav`，在可用性
+    之上再判正；取数层不再折 0，好让坏值响亮地落成跳过 + WARNING 而不是静默消失），
+    详见 `test_zero_accumulated_nav_is_not_folded_into_missing`。
     """
     seen: dict[str, dict] = {}
     for r in raw_data:
@@ -480,7 +510,9 @@ def _normalize_raw(raw_data: List[dict], market: str) -> List[dict]:
 def _optional_pct(value: Any) -> Optional[Decimal]:
     """日涨跌原值 → 4 位百分数 Decimal；缺值/坏值（None、空串、NaN、Inf、非数字）→ None。
 
-    坏值判据复用 `_usable_price`（#580）：与单价是同一族上游缺值形态，刻意不另立一套。
+    坏值判据复用 `_usable_price`（#580）：上游缺值形态与单价同族，刻意不另立一套。
+    **不含正负判据**（#701）——`_usable_nav` 管的是净值列，日涨跌是比率、平盘 `0.0`
+    必须落成 `0.0000`，两类输入不共用一个「必须为正」。
     不经这道过滤直接 `quantize_nav` 的话，pandas 的 NaN 会让 `Decimal.quantize` 抛
     InvalidOperation，把一次同步整体打成 failed。
     """
@@ -543,7 +575,7 @@ def _derive_otc_pct_change(
     - 港互认与 akshare 场外走上游字段透传，语义是**单位净值**日涨跌（除息日含跳水），
       与此处的总收益口径在除息日存在一次性口径差。
 
-    无基准（产品首条记录）、基准非正、accum 缺失或坏值时保持 None，**不伪造 0.00%**：
+    无基准（产品首条记录）、基准非正、accum 缺失/坏值/非正时保持 None，**不伪造 0.00%**：
     首行无基准与平盘是两件事。
     """
     if not rows:
@@ -557,8 +589,10 @@ def _derive_otc_pct_change(
     )
     for r in ordered:
         accum = r.get("accumulated_nav")
-        if not _usable_price(accum):
-            # 缺失/坏值行既算不出涨跌，也不作后续基准（与迁移的 LAG 非空子集同口径）
+        if not _usable_nav(accum):
+            # 缺失/坏值/非正行既算不出涨跌，也不作后续基准（与迁移的 LAG 非空子集同口径）；
+            # 判正的理由与 `_bulk_upsert_prices` 同源：0.0 作分子会推出 −100.0000 的假暴跌
+            # （#701），而取数层 `get_fund_nav` 现已不再把 0 折成缺值，只能在这一层拦住。
             continue
         if prev is not None and prev > 0:
             r["pct_change"] = quantize_nav(
@@ -580,35 +614,43 @@ def _bulk_upsert_prices(
     if not rows:
         return 0
 
-    values, skipped = [], []
+    values, skipped, nav_dropped = [], [], []
     for r in rows:
         td = r["trade_date"]
-        # #580：无单价的行不入库。落进去的后果比缺一行严重得多——读取路径
-        # `float(None)` 炸成 500（market_data.py），快照取价把 NULL 当作「有这一天」、
-        # 让 nav_coverage 误计为已覆盖，事后再难从这里定位缺失的那个日期。
-        if not _usable_price(r.get("unit_price")):
+        # #580 无值 / #701 非正：单价不合格的行不入库。落进去的后果比缺一行严重得多——
+        # 读取路径 `float(None)` 炸成 500（market_data.py）；0.0 更隐蔽，快照取价把这一行
+        # 当作「有价的一天」、把市值算成 0，nav_coverage 还把它误计为已覆盖，事后再难从
+        # 这里定位缺失的那个日期。负数连读取侧的 truthiness 判空都挡不住（算出负份额）。
+        if not _usable_nav(r.get("unit_price")):
             skipped.append(td)
             continue
+        # 累计净值不合格**只丢这一列**：unit_price 已合格，这一天确实有价，整行丢弃会把
+        # 「一个派生口径的缺值」升级成「这一天没有净值」（快照报 MISSING_NAV）。
+        accum = r.get("accumulated_nav")
+        if accum is not None and not _usable_nav(accum):
+            nav_dropped.append(td)
+            accum = None
         d = date(int(td[:4]), int(td[4:6]), int(td[6:8]))
         values.append({
             "product_code": product_code,
             "market": market,
             "price_date": d,
             "unit_price": r.get("unit_price"),
-            "accumulated_nav": r.get("accumulated_nav"),
+            "accumulated_nav": accum,
             "pre_close": r.get("pre_close"),
             "pct_change": r.get("pct_change"),
             "source": source,
         })
 
-    if skipped:
+    if skipped or nav_dropped:
         logger.warning(
-            "跳过无单价的行情行（#580）",
+            "行情行写入侧过滤（#580 无值 / #701 非正）",
             extra={
                 "operation": "bulk_upsert_prices",
                 "product_code": product_code,
                 "market": market,
                 "skipped": skipped,
+                "accumulated_nav_dropped": nav_dropped,
             },
         )
 
