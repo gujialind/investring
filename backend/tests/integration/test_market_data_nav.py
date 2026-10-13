@@ -178,7 +178,11 @@ class TestNavHistoryPctByMarket:
     def test_hk_mutual_rows_carry_upstream_pct_without_accum(
         self, client, viewer_headers, test_db
     ):
-        """港互认：日涨跌来自上游 NAVCHGRT，累计净值上游不给、恒为 None。"""
+        """港互认：日涨跌来自上游 NAVCHGRT；本形态（968050）累计净值整列为 None。
+
+        #703 起写侧按行读上游 `ACCNAV`（968024 形态有值），但缺值基金仍整列 NULL——
+        那条形态由 nav-analysis 的 unit 回退承接，见 `TestNavAnalysis`。
+        """
         _seed_nav(test_db, [
             (date(2026, 9, 14), "10.5700", None, None),
             (date(2026, 9, 15), "10.5400", None, "-0.4762"),
@@ -199,20 +203,26 @@ class TestNavAnalysis:
         _seed_nav(test_db, _FULL_ROWS)
         return client, viewer_headers
 
-    def test_curve_filters_by_range(self, seeded):
-        client, headers = seeded
-        # 最新 2025-12-01；近 3 月起点 2025-09-01（恰在窗口内）
+    @staticmethod
+    def _analysis(client, headers, range_code, code=_CODE, market=_MARKET):
         resp = client.get(
-            f"/api/market-data/products/{_CODE}/{_MARKET}/nav-analysis",
-            params={"range": "3m"},
+            f"/api/market-data/products/{code}/{market}/nav-analysis",
+            params={"range": range_code},
             headers=headers,
         )
         assert resp.status_code == 200
-        curve = resp.json()["curve"]
+        return resp.json()
+
+    def test_curve_filters_by_range(self, seeded):
+        client, headers = seeded
+        # 最新 2025-12-01；近 3 月起点 2025-09-01（恰在窗口内）
+        body = self._analysis(client, headers, "3m")
+        curve = body["curve"]
         assert [p["date"] for p in curve] == [
             "2025-09-01", "2025-10-08", "2025-11-03", "2025-12-01",
         ]
         assert curve[0]["accumulated_nav"] == 4.0
+        assert body["nav_basis"] == "accumulated"
 
     def test_interval_returns_all_windows(self, seeded):
         client, headers = seeded
@@ -274,6 +284,70 @@ class TestNavAnalysis:
             "m1": None, "m3": None, "m6": None,
             "y1": None, "ytd": None, "all": None,
         }
+        # 空态不给前端第三种 basis 取值（#703）：无数据与口径无关。
+        assert body["nav_basis"] == "accumulated"
+
+    def test_interval_returns_are_accum_basis_when_accum_exists(
+        self, client, viewer_headers, test_db
+    ):
+        """累计净值有值时不消费单位净值（#703）：两列取值刻意拉开，串了立刻可见。"""
+        _seed_nav(test_db, [
+            (date(2025, 10, 1), "4.0000", "4.8000", None),
+            (date(2025, 11, 3), "4.1000", "5.0000", None),
+            (date(2025, 12, 1), "4.1500", "5.2500", "1.2195"),
+        ])
+
+        body = self._analysis(client, viewer_headers, "1m")
+
+        assert body["nav_basis"] == "accumulated"
+        assert [p["accumulated_nav"] for p in body["curve"]] == [5.0, 5.25]
+        # m1 基准 11-03：5.25/5.00-1 = 5.0%；若误用单位净值会算成 1.2195%
+        assert body["interval_returns"]["m1"] == 5.0
+
+    def test_unit_price_fallback_when_accum_all_null(
+        self, client, viewer_headers, test_db
+    ):
+        """#703 本体：累计净值整列为 NULL 时回退单位净值，两张卡不再永久空白。
+
+        这是 issue 点名的零覆盖形态——港互认缺值基金与场内行情源该列恒 NULL，此前
+        `accumulated_nav IS NOT NULL` 把 1773 行完好的 `unit_price` 整段过滤掉，响应
+        仍是 200（前端失败态不触发），曲线与六窗永久空。
+        """
+        _seed_nav(test_db, [
+            (date(2024, 11, 1), "3.5000", None, None),
+            (date(2025, 11, 3), "4.1000", None, None),
+            (date(2025, 12, 1), "4.1500", None, "1.2195"),
+        ])
+
+        body = self._analysis(client, viewer_headers, "6m")
+
+        assert body["nav_basis"] == "unit"
+        assert [p["date"] for p in body["curve"]] == ["2025-11-03", "2025-12-01"]
+        assert [p["accumulated_nav"] for p in body["curve"]] == [4.1, 4.15]
+        returns = body["interval_returns"]
+        # 六窗与曲线同 basis：m1/m3/m6 的窗口起点都落在 11-03 之后 → 同一基准 4.10
+        assert returns["m1"] == 1.2195
+        assert returns["m3"] == 1.2195
+        assert returns["m6"] == 1.2195
+        # all 以首条（2024-11-01，3.50）为基准：4.15/3.50-1 = 18.5714%
+        assert returns["all"] == 18.5714
+
+    def test_partial_accum_keeps_accumulated_basis(
+        self, client, viewer_headers, test_db
+    ):
+        """部分行有累计净值时维持原语义（#703）：不按行混用两种口径。"""
+        _seed_nav(test_db, [
+            (date(2025, 11, 3), "4.1000", None, None),
+            (date(2025, 12, 1), "4.1500", "5.2500", None),
+        ])
+
+        body = self._analysis(client, viewer_headers, "6m")
+
+        assert body["nav_basis"] == "accumulated"
+        assert [p["date"] for p in body["curve"]] == ["2025-12-01"]
+        # 只有一条累计净值记录：基准不足，六窗全 None（原语义，回退不由此触发）
+        assert body["interval_returns"]["all"] is None
+        assert body["interval_returns"]["m1"] is None
 
     def test_invalid_range_422(self, client, viewer_headers):
         resp = client.get(

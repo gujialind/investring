@@ -13,10 +13,11 @@ export interface PriceDataPoint {
 
 /**
  * 历史净值行：单位净值必有；累计净值与日涨跌可空，两者成因不同（#692 更正归因）。
- * 累计净值为空 = 场内行情源、akshare 场外源与港互认上游都不提供该字段（仅 tushare
- * 场外净值有值），净值曲线与区间收益率因此在这些市场上为空；日涨跌为空 = 该产品首条
- * 记录无基准，或上游未提供且本地不满足推导条件。日涨跌是百分数（1.2195 即 1.2195%），
- * 前端不再乘 100。
+ * 累计净值为空 = 场内行情源不提供该字段，或港互认上游 `ACCNAV` 逐基金分档、该基金整列
+ * 为空（#703）；场外源（tushare 与 akshare，#704）逐日有值。净值曲线与区间收益率优先
+ * 按累计净值算，整列缺值时回退单位净值，口径见 `ProductNavAnalysis.nav_basis`。
+ * 日涨跌为空 = 该产品首条记录无基准，或上游未提供且本地不满足推导条件。日涨跌是百分数
+ * （1.2195 即 1.2195%），前端不再乘 100。
  */
 export interface NavHistoryItem {
   price_date: string;
@@ -45,12 +46,21 @@ export interface ProductIntervalReturns {
 
 export interface NavCurvePoint {
   date: string;
+  /** 字段名沿用后端契约（#703）：`nav_basis === "unit"` 时装的是单位净值/场内收盘价。 */
   accumulated_nav: number;
 }
+
+/**
+ * 净值口径（#703）：`accumulated` = 累计净值（含分红再投资）；`unit` = 单位净值回退
+ * 口径，该产品整段历史都没有累计净值时使用——收益率不含分红再投资，场内产品为市价
+ * 涨跌。卡片标题与注记必须按它切换，不能把回退口径的数字标成累计净值。
+ */
+export type NavBasis = "accumulated" | "unit";
 
 export interface ProductNavAnalysis {
   curve: NavCurvePoint[];
   interval_returns: ProductIntervalReturns;
+  nav_basis: NavBasis;
 }
 
 /** 净值曲线区间（与后端 nav-analysis 的 range 参数同码） */

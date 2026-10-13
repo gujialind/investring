@@ -41,6 +41,10 @@ _COMPACT_DATE_RE = re.compile(r"^\d{8}$")
 _OTC_PCT_COLUMN = "日增长率"
 # 东财港互认响应里的日涨跌率键（百分数形态，如 -0.4762 = -0.4762%）。
 _HK_PCT_KEY = "NAVCHGRT"
+# 东财港互认响应里的累计净值键（#703）。实测**逐基金分档**：968024 有值、968050 为
+# 空串，故它是列级可选字段而非恒缺字段——此前按「恒为空串」硬编码 None，把有值的那
+# 批基金也一并丢成了 NULL。
+_HK_ACCUM_KEY = "ACCNAV"
 
 
 class AkshareAPIError(Exception):
@@ -124,19 +128,21 @@ def _screen_nav_rows(
     start_date: Optional[str],
     end_date: Optional[str],
     extras: Optional[List[Any]] = None,
-) -> Tuple[List[Tuple[str, float, Optional[float]]], List[str]]:
-    """把 (日期原值, 价格原值) 序列筛成 (YYYYMMDD, price, extra)，并回报无法解析的样本。
+    extras2: Optional[List[Any]] = None,
+) -> Tuple[List[Tuple[str, float, Optional[float], Optional[float]]], List[str]]:
+    """把 (日期原值, 价格原值) 序列筛成 (YYYYMMDD, price, extra, extra2)，并回报无法解析的样本。
 
     日期先于区间判定：坏日期无法比较区间，把它记成 malformed 而不是默默丢掉，
     「上游给了行却零可解析」这条判据才有输入。落在区间外是正常剔除，不算 malformed。
 
-    `extras`（#692）是与 `pairs` 等长的第三列原值（场外「日增长率」/ 港互认
-    `NAVCHGRT`），按 `_finite_number` 归一成 float 或 None，缺省整列为 None。它
-    **刻意不计入 malformed**：「这一行是不是净值行」的判据仍只看日期 + 价格。日涨跌
-    是纯展示列，把它的坏值算进去等于让 #651 的响亮判据由展示列驱动——一列漂移就会
-    打死整段可用历史。
+    `extras`（#692）/ `extras2`（#703）是与 `pairs` 等长的附加列原值——`extras` 是日
+    涨跌（场外「日增长率」/ 港互认 `NAVCHGRT`），`extras2` 是港互认累计净值 `ACCNAV`
+    ——各按 `_finite_number` 归一成 float 或 None，缺省整列为 None。两者**刻意都不计入
+    malformed**：「这一行是不是净值行」的判据仍只看日期 + 价格。日涨跌与累计净值都是
+    展示列（累计净值另有写入侧 `_usable_nav` 的列级判据兜底），把它们的坏值算进去等于
+    让 #651 的响亮判据由展示列驱动——一列漂移就会打死整段可用历史。
     """
-    usable: List[Tuple[str, float, Optional[float]]] = []
+    usable: List[Tuple[str, float, Optional[float], Optional[float]]] = []
     malformed: List[str] = []
     for index, (raw_date, raw_price) in enumerate(pairs):
         td = _compact_date(raw_date)
@@ -152,12 +158,13 @@ def _screen_nav_rows(
         if end_date and td > end_date:
             continue
         extra = _finite_number(extras[index]) if extras is not None else None
-        usable.append((td, price, extra))
+        extra2 = _finite_number(extras2[index]) if extras2 is not None else None
+        usable.append((td, price, extra, extra2))
     return usable, malformed
 
 
 def _finalize_nav_rows(
-    usable: List[Tuple[str, float, Optional[float]]],
+    usable: List[Tuple[str, float, Optional[float], Optional[float]]],
     malformed: List[str],
     *,
     upstream_rows: int,
@@ -284,7 +291,7 @@ def get_fund_nav_otc(
     )
     return [
         {"trade_date": td, "unit_nav": price, "accum_nav": None, "pct_change": pct}
-        for td, price, pct in usable
+        for td, price, pct, _accum in usable
     ]
 
 
@@ -512,8 +519,9 @@ def get_fund_hk_mutual(
     )
     pairs = [(row.get("PDATE"), row.get("NAV")) for row in rows]
     extras = [row.get(_HK_PCT_KEY) for row in rows]
+    extras2 = [row.get(_HK_ACCUM_KEY) for row in rows]
     usable, malformed = _screen_nav_rows(
-        pairs, start_date=start_date, end_date=end_date, extras=extras,
+        pairs, start_date=start_date, end_date=end_date, extras=extras, extras2=extras2,
     )
     _finalize_nav_rows(
         usable, malformed,
@@ -521,9 +529,9 @@ def get_fund_hk_mutual(
         operation="fetch_hk_mutual_nav", start_date=start_date,
         unwindowed_empty_is_error=start_date is None,
     )
-    # accumulated_nav 恒为 None：上游 ACCNAV 实测为空串，且改这里会连带改变 #595
-    # 净值曲线的取数形态，属另一决策（见 #651 follow-up）。
+    # accumulated_nav 按行取上游 ACCNAV（#703）：该键**逐基金分档**——实测 968024 有值、
+    # 968050 为空串——故缺值落 NULL 由读侧按 basis 回退单位净值，不在此用单位净值顶替。
     return [
-        {"trade_date": td, "unit_price": price, "accumulated_nav": None, "pct_change": pct}
-        for td, price, pct in usable
+        {"trade_date": td, "unit_price": price, "accumulated_nav": accum, "pct_change": pct}
+        for td, price, pct, accum in usable
     ]

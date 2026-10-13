@@ -8,8 +8,11 @@ import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger } from "
  * - E2E_ACTIVE：单平台 HBZQ（华宝证券）持有 510300.SH（沪深300ETF）15,000 份，
  *   连续 2 日快照（D2=4.0000 / D3=4.2000，仅 unit_price，accumulated_nav/pct_change
  *   为 NULL）→ 市值 ¥63,000.00、持有/最新收益 +¥3,000.00。
- * - 净值夹具无累计净值 → 累计净值曲线走「暂无净值数据」空态、六窗区间收益率
- *   全为占位「--」（#637：None 语义，历史不足或数据缺失不硬凑数）。
+ * - 净值夹具无累计净值 → nav-analysis 回退单位净值口径（`nav_basis="unit"`，#703）：
+ *   场内产品即收盘价（市价），曲线有两点、标题与注记明示口径；只有曲线与六窗**都**
+ *   取不到数时才是「暂无净值数据」+ 全「--」空态（#637：None 语义，历史不足或数据
+ *   缺失不硬凑数）。六窗只有「成立以来」有值：两行夹具只跨一个交易日，30/90/180/365
+ *   天窗口起点早于首条记录即不足窗口期（返回 None → 「--」是正确显示，不是回退失败）。
  * - 断言为可见性与关系式，不硬绑定快照日期；两端共用组件，mobile project 同跑。
  */
 
@@ -36,18 +39,87 @@ test.describe("产品详情页", () => {
     await expect(overview).toContainText("*累计收益含已卖出实现盈亏");
   });
 
-  test("净值曲线空态与六窗区间收益率占位", async ({ page }) => {
+  test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }) => {
+    await page.goto(PRODUCT_PATH);
+    const curve = page.getByTestId("product-curve-card");
+    // 承重点：修复前 `accumulated_nav IS NOT NULL` 把种子里两行完好的 unit_price 整段
+    // 过滤掉，本卡恒为「暂无净值数据」、六窗恒为「--」，而响应是 200（失败态不触发）。
+    // 场内回退口径是收盘价（市价），标题与注记必须自己说明，不得冒充累计净值。
+    await expect(
+      curve.getByRole("heading", { name: "收盘价走势（市价）" })
+    ).toBeVisible();
+    await expect(curve.getByTestId("nav-basis-note")).toContainText("不含分红再投资");
+    // 默认近6月选中
+    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
+    await expect(curve).not.toContainText("暂无净值数据");
+
+    const returns = page.getByTestId("product-returns-card");
+    await expect(
+      returns.getByRole("heading", { name: "区间收益率（市价）" })
+    ).toBeVisible();
+    await expect(returns.getByTestId("returns-basis-note")).toContainText("收盘价");
+    // 两行夹具 4.0000 → 4.2000 只跨一个交易日：「成立以来」以首条记录为基准 = +5.00%；
+    // 30/90/180/365 天窗口的起点早于首条记录即「不足窗口期」→ None → 「--」（#637：不
+    // 硬凑数，这正是回退后该有的形态，不是回退失败）。ytd 是变长窗口（clip 到首条），
+    // 种子跨年与否会改基准，按「不硬绑定快照日期」的既有约定不断言其数值。
+    await expect(returns.getByTestId("return-all")).toContainText("+5.00%");
+    for (const field of ["m1", "m3", "m6", "y1"]) {
+      await expect(returns.getByTestId(`return-${field}`)).toContainText("--");
+    }
+  });
+
+  test("曲线与六窗皆空才落空态，且此时仍报累计净值口径（#703）", async ({ page }) => {
+    // 空态与失败态、回退态三者必须可区分：这里 mock「产品存在但整段无价」的响应，
+    // 标题回到累计净值走势、不加口径注记（空态与口径无关，不给前端第三种取值）。
+    await page.route(/\/nav-analysis(\?|$)/, (route) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          curve: [],
+          interval_returns: { m1: null, m3: null, m6: null, y1: null, ytd: null, all: null },
+          nav_basis: "accumulated",
+        },
+      })
+    );
     await page.goto(PRODUCT_PATH);
     const curve = page.getByTestId("product-curve-card");
     await expect(curve.getByRole("heading", { name: "累计净值走势" })).toBeVisible();
-    // 默认近6月选中；ETF 夹具无累计净值 → 图表空态文案
-    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
-    await expect(curve).toContainText("暂无净值数据");
+    await expect(curve.getByTestId("nav-basis-note")).toHaveCount(0);
+    await expect(curve).toContainText("暂无净值数据", { timeout: 10_000 });
 
     const returns = page.getByTestId("product-returns-card");
+    await expect(returns.getByTestId("returns-basis-note")).toHaveCount(0);
     for (const field of ["m1", "m3", "m6", "y1", "ytd", "all"]) {
       await expect(returns.getByTestId(`return-${field}`)).toContainText("--");
     }
+  });
+
+  test("累计净值口径不加注记，标题与注记由 nav_basis 驱动（#703）", async ({ page }) => {
+    await page.route(/\/nav-analysis(\?|$)/, (route) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          curve: [
+            { date: "2020-01-02", accumulated_nav: 1.0 },
+            { date: "2020-06-30", accumulated_nav: 1.5 },
+          ],
+          interval_returns: { m1: 1.0, m3: 2.0, m6: 3.0, y1: 4.0, ytd: 5.0, all: 6.0 },
+          nav_basis: "accumulated",
+        },
+      })
+    );
+    await page.goto(PRODUCT_PATH);
+    const curve = page.getByTestId("product-curve-card");
+    // 场内产品拿到累计净值时仍走原口径：回退是「整段无累计净值」才触发，不按市场一刀切
+    await expect(
+      curve.getByRole("heading", { name: "累计净值走势" })
+    ).toBeVisible();
+    await expect(curve.getByTestId("nav-basis-note")).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId("product-returns-card")
+        .getByRole("heading", { name: "区间收益率", exact: true })
+    ).toBeVisible();
   });
 
   test("区间 Tab 切换", async ({ page }) => {
@@ -386,6 +458,7 @@ test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析�
       // m1 取一个可识别值作旧值基线（六窗是同一查询的另一个消费点，且是纯 DOM 文本；
       // 曲线数值落在 recharts 的 SVG 刻度里、不保证以文本呈现，故不作基线）
       interval_returns: { m1: 1.11, m3: 2.0, m6: 3.0, y1: 4.0, ytd: 5.0, all: 6.0 },
+      nav_basis: "accumulated",
     };
     await page.route(/\/nav-analysis\?range=6m/, (route) =>
       route.fulfill({ status: 200, json: SIX_M })

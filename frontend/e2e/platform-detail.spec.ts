@@ -423,13 +423,28 @@ test.describe("平台-产品详情页", () => {
     await expect(productTrigger(dlg, "510300.SH")).toBeVisible();
   });
 
-  test("净值曲线空态与六窗区间收益率占位", async ({ page }) => {
+  test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }) => {
+    // 与 product-detail.spec.ts 的同名用例同形：两页各一份卡片判序，缺一条就等于那一页
+    // 没有网（口径文案单点在 lib/navBasis.ts，但「有没有接上」是每页各自的接线）。
     await page.goto(PLATFORM_PRODUCT_PATH);
     const curve = page.getByTestId("platform-product-curve-card");
-    await expect(curve).toContainText("暂无净值数据");
+    await expect(
+      curve.getByRole("heading", { name: "收盘价走势（市价）" })
+    ).toBeVisible();
+    await expect(curve.getByTestId("nav-basis-note")).toContainText("不含分红再投资");
+    await expect(curve).not.toContainText("暂无净值数据");
 
     const returns = page.getByTestId("platform-product-returns-card");
-    for (const field of ["m1", "m3", "m6", "y1", "ytd", "all"]) {
+    await expect(
+      returns.getByRole("heading", { name: "区间收益率（市价）" })
+    ).toBeVisible();
+    await expect(returns.getByTestId("returns-basis-note")).toContainText("收盘价");
+    // 两行夹具 4.0000 → 4.2000 只跨一个交易日：「成立以来」以首条记录为基准 = +5.00%；
+    // 30/90/180/365 天窗口的起点早于首条记录即「不足窗口期」→ None → 「--」（#637：不
+    // 硬凑数，这正是回退后该有的形态，不是回退失败）。ytd 是变长窗口（clip 到首条），
+    // 种子跨年与否会改基准，按「不硬绑定快照日期」的既有约定不断言其数值。
+    await expect(returns.getByTestId("return-all")).toContainText("+5.00%");
+    for (const field of ["m1", "m3", "m6", "y1"]) {
       await expect(returns.getByTestId(`return-${field}`)).toContainText("--");
     }
   });
