@@ -152,7 +152,7 @@ ir schema trade              # 仅输出指定命令组
 | `INVALID_CONFIRM_DAYS` | confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；返回 422 |
 | `DIMENSION_VALUE_IN_USE` | 维度值关联仍被产品引用，不可移除（`details.products` 列引用产品） |
 | `DIMENSION_RULE_CONFLICT` | 维度规则收紧与存量产品冲突（`details.products` 列冲突产品） |
-| `CONFIRM_REQUIRED` | 需要显式确认（当前仅 `ir snapshot delete-bulk` 产出：真删除需 `--yes`，可先 `--dry-run` 预览） |
+| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1，不发任何后端请求）：`investor delete`、`portfolio close`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
 
 ### 3.4 数据类型说明
 
@@ -280,8 +280,12 @@ ir investor update <CODE> [--name <姓名>] [--role <角色>] [--phone <手机>]
 删除投资人。
 
 ```bash
-ir investor delete <CODE>
+ir investor delete <CODE> --yes
 ```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
 > **约束**：投资人仍持有份额（`InvestorHolding.shares > 0`）时禁止删除。
 
@@ -341,10 +345,14 @@ ir portfolio update <CODE> [--name <名称>] [--description <描述>] [--display
 关闭组合。
 
 ```bash
-ir portfolio close <CODE>
+ir portfolio close <CODE> --yes
 ```
 
-> **约束**：存在 pending 状态的申购/赎回或调仓交易时禁止关闭。
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
+
+> **约束**：存在 pending 状态的申购/赎回或调仓交易时禁止关闭。关闭可经 `ir portfolio reactivate` 回退，但仍纳入确认门槛以统一破坏性命令口径（#629）。
 
 #### `ir portfolio reactivate`
 
@@ -843,8 +851,14 @@ ir share-event update <ID> --json '{"cash_pay_date":null}'
 删除事件。
 
 ```bash
-ir share-event delete <ID>
+ir share-event delete <ID> --yes
 ```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
+
+> **破坏性操作**：物理删除该事件及其子记录；已确认事件删除后还须重算其生效日及之后的快照。
 
 #### `ir share-event confirm`
 
@@ -1023,8 +1037,12 @@ ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [-
 删除产品。
 
 ```bash
-ir product delete <CODE> <MARKET>
+ir product delete <CODE> <MARKET> --yes
 ```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
 ---
 
@@ -1067,8 +1085,12 @@ ir platform update <CODE> [--name <名称>] [--platform-type <类型>]
 删除平台。
 
 ```bash
-ir platform delete <CODE>
+ir platform delete <CODE> --yes
 ```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
 ---
 
@@ -1157,8 +1179,14 @@ ir snapshot status <PORTFOLIO_CODE>
 删除指定日期的快照（包括持仓快照、净值快照、投资人持仓三类数据）。
 
 ```bash
-ir snapshot delete <PORTFOLIO_CODE> <SNAPSHOT_DATE>
+ir snapshot delete <PORTFOLIO_CODE> <SNAPSHOT_DATE> --yes
 ```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
+
+> **破坏性操作**：删除会级联回退依赖该快照的已确认申赎与份额变动事件（口径见[业务规则·快照](../docs/reference/business-constraints.md#rule-snapshot)）。本命令**无** `--dry-run`；先用 `ir snapshot status <PORTFOLIO_CODE>` 与 `ir snapshot validate --portfolio-code <PORTFOLIO_CODE> --target-date <SNAPSHOT_DATE>` 核实影响面。删除某日及以后的全部快照请用 [`delete-bulk`](#ir-snapshot-delete-bulk)。
 
 #### `ir snapshot delete-bulk`
 

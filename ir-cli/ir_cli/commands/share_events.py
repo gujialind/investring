@@ -119,8 +119,14 @@ def update(
 
 
 @app.command("delete")
-def delete(id: int = typer.Argument(..., help="事件ID")):
+def delete(
+    id: int = typer.Argument(..., help="事件ID"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
+):
     """删除事件"""
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"删除份额事件 {id} 会物理删掉该事件及其子记录，不可逆：请追加 --yes 确认，先用 ir share-event get {id} 核实；已确认事件还须重算其生效日及之后的快照")
     client = APIClient.from_config()
     result = client.delete(f"/api/share-change-events/{id}")
     success(data=result["data"])
