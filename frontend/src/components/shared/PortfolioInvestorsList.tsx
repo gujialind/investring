@@ -1,5 +1,6 @@
 "use client";
 
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import NameCodeCell from "@/components/shared/NameCodeCell";
@@ -39,10 +40,12 @@ const NUM_CELL = cn(getNumberCellClass(), "whitespace-nowrap");
 
 /**
  * 组合投资人列表（issue #99 抽出双端复用；#693 卡片改表格，暴露
- * investor_holding 已落库的派生列）：供 ?tab=investors 视图（双端）使用。
+ * investor_holding 已落库的派生列；#694 加累计收益*列与清仓行）：
+ * 供 ?tab=investors 视图（双端）使用。
  * 占比用后端 ratio（同快照日 shares/total_shares，份额占比与市值占比数学
  * 等价故只此一列），展示层经 largestRemainderPercents 归一、加总恒 100.0%；
  * 派生列历史快照为 NULL 时直接进 format 函数兜底 `--`（不显示 0.00）。
+ * 清仓行（is_liquidated）份额/市值/占比显示真 0、派生列 `--`、累计收益保留。
  */
 export default function PortfolioInvestorsList({
   investors,
@@ -80,6 +83,7 @@ export default function PortfolioInvestorsList({
                   <TableHead className={cn("text-muted-foreground", NUM_CELL)}>总成本</TableHead>
                   <TableHead className={cn("text-muted-foreground", NUM_CELL)}>成本价</TableHead>
                   <TableHead className={cn("text-muted-foreground", NUM_CELL)}>持仓收益</TableHead>
+                  <TableHead className={cn("text-muted-foreground", NUM_CELL)}>累计收益*</TableHead>
                   <TableHead className={cn("text-muted-foreground", NUM_CELL)}>冻结</TableHead>
                 </TableRow>
               </TableHeader>
@@ -87,9 +91,16 @@ export default function PortfolioInvestorsList({
                 {investors.map((investor, i) => {
                   const ret = getSignedReturn(investor.profit_percent);
                   return (
-                    <TableRow key={investor.investor_code} data-testid="investor-row">
+                    <TableRow
+                      key={investor.investor_code}
+                      data-testid={investor.is_liquidated ? "investor-row-liquidated" : "investor-row"}
+                    >
                       <TableCell>
-                        <NameCodeCell code={investor.investor_code} nameMap={nameMap} />
+                        {/* flex-wrap：窄列下徽章换到名称下一行，而非撑宽首列挤垮数字列 */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <NameCodeCell code={investor.investor_code} nameMap={nameMap} />
+                          {investor.is_liquidated && <Badge variant="secondary">已清仓</Badge>}
+                        </div>
                       </TableCell>
                       <TableCell className={NUM_CELL}>
                         {formatSharesUnit(investor.shares)}
@@ -118,6 +129,12 @@ export default function PortfolioInvestorsList({
                           <span className={ret.colorClass}>{ret.text}</span>
                         </div>
                       </TableCell>
+                      <TableCell className={NUM_CELL} data-testid="investor-cumulative">
+                        {/* #694 方案 A 全历史净流量口径；与持仓收益并列、* 注记见表下 */}
+                        <span className={getReturnColorClass(investor.cumulative_profit)}>
+                          {formatSignedCurrency(investor.cumulative_profit)}
+                        </span>
+                      </TableCell>
                       <TableCell className={NUM_CELL}>
                         {formatSharesUnit(investor.frozen_shares)}
                       </TableCell>
@@ -126,6 +143,12 @@ export default function PortfolioInvestorsList({
                 })}
               </TableBody>
             </Table>
+            {/* 口径注记有数据时恒渲染（空态走「暂无投资人」分支不渲染；形态同
+                ProductDetailContent 累计收益* 注记，visual-spec §20） */}
+            <p className="mt-2 text-xs text-warning" data-testid="investor-cumulative-note">
+              *累计收益 = 当前市值 + 已确认赎回金额 − 已确认申购金额；产品分红与调整
+              未归属到投资人，与「持仓收益」（在手份额浮动盈亏）口径不同
+            </p>
           </div>
         )}
       </CardContent>

@@ -13,12 +13,15 @@ from app.services.cumulative_profit_service import compute_cumulative_profits
 from app.services.exceptions import BusinessError, NotFoundError
 from app.utils.quantize import quantize_nav
 from tests.factories import (
+    create_investor,
+    create_investor_holding,
     create_manual_market_value,
     create_platform,
     create_portfolio,
     create_position_snapshot,
     create_product,
     create_share_change_event,
+    create_subscription,
     create_trade,
     create_value_snapshot,
 )
@@ -97,7 +100,9 @@ def _event(db, portfolio, cash="0", *, product=FUND, market=MARKET,
 
 def _assert_rollups(result):
     """返回字段、Decimal 四位与三粒度严格相加；不借用被测公式算期望收益。"""
-    assert set(result) == {"snapshot_date", "platform_products", "products", "platforms"}
+    assert set(result) == {
+        "snapshot_date", "platform_products", "products", "platforms", "investors",
+    }
     assert type(result["snapshot_date"]) is date
     dimensions = {
         "platform_products": ("product_code", "market", "platform_code"),
@@ -123,6 +128,18 @@ def _assert_rollups(result):
     for field in ("market_value", "cumulative_profit"):
         totals = [sum((r[field] for r in result[name]), ZERO) for name in dimensions]
         assert totals[0] == totals[1] == totals[2]
+    # investors 粒度自洽（#694）：键唯一升序、Decimal 四位。三粒度总和相等
+    # 断言刻意不外扩到 investors——方案 A 不闭合（分红/事件现金腿不归属到
+    # 投资人），Σ 关系由 TestInvestorGranularity 按受控场景单独钉。
+    investors = result["investors"]
+    codes = [r["investor_code"] for r in investors]
+    assert codes == sorted(codes)
+    assert len(codes) == len(set(codes))
+    for row in investors:
+        assert set(row) == {"investor_code", "market_value", "cumulative_profit"}
+        for field in ("market_value", "cumulative_profit"):
+            assert isinstance(row[field], Decimal)
+            assert row[field].as_tuple().exponent == -4
 
 
 def _compute(db, portfolio, day):
@@ -167,6 +184,7 @@ def test_empty_or_transit_only_snapshot_has_no_profit_rows(test_db, portfolio, t
     _snapshot(test_db, portfolio, EX)
     assert _compute(test_db, portfolio, EX) == {
         "snapshot_date": EX, "platform_products": [], "products": [], "platforms": [],
+        "investors": [],
     }
 
 
@@ -528,7 +546,8 @@ def test_queries_are_fixed_read_only_and_independent_of_list_pagination(
     assert set(test_db.dirty) == dirty_before
     assert set(test_db.new) == new_before
     assert trade.notes == "caller-owned unsaved change"
-    assert len(statements) == 4
+    # 固定六次批量 SELECT（#694 起含 investor_holding 与 subscription 两条）
+    assert len(statements) == 6
     assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
     assert all("LIMIT" not in statement.upper() and "OFFSET" not in statement.upper()
                for statement in statements[1:])
@@ -546,3 +565,217 @@ def test_missing_confirmed_actual_amount_never_falls_back_to_amount(test_db, por
         compute_cumulative_profits(test_db, portfolio, EX)
     assert caught.value.code == "INVALID_AMOUNT"
     assert "实际金额" in caught.value.message
+
+
+class TestInvestorGranularity:
+    """#694 投资人第四粒度：键集合、清仓保留、日期边界、缺金额防御与 Σ 关系。"""
+
+    def test_keys_union_holdings_and_flows_with_liquidated_kept(self, test_db, portfolio):
+        """键集合 = 当日持仓键 ∪ confirmed 流水键；清仓者市值 0、累计收益保留"""
+        create_investor(test_db, code="CUM_IA", name="投资人A")
+        create_investor(test_db, code="CUM_IB", name="投资人B")
+        # CUM_IA 当日持仓：市值 110、申购 100 → 累计 10
+        create_investor_holding(
+            test_db, portfolio, "CUM_IA", EX, 100.0,
+            cost_per_share=1.0, market_value=110.0, total_cost=100.0, profit=10.0,
+        )
+        create_subscription(
+            test_db, portfolio, "CUM_IA", "subscribe", amount=100.0,
+            apply_date=START, confirm_date=START, status="confirmed", platform_code=A,
+        )
+        # CUM_IB 已清仓：申购 50、赎回 60、当日无持仓行 → 市值 0、累计 10 保留
+        create_subscription(
+            test_db, portfolio, "CUM_IB", "subscribe", amount=50.0,
+            apply_date=START, confirm_date=START, status="confirmed", platform_code=A,
+        )
+        create_subscription(
+            test_db, portfolio, "CUM_IB", "redeem", amount=60.0,
+            apply_date=START, confirm_date=EX, status="confirmed", platform_code=A,
+        )
+        _snapshot(test_db, portfolio, EX)
+
+        result = _compute(test_db, portfolio, EX)
+        assert result["investors"] == [
+            {
+                "investor_code": "CUM_IA",
+                "market_value": Decimal("110.0000"),
+                "cumulative_profit": Decimal("10.0000"),
+            },
+            {
+                "investor_code": "CUM_IB",
+                "market_value": Decimal("0.0000"),
+                "cumulative_profit": Decimal("10.0000"),
+            },
+        ]
+
+    def test_confirm_date_boundary_excludes_future_and_pending(self, test_db, portfolio):
+        """流水按 confirm_date <= D 收口：D 后确认与 pending 不入历史结果"""
+        create_investor(test_db, code="CUM_IC", name="投资人C")
+        create_subscription(
+            test_db, portfolio, "CUM_IC", "subscribe", amount=20.0,
+            apply_date=START, confirm_date=START, status="confirmed", platform_code=A,
+        )
+        create_subscription(
+            test_db, portfolio, "CUM_IC", "subscribe", amount=30.0,
+            apply_date=START, confirm_date=AFTER, status="confirmed", platform_code=A,
+        )
+        create_subscription(
+            test_db, portfolio, "CUM_IC", "subscribe", amount=40.0,
+            apply_date=START, confirm_date=EX, status="pending", platform_code=A,
+        )
+        _snapshot(test_db, portfolio, EX)
+
+        result = _compute(test_db, portfolio, EX)
+        # 仅 START 确认的 20 入账：市值 0 − 申购 20
+        assert result["investors"] == [
+            {
+                "investor_code": "CUM_IC",
+                "market_value": Decimal("0.0000"),
+                "cumulative_profit": Decimal("-20.0000"),
+            },
+        ]
+
+    def test_missing_confirmed_subscription_amount_raises(self, test_db, portfolio):
+        """confirmed 申赎缺 amount → INVALID_AMOUNT（同交易腿口径，不伪装零）"""
+        create_investor(test_db, code="CUM_ID", name="投资人D")
+        sub = create_subscription(
+            test_db, portfolio, "CUM_ID", "subscribe", amount=10.0,
+            apply_date=START, confirm_date=START, status="confirmed", platform_code=A,
+        )
+        sub.amount = None
+        test_db.commit()
+        _snapshot(test_db, portfolio, EX)
+
+        with pytest.raises(BusinessError) as caught:
+            compute_cumulative_profits(test_db, portfolio, EX)
+        assert caught.value.code == "INVALID_AMOUNT"
+        assert "缺少金额" in caught.value.message
+
+    def test_sigma_closed_on_self_consistent_loop_including_transit_dividend(
+        self, test_db, portfolio,
+    ):
+        """Σ 关系受控场景一：自洽闭环（含显式在途分红）逐时点闭合（实测钉死）。
+
+        分红经组合净值隐含进投资人市值（investor_holding.market_value =
+        shares × unit_price，unit_price 含在途资产），产品侧基金腿按 ex_date
+        显式应计——两侧各含一次；CASH 腿按有效现金日扣减，在途窗口不扣、
+        到账后与真实现金对齐，故两时点均闭合。不闭合只出现在降级形态
+        （有效现金日缺省回退、历史 NULL 市值行），见后两例。
+        """
+        create_investor(test_db, code="CUM_IA", name="投资人A")
+        # 闭环：入金 100（CASH 腿）→ 买入基金 91（含费 1，现金余 9）→ 分红 7 在途
+        _trade(test_db, portfolio, "buy", "100", product="CASH", market="",
+               platform=A, transfer_group="sub_1")
+        create_subscription(
+            test_db, portfolio, "CUM_IA", "subscribe", amount=100.0,
+            apply_date=START, confirm_date=START, status="confirmed", platform_code=A,
+        )
+        _trade(test_db, portfolio, "buy", "91", amount="90", fee="1",
+               transfer_group="rebal_b")
+        _trade(test_db, portfolio, "sell", "91", product="CASH", market="",
+               platform=A, transfer_group="rebal_b")
+        _event(test_db, portfolio, "7", ex_date=EX, cash_pay_date=MONDAY)
+        _position(test_db, portfolio, EX, "84")   # 除息后基金市值
+        _position(test_db, portfolio, EX, "7", product="IN_TRANSIT_DIVIDEND", market="")
+        _position(test_db, portfolio, EX, "9", product="CASH", market="")
+        _snapshot(test_db, portfolio, EX)
+        # 投资人市值 = 份额 × 组合净值 = 100 × (100/100)；total = 84+7+9 = 100
+        create_investor_holding(
+            test_db, portfolio, "CUM_IA", EX, 100.0,
+            cost_per_share=1.0, market_value=100.0, total_cost=100.0, profit=0.0,
+        )
+
+        def sigma(result, grain):
+            return sum((r["cumulative_profit"] for r in result[grain]), ZERO)
+
+        result = _compute(test_db, portfolio, EX)
+        assert result["investors"] == [
+            {
+                "investor_code": "CUM_IA",
+                "market_value": Decimal("100.0000"),
+                "cumulative_profit": Decimal("0.0000"),
+            },
+        ]
+        assert sigma(result, "investors") == sigma(result, "products") == ZERO
+
+        # 现金到账日：在途行消失、现金 +7，仍闭合
+        _position(test_db, portfolio, MONDAY, "84")
+        _position(test_db, portfolio, MONDAY, "16", product="CASH", market="")
+        _snapshot(test_db, portfolio, MONDAY)
+        create_investor_holding(
+            test_db, portfolio, "CUM_IA", MONDAY, 100.0,
+            cost_per_share=1.0, market_value=100.0, total_cost=100.0, profit=0.0,
+        )
+        result = _compute(test_db, portfolio, MONDAY)
+        assert sigma(result, "investors") == sigma(result, "products") == ZERO
+
+    def test_sigma_gap_when_dividend_cash_date_falls_back_to_ex_date(
+        self, test_db, portfolio,
+    ):
+        """Σ 关系受控场景二：有效现金日缺省回退 ex_date 而现金未到账 → 差额 = 分红腿。
+
+        cash_pay_date 缺省时 CASH 腿在 ex_date 即扣减（视同到账），但现金头寸
+        未含该笔——产品侧多扣一次，差额即「未归属到投资人的产品级收益」
+        的时点形态（#694 实测修正：issue 原推断的方向与成因以此为准）。
+        """
+        create_investor(test_db, code="CUM_IA", name="投资人A")
+        _trade(test_db, portfolio, "buy", "100", product="CASH", market="",
+               platform=A, transfer_group="sub_1")
+        create_subscription(
+            test_db, portfolio, "CUM_IA", "subscribe", amount=100.0,
+            apply_date=START, confirm_date=START, status="confirmed", platform_code=A,
+        )
+        _event(test_db, portfolio, "7", ex_date=EX, cash_pay_date=None)
+        _position(test_db, portfolio, EX, "100", product="CASH", market="")
+        _snapshot(test_db, portfolio, EX)
+        create_investor_holding(
+            test_db, portfolio, "CUM_IA", EX, 100.0,
+            cost_per_share=1.0, market_value=107.0, total_cost=100.0, profit=7.0,
+        )
+
+        result = _compute(test_db, portfolio, EX)
+        sigma_investors = sum(
+            (r["cumulative_profit"] for r in result["investors"]), ZERO
+        )
+        sigma_products = sum(
+            (r["cumulative_profit"] for r in result["products"]), ZERO
+        )
+        # 投资人侧 107 − 100 = 7（分红经净值隐含）；产品侧基金腿应计 +7 与
+        # CASH 腿预扣 −7 相抵 = 0（现金头寸 100 未含该笔）→ 差额 = 分红腿 7，
+        # 即「未归属到投资人的产品级收益」的时点形态（实测钉死）
+        assert sigma_investors == Decimal("7.0000")
+        assert sigma_products == ZERO
+        assert sigma_investors - sigma_products == Decimal("7.0000")
+
+    def test_sigma_gap_named_when_holding_market_value_null(self, test_db, portfolio):
+        """Σ 关系受控场景二：历史 NULL 市值行降级 → 差额显式可命名。
+
+        investor_holding.market_value 为 NULL（#40 前历史行）时投资人侧按 0 计，
+        产品侧市值仍在——差额即「未归属到投资人的产品级收益」。此处差额 =
+        产品侧基金市值 50（投资人侧计 0）。
+        """
+        create_investor(test_db, code="CUM_IA", name="投资人A")
+        _position(test_db, portfolio, EX, "50")
+        _snapshot(test_db, portfolio, EX)
+        create_investor_holding(
+            test_db, portfolio, "CUM_IA", EX, 100.0,
+            cost_per_share=1.0, market_value=None, total_cost=None, profit=None,
+        )
+
+        result = _compute(test_db, portfolio, EX)
+        sigma_investors = sum(
+            (r["cumulative_profit"] for r in result["investors"]), ZERO
+        )
+        sigma_products = sum(
+            (r["cumulative_profit"] for r in result["products"]), ZERO
+        )
+        # 差额命名断言：产品侧 − 投资人侧 = 未归属到投资人的产品级收益（此处 = 基金市值 50）
+        unattributed = sigma_products - sigma_investors
+        assert unattributed == Decimal("50.0000")
+        assert result["investors"] == [
+            {
+                "investor_code": "CUM_IA",
+                "market_value": Decimal("0.0000"),
+                "cumulative_profit": Decimal("0.0000"),
+            },
+        ]

@@ -153,6 +153,7 @@ def _round4(value):
 _INVESTOR_NUMERIC_KEYS = (
     "shares", "frozen_shares", "cost_per_share",
     "market_value", "total_cost", "profit", "profit_percent", "ratio",
+    "cumulative_profit",
 )
 
 
@@ -167,12 +168,21 @@ def _shape_investor_item(item: dict) -> dict:
 @router.get("/{code}/investors", response_model=list[PortfolioInvestorItem])
 def get_portfolio_investors(
     code: str,
+    snapshot_date: Optional[date] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    """投资人列表（#693 派生列 + #694 累计收益与清仓行）。
+
+    snapshot_date 可选（#672 语义）：缺省取最新快照日、无组合市值快照时
+    cumulative_profit 降级 None；显式传入严格校验，该日无持仓行或无市值
+    快照均 404。
+    """
     return [
         _shape_investor_item(item)
-        for item in portfolio_service.get_portfolio_investors(db, code)
+        for item in portfolio_service.get_portfolio_investors(
+            db, code, snapshot_date
+        )
     ]
 
 
