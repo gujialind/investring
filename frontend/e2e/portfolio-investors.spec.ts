@@ -44,7 +44,10 @@ async function setupInvestorsPortfolio(
     .map((d) => d.calendar_date)
     .sort();
   const uptoToday = days.filter((d) => d <= today);
-  expect(uptoToday.length, '种子日历须覆盖今天之前的至少两个交易日').toBeGreaterThanOrEqual(2);
+  // 赎回形态需 d1..d4 四个交易日；不足时 slice(-4) 会解出 undefined，
+  // 以快照接口 422 等糊涂形态失败，故下界随形态提到 4
+  const minDays = withRedeems ? 4 : 2;
+  expect(uptoToday.length, `种子日历须覆盖今天之前的至少 ${minDays} 个交易日`).toBeGreaterThanOrEqual(minDays);
   const [d1, d2, d3, d4] = withRedeems
     ? uptoToday.slice(-4)
     : [...uptoToday.slice(-2), '', ''];

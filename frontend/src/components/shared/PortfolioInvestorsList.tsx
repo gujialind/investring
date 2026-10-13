@@ -143,7 +143,8 @@ export default function PortfolioInvestorsList({
                 })}
               </TableBody>
             </Table>
-            {/* 口径注记恒渲染（形态同 ProductDetailContent 累计收益* 注记，visual-spec §20） */}
+            {/* 口径注记有数据时恒渲染（空态走「暂无投资人」分支不渲染；形态同
+                ProductDetailContent 累计收益* 注记，visual-spec §20） */}
             <p className="mt-2 text-xs text-warning" data-testid="investor-cumulative-note">
               *累计收益 = 当前市值 + 已确认赎回金额 − 已确认申购金额；产品分红与调整
               未归属到投资人，与「持仓收益」（在手份额浮动盈亏）口径不同
