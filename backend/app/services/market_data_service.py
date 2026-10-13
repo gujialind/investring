@@ -342,6 +342,11 @@ def get_nav_coverage(
     }
 
 
+# 累计净值整段降级的统一留痕文案（#704）。同步终态（NavSyncDetail.error_message）与
+# 单产品同步返回的 message 共用同一句，避免两处措辞漂移。
+ACCUM_DEGRADED_NOTE = "累计净值降级：本批未取到累计净值，已有值保留"
+
+
 def sync_product_prices(
     db: Session,
     product_code: str,
@@ -352,7 +357,12 @@ def sync_product_prices(
     """
     单产品价格同步（改造版）。
     数据源路由 + 批量 upsert + 禁止硬编码 data_source + sync_error/source 回写。
-    返回 {success, synced_count, message, source}
+    返回 {success, synced_count, message, source}；真正写入价格的那条路径另带
+    `accum_degraded`（#704），跳过/失败/无新数据的早退路径没有该键，调用方一律 `.get()`。
+
+    `accum_degraded` 为 True 表示 akshare 场外累计净值整段失效：同步本身成功（单位净值
+    已落库、冲突行的既有 accumulated_nav 已保留），但本批没取到累计净值，任务终态据此
+    显式标注降级，不与「上游合法地没有累计净值序列」共用一种结果。
     """
     product = db.query(Product).filter(
         and_(Product.code == product_code, Product.market == market)
@@ -421,13 +431,26 @@ def sync_product_prices(
         # 口径与限制见 _derive_otc_pct_change（#692）。
         _derive_otc_pct_change(db, product_code, market, normalized)
     synced_count = _bulk_upsert_prices(db, product_code, market, normalized, data_source)
+    accum_degraded = any(r.get("accum_degraded") for r in normalized)
 
     product.data_source_status = "success"
     product.last_sync_at = datetime.utcnow()
+    # 降级不写 sync_error：`data_source_status` 仍是 success，只写错误文案会让产品列表
+    # 读成「这条源坏了」。降级留痕走任务终态（NavSyncDetail / TaskExecutionLog）与
+    # 本函数返回的 message。
     product.sync_error = None
     db.flush()
 
-    return {"success": True, "message": f"同步 {synced_count} 条", "synced_count": synced_count, "source": data_source}
+    message = f"同步 {synced_count} 条"
+    if accum_degraded:
+        message = f"{message}（{ACCUM_DEGRADED_NOTE}）"
+    return {
+        "success": True,
+        "message": message,
+        "synced_count": synced_count,
+        "source": data_source,
+        "accum_degraded": accum_degraded,
+    }
 
 
 def sync_price_data(
@@ -475,6 +498,9 @@ def _normalize_raw(raw_data: List[dict], market: str) -> List[dict]:
     `_bulk_upsert_prices` 对 `unit_price`/`accumulated_nav` 走 `_usable_nav`，在可用性
     之上再判正；取数层不再折 0，好让坏值响亮地落成跳过 + WARNING 而不是静默消失），
     详见 `test_zero_accumulated_nav_is_not_folded_into_missing`。
+
+    `accum_degraded`（#704）是 akshare 场外专有的批级标记，仅在该批累计净值整段失效时
+    出现，透传给 `_bulk_upsert_prices` 决定冲突行是否保留既有 `accumulated_nav`。
     """
     seen: dict[str, dict] = {}
     for r in raw_data:
@@ -498,12 +524,18 @@ def _normalize_raw(raw_data: List[dict], market: str) -> List[dict]:
             accum = r.get("accum_nav")
             if accum is None:
                 accum = r.get("accumulated_nav")
-            seen[td] = {
+            row = {
                 "trade_date": td,
                 "unit_price": unit,
                 "accumulated_nav": accum,
                 "pct_change": _optional_pct(r.get("pct_change")),
             }
+            if r.get("accum_degraded"):
+                # 批级降级标记原样透传给写入侧（#704）：取数层「整段没取到累计净值」与
+                # 「该产品本来没有累计净值序列」在 `accumulated_nav` 上同形，只有这个标记
+                # 能把两者分开。仅 akshare 场外会产生它。
+                row["accum_degraded"] = True
+            seen[td] = row
     return list(seen.values())
 
 
@@ -608,13 +640,20 @@ def _bulk_upsert_prices(
     rows: List[dict],
     source: str,
 ) -> int:
-    """批量 upsert。MySQL 用 ON DUPLICATE KEY UPDATE，SQLite 用 ORM fallback（测试环境）。"""
+    """批量 upsert。MySQL 用 ON DUPLICATE KEY UPDATE，SQLite 用 ORM fallback（测试环境）。
+
+    `accum_degraded`（#704）是唯一一处「NULL 不覆盖既有值」：该批累计净值整段没取到时，
+    冲突行保留库里已有的 `accumulated_nav`，只更新单价等其余列。范围刻意只到降级批次
+    ——全局改成 COALESCE 会让真实逐日缺值（净值发布时差、坏值）永远修不回来，那是
+    既有语义（`test_resync_overwrites_pct_unconditionally`）。
+    """
     from sqlalchemy import text
 
     if not rows:
         return 0
 
     values, skipped, nav_dropped = [], [], []
+    accum_degraded = False
     for r in rows:
         td = r["trade_date"]
         # #580 无值 / #701 非正：单价不合格的行不入库。落进去的后果比缺一行严重得多——
@@ -630,6 +669,8 @@ def _bulk_upsert_prices(
         if accum is not None and not _usable_nav(accum):
             nav_dropped.append(td)
             accum = None
+        if r.get("accum_degraded"):
+            accum_degraded = True
         d = date(int(td[:4]), int(td[4:6]), int(td[6:8]))
         values.append({
             "product_code": product_code,
@@ -663,22 +704,43 @@ def _bulk_upsert_prices(
         # 所以这条方言分叉只有生产会踩到。
         return 0
 
+    if accum_degraded:
+        logger.warning(
+            "累计净值整段降级，冲突行保留既有 accumulated_nav（#704）",
+            extra={
+                "operation": "bulk_upsert_prices",
+                "product_code": product_code,
+                "market": market,
+                "accum_degraded": True,
+                "rows": len(values),
+            },
+        )
+
     if db.bind.dialect.name == "mysql":
-        sql = text("""
+        # 降级批次里 accumulated_nav 恒为 NULL，COALESCE 因此等价于「保留旧值」；
+        # 非降级批次仍走无条件覆盖。插值项是模块内固定字面量，不含外部输入。
+        accum_term = (
+            "COALESCE(VALUES(accumulated_nav), accumulated_nav)"
+            if accum_degraded else "VALUES(accumulated_nav)"
+        )
+        sql = text(f"""
             INSERT INTO price_record (product_code, market, price_date, unit_price, accumulated_nav, pre_close, pct_change, source)
             VALUES (:product_code, :market, :price_date, :unit_price, :accumulated_nav, :pre_close, :pct_change, :source)
             ON DUPLICATE KEY UPDATE
-              unit_price=VALUES(unit_price), accumulated_nav=VALUES(accumulated_nav),
+              unit_price=VALUES(unit_price), accumulated_nav={accum_term},
               pre_close=VALUES(pre_close), pct_change=VALUES(pct_change), source=VALUES(source)
         """)
         db.execute(sql, values)
     else:
+        conflict_keys = ("unit_price", "pre_close", "pct_change", "source")
+        if not accum_degraded:
+            conflict_keys += ("accumulated_nav",)
         for v in values:
             existing = db.query(PriceRecord).filter_by(
                 product_code=v["product_code"], market=v["market"], price_date=v["price_date"]
             ).first()
             if existing:
-                for k in ("unit_price", "accumulated_nav", "pre_close", "pct_change", "source"):
+                for k in conflict_keys:
                     setattr(existing, k, v[k])
             else:
                 db.add(PriceRecord(**v))
@@ -834,7 +896,12 @@ def _run_price_sync_job_impl(job_id: int):
                     status=status,
                     synced_count=result.get("synced_count", 0),
                     source=result.get("source"),
-                    error_message=None if status == "success" else result.get("message"),
+                    # 成功但降级的批次也要留痕（#704）：否则任务终态与「累计净值全部
+                    # 正常取到」的成功批次同形，运维无从得知哪些产品的累计净值待补。
+                    error_message=(
+                        result.get("message") if status == "failed"
+                        else (ACCUM_DEGRADED_NOTE if result.get("accum_degraded") else None)
+                    ),
                 ))
                 if status == "success":
                     job.success_count += 1

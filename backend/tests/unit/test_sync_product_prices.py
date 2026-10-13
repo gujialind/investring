@@ -11,6 +11,8 @@ sync_product_prices 改造测试（P5.2）
 - 港互认净值故障的响亮与良性边界（#651）：取数层抛错→failed，合法空窗→仍 success
 - 日涨跌的产生点收口（#692）：上游透传、tushare 场外就地推导、平盘 0.0 不折成缺值
 - 净值列的非正形态过滤（#701）：0.0/负单价与坏值同族跳过，非正累计净值只丢这一列
+- 累计净值整段降级的写入侧保留（#704）：降级批次的冲突行不清空既有 accumulated_nav，
+  而逐日缺值与合法空序列仍按既有语义写 NULL
 """
 import logging
 
@@ -567,6 +569,11 @@ def _pct(row):
     return None if row is None else Decimal(str(row))
 
 
+def _dec(value):
+    """同 `_pct` 的口径，用于净值列（`_pct` 的名字绑死日涨跌，读起来会误导）。"""
+    return None if value is None else Decimal(str(value))
+
+
 class TestNormalizeRawPctKeys:
     """`_normalize_raw` 的键集与 pct 归一（透传路径的唯一收口点）。
 
@@ -917,3 +924,121 @@ class TestUpsertPctCoverage:
                             start_date=date(2026, 9, 16), end_date=date(2026, 9, 16))
 
         assert self._read(test_db, OTC, "CN_OTC")[date(2026, 9, 16)] is None
+
+
+class TestAccumDegradedPreservesExisting:
+    """#704 评审 Blocker：累计净值整段降级不得把已落库的 accumulated_nav 抹成 NULL。
+
+    「降级」= 本批一条累计净值都没取到、且不是上游合法地没有该序列（请求重试耗尽 /
+    缺「累计净值」列 / 日期整段不可解析），由取数层在行上打 `accum_degraded`。它与逐日
+    缺值是两件事：后者写 NULL 是既有语义（见
+    `TestUpsertPctCoverage::test_resync_overwrites_pct_unconditionally`），刻意**不**改成
+    全局「NULL 永不覆盖」；前者若不区分，一次上游抖动就能撤销已成功写入的历史累计净值，
+    而增量窗从本地最大 `price_date + 1` 起，不会回头自愈。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch):
+        """累计净值请求重试耗尽要走满 3 次尝试，限流与退避的真 sleep 不必等。"""
+        from app.services import akshare_client
+        monkeypatch.setattr(akshare_client, "_rate_limit_sleep", lambda: None)
+        monkeypatch.setattr(akshare_client.time, "sleep", lambda seconds: None)
+
+    @staticmethod
+    def _install_otc(monkeypatch, *, accum, unit=None):
+        """顶掉东财两个指标：单位净值恒可用，累计净值按 `accum` 决定形态。
+
+        用真 DataFrame 而不是 test_akshare_client 的 `_RowFrame` 替身：本组用例要验的是
+        「取数层降级 → 写入侧保留」的整条链，`df.columns` / `iterrows()` 的真实形态不该
+        在这一层被换掉。`accum` 传异常即「请求重试耗尽」。
+        """
+        import pandas as pd
+        from app.services.akshare_client import _OTC_ACCUM_INDICATOR
+
+        unit_rows = unit if unit is not None else [
+            {"净值日期": "2026-09-15", "单位净值": 1.2340, "日增长率": 0.12},
+        ]
+
+        def fake_em(**kwargs):
+            if kwargs.get("indicator") == _OTC_ACCUM_INDICATOR:
+                if isinstance(accum, Exception):
+                    raise accum
+                return pd.DataFrame(accum, columns=["净值日期", "累计净值"])
+            return pd.DataFrame(unit_rows, columns=["净值日期", "单位净值", "日增长率"])
+
+        monkeypatch.setattr("akshare.fund_open_fund_info_em", fake_em)
+
+    @staticmethod
+    def _row(db: Session, day: date) -> PriceRecord:
+        """绕开 identity map 读回真实落库值：MySQL 分支的 upsert 是裸 SQL，不刷新 ORM 对象。"""
+        db.expire_all()
+        return db.query(PriceRecord).filter(
+            PriceRecord.product_code == OTC,
+            PriceRecord.market == "CN_OTC",
+            PriceRecord.price_date == day,
+        ).one()
+
+    @pytest.mark.parametrize("start_date", [None, date(2026, 9, 14)],
+                             ids=["full_history", "overlapping_window"])
+    def test_degraded_accum_keeps_existing_value(self, monkeypatch, test_db: Session,
+                                                 sample_otc_product: Product, start_date):
+        """全历史与重叠区间两种入口：单位净值照常更新，既有累计净值原样保留。"""
+        sample_otc_product.data_source = "akshare"
+        _seed_price(test_db, OTC, "CN_OTC", date(2026, 9, 15),
+                    unit=1.2000, accum=Decimal("3.7210"), source="akshare")
+        test_db.flush()
+        self._install_otc(monkeypatch, accum=ConnectionError("对端拒绝"))
+
+        result = sync_product_prices(test_db, OTC, "CN_OTC",
+                                     start_date=start_date, end_date=date(2026, 9, 16))
+
+        row = self._row(test_db, date(2026, 9, 15))
+        assert _dec(row.accumulated_nav) == Decimal("3.7210")
+        assert _dec(row.unit_price) == Decimal("1.2340")
+        assert result["success"] is True
+        assert result["accum_degraded"] is True
+        assert "累计净值降级" in result["message"]
+
+    def test_legit_empty_accum_series_still_writes_null(self, monkeypatch, test_db: Session,
+                                                        sample_otc_product: Product):
+        """对照组：上游合法地没有累计净值序列（货币基金形态）时，NULL 照既有语义覆盖。
+
+        钉住「保留」只作用于降级批次——把它放宽成全局「NULL 永不覆盖」会改掉真实逐日
+        缺值的既有语义（评审明确要求不要这么做）。
+        """
+        sample_otc_product.data_source = "akshare"
+        _seed_price(test_db, OTC, "CN_OTC", date(2026, 9, 15),
+                    unit=1.2000, accum=Decimal("3.7210"), source="akshare")
+        test_db.flush()
+        self._install_otc(monkeypatch, accum=[])
+
+        result = sync_product_prices(test_db, OTC, "CN_OTC",
+                                     start_date=date(2026, 9, 14), end_date=date(2026, 9, 16))
+
+        assert self._row(test_db, date(2026, 9, 15)).accumulated_nav is None
+        assert result["accum_degraded"] is False
+
+    def test_partial_accum_still_overwrites_by_date(self, monkeypatch, test_db: Session,
+                                                    sample_otc_product: Product):
+        """对照组：累计净值序列可用时按日期覆盖，缺的那一天落 NULL（不是保留）。"""
+        sample_otc_product.data_source = "akshare"
+        for day, accum in ((date(2026, 9, 15), "3.7210"), (date(2026, 9, 16), "3.7250")):
+            _seed_price(test_db, OTC, "CN_OTC", day, unit=1.2000,
+                        accum=Decimal(accum), source="akshare")
+        test_db.flush()
+        self._install_otc(
+            monkeypatch,
+            accum=[{"净值日期": "2026-09-15", "累计净值": 3.7300}],
+            unit=[
+                {"净值日期": "2026-09-15", "单位净值": 1.2340, "日增长率": 0.12},
+                {"净值日期": "2026-09-16", "单位净值": 1.2360, "日增长率": 0.16},
+            ],
+        )
+
+        result = sync_product_prices(test_db, OTC, "CN_OTC",
+                                     start_date=date(2026, 9, 14), end_date=date(2026, 9, 16))
+
+        # 09-15 有新值 → 覆盖；09-16 累计序列缺日 → 落 NULL（逐日缺值的既有语义）
+        assert _dec(self._row(test_db, date(2026, 9, 15)).accumulated_nav) == Decimal("3.7300")
+        assert self._row(test_db, date(2026, 9, 16)).accumulated_nav is None
+        assert result["accum_degraded"] is False

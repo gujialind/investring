@@ -660,11 +660,29 @@ class TestPctChangePassthrough:
         assert line["market"] == "CN_OTC"
 
     def test_otc_empty_frame_does_not_warn_about_drift(self, monkeypatch, json_log_capture):
-        """合法空窗（周末、净值未发布）不该顺带报一条列漂移——那是假报警。"""
-        _patch_otc(monkeypatch, [])
+        """合法空窗（周末、净值未发布）不该顺带报一条列漂移——那是假报警。
+
+        也不该再打一次累计净值请求（#704 评审）：没有行会消费它，而两个指标各自都要
+        重新下载并解析整份 `pingzhongdata/{symbol}.js`，`run_nav_sync` 又是按产品串行，
+        空窗日的无效成本会被产品数放大。
+        """
+        calls = _patch_otc(monkeypatch, [])
 
         assert akshare_client.get_fund_nav_otc("000051", "20260926", "20260927") == []
         assert log_lines(json_log_capture) == []
+        assert [c["indicator"] for c in calls] == ["单位净值走势"]
+
+    def test_otc_window_outside_history_skips_accum_request(
+        self, monkeypatch, json_log_capture
+    ):
+        """上游有行但全落在请求窗口外，同样是合法空窗：不打第二次请求、不留日志。"""
+        calls = _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+        ])
+
+        assert akshare_client.get_fund_nav_otc("000051", "20260926", "20260927") == []
+        assert log_lines(json_log_capture) == []
+        assert [c["indicator"] for c in calls] == ["单位净值走势"]
 
     def test_otc_drift_warning_survives_a_total_parse_failure(
         self, monkeypatch, json_log_capture
@@ -707,9 +725,13 @@ class TestOtcAccumulatedNav:
     """#704：场外累计净值取自同接口的「累计净值走势」指标，按净值日期合并。
 
     三条语义各自独立钉住：合并靠日期映射而非位置对齐（缺日/日期不对齐落 NULL，**不拿
-    单位净值顶替**）；坏值与列漂移是展示列级事件（不计 malformed、不打死单位净值历史，
-    与 #692 日涨跌同族）；整段请求失败降级为全 NULL + 一条 WARNING，且该请求同样经
-    `_retry` 限流与重试。
+    单位净值顶替**）；坏值是展示列级事件（不计 malformed、不打死单位净值历史，与 #692
+    日涨跌同族）；整段失效降级为全 NULL + 一条 WARNING，且该请求同样经 `_retry` 限流
+    与重试。
+
+    **整段失效必须与合法空序列分开**（评审 Blocker）：请求重试耗尽、缺「累计净值」列、
+    有列但零条日期可解析，三种都在行上打 `accum_degraded`，写入侧据此在冲突行保留既有
+    `accumulated_nav`；货币基金那种「上游 0 行」不打标，照既有语义落 NULL。
     """
 
     def test_accum_series_is_merged_by_date(self, monkeypatch):
@@ -773,6 +795,8 @@ class TestOtcAccumulatedNav:
         assert [r["accum_nav"] for r in rows] == [None, None]
         assert [r["unit_nav"] for r in rows] == [1.234, 1.230]
         assert log_lines(json_log_capture) == []
+        # 日期可解析、只是逐日坏值：不是整段失效，不得打上降级标记
+        assert all("accum_degraded" not in r for r in rows)
 
     def test_empty_accum_series_is_silent(self, monkeypatch, json_log_capture):
         """货币基金等品种上游本就没有累计净值序列：空 DataFrame 不是漂移，不告警。"""
@@ -799,12 +823,42 @@ class TestOtcAccumulatedNav:
         rows = akshare_client.get_fund_nav_otc("000001")
 
         assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
-                         "pct_change": 0.12}]
+                         "pct_change": 0.12, "accum_degraded": True}]
         line = only_log_line(
             json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
             column_drift=True,
         )
         assert line["missing_column"] == akshare_client._OTC_ACCUM_COLUMN
+        assert line["market"] == "CN_OTC"
+
+    def test_accum_date_column_drift_is_loud_and_degraded(
+        self, monkeypatch, json_log_capture
+    ):
+        """有「累计净值」列、但零条日期可解析：整段失效，不得静默按合法空序列处理。
+
+        真实 akshare 会把不可解析日期转成 `NaT`，故列名不变、日期列整体漂移时正是这个
+        形态。此前它与货币基金那种「上游 0 行」共用 `{}` 且零日志，写入侧无从区分，
+        重叠同步会把已有的 accumulated_nav 抹成 NULL。
+        """
+        _patch_otc(
+            monkeypatch,
+            [{"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12}],
+            accum_rows=[
+                {"净值日期": "NaT", "累计净值": 3.721},
+                {"净值日期": "NaT", "累计净值": 3.710},
+            ],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001")
+
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+                         "pct_change": 0.12, "accum_degraded": True}]
+        line = only_log_line(
+            json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
+            accum_date_drift=True,
+        )
+        assert line["upstream_rows"] == 2
+        assert line["parsed"] == 0
         assert line["market"] == "CN_OTC"
 
     def test_accum_request_failure_degrades_without_killing_unit_nav(
@@ -823,7 +877,7 @@ class TestOtcAccumulatedNav:
         rows = akshare_client.get_fund_nav_otc("000001")
 
         assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
-                         "pct_change": 0.12}]
+                         "pct_change": 0.12, "accum_degraded": True}]
         # _retry 自己的 2 条重试 WARNING + 1 条 ERROR 之外，降级线索恰好一条
         only_log_line(
             json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",

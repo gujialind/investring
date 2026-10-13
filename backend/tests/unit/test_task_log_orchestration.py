@@ -88,7 +88,34 @@ class TestNavSyncDerivation:
         assert status == "partial_success"
         assert (total, success, failed) == (9, 7, 2)
         assert total == success + failed  # 验收断言：三者自洽
-        assert message is None  # 现状语义：nav_sync 不写 error_message
+        assert message is None  # 无降级产品时不写 error_message
+
+    def test_accum_degradation_shows_in_terminal_state_without_failing(self):
+        """#704：累计净值整段降级的产品在终态可见，但不算失败。
+
+        降级批次单位净值已落库、冲突行的既有 accumulated_nav 已保留，判 failed 会让
+        `records_failed` 谎报「这个产品没同步」；判 success 且不留痕又会让它与完全正常
+        的成功同形——运维答不出「哪些产品的累计净值待补」。
+        """
+        status, total, success, failed, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "degraded_products": ["000001.OF"],
+        })
+        assert (status, total, success, failed) == ("success", 3, 3, 0)
+        assert total == success + failed
+        assert "累计净值降级" in message
+        assert "000001.OF" in message
+
+    def test_accum_degradation_coexists_with_failures(self):
+        """降级与失败同时出现：status 仍按失败判，自洽关系不变，两类信息都不丢。"""
+        status, total, success, failed, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": ["B.OF"],
+            "degraded_products": ["000001.OF"],
+        })
+        assert status == "partial_success"
+        assert (total, success, failed) == (3, 2, 1)
+        assert total == success + failed
+        assert "000001.OF" in message
 
     def test_missing_keys_degrade_to_zero_without_crash(self):
         status, total, success, failed, _ = _derive_log_fields("nav_sync", {})
