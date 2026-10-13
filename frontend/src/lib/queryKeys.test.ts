@@ -67,7 +67,11 @@ describe("queryKeys 全域工厂", () => {
       },
       {
         root: queryKeys.portfolios.root,
-        keys: [queryKeys.portfolios.list(), queryKeys.portfolios.detail("P1")],
+        keys: [
+          queryKeys.portfolios.list(),
+          queryKeys.portfolios.detail("P1"),
+          queryKeys.portfolios.investorsByPortfolio("P1"),
+        ],
       },
       {
         root: queryKeys.positions.root,

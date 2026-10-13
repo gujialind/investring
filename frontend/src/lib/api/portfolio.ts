@@ -4,6 +4,7 @@ import {
   PortfolioCreate,
   PortfolioUpdate,
   PortfolioValueSnapshot,
+  PortfolioInvestorItem,
   NavHistoryRecord,
   PortfolioReturns,
   PortfolioPerformance,
@@ -81,7 +82,7 @@ export const portfolioApi = {
     request<{ available_cash: number }>({ method: "GET", url: `/positions/portfolio/${code}/available-cash` }),
 
   getInvestors: (code: string) =>
-    request<{ investor_code: string; name: string; shares: number }[]>({
+    request<PortfolioInvestorItem[]>({
       method: "GET",
       url: `/portfolios/${code}/investors`,
     }),

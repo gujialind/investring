@@ -135,11 +135,8 @@ function MobilePortfolioDetailInner() {
       )}
 
       {showInvestors ? (
-        /* ?tab=investors 投资人视图（draft 也允许） */
-        <PortfolioInvestorsList
-          investors={investors}
-          totalShares={snapshot?.total_shares || 0}
-        />
+        /* ?tab=investors 投资人视图（draft 也允许）；占比用后端 ratio，不再传 totalShares（#693） */
+        <PortfolioInvestorsList investors={investors} variant="mobile" />
       ) : (
         <>
           {/* Stats Cards */}
