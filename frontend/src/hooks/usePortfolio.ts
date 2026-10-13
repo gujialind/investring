@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { portfolioApi, positionApi, getErrorMessage } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { PortfolioCreate, PortfolioUpdate } from "@/types/portfolio";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -157,7 +158,7 @@ export function useAvailableCash(code: string) {
 // 组合投资人列表 Hook（options.enabled 惰性查询：弹窗/Tab 视图仅在需要时请求）
 export function usePortfolioInvestors(code: string, options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: [PORTFOLIO_QUERY_KEY, code, "investors"],
+    queryKey: queryKeys.portfolios.investorsByPortfolio(code),
     queryFn: () => portfolioApi.getInvestors(code),
     enabled: !!code && (options?.enabled ?? true),
     staleTime: 30 * 1000,

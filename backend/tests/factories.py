@@ -370,8 +370,16 @@ def create_investor_holding(
     snapshot_date: date,
     shares: float,
     cost_per_share: Optional[float] = 1.0,
+    frozen_shares: Optional[float] = None,
+    market_value: Optional[float] = None,
+    total_cost: Optional[float] = None,
+    profit: Optional[float] = None,
 ) -> InvestorHolding:
-    """创建投资人份额快照"""
+    """创建投资人份额快照；派生列缺省不写（保持历史快照 NULL 形态，#693）。
+
+    frozen_shares 未传时**不设属性**——显式赋 None 会压掉列 default=0，
+    改变既有调用点的落库形态（SQLAlchemy 只对缺席属性应用 default）。
+    """
     holding = InvestorHolding(
         portfolio_code=portfolio_code,
         investor_code=investor_code,
@@ -379,6 +387,14 @@ def create_investor_holding(
         shares=Decimal(str(shares)),
         cost_per_share=Decimal(str(cost_per_share)) if cost_per_share else None,
     )
+    if frozen_shares is not None:
+        holding.frozen_shares = Decimal(str(frozen_shares))
+    if market_value is not None:
+        holding.market_value = Decimal(str(market_value))
+    if total_cost is not None:
+        holding.total_cost = Decimal(str(total_cost))
+    if profit is not None:
+        holding.profit = Decimal(str(profit))
     db.add(holding)
     db.commit()
     db.refresh(holding)

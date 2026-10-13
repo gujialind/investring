@@ -47,6 +47,29 @@ export interface PortfolioValueSnapshot {
   created_at?: string;
 }
 
+/**
+ * GET /portfolios/{code}/investors 返回项（#693）。
+ *
+ * 派生列来自 investor_holding 快照落库值；#40 之前生成且从未重算的历史快照
+ * 可为 null（界面显示 `--`，不兜底成 0）。口径对齐后端 PortfolioInvestorItem：
+ * ratio 为占组合总份额比（0-1 小数）、profit_percent 为百分数（×100）。
+ */
+export interface PortfolioInvestorItem {
+  investor_code: string;
+  name: string;
+  shares: number;
+  frozen_shares: number | null;
+  cost_per_share: number | null;
+  market_value: number | null;
+  total_cost: number | null;
+  /** 持仓收益 = market_value − total_cost（当前在手份额浮动盈亏，与 #598「累计收益」口径不同） */
+  profit: number | null;
+  /** profit / total_cost × 100；total_cost 为 null/0 时 null */
+  profit_percent: number | null;
+  /** shares / 当日市值快照 total_shares；无当日市值快照行时 null */
+  ratio: number | null;
+}
+
 // GET /portfolios/{code}/nav-history 返回项
 export interface NavHistoryRecord {
   snapshot_date: string;

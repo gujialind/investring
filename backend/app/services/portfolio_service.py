@@ -206,7 +206,15 @@ def get_latest_value_snapshot(db: Session, code: str) -> PortfolioValueSnapshot:
 
 
 def get_portfolio_investors(db: Session, code: str) -> List[dict]:
-    """获取组合最新快照日的投资人份额列表（shares > 0），无快照返回空列表。"""
+    """获取组合最新快照日的投资人份额列表（shares > 0），无快照返回空列表。
+
+    #693：读出 investor_holding 已有派生列（DB 原值保 Decimal，float 序列化
+    舍入只在 router shaping 层做，口径同 holding_aggregation_service）。
+    ratio = shares / 当日市值快照 total_shares（份额占比与市值占比同快照日
+    数学等价，全体投资人共用 unit_price，故只出这一列）；profit_percent =
+    profit / total_cost × 100。分母为 NULL/0 时降级 None（不除零、不返回 0，
+    同 holding_aggregation_service 的 holding_profit_percent 三重降级）。
+    """
     _get_portfolio_or_404(db, code)
     latest_date = (
         db.query(InvestorHolding.snapshot_date)
@@ -217,6 +225,16 @@ def get_portfolio_investors(db: Session, code: str) -> List[dict]:
     )
     if latest_date is None:
         return []
+    # 两表由同一次快照生成同批落库，正常恒有当日行；脏数据/部分失败时缺行，
+    # ratio 降级 None 而不 404（本端点无显式 snapshot_date 参数，无 #672 严格路径）
+    total_shares = (
+        db.query(PortfolioValueSnapshot.total_shares)
+        .filter(
+            PortfolioValueSnapshot.portfolio_code == code,
+            PortfolioValueSnapshot.snapshot_date == latest_date,
+        )
+        .scalar()
+    )
     rows = (
         db.query(InvestorHolding, Investor.name)
         .join(Investor, Investor.code == InvestorHolding.investor_code)
@@ -228,14 +246,26 @@ def get_portfolio_investors(db: Session, code: str) -> List[dict]:
         .order_by(InvestorHolding.shares.desc())
         .all()
     )
-    return [
-        {
+    items = []
+    for h, name in rows:
+        profit_percent = (
+            h.profit / h.total_cost * 100
+            if h.profit is not None and h.total_cost
+            else None
+        )
+        items.append({
             "investor_code": h.investor_code,
             "name": name,
-            "shares": float(h.shares),
-        }
-        for h, name in rows
-    ]
+            "shares": h.shares,
+            "frozen_shares": h.frozen_shares,
+            "cost_per_share": h.cost_per_share,
+            "market_value": h.market_value,
+            "total_cost": h.total_cost,
+            "profit": h.profit,
+            "profit_percent": profit_percent,
+            "ratio": h.shares / total_shares if total_shares else None,
+        })
+    return items
 
 
 def create_portfolio(

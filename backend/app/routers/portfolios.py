@@ -145,13 +145,35 @@ def get_latest_snapshot(
     return portfolio_service.get_latest_value_snapshot(db, code)
 
 
+def _round4(value):
+    """读侧展示舍入（同 routers/positions.py _round4 惯例）；None 透传。"""
+    return round(float(value), 4) if value is not None else None
+
+
+_INVESTOR_NUMERIC_KEYS = (
+    "shares", "frozen_shares", "cost_per_share",
+    "market_value", "total_cost", "profit", "profit_percent", "ratio",
+)
+
+
+def _shape_investor_item(item: dict) -> dict:
+    """service 返回的 Decimal 原值 → float 序列化舍入（#693，shaping 只在 router）。"""
+    shaped = dict(item)
+    for key in _INVESTOR_NUMERIC_KEYS:
+        shaped[key] = _round4(item[key])
+    return shaped
+
+
 @router.get("/{code}/investors", response_model=list[PortfolioInvestorItem])
 def get_portfolio_investors(
     code: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return portfolio_service.get_portfolio_investors(db, code)
+    return [
+        _shape_investor_item(item)
+        for item in portfolio_service.get_portfolio_investors(db, code)
+    ]
 
 
 @router.get("/{code}/returns")

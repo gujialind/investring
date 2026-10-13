@@ -48,6 +48,9 @@ export const queryKeys = {
     root: ["portfolios"] as const,
     list: (params?: unknown) => ["portfolios", "list", params] as const,
     detail: (code: string) => ["portfolios", code] as const,
+    /** 组合投资人列表（#693 收敛自 usePortfolio 字面量，值逐元素相等）；
+     * 与全局投资人 CRUD 的 investors 域（root ["investors"]）无关 */
+    investorsByPortfolio: (code: string) => ["portfolios", code, "investors"] as const,
   },
   positions: {
     root: ["positions"] as const,

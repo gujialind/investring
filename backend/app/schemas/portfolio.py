@@ -72,9 +72,24 @@ class PortfolioValueSnapshotResponse(BaseModel):
 
 
 class PortfolioInvestorItem(BaseModel):
+    """组合投资人持仓行（#693）。
+
+    派生列来自 investor_holding（快照生成时逐日落库）；#40 之前生成且从未重算的
+    历史快照三列（market_value/total_cost/profit）可为 NULL，连同 frozen_shares/
+    cost_per_share 一律 Optional。ratio 为占组合总份额比（0-1 小数）、
+    profit_percent 为百分数（×100，total_cost 为 NULL/0 时 None），口径对齐
+    HoldingProductAggregate（schemas/position.py）。
+    """
     investor_code: str
     name: str
     shares: float
+    frozen_shares: Optional[float] = None
+    cost_per_share: Optional[float] = None
+    market_value: Optional[float] = None
+    total_cost: Optional[float] = None
+    profit: Optional[float] = None
+    profit_percent: Optional[float] = None
+    ratio: Optional[float] = None
 
 
 class NavHistoryRecord(BaseModel):

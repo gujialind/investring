@@ -370,6 +370,90 @@ class TestPortfolioInvestorsEndpoint:
         assert data[0]["shares"] == 6000.0
         assert data[1]["investor_code"] == "INV_L2"
 
+    def test_investors_full_fields_match_table(self, client, admin_headers, test_db):
+        """#693：全字段经 API 暴露且与 investor_holding 表行逐字段相等（含恒等关系）"""
+        create_portfolio(test_db, code="P_INV_F", status="active")
+        create_investor(test_db, code="INV_F1", name="投资人A")
+        create_investor(test_db, code="INV_F2", name="投资人B")
+        d = date(2025, 3, 3)
+        # 手算期望：unit_price=1.3 → market_value = shares × 1.3；
+        # total_cost = shares × cost_per_share；profit = market_value − total_cost
+        create_investor_holding(
+            test_db, "P_INV_F", "INV_F1", d, 6000.0,
+            cost_per_share=1.25, frozen_shares=500.0,
+            market_value=7800.0, total_cost=7500.0, profit=300.0,
+        )
+        create_investor_holding(
+            test_db, "P_INV_F", "INV_F2", d, 4000.0,
+            cost_per_share=1.0, frozen_shares=0.0,
+            market_value=5200.0, total_cost=4000.0, profit=1200.0,
+        )
+        create_value_snapshot(test_db, "P_INV_F", d, 13000.0, 10000.0, 1.3)
+
+        resp = client.get("/api/portfolios/P_INV_F/investors", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [item["investor_code"] for item in data] == ["INV_F1", "INV_F2"]
+        # 整对象相等：同时钉住键集合与逐字段值（期望值手算，不借被测公式）
+        assert data[0] == {
+            "investor_code": "INV_F1",
+            "name": "投资人A",
+            "shares": 6000.0,
+            "frozen_shares": 500.0,
+            "cost_per_share": 1.25,
+            "market_value": 7800.0,
+            "total_cost": 7500.0,
+            "profit": 300.0,
+            "profit_percent": 4.0,   # 300 / 7500 × 100
+            "ratio": 0.6,            # 6000 / 10000
+        }
+        assert data[1]["profit_percent"] == 30.0  # 1200 / 4000 × 100
+        assert data[1]["ratio"] == 0.4            # 4000 / 10000
+        # 恒等关系在响应上逐行成立
+        for item in data:
+            assert item["profit"] == item["market_value"] - item["total_cost"]
+
+    def test_investors_null_derived_columns_degrade_to_none(self, client, admin_headers, test_db):
+        """#693：历史快照派生列 NULL → None（不被兜底成 0）；ratio 只依赖 shares/total_shares"""
+        create_portfolio(test_db, code="P_INV_N", status="active")
+        create_investor(test_db, code="INV_N1", name="投资人C")
+        d = date(2025, 3, 3)
+        create_investor_holding(test_db, "P_INV_N", "INV_N1", d, 1000.0, cost_per_share=None)
+
+        resp = client.get("/api/portfolios/P_INV_N/investors", headers=admin_headers)
+        assert resp.status_code == 200
+        item = resp.json()[0]
+        for key in ("cost_per_share", "market_value", "total_cost", "profit", "profit_percent"):
+            assert item[key] is None, key
+        assert item["frozen_shares"] == 0.0  # 列 default=0，非 NULL 形态
+        # 无当日市值快照行 → ratio 降级 None（脏数据形态，不 404）
+        assert item["ratio"] is None
+
+        # 补上同日市值快照：两列均 NOT NULL，派生列 NULL 不影响 ratio 可算
+        create_value_snapshot(test_db, "P_INV_N", d, 1500.0, 1000.0, 1.5)
+        resp = client.get("/api/portfolios/P_INV_N/investors", headers=admin_headers)
+        item = resp.json()[0]
+        assert item["ratio"] == 1.0
+        assert item["market_value"] is None
+
+    def test_investors_zero_total_cost_percent_none(self, client, admin_headers, test_db):
+        """#693：total_cost 为 0 → profit_percent 为 None（不除零、不返回 0）"""
+        create_portfolio(test_db, code="P_INV_Z", status="active")
+        create_investor(test_db, code="INV_Z1", name="投资人D")
+        d = date(2025, 3, 3)
+        create_investor_holding(
+            test_db, "P_INV_Z", "INV_Z1", d, 1000.0,
+            cost_per_share=0.0, market_value=1000.0, total_cost=0.0, profit=1000.0,
+        )
+        create_value_snapshot(test_db, "P_INV_Z", d, 1000.0, 1000.0, 1.0)
+
+        resp = client.get("/api/portfolios/P_INV_Z/investors", headers=admin_headers)
+        assert resp.status_code == 200
+        item = resp.json()[0]
+        assert item["profit_percent"] is None
+        assert item["profit"] == 1000.0
+        assert item["ratio"] == 1.0
+
     def test_investors_empty_without_holdings(self, client, admin_headers, test_db):
         """无投资人快照返回空列表"""
         create_portfolio(test_db, code="P_INV_E", status="draft")

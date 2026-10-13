@@ -9757,6 +9757,83 @@
           "shares": {
             "type": "number",
             "title": "Shares"
+          },
+          "frozen_shares": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frozen Shares"
+          },
+          "cost_per_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Share"
+          },
+          "market_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Value"
+          },
+          "total_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost"
+          },
+          "profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit"
+          },
+          "profit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Percent"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
           }
         },
         "type": "object",
@@ -9765,7 +9842,8 @@
           "name",
           "shares"
         ],
-        "title": "PortfolioInvestorItem"
+        "title": "PortfolioInvestorItem",
+        "description": "组合投资人持仓行（#693）。\n\n派生列来自 investor_holding（快照生成时逐日落库）；#40 之前生成且从未重算的\n历史快照三列（market_value/total_cost/profit）可为 NULL，连同 frozen_shares/\ncost_per_share 一律 Optional。ratio 为占组合总份额比（0-1 小数）、\nprofit_percent 为百分数（×100，total_cost 为 NULL/0 时 None），口径对齐\nHoldingProductAggregate（schemas/position.py）。"
       },
       "PortfolioListItem": {
         "properties": {
