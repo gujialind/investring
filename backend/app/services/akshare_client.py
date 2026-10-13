@@ -39,6 +39,10 @@ _COMPACT_DATE_RE = re.compile(r"^\d{8}$")
 # 东财场外「单位净值走势」的日涨跌列（akshare 已 to_numeric，百分数形态）。#692：
 # 缺列只降级成 WARNING，不参与「是否净值行」判据，理由见 _screen_nav_rows。
 _OTC_PCT_COLUMN = "日增长率"
+# 东财场外「累计净值走势」的净值列（#704）。同一接口函数换 indicator 即返回，此前
+# 本地从未请求，导致 akshare 场外产品的 accumulated_nav 恒 NULL。
+_OTC_ACCUM_COLUMN = "累计净值"
+_OTC_ACCUM_INDICATOR = "累计净值走势"
 # 东财港互认响应里的日涨跌率键（百分数形态，如 -0.4762 = -0.4762%）。
 _HK_PCT_KEY = "NAVCHGRT"
 
@@ -225,6 +229,74 @@ def _finalize_nav_rows(
         )
 
 
+def _fetch_otc_accum_map(code: str) -> Dict[str, float]:
+    """东财场外「累计净值走势」→ `{YYYYMMDD: 累计净值}`（#704）。
+
+    同一接口函数换 `indicator` 即返回累计净值（实测 000001 有 6020 行），此前本地只请
+    求「单位净值走势」并把 `accum_nav` 写死 None，等于把可取得的数据永久丢在读侧外面。
+
+    合并靠日期映射天然对齐，不做位置对齐：两条序列各自独立取回，缺日/坏值就是查不到
+    键，落 NULL 而**不拿单位净值顶替**——列级判据由写入侧 `_bulk_upsert_prices` 承接。
+
+    整段失败降级为空映射 + 一条 WARNING：累计净值是展示列，一次上游抖动不该把已经取
+    到手的单位净值历史一起打死（与 `get_fund_nav_otc` 里日涨跌列的既有立场同族）。
+    空 DataFrame 不告警——货币基金等品种本就没有累计净值序列。
+    """
+    try:
+        import akshare as ak
+    except ImportError:
+        raise AkshareAPIError("akshare 未安装，请 pip install akshare")
+
+    def _fetch():
+        df = ak.fund_open_fund_info_em(symbol=code, indicator=_OTC_ACCUM_INDICATOR)
+        pairs = [
+            (row.get("净值日期"), row.get(_OTC_ACCUM_COLUMN))
+            for _, row in df.iterrows()
+        ]
+        return pairs, _OTC_ACCUM_COLUMN in df.columns
+
+    try:
+        pairs, has_accum_column = _retry(_fetch, "获取场外基金累计净值失败")
+    except AkshareAPIError as e:
+        logger.warning(
+            "东财场外累计净值请求失败，本批 accumulated_nav 全为空（#704）：%s",
+            e,
+            extra={
+                "operation": "fetch_fund_nav_otc",
+                "product_code": code,
+                "market": "CN_OTC",
+                "accum_degraded": True,
+            },
+        )
+        return {}
+
+    if pairs and not has_accum_column:
+        logger.warning(
+            "东财场外累计净值响应缺少「%s」列，本批累计净值全为空（#704）",
+            _OTC_ACCUM_COLUMN,
+            extra={
+                "operation": "fetch_fund_nav_otc",
+                "product_code": code,
+                "market": "CN_OTC",
+                "upstream_rows": len(pairs),
+                "missing_column": _OTC_ACCUM_COLUMN,
+                "column_drift": True,
+            },
+        )
+        return {}
+
+    accum_map: Dict[str, float] = {}
+    for raw_date, raw_value in pairs:
+        td = _compact_date(raw_date)
+        value = _finite_number(raw_value)
+        if td is None or value is None:
+            # 坏日期/坏值只让这一天没有累计净值，不计 malformed、不打死整段：
+            # 「这一行是不是净值行」的判据仍只由单位净值序列驱动（#651）。
+            continue
+        accum_map[td] = value
+    return accum_map
+
+
 def get_fund_nav_otc(
     symbol: str,
     start_date: Optional[str] = None,
@@ -237,8 +309,9 @@ def get_fund_nav_otc(
     返回: [{trade_date: 'YYYYMMDD', unit_nav, accum_nav, pct_change}]
 
     `pct_change` 是上游「日增长率」原值（百分数，1.2195 即 1.2195%，#692）：语义为
-    单位净值日涨跌、除息日含跳水，与天天基金展示一致。上游缺该列或该行坏值时为 None
-    ——`accum_nav` 同样恒为 None（东财这条接口不给累计净值）。
+    单位净值日涨跌、除息日含跳水，与天天基金展示一致。上游缺该列或该行坏值时为 None。
+    `accum_nav` 取自同接口的「累计净值走势」指标（#704），按净值日期合并；该序列缺日、
+    坏值或整段请求失败时为 None，不以单位净值顶替。
     """
     try:
         import akshare as ak
@@ -282,8 +355,16 @@ def get_fund_nav_otc(
         operation="fetch_fund_nav_otc", start_date=start_date,
         unwindowed_empty_is_error=start_date is None,
     )
+    # 累计净值另打一次上游（#704），放在 _finalize_nav_rows 之后：单位净值整段解析不出
+    # 来时本次同步已经失败，不该再白打一次限流请求。
+    accum_map = _fetch_otc_accum_map(code)
     return [
-        {"trade_date": td, "unit_nav": price, "accum_nav": None, "pct_change": pct}
+        {
+            "trade_date": td,
+            "unit_nav": price,
+            "accum_nav": accum_map.get(td),
+            "pct_change": pct,
+        }
         for td, price, pct in usable
     ]
 
