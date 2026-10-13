@@ -542,6 +542,22 @@ def test_pull_retry_is_bounded_and_keeps_exit_2(server, make_release):
     assert not server.accepted()                           # 停在拉取前 ⇒ 零记录、零激活
 
 
+@pytest.mark.parametrize("knob", ["PULL_ATTEMPTS", "PULL_INTERVAL"])
+def test_non_numeric_pull_retry_knob_rejected_before_first_pull(server, make_release, knob):
+    """上界判据不能被外部值架空——非法取值必须停在第一次拉取之前，而不是无限重试。
+
+    `[ 1 -ge abc ]` 报 integer expression expected 并返回假，循环因此越过上界判据；
+    判据落在**没有任何 pull 发生**上，所以缺校验时这条是 rc=0 判红，不会挂住 CI。
+    """
+    rel = make_release()
+    server.env[knob] = "abc"
+    proc = deploy(server, rel)
+    assert proc.returncode == 2 and "拉取重试参数非法" in proc.stderr
+    assert not pull_refs(server), "非法旋钮仍走到了拉取，校验不在 pull 之前"
+    assert server.current_id() is None and not server.calls_for(rel.id, "up")
+    assert not server.accepted()
+
+
 # ------------------------------------------------------------------ DB 兼容判据
 def test_migration_required_stops_before_any_db_write(server, make_release):
     rel = make_release()

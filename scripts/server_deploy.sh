@@ -208,6 +208,11 @@ image_refs_of() { # 发布目录的三个 digest 引用，每行一个（缺失�
 
 pull_images() {
     local dir="$1" key ref out attempt
+    # `[ 1 -ge abc ]` 返回假，非数字的上界会让循环永不耗尽并一直占着部署锁。校验放在
+    # pull_images 而非脚本顶部，让 record 等不拉取的路径不依赖这两个旋钮；不回显取值，
+    # 避免把外部环境内容原样写进 CI 日志。
+    [[ "$PULL_ATTEMPTS" =~ ^[1-9][0-9]*$ && "$PULL_INTERVAL" =~ ^[0-9]+$ ]] \
+        || die 2 "拉取重试参数非法：PULL_ATTEMPTS 必须是正整数、PULL_INTERVAL 必须是非负整数（取自部署进程环境）；已在第一次拉取前停止，未改动任何运行状态"
     for key in "${IMAGE_REF_KEYS[@]}"; do
         ref="$(image_ref_of "$dir" "$key")"
         [ -n "$ref" ] || die 2 "images.env 缺少 $key"
