@@ -406,9 +406,13 @@ class TestPortfolioInvestorsEndpoint:
             "profit": 300.0,
             "profit_percent": 4.0,   # 300 / 7500 × 100
             "ratio": 0.6,            # 6000 / 10000
+            # #694：无申赎流水 → 累计收益 = D 日市值；非清仓行
+            "cumulative_profit": 7800.0,
+            "is_liquidated": False,
         }
         assert data[1]["profit_percent"] == 30.0  # 1200 / 4000 × 100
         assert data[1]["ratio"] == 0.4            # 4000 / 10000
+        assert data[1]["cumulative_profit"] == 5200.0
         # 恒等关系在响应上逐行成立
         for item in data:
             assert item["profit"] == item["market_value"] - item["total_cost"]
@@ -452,6 +456,131 @@ class TestPortfolioInvestorsEndpoint:
         item = resp.json()[0]
         assert item["profit_percent"] is None
         assert item["profit"] == 1000.0
+        assert item["ratio"] == 1.0
+
+    def test_investors_liquidated_rows_merged_with_cumulative_profit(
+        self, client, admin_headers, test_db,
+    ):
+        """#694：清仓出资人合并进列表（份额/市值计 0、保留累计收益、排序置后）"""
+        create_portfolio(test_db, code="P_INV_Q", status="active")
+        create_investor(test_db, code="INV_Q1", name="投资人E")
+        create_investor(test_db, code="INV_Q2", name="投资人F")
+        d1, d2 = date(2025, 4, 1), date(2025, 4, 2)
+        create_subscription(
+            test_db, "P_INV_Q", "INV_Q1", "subscribe", amount=6000.0,
+            apply_date=d1, confirm_date=d1, status="confirmed",
+        )
+        create_subscription(
+            test_db, "P_INV_Q", "INV_Q2", "subscribe", amount=6000.0,
+            apply_date=d1, confirm_date=d1, status="confirmed",
+        )
+        create_subscription(
+            test_db, "P_INV_Q", "INV_Q2", "redeem", amount=6500.0,
+            apply_date=d1, confirm_date=d2, status="confirmed",
+        )
+        create_investor_holding(
+            test_db, "P_INV_Q", "INV_Q1", d2, 6000.0,
+            cost_per_share=1.0, market_value=6600.0, total_cost=6000.0, profit=600.0,
+        )
+        create_value_snapshot(test_db, "P_INV_Q", d2, 6600.0, 6000.0, 1.1)
+
+        resp = client.get("/api/portfolios/P_INV_Q/investors", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [i["investor_code"] for i in data] == ["INV_Q1", "INV_Q2"]
+        held, liquidated = data
+        assert held["is_liquidated"] is False
+        assert held["cumulative_profit"] == 600.0   # 6600 − 6000
+        assert liquidated["is_liquidated"] is True
+        assert liquidated["name"] == "投资人F"
+        assert liquidated["shares"] == 0.0
+        assert liquidated["frozen_shares"] == 0.0
+        assert liquidated["market_value"] == 0.0
+        assert liquidated["ratio"] == 0.0
+        assert liquidated["cost_per_share"] is None
+        assert liquidated["profit"] is None
+        # 清仓者累计收益保留：赎回 6500 − 申购 6000
+        assert liquidated["cumulative_profit"] == 500.0
+
+    def test_investors_cumulative_profit_differs_from_profit_after_partial_redeem(
+        self, client, admin_headers, test_db,
+    ):
+        """#694：部分赎回后累计收益 ≠ 持仓收益（钉住两口径差异，防后续误并）"""
+        create_portfolio(test_db, code="P_INV_R", status="active")
+        create_investor(test_db, code="INV_R1", name="投资人G")
+        d1, d2 = date(2025, 4, 1), date(2025, 4, 2)
+        create_subscription(
+            test_db, "P_INV_R", "INV_R1", "subscribe", amount=10000.0,
+            apply_date=d1, confirm_date=d1, status="confirmed",
+        )
+        create_subscription(
+            test_db, "P_INV_R", "INV_R1", "redeem", amount=4200.0,
+            apply_date=d1, confirm_date=d2, status="confirmed",
+        )
+        create_investor_holding(
+            test_db, "P_INV_R", "INV_R1", d2, 6000.0,
+            cost_per_share=1.0, market_value=6600.0, total_cost=6000.0, profit=600.0,
+        )
+        create_value_snapshot(test_db, "P_INV_R", d2, 6600.0, 6000.0, 1.1)
+
+        resp = client.get("/api/portfolios/P_INV_R/investors", headers=admin_headers)
+        item = resp.json()[0]
+        # 持仓收益 = 在手份额浮动盈亏；累计收益 = 市值 + 赎回 − 申购（含已落袋）
+        assert item["profit"] == 600.0
+        assert item["cumulative_profit"] == 800.0   # 6600 + 4200 − 10000
+        assert item["cumulative_profit"] != item["profit"]
+
+    def test_investors_default_path_without_value_snapshot_degrades_cumulative(
+        self, client, admin_headers, test_db,
+    ):
+        """#694：缺省最新日路径无市值快照 → 200 且 cumulative_profit 全 None"""
+        create_portfolio(test_db, code="P_INV_D", status="active")
+        create_investor(test_db, code="INV_D1", name="投资人H")
+        d = date(2025, 4, 2)
+        create_subscription(
+            test_db, "P_INV_D", "INV_D1", "subscribe", amount=1000.0,
+            apply_date=d, confirm_date=d, status="confirmed",
+        )
+        create_investor_holding(test_db, "P_INV_D", "INV_D1", d, 1000.0)
+
+        resp = client.get("/api/portfolios/P_INV_D/investors", headers=admin_headers)
+        assert resp.status_code == 200
+        item = resp.json()[0]
+        assert item["cumulative_profit"] is None
+        assert item["ratio"] is None
+
+    def test_investors_explicit_snapshot_date_strict_404(self, client, admin_headers, test_db):
+        """#694：显式 snapshot_date 严格校验——无持仓行 404、无市值快照 404"""
+        create_portfolio(test_db, code="P_INV_S", status="active")
+        create_investor(test_db, code="INV_S1", name="投资人I")
+        d = date(2025, 4, 2)
+        resp = client.get(
+            f"/api/portfolios/P_INV_S/investors?snapshot_date={d}", headers=admin_headers,
+        )
+        assert resp.status_code == 404
+        assert "无投资人份额快照" in resp.json()["detail"]["message"]
+
+        create_subscription(
+            test_db, "P_INV_S", "INV_S1", "subscribe", amount=1000.0,
+            apply_date=d, confirm_date=d, status="confirmed",
+        )
+        create_investor_holding(test_db, "P_INV_S", "INV_S1", d, 1000.0)
+        # 有持仓行但无市值快照：strict 路径 NOT_FOUND 上抛不降级
+        resp = client.get(
+            f"/api/portfolios/P_INV_S/investors?snapshot_date={d}", headers=admin_headers,
+        )
+        assert resp.status_code == 404
+        assert "无市值快照" in resp.json()["detail"]["message"]
+
+        # 补市值快照后显式日期正常返回该日数据
+        create_value_snapshot(test_db, "P_INV_S", d, 1000.0, 1000.0, 1.0)
+        resp = client.get(
+            f"/api/portfolios/P_INV_S/investors?snapshot_date={d}", headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        item = resp.json()[0]
+        # 持仓行派生列 NULL → 市值按 0 计：累计 = 0 − 申购 1000
+        assert item["cumulative_profit"] == -1000.0
         assert item["ratio"] == 1.0
 
     def test_investors_empty_without_holdings(self, client, admin_headers, test_db):

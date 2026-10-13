@@ -72,13 +72,18 @@ class PortfolioValueSnapshotResponse(BaseModel):
 
 
 class PortfolioInvestorItem(BaseModel):
-    """组合投资人持仓行（#693）。
+    """组合投资人持仓行（#693 派生列 + #694 累计收益与清仓行）。
 
     派生列来自 investor_holding（快照生成时逐日落库）；#40 之前生成且从未重算的
     历史快照三列（market_value/total_cost/profit）可为 NULL，连同 frozen_shares/
     cost_per_share 一律 Optional。ratio 为占组合总份额比（0-1 小数）、
     profit_percent 为百分数（×100，total_cost 为 NULL/0 时 None），口径对齐
     HoldingProductAggregate（schemas/position.py）。
+
+    cumulative_profit 为投资人累计收益（#694 方案 A：D 日市值 + Σconfirmed
+    赎回 − Σconfirmed 申购，与 profit「持仓收益」口径不同）；缺省最新日路径
+    无市值快照时降级 None，显式 snapshot_date 该日无市值快照为 404（#672）。
+    is_liquidated 标记清仓行（当日无持仓行、份额/市值计 0、保留累计收益）。
     """
     investor_code: str
     name: str
@@ -90,6 +95,8 @@ class PortfolioInvestorItem(BaseModel):
     profit: Optional[float] = None
     profit_percent: Optional[float] = None
     ratio: Optional[float] = None
+    cumulative_profit: Optional[float] = None
+    is_liquidated: bool = False
 
 
 class NavHistoryRecord(BaseModel):

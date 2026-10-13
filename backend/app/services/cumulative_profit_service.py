@@ -7,9 +7,11 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.constants.share_change_events import CASH_EFFECT_EVENT_TYPES
+from app.models.investor_holding import InvestorHolding
 from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.share_change_event import ShareChangeEvent
+from app.models.subscription import Subscription
 from app.models.trade import Trade
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import IN_TRANSIT_PRODUCT_CODES
@@ -29,17 +31,24 @@ def compute_cumulative_profits(
     portfolio_code: str,
     snapshot_date: date,
 ) -> dict:
-    """按显式快照日返回平台产品、产品市场、平台三粒度累计收益。
+    """按显式快照日返回平台产品、产品市场、平台、投资人四粒度累计收益。
 
     基金 = D 日市值 + confirmed 卖出实际净额 - confirmed 买入含费支出
            + confirmed 平台/子事件现金腿（仅现金分红/强制调整，ex_date <= D）。
     CASH = D 日现金 - confirmed CASH 腿净流入 - 基金事件已到账现金。
     CASH 自身调整、手动重估留在现金损益；在途不产生独立收益。
 
-    固定四次批量 SELECT，不依赖列表分页，不写 ORM 或提交事务。历史流水键
+    投资人（第四粒度，#694 方案 A）= D 日 investor_holding.market_value
+    （清仓者当日无行、市值为零）+ Σconfirmed 赎回 amount − Σconfirmed 申购
+    amount（confirm_date <= D，pending/cancelled 不入历史结果）。归属边界：
+    分红/强制调整的现金腿不归属到投资人（share_change_event 无 investor_code
+    列），手动重估差额留在现金损益；故 Σinvestors 与 Σproducts 一般不闭合，
+    差额显式命名为「未归属到投资人的产品级收益」，属口径设计而非缺陷。
+
+    固定六次批量 SELECT，不依赖列表分页，不写 ORM 或提交事务。历史流水键
     与当日持仓键取并集，清仓缺行市值为零，绝不回查旧快照复活持仓。
     逐行取 Decimal 后在内存累加（避免 SQLite SUM 的浮点累计误差），仅在
-    基础键返回时用 quantize_nav 量化，另两粒度直接加总这些四位数值。
+    基础键返回时用 quantize_nav 量化，汇总粒度直接加总这些四位数值。
     """
     with db.no_autoflush:
         snapshot = db.query(PortfolioValueSnapshot.id).filter(
@@ -94,9 +103,28 @@ def compute_cumulative_profits(
             ShareChangeEvent.cash_change.isnot(None),
             ShareChangeEvent.cash_change != 0,
         ).all()
+        investor_holdings = db.query(
+            InvestorHolding.investor_code,
+            InvestorHolding.market_value,
+        ).filter(
+            InvestorHolding.portfolio_code == portfolio_code,
+            InvestorHolding.snapshot_date == snapshot_date,
+        ).all()
+        subscriptions = db.query(
+            Subscription.id,
+            Subscription.investor_code,
+            Subscription.sub_type,
+            Subscription.amount,
+        ).filter(
+            Subscription.portfolio_code == portfolio_code,
+            Subscription.status == "confirmed",
+            Subscription.confirm_date <= snapshot_date,
+        ).all()
 
     market_values = defaultdict(lambda: _ZERO)
     profit_flows = defaultdict(lambda: _ZERO)
+    investor_values = defaultdict(lambda: _ZERO)
+    investor_flows = defaultdict(lambda: _ZERO)
     for product, market, platform, market_value, cash_amount in positions:
         value = cash_amount if product == "CASH" else market_value
         market_values[(product, market, platform)] += value or _ZERO
@@ -114,6 +142,19 @@ def compute_cumulative_profits(
         profit_flows[(product, market, platform)] += cash_change
         if cash_date <= snapshot_date:
             profit_flows[("CASH", "", platform)] -= cash_change
+
+    for investor_code, market_value in investor_holdings:
+        investor_values[investor_code] += market_value or _ZERO
+    for sub_id, investor_code, sub_type, amount in subscriptions:
+        # 确认写入方保证金额存在；异常历史数据不能退回 shares×unit_price 或伪装为零。
+        if amount is None:
+            raise BusinessError(
+                "INVALID_AMOUNT", f"已确认申赎记录 {sub_id} 缺少金额"
+            )
+        # subscribe = 投资人出资（现金流出）取负、redeem = 取回（现金流入）取正。
+        investor_flows[investor_code] += (
+            -amount if sub_type == "subscribe" else amount
+        )
 
     platform_products = []
     product_totals = defaultdict(lambda: [_ZERO, _ZERO])
@@ -155,6 +196,20 @@ def compute_cumulative_profits(
             }
             for (platform,), totals in sorted(
                 platform_totals.items(), key=lambda item: _sort_key(item[0])
+            )
+        ],
+        # 投资人键 = 当日持仓键 ∪ confirmed 流水键；清仓者无持仓行市值为零、
+        # 累计收益保留（#694）。investor_code NOT NULL，普通升序即可。
+        "investors": [
+            {
+                "investor_code": investor_code,
+                "market_value": quantize_nav(investor_values[investor_code]),
+                "cumulative_profit": quantize_nav(
+                    investor_values[investor_code] + investor_flows[investor_code]
+                ),
+            }
+            for investor_code in sorted(
+                investor_values.keys() | investor_flows.keys()
             )
         ],
     }

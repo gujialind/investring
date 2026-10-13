@@ -4,6 +4,7 @@
 组合的创建、更新、关闭/重新激活状态机，以及净值历史/收益率/资金流查询，
 从路由层提取供 REST 与 CLI 共用。service 层只抛领域异常，不 commit。
 """
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
@@ -17,7 +18,10 @@ from app.models.portfolio import Portfolio
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.subscription import Subscription
 from app.models.trade import Trade
+from app.services.cumulative_profit_service import compute_cumulative_profits
 from app.services.exceptions import BusinessError, NotFoundError
+
+logger = logging.getLogger(__name__)
 
 # display_config 哨兵：区分 PUT「不传 = 不修改」与「显式 null = 清空」（issue #144）
 UNSET = object()
@@ -205,8 +209,35 @@ def get_latest_value_snapshot(db: Session, code: str) -> PortfolioValueSnapshot:
     return latest
 
 
-def get_portfolio_investors(db: Session, code: str) -> List[dict]:
-    """获取组合最新快照日的投资人份额列表（shares > 0），无快照返回空列表。
+def _load_investor_cumulative_map(
+    db: Session, code: str, snapshot_date: date, *, strict: bool = False,
+) -> dict:
+    """#694 第四粒度累计收益 → {investor_code: cumulative_profit}。
+
+    strict=False（缺省最新日路径）：无当日组合市值快照时记 WARNING 并降级
+    空映射（cumulative_profit 字段输出 None）；strict=True（调用方显式传
+    snapshot_date，#672）：NotFoundError 原样上抛。INVALID_AMOUNT 等存量
+    数据错误两种模式都不吞（口径同 holding_aggregation_service 的
+    _load_cumulative_maps）。
+    """
+    try:
+        result = compute_cumulative_profits(db, code, snapshot_date)
+    except NotFoundError:
+        if strict:
+            raise
+        logger.warning(
+            "投资人列表：组合 %s 在 %s 有持仓行但无组合市值快照，"
+            "cumulative_profit 字段降级 None",
+            code, snapshot_date,
+        )
+        return {}
+    return {r["investor_code"]: r["cumulative_profit"] for r in result["investors"]}
+
+
+def get_portfolio_investors(
+    db: Session, code: str, snapshot_date: Optional[date] = None,
+) -> List[dict]:
+    """获取组合快照日的投资人列表：当前持仓行（shares > 0）∪ 清仓出资人。
 
     #693：读出 investor_holding 已有派生列（DB 原值保 Decimal，float 序列化
     舍入只在 router shaping 层做，口径同 holding_aggregation_service）。
@@ -214,19 +245,43 @@ def get_portfolio_investors(db: Session, code: str) -> List[dict]:
     数学等价，全体投资人共用 unit_price，故只出这一列）；profit_percent =
     profit / total_cost × 100。分母为 NULL/0 时降级 None（不除零、不返回 0，
     同 holding_aggregation_service 的 holding_profit_percent 三重降级）。
+
+    #694：cumulative_profit 取第四粒度（方案 A：D 日市值 + Σconfirmed 赎回
+    − Σconfirmed 申购）；清仓出资人（有 confirmed 申赎历史但当日无持仓行）
+    份额/市值计 0、保留累计收益、is_liquidated=True，排在持仓行之后。
+    snapshot_date 可选（#672 语义）：缺省 = investor_holding 自身最新快照日
+    （无行返回空列表，cumulative_profit 无市值快照时降级 None）；显式传入
+    严格校验——该日无持仓行或无市值快照均 NOT_FOUND 上抛。
     """
     _get_portfolio_or_404(db, code)
-    latest_date = (
-        db.query(InvestorHolding.snapshot_date)
-        .filter(InvestorHolding.portfolio_code == code)
-        .order_by(InvestorHolding.snapshot_date.desc())
-        .limit(1)
-        .scalar()
-    )
-    if latest_date is None:
-        return []
+    strict = snapshot_date is not None
+    if strict:
+        latest_date = snapshot_date
+        has_rows = (
+            db.query(InvestorHolding.id)
+            .filter(
+                InvestorHolding.portfolio_code == code,
+                InvestorHolding.snapshot_date == latest_date,
+            )
+            .first()
+        )
+        if has_rows is None:
+            raise NotFoundError(
+                "NOT_FOUND", f"组合 {code} 在 {snapshot_date} 无投资人份额快照"
+            )
+    else:
+        latest_date = (
+            db.query(InvestorHolding.snapshot_date)
+            .filter(InvestorHolding.portfolio_code == code)
+            .order_by(InvestorHolding.snapshot_date.desc())
+            .limit(1)
+            .scalar()
+        )
+        if latest_date is None:
+            return []
     # 两表由同一次快照生成同批落库，正常恒有当日行；脏数据/部分失败时缺行，
-    # ratio 降级 None 而不 404（本端点无显式 snapshot_date 参数，无 #672 严格路径）
+    # ratio 降级 None 而不 404（严格路径的 404 由上方持仓行探针与
+    # _load_investor_cumulative_map(strict=True) 承担）
     total_shares = (
         db.query(PortfolioValueSnapshot.total_shares)
         .filter(
@@ -246,6 +301,7 @@ def get_portfolio_investors(db: Session, code: str) -> List[dict]:
         .order_by(InvestorHolding.shares.desc())
         .all()
     )
+    cum_map = _load_investor_cumulative_map(db, code, latest_date, strict=strict)
     items = []
     for h, name in rows:
         profit_percent = (
@@ -264,7 +320,51 @@ def get_portfolio_investors(db: Session, code: str) -> List[dict]:
             "profit": h.profit,
             "profit_percent": profit_percent,
             "ratio": h.shares / total_shares if total_shares else None,
+            "cumulative_profit": cum_map.get(h.investor_code),
+            "is_liquidated": False,
         })
+    # 清仓出资人：confirmed 申赎历史 ∖ 当日持仓行；份额/市值计 0、保留累计收益
+    liquidated_codes = {
+        investor_code
+        for (investor_code,) in db.query(Subscription.investor_code)
+        .distinct()
+        .filter(
+            Subscription.portfolio_code == code,
+            Subscription.status == "confirmed",
+            Subscription.confirm_date <= latest_date,
+        )
+        .all()
+    } - {h.investor_code for h, _ in rows}
+    if liquidated_codes:
+        name_map = dict(
+            db.query(Investor.code, Investor.name)
+            .filter(Investor.code.in_(liquidated_codes))
+            .all()
+        )
+        liquidated = [
+            {
+                "investor_code": lc,
+                "name": name_map.get(lc, lc),
+                "shares": Decimal("0"),
+                "frozen_shares": Decimal("0"),
+                "cost_per_share": None,
+                "market_value": Decimal("0"),
+                "total_cost": None,
+                "profit": None,
+                "profit_percent": None,
+                "ratio": Decimal("0") if total_shares else None,
+                "cumulative_profit": cum_map.get(lc),
+                "is_liquidated": True,
+            }
+            for lc in liquidated_codes
+        ]
+        # 清仓行置后：累计收益降序（None 最后）、tie 按 code 升序（确定性可钉测试）
+        liquidated.sort(key=lambda it: (
+            it["cumulative_profit"] is None,
+            -(it["cumulative_profit"] or Decimal("0")),
+            it["investor_code"],
+        ))
+        items.extend(liquidated)
     return items
 
 

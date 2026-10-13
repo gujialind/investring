@@ -28,6 +28,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - 份额只因申赎变化；产品/平台维度的份额事件不并入投资人账本，分红再投资只改成分基金份额。
 - 市值 = 份额 × 组合净值。投资人成本价 `investor_holding.cost_per_share` 首次取组合净值，后续为 `(old×cost + new×price)/(old + new)`；产品持仓的 `portfolio_position.cost_price` 是另一套口径，见[份额变动事件](#rule-event)。
 - 可用份额必须实时计算（#277），不能只读快照冻结份额，见[可用量口径](#可用量口径)。份额为 0 才能删除投资人，不支持强制物理删除。
+- `investor_holding.profit` 读作「持仓收益」（当前在手份额浮动盈亏，赎回时成本价不变、总成本随份额等比缩小，已落袋盈亏不含在内），与 #598「累计收益」（全历史净流量，投资人粒度见[累计收益](#rule-cumulative-profit)）两口径并列展示、列头用词不得互换；未计算（历史 NULL）显示 `--`。
 
 <a id="rule-product"></a>
 ## 产品与市场
@@ -112,12 +113,13 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-cumulative-profit"></a>
 ## 累计收益（全历史净流量口径）
 
-独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；经 #595 组合详情页聚合端点（`GET /positions/portfolio/{code}/holdings/by-product|by-platform`）接入。**服务函数**只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`；confirmed 交易缺 `actual_amount` 报 `INVALID_AMOUNT`——属存量数据不完整，见[错误码总表](#错误码总表)），固定批量查询、只读不 commit。**聚合端点**的 `snapshot_date` 为可选查询参数（#672，偏离 #598 原措辞、已回填）：不传 = 最新**持仓**快照日（`portfolio_position` max，与 `get_latest_snapshot_date` 的市值快照日不是同一个日期），该日无组合市值快照时响应字段降级为 None（前端按可空占位渲染）；显式传入则严格校验、不降级，该日无持仓快照或无组合市值快照均报 `NOT_FOUND`（消息含组合代码与日期）。
+独立读侧计算（#598，`cumulative_profit_service.compute_cumulative_profits`），与持仓列表旧 `profit_loss` 并存、不替换；经 #595 组合详情页聚合端点（`GET /positions/portfolio/{code}/holdings/by-product|by-platform`）与 #694 投资人列表端点（`GET /api/portfolios/{code}/investors` 的 `cumulative_profit` 字段，同 #672 降级/404 语义）接入。**服务函数**只接受显式快照日（该日无组合市值快照报 `NOT_FOUND`；confirmed 交易缺 `actual_amount`、confirmed 申赎缺 `amount` 报 `INVALID_AMOUNT`——属存量数据不完整，见[错误码总表](#错误码总表)），固定批量查询、只读不 commit。**聚合端点**的 `snapshot_date` 为可选查询参数（#672，偏离 #598 原措辞、已回填）：不传 = 最新**持仓**快照日（`portfolio_position` max，与 `get_latest_snapshot_date` 的市值快照日不是同一个日期），该日无组合市值快照时响应字段降级为 None（前端按可空占位渲染）；显式传入则严格校验、不降级，该日无持仓快照或无组合市值快照均报 `NOT_FOUND`（消息含组合代码与日期）。
 
 - **基金（平台-产品键）**＝ D 日市值 ＋ confirmed 基金卖出腿实际到手（`actual_amount`）－ confirmed 基金买入腿含费支出 ＋ confirmed 平台/子记录事件现金净额（按 `ex_date` 应计）。强制调整的份额增减由市值体现，**不虚构本金投入抵消**；再投资/拆分/合并不另计外部投入、不重复分红。
 - **CASH**＝ D 日现金 － confirmed CASH 腿净流入 － 基金事件**已到账**现金（有效现金日 ≤ D，#522）；CASH 自身强制现金调整与手动重估差额留在现金损益、不伪装成本金；转移与买卖回款不再赚一次收益，基金与 CASH 不双计。在途（含分红在途）不产生独立收益。
 - **归属与边界**：收益归基金腿所在平台，不随现金到账平台搬迁；交易按 `confirm_date ≤ D`、pending/cancelled 与未来流水不入历史结果。历史键取「流水键 ∪ D 日持仓键」：清仓产品市值为零但保留累计收益，平台合计含该平台清仓历史，绝不回查旧快照复活持仓行；结果不受列表分页/筛选截断。
 - **三粒度严格相加**：平台-产品 →（产品, market）与平台两级汇总直接加总基础键的四位数值，不在汇总层另行舍入；量化只走统一入口（见[数值口径](#rule-precision)）。
+- **投资人（第四粒度，#694 方案 A）**＝ D 日 `investor_holding.market_value`（清仓者当日无行、市值为零）＋ Σconfirmed 赎回 `amount` − Σconfirmed 申购 `amount`（`confirm_date ≤ D`，pending/cancelled 不入历史结果）；键集合 = 当日持仓键 ∪ confirmed 流水键，清仓投资人不因份额归零而消失。**归属边界**：分红/强制调整的现金腿不归属到投资人（`share_change_event` 无 `investor_code` 列），手动重估差额留在现金损益。**与三粒度的相加关系（#694 实测定案，修正 issue 原推断）**：自洽业务闭环（含显式在途分红）下逐时点闭合——分红经组合净值隐含进投资人市值（`market_value = shares × unit_price`），产品侧由基金腿显式应计，两侧各含一次；不闭合只出现在两类降级形态，差额显式命名为「未归属到投资人的产品级收益」，属口径设计而非缺陷：① 有效现金日缺省回退 `ex_date` 而现金未到账（CASH 腿预扣、差额 = 分红腿，显式到账日后闭合）；② 历史 NULL 市值行投资人侧按 0 计。受控场景由 `test_cumulative_profits.py::TestInvestorGranularity` 钉住。
 
 <a id="rule-subscription"></a>
 ## 申购赎回
