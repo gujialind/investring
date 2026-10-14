@@ -1,8 +1,9 @@
 """任务管理命令组"""
+import time
 import typer
 from typing import Optional
 from ir_cli.client import APIClient
-from ir_cli.output import success
+from ir_cli.output import success, error
 from ir_cli.utils import run_list
 
 app = typer.Typer(no_args_is_help=True)
@@ -29,10 +30,47 @@ def describe(code: str = typer.Argument(..., help="任务代码")):
 
 
 @app.command("run")
-def run(code: str = typer.Argument(..., help="任务代码")):
-    """手动执行任务"""
+def run(
+    code: str = typer.Argument(..., help="任务代码"),
+    wait: bool = typer.Option(
+        True,
+        "--wait/--no-wait",
+        help="提交后轮询至终态再返回（默认开；#714 后任务不再在请求内跑完，--no-wait 只返回受理回执）",
+    ),
+    poll_interval: int = typer.Option(5, "--poll-interval", help="--wait 轮询间隔秒数"),
+):
+    """手动执行任务（提交即返，--wait 轮询终态）"""
     client = APIClient.from_config()
-    result = client.post(f"/api/system/tasks/{code}/run")
+    accepted = client.post(f"/api/system/tasks/{code}/run")["data"]
+    execution_id = accepted.get("execution_id")
+    if not wait:
+        success(
+            data=accepted,
+            hints=[f"轮询终态: ir task execution {execution_id}（pending/running → success/failed/partial_success/interrupted）"],
+        )
+        return
+
+    # 每次轮询都是短请求，不受 nginx 60s 上限影响（#714 的 504 根因）
+    while True:
+        state = client.get(f"/api/system/tasks/executions/{execution_id}")["data"]
+        if state.get("status") not in ("pending", "running"):
+            break
+        time.sleep(poll_interval)
+
+    if state.get("status") == "success":
+        success(data=state)
+    error(
+        "TASK_EXECUTION_NOT_SUCCESS",
+        f"任务 {code} 执行终态为 {state.get('status')}",
+        details=state,
+    )
+
+
+@app.command("execution")
+def execution(execution_id: int = typer.Argument(..., help="执行记录 ID")):
+    """查看单条任务执行记录（手动触发回执里的 execution_id）"""
+    client = APIClient.from_config()
+    result = client.get(f"/api/system/tasks/executions/{execution_id}")
     success(data=result["data"])
 
 

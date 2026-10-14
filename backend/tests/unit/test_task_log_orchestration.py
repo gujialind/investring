@@ -7,7 +7,8 @@
 # - `_derive_log_fields`：各任务返回 dict → (status, total, success, failed, error_message)。
 #   重点守 #305 语义（snapshot_generate 的 warnings / auto_confirm_failed 归并 +
 #   1000 字符截断）与「failed 为 None 表示未度量、不是零失败」的口径。
-# 纯函数测试，无需 DB。
+# 派生口径部分为纯函数测试，无需 DB；接管预建行与孤儿回收两类需 test_db
+#（自持会话经 patch_non_closing_session_local 重定向，见 #592 口径）。
 # ============================================================================
 
 import pytest
@@ -53,6 +54,60 @@ class TestDispatchCoverage:
     def test_unknown_code_raises_value_error(self):
         with pytest.raises(ValueError, match="未定义任务执行记录口径"):
             _derive_log_fields("no_such_task", {})
+
+
+class TestAdoptPreCreatedRow:
+    """run_task(execution_id=...)（#714 异步手动触发）：接管预建行，不新建记录"""
+
+    def test_missing_execution_id_raises_not_found(self, test_db):
+        """行已不在（被清理/同 id 从未建）时响亮失败，不得静默新建一条冒名记录。"""
+        from app.models.task_execution_log import TaskExecutionLog
+
+        with pytest.raises(NotFoundError) as exc:
+            run_task(test_db, "log_cleanup", execution_id=999999)
+
+        assert exc.value.code == "TASK_NOT_FOUND"
+        assert "999999" in exc.value.message
+        assert test_db.query(TaskExecutionLog).count() == 0
+
+
+class TestOrphanTaskExecutionRecovery:
+    """recover_orphan_task_executions（#714）：启动期回收未终态行，松开单 active 锁"""
+
+    def _mk(self, test_db, code, status):
+        from app.models.task_execution_log import TaskExecutionLog
+
+        log = TaskExecutionLog(task_code=code, trigger_type="manual", status=status)
+        test_db.add(log)
+        test_db.commit()
+        return log
+
+    def test_pending_and_running_become_interrupted(self, test_db, monkeypatch):
+        from app.services.task_runner import recover_orphan_task_executions
+        from tests.session_helpers import patch_non_closing_session_local
+
+        patch_non_closing_session_local(monkeypatch, test_db)
+        pending = self._mk(test_db, "nav_sync", "pending")
+        running = self._mk(test_db, "snapshot_generate", "running")
+        done = self._mk(test_db, "log_cleanup", "success")
+
+        assert recover_orphan_task_executions() == 2
+        assert pending.status == "interrupted"
+        assert "提交后未被执行体接管" in pending.error_message
+        assert running.status == "interrupted"
+        assert "可能上次崩溃遗留" in running.error_message
+        # 已终态的行不属于孤儿，不得被改写
+        assert done.status == "success"
+        assert done.error_message is None
+
+    def test_terminal_rows_only_noop(self, test_db, monkeypatch):
+        from app.services.task_runner import recover_orphan_task_executions
+        from tests.session_helpers import patch_non_closing_session_local
+
+        patch_non_closing_session_local(monkeypatch, test_db)
+        self._mk(test_db, "nav_sync", "failed")
+
+        assert recover_orphan_task_executions() == 0
 
 
 class TestUnknownTaskCode:

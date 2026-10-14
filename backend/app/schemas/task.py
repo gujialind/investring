@@ -30,6 +30,19 @@ class PaginatedTaskResponse(BaseModel):
     page_size: int
 
 
+class TaskRunAcceptedResponse(BaseModel):
+    """手动触发的异步回执（#714）：提交即返，终态经执行记录查询。
+
+    刻意不回传任务结果字段（旧响应把 result dict 摊平进 body）——请求返回时任务
+    还没跑完；执行进度与 records/error 一律看 GET /api/system/tasks/executions/{id}。
+    """
+
+    execution_id: int
+    task_code: str
+    status: str
+    message: str
+
+
 class TaskExecutionLogResponse(BaseModel):
     id: int
     task_code: str

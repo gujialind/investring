@@ -32,6 +32,7 @@ from app.models import (
 )
 from app.services.market_data_service import ConflictError, submit_price_sync_job
 from app.services.snapshot_recalc_job import submit_snapshot_recalc_job
+from app.services.task_runner import submit_task
 from tests.factories import (
     create_portfolio,
     create_position_snapshot,
@@ -79,7 +80,7 @@ class TestInjectedSessionBoundaryGuard:
             owned.rollback()
 
 
-_SUBMIT_ENTRIES = [submit_price_sync_job, submit_snapshot_recalc_job]
+_SUBMIT_ENTRIES = [submit_price_sync_job, submit_snapshot_recalc_job, submit_task]
 
 
 class TestTaskSubmissionSessionOwnership:

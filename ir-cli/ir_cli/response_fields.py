@@ -107,5 +107,21 @@ RESPONSE_FIELDS: dict = {
                 "dimension_rules": "仅 asset_class 维度值有值：{dimension: rule}，rule ∈ required/optional，未出现的维度 = forbidden"
             }
         }
+    },
+    "task": {
+        "run": {
+            "shape": "object",
+            "fields": "execution_id:int,task_code:str,status:str,message:str",
+            "notes": {
+                "_": "提交即返的受理回执（#714）：status 恒为 pending，任务在服务端后台跑，不代表已执行完；进度与结果看 ir task execution <execution_id>"
+            }
+        },
+        "execution": {
+            "shape": "object",
+            "fields": "id:int,task_code:str,trigger_type:str?,status:str,started_at:datetime?,finished_at:datetime?,duration_ms:int?,records_total:int?,records_success:int?,records_failed:int?,error_message:str?,error_stack:str?,created_at:datetime?",
+            "notes": {
+                "status": "pending/running=进行中；success/failed/partial_success/interrupted=终态（interrupted=进程重启导致未完成，可重新触发）"
+            }
+        }
     }
 }

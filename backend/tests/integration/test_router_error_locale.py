@@ -51,6 +51,13 @@ LOCALE_CASES = [
     ("post", f"/api/system/tasks/{BOGUS_CODE}/enable", f"任务 {BOGUS_CODE} 不存在", None),
     ("post", f"/api/system/tasks/{BOGUS_CODE}/disable", f"任务 {BOGUS_CODE} 不存在", None),
     ("get", f"/api/system/tasks/{BOGUS_CODE}", f"任务 {BOGUS_CODE} 不存在", None),
+    # ------------- tasks.py：1 处「任务执行记录 {id} 不存在」（#714，DB 自增 id 短形回显） -------------
+    (
+        "get",
+        f"/api/system/tasks/executions/{BOGUS_ID}",
+        f"任务执行记录 {BOGUS_ID} 不存在",
+        None,
+    ),
     # ------------- positions.py：1 处短形 + 3 处回显组合码 -------------
     ("get", f"/api/positions/{BOGUS_ID}", "持仓记录不存在", None),
     (

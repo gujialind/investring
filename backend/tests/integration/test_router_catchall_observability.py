@@ -256,7 +256,9 @@ OTHER_CASES = [
     ),
     (
         "tasks_run",
-        "app.services.task_runner.run_task",
+        # #714：端点改为调用 submit_task（run_task 只在后台线程里跑，请求不再持有它），
+        # 故兜底面打在投递入口上；router 的 operation 标识仍是 run_task
+        "app.services.task_runner.submit_task",
         "POST",
         "/api/system/tasks/nav_sync/run",
         None,

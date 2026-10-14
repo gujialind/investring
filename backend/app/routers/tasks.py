@@ -8,6 +8,7 @@ from app.schemas.task import (
     TaskResponse,
     TaskExecutionLogResponse,
     TaskDetailResponse,
+    TaskRunAcceptedResponse,
     PaginatedTaskResponse,
     PaginatedTaskLogResponse,
 )
@@ -64,20 +65,40 @@ def get_all_task_executions(
     }
 
 
-@router.post("/{code}/run")
+@router.get("/executions/{execution_id}", response_model=TaskExecutionLogResponse)
+def get_task_execution(
+    execution_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_admin),
+):
+    """按执行记录 id 查询单条状态（#714：手动触发后的轮询入口）。"""
+    log = (
+        db.query(TaskExecutionLog)
+        .filter(TaskExecutionLog.id == execution_id)
+        .first()
+    )
+    if not log:
+        raise HTTPException(
+            status_code=404, detail=f"任务执行记录 {execution_id} 不存在"
+        )
+    return log
+
+
+@router.post("/{code}/run", response_model=TaskRunAcceptedResponse)
 def run_task(
     code: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
-    # #406：按 code 分支的 status / records / error 推导整体下沉到
-    # `task_runner.run_task`（手动与调度共用同一实现），本层不再持有任务业务逻辑
-    # （backend/AGENTS.md「分层目录与职责」节：router 是 service 薄适配层）。
-    # 响应体与文案逐字保持不变。
+    # #714：改为「提交后台执行 + 轮询终态」。原先本端点在请求内同步跑完任务，
+    # 请求寿命 = 任务时长，而 nginx `location /api/` 的 proxy_read_timeout 是 60s，
+    # nav_sync 实测 162s 会被网关切断成 504、任务却在服务端照常成功（假失败）。
+    # 执行体本身仍是 task_runner.run_task，与调度触发共用同一实现（#406 口径不变）。
     #
     # 刻意不写函数 docstring——FastAPI 会把 docstring 收进 OpenAPI `description`，
     # 中文段落会让 openapi.json 无谓漂移（契约只该因接口语义变化而变）。
-    from app.services.task_runner import TRIGGER_MANUAL, run_task as run_task_service
+    from app.services.market_data_service import ConflictError
+    from app.services.task_runner import TRIGGER_MANUAL, submit_task
 
     task = db.query(ScheduledTask).filter(ScheduledTask.code == code).first()
     if not task:
@@ -87,7 +108,14 @@ def run_task(
         raise HTTPException(status_code=400, detail="任务未启用，请先启用后再执行")
 
     try:
-        result = run_task_service(db, code, trigger_type=TRIGGER_MANUAL)
+        # 投递入口自持会话（#592）；本层的 db 只用于上面的只读前置校验
+        execution_id = submit_task(code, triggered_by=TRIGGER_MANUAL)
+    except ConflictError as e:
+        # 单 active 锁：同 code 已有 pending/running 记录（#714 前无任何并发保护）
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "TASK_ALREADY_RUNNING", "message": str(e)},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -98,11 +126,15 @@ def run_task(
         report_unexpected(e, operation="run_task", task_code=code)
         raise HTTPException(status_code=500, detail=f"任务执行失败: {str(e)}")
 
-    if code == "log_cleanup":
-        return {"message": f"任务 {code} 执行成功", "deleted_logs": result}
-
-    verb = "执行完成" if code in ("nav_sync", "snapshot_generate") else "执行成功"
-    return {"message": f"任务 {code} {verb}", **result}
+    return TaskRunAcceptedResponse(
+        execution_id=execution_id,
+        task_code=code,
+        status="pending",
+        message=(
+            f"任务 {code} 已提交，执行记录 #{execution_id}；"
+            f"终态请用 GET /api/system/tasks/executions/{execution_id} 查询"
+        ),
+    )
 
 
 @router.post("/{code}/enable")

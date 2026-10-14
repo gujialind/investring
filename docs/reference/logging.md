@@ -119,7 +119,20 @@ NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不�
 
 **唯一编排点**是 `task_runner.run_task(db, task_code, trigger_type)`：手动触发
 （`POST /api/system/tasks/{code}/run`）与调度触发（`scheduler_service`）共用它，
-两条路径不会漂移。读侧 `GET /api/system/tasks/executions`、CLI `ir task logs <code>`。
+两条路径不会漂移。读侧 `GET /api/system/tasks/executions`、
+`GET /api/system/tasks/executions/{id}`、CLI `ir task logs <code>`。
+
+**手动触发是异步提交**（#714）：`task_runner.submit_task(code)` 自持会话建一条
+`pending` 记录并投线程池后立即返回 `{execution_id, ...}` 受理回执，执行体接管该行
+（`run_task(..., execution_id=...)`）才改 `running`。旧形态在请求内同步跑完任务，
+长任务被 nginx 60s 上限切成 504——任务实际成功而入口显示失败。同一任务已有
+`pending`/`running` 行时提交报 `ConflictError` → 409 `TASK_ALREADY_RUNNING`；进程
+重启遗留的未终态行由 `main.py` lifespan 的 `recover_orphan_task_executions()` 标
+`interrupted`（与 `sync_job` 的对偶回收同批落地，否则残留行会让该任务永久 409）。
+
+**状态取值**：`pending` → `running` → `success` / `failed` / `partial_success` /
+`interrupted`。前两个是进行中，后四个是终态；`interrupted` 表示「未被执行体接管或
+进程重启打断」，不是任务自身失败，可重新触发。
 
 **触发来源**（`trigger_type`，前端执行历史「触发方式」列取它）：
 

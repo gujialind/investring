@@ -1325,11 +1325,20 @@ ir task describe <CODE>
 
 #### `ir task run`
 
-手动执行任务。
+手动执行任务。**提交即返**（issue #714）：`POST /api/system/tasks/{code}/run` 只登记一条执行记录并返回受理回执，任务本体在服务端后台线程跑——旧形态在请求内同步跑完，长任务会被 nginx 60s 上限切成 504，任务却照常成功。默认 `--wait` 会轮询到终态再返回，退出码与输出仍反映任务真实结果；关掉等待只拿回执。
 
 ```bash
-ir task run <CODE>
+ir task run <CODE>                          # 提交并等待终态（默认 --wait）
+ir task run <CODE> --poll-interval 10       # 调整轮询间隔
+ir task execution <EXECUTION_ID>            # 稍后自行查询该次执行终态
 ```
+
+| 参数 | 说明 |
+|------|------|
+| `--wait` / `--no-wait` | 默认等待：提交后轮询至终态再返回（每次轮询都是短请求，不受长连接超时影响）。关闭后只返回受理回执 |
+| `--poll-interval` | `--wait` 的轮询间隔秒数（默认 5） |
+
+回执字段为 `{execution_id, task_code, status, message}`，`status` 此时是 `pending`；终态 ∈ `success` / `failed` / `partial_success` / `interrupted`（进程重启导致未完成，可重新触发）。非 `success` 终态以退出码 1 返回 `TASK_EXECUTION_NOT_SUCCESS`，`details` 即该条执行记录。同一任务已有 `pending`/`running` 记录时返回 409 `TASK_ALREADY_RUNNING`。
 
 **支持的任务代码：**
 
@@ -1339,6 +1348,14 @@ ir task run <CODE>
 | `snapshot_generate` | 组合快照生成（仅处理开启自动快照的组合） |
 | `trading_calendar_sync` | 交易日历同步 |
 | `log_cleanup` | 过期日志清理 |
+
+#### `ir task execution`
+
+按执行记录 ID 查看单次执行状态（`ir task run` 回执里的 `execution_id`）。
+
+```bash
+ir task execution <EXECUTION_ID>
+```
 
 #### `ir task enable`
 
@@ -1656,7 +1673,7 @@ ir snapshot generate-next --portfolio-code PORT001
 # 同步交易日历
 ir system calendar-sync --year 2025
 
-# 手动执行净值同步任务
+# 手动执行净值同步任务（默认等待终态；--no-wait 只拿受理回执）
 ir task run nav_sync
 
 # 生成今日快照
