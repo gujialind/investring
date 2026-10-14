@@ -112,8 +112,12 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
     `log_id` 必填（#406 起）：每条 NavSyncDetail 都要挂到当次 TaskExecutionLog 上，
     否则逐产品明细无父记录、答不出「这条明细属于哪次运行」。调用方一律经
     `run_task` 编排（它先建 log 再派发），故不再接受 None。
+
+    返回的 `degraded_products`（#704）是「同步成功但累计净值整段降级」的产品：单位净值
+    已落库、既有 accumulated_nav 已保留，不计入 `failed_products`，但经
+    `_derive_log_fields` 落到任务终态的 error_message 上，避免与完全正常的成功同形。
     """
-    from app.services.market_data_service import sync_product_prices
+    from app.services.market_data_service import sync_product_prices, ACCUM_DEGRADED_NOTE
     from app.models.trading_calendar import TradingCalendar
     from app.models.price_record import PriceRecord
     from sqlalchemy import func
@@ -130,11 +134,13 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
             "synced_count": 0,
             "products_count": 0,
             "failed_products": [],
+            "degraded_products": [],
             "target_date": target_date.isoformat(),
         }
 
     total_synced = 0
     failed_products = []
+    degraded_products = []
 
     for product in products:
         try:
@@ -154,6 +160,12 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
 
             if result["success"]:
                 total_synced += result.get("synced_count", 0)
+                # 累计净值整段降级（#704）：单位净值已落库、冲突行的既有累计净值已保留，
+                # 故仍算 success，但要在任务终态里显式可见——否则与「全部取到」的成功批次
+                # 同形，运维无从得知哪些产品待补。
+                degraded = bool(result.get("accum_degraded"))
+                if degraded:
+                    degraded_products.append(product.code)
                 db.add(NavSyncDetail(
                     task_log_id=log_id,
                     product_code=product.code,
@@ -162,6 +174,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
                     status="success",
                     synced_count=result.get("synced_count", 0),
                     source=result.get("source"),
+                    error_message=ACCUM_DEGRADED_NOTE if degraded else None,
                 ))
             else:
                 failed_products.append(product.code)
@@ -193,6 +206,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         "synced_count": total_synced,
         "products_count": len(products),
         "failed_products": failed_products,
+        "degraded_products": degraded_products,
         "dividends_detected": dividends_detected,
         "target_date": target_date.isoformat(),
     }
@@ -451,7 +465,8 @@ def _derive_log_fields(
 
     口径（#406）：
     - `nav_sync`：total=products_count、failed=len(failed_products)、success=差额，
-      满足 total == success + failed；
+      满足 total == success + failed；`degraded_products`（#704）不改 status/records
+      （降级批次单位净值已同步），只落到 error_message；
     - `snapshot_generate`：total=portfolios_processed、failed=len(auto_confirm_failed)、
       success=差额；#305 的 warnings / auto_confirm_failed 归并语义与 1000 字符截断
       原样保留（原先写在 routers/tasks.py 的按 code 分支里）；
@@ -466,7 +481,16 @@ def _derive_log_fields(
     if task_code == "nav_sync":
         failed = len(result.get("failed_products") or [])
         total = result.get("products_count") or 0
-        return "success" if not failed else "partial_success", total, total - failed, failed, None
+        status = "success" if not failed else "partial_success"
+        # 降级不是失败（单位净值已同步、既有累计净值已保留），但必须在终态可见（#704），
+        # 与 snapshot_generate 用 error_message 承载 warnings 同一手法。
+        degraded = result.get("degraded_products") or []
+        error_message = (
+            f"累计净值降级: {', '.join(degraded)}（本批未取到累计净值，已有值保留）"
+            [:ERROR_MESSAGE_MAX]
+            if degraded else None
+        )
+        return status, total, total - failed, failed, error_message
 
     if task_code == "snapshot_generate":
         warnings = result.get("warnings") or []
