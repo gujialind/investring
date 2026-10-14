@@ -671,6 +671,7 @@ export default function ShareChangeEventsContent({
                               code={event.product_code}
                               name={event.product_name}
                               market={event.market}
+                              displayCode={event.display_code}
                             />
                           ) : (
                             "--"

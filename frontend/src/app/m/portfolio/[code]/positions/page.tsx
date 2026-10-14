@@ -96,6 +96,7 @@ export default function MobilePositionsPage() {
             <PositionCard
               key={position.id}
               productCode={position.product_code}
+              displayCode={position.display_code}
               productName={position.product_name}
               market={position.market}
               shares={position.shares}

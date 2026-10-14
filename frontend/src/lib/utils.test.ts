@@ -23,6 +23,8 @@ import {
   formatDate,
   formatMarketName,
   formatProductName,
+  formatProductDisplayCode,
+  formatProductCodeLabel,
 } from "@/lib/utils";
 
 describe("formatNumber", () => {
@@ -239,6 +241,40 @@ describe("其他工具", () => {
     expect(formatProductName(null, "000001")).toBe("000001");
     expect(formatProductName("某基金", "")).toBe("--");
     expect(formatProductName(null, null)).toBe("--");
+  });
+
+  it("formatProductName 括号内优先显示码（#705）", () => {
+    expect(formatProductName("某基金", "510300.SH", "510300")).toBe("某基金（510300）");
+    // 名称缺失时同样用显示码回退
+    expect(formatProductName(null, "1001767344", "968050")).toBe("968050");
+    // 行级 display_code 缺位（单对象接口）不改变既有输出
+    expect(formatProductName("某基金", "510300.SH", null)).toBe("某基金（510300.SH）");
+    expect(formatProductName("某基金", "", "510300")).toBe("--");
+  });
+
+  it("formatProductDisplayCode 剥后缀与港互认透传（#705）", () => {
+    expect(formatProductDisplayCode("510300.SH", "CN_EXCHANGE")).toBe("510300");
+    expect(formatProductDisplayCode("000001.OF", "CN_OTC")).toBe("000001");
+    expect(formatProductDisplayCode("CASH", "CASH")).toBe("CASH");
+    expect(formatProductDisplayCode("IN_TRANSIT")).toBe("IN_TRANSIT");
+    // 港互认前端无销售码来源，兜底不猜测
+    expect(formatProductDisplayCode("1001767344", "HK_MUTUAL")).toBe("1001767344");
+    expect(formatProductDisplayCode(null, "CN_OTC")).toBe("--");
+  });
+
+  it("formatProductCodeLabel 港互认双码并列、其余市场只出显示码（#705）", () => {
+    expect(formatProductCodeLabel("968050", "1001767344", "HK_MUTUAL")).toBe(
+      "968050（1001767344）"
+    );
+    // 映射不可得时后端 display_code 等于原始码 → 不并列
+    expect(formatProductCodeLabel("1001767344", "1001767344", "HK_MUTUAL")).toBe("1001767344");
+    // 前端无销售码来源，兜底也不猜测
+    expect(formatProductCodeLabel(null, "1001767344", "HK_MUTUAL")).toBe("1001767344");
+    expect(formatProductCodeLabel("510300", "510300.SH", "CN_EXCHANGE")).toBe("510300");
+    // 行级 display_code 缺位（单对象接口）走兜底剥后缀
+    expect(formatProductCodeLabel(null, "000001.OF", "CN_OTC")).toBe("000001");
+    expect(formatProductCodeLabel(null, "CASH", "CASH")).toBe("CASH");
+    expect(formatProductCodeLabel("510300", "", "CN_EXCHANGE")).toBe("--");
   });
 
   it("cn 过滤 falsy 参数，冲突类由 twMerge 取后者", () => {

@@ -33,7 +33,7 @@ import {
 } from "@/lib/dimensions";
 import type { DimensionFilterKey, DimensionFilters } from "@/lib/dimensions";
 import { MARKET_OPTIONS } from "@/lib/market";
-import { cn, formatMarketName } from "@/lib/utils";
+import { cn, formatMarketName, formatProductDisplayCode } from "@/lib/utils";
 
 /** 产品筛选选中项：code + market（market 为空串对应现金类等无市场产品） */
 export interface ProductSelection {
@@ -337,8 +337,9 @@ export default function ProductFilterDialog({
                             )}
                           </div>
                           {/* market 为空（CASH / 在途虚拟产品）不拼市场段，避免 `· --` 残留（#393） */}
+                          {/* #705 代码段用显示码；筛选值/勾选态仍用原始 code */}
                           <p className="text-xs text-muted-foreground">
-                            {p.code}
+                            {p.display_code || formatProductDisplayCode(p.code, p.market)}
                             {p.market ? <> · {formatMarketName(p.market)}</> : null}
                             {" · "}
                             {productTypeLabel(p.product_type)}

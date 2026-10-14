@@ -7,6 +7,9 @@
 # `requests.get` 打桩，不碰真网络。
 # ============================================================================
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from app.services import akshare_client
@@ -949,3 +952,73 @@ class TestHkMutualCodeResolution:
 
         with pytest.raises(AkshareAPIError, match="未找到 6 位代码 123456"):
             akshare_client.get_fund_hk_mutual("123456")
+
+
+class _FakeRankFrame:
+    """`fund_hk_rank_em` 的最小 DataFrame 替身：只提供 `iterrows()`。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def iterrows(self):
+        return enumerate(self._rows)
+
+
+class TestHkCodeMapNormalization:
+    """排名表取数经 `_retry` 归一（#705 评审 Blocker）。
+
+    直调 `fund_hk_rank_em` 时，超时/连接失败/上游结构变化会以非领域异常冒出
+    service 层 → 全局 handler → 500；建档侧承诺的是 422 `HK_CODE_UNMAPPED`，
+    故归一必须发生在取数点，而不是在调用方各加一层 `except`。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self, monkeypatch):
+        """映射是进程内懒加载缓存：不清零就测不到取数分支。"""
+        monkeypatch.setattr(akshare_client, "_hk_code_map", None)
+
+    def test_rank_table_parsed_into_six_to_ten_map(self):
+        fake_ak = SimpleNamespace(
+            fund_hk_rank_em=lambda: _FakeRankFrame([
+                {"基金代码": "968050", "香港基金代码": HK},
+                {"基金代码": " 968052 ", "香港基金代码": " 1001767346 "},
+                # 任一列为空的行不入表（空键会污染反查）
+                {"基金代码": "", "香港基金代码": "1001767999"},
+            ])
+        )
+
+        assert akshare_client._ensure_hk_code_map(fake_ak) == {
+            "968050": HK, "968052": "1001767346",
+        }
+
+    def test_upstream_failure_normalized_to_akshare_error(self):
+        def unreachable():
+            raise RuntimeError("上游 fund_hk_rank_em 超时/连接失败")
+
+        fake_ak = SimpleNamespace(fund_hk_rank_em=unreachable)
+
+        with pytest.raises(AkshareAPIError, match="获取东财港基排名表失败"):
+            akshare_client._ensure_hk_code_map(fake_ak)
+
+    def test_six_digit_resolve_surfaces_normalized_error(self, monkeypatch):
+        """6 位建档路径拿到的是 AkshareAPIError，调用方的 422 收口才接得住。"""
+        def unreachable():
+            raise ConnectionError("DNS 解析失败")
+
+        monkeypatch.setitem(
+            sys.modules, "akshare", SimpleNamespace(fund_hk_rank_em=unreachable)
+        )
+
+        with pytest.raises(AkshareAPIError):
+            akshare_client.resolve_hk_code_pair("968050")
+
+    def test_ten_digit_reverse_lookup_still_swallows_upstream_failure(self, monkeypatch):
+        """反查是展示码锦上添花：归一后的异常同样不得阻断 10 位码录入。"""
+        def unreachable():
+            raise ConnectionError("DNS 解析失败")
+
+        monkeypatch.setitem(
+            sys.modules, "akshare", SimpleNamespace(fund_hk_rank_em=unreachable)
+        )
+
+        assert akshare_client.resolve_hk_code_pair(HK) == (HK, None)

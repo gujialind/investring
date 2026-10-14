@@ -1,10 +1,12 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { formatCurrency, formatNav, formatReturnRate, formatSharesUnit, getReturnColorClass } from "@/lib/utils";
+import { formatCurrency, formatNav, formatProductCodeLabel, formatReturnRate, formatSharesUnit, getReturnColorClass } from "@/lib/utils";
 
 interface PositionCardProps {
   productCode: string;
+  /** 后端派生显示码（#705）；缺位时按 market 剥后缀兜底 */
+  displayCode?: string | null;
   productName?: string;
   market?: string;
   shares?: number;
@@ -18,6 +20,7 @@ interface PositionCardProps {
 
 export default function PositionCard({
   productCode,
+  displayCode,
   productName,
   market,
   shares,
@@ -28,14 +31,16 @@ export default function PositionCard({
   profitLossPercent,
   onClick,
 }: PositionCardProps) {
+  // #705 展示用显示码；港互认双码并列（onClick 跳转仍由调用方用原始码）
+  const codeLabel = formatProductCodeLabel(displayCode, productCode, market);
   return (
     <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={onClick}>
       <CardContent className="p-4 space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <p className="font-medium">{productName || productCode}</p>
+            <p className="font-medium">{productName || codeLabel}</p>
             <p className="text-xs text-muted-foreground">
-              {productCode}
+              {codeLabel}
               {market ? ` | ${market}` : ""}
             </p>
           </div>

@@ -9,6 +9,9 @@ class Product(Base):
     market = Column(String(20), primary_key=True, nullable=True)
     name = Column(String(100), nullable=False)
     product_type = Column(String(20), nullable=False)
+    # 港互认 6 位内地销售代码（issue #705，仅 HK_MUTUAL 有值）：`code` 存 10 位
+    # 香港基金代码（取数主键），展示码由它派生；映射不可得为 NULL，读侧回退原码
+    hk_sale_code = Column(String(10))
     # 正交维度标签（issue #128）：asset_class 必填；region 股票/债券必填；
     # style/size 仅股票；segment 按大类解释（股票→行业/债券→期限/商品→品种）
     asset_class_code = Column(String(30), ForeignKey("asset_classification.code"))

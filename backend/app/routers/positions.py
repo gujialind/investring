@@ -33,6 +33,7 @@ from app.services.position_service import (
     compute_derived_fields,
 )
 from app.dependencies import get_current_user, get_current_admin
+from app.utils.product_code import display_code
 
 router = APIRouter()
 
@@ -74,6 +75,7 @@ def get_positions(
     # 产品名称、五维度标签（code+name 成对）、盈亏/收益率、daily_profit（issue #99/#128）
     codes = {p.product_code for p in items}
     name_map = {}
+    display_map = {}
     dims_by_product = {}
     qdii_map = {}
     nav_lag_map = {}
@@ -81,11 +83,14 @@ def get_positions(
     if codes:
         for prod in db.query(
             Product.code, Product.market, Product.name, Product.is_qdii,
-            Product.nav_lag_days,
+            Product.nav_lag_days, Product.hk_sale_code,
             Product.asset_class_code, Product.region_code, Product.style_code,
             Product.size_code, Product.segment_code,
         ).filter(Product.code.in_(codes)).all():
             name_map[(prod.code, prod.market)] = prod.name
+            display_map[(prod.code, prod.market)] = display_code(
+                prod.code, prod.market, prod.hk_sale_code
+            )
             qdii_map[(prod.code, prod.market)] = prod.is_qdii
             nav_lag_map[(prod.code, prod.market)] = prod.nav_lag_days
             dims = (prod.asset_class_code, prod.region_code, prod.style_code,
@@ -121,6 +126,7 @@ def get_positions(
         row = PositionResponse.model_validate(p).model_dump()
         key = (p.portfolio_code, p.product_code, p.market, p.platform_code)
         row["product_name"] = name_map.get((p.product_code, p.market))
+        row["display_code"] = display_map.get((p.product_code, p.market))
         row["is_qdii"] = qdii_map.get((p.product_code, p.market))
         row["nav_lag_days"] = nav_lag_map.get((p.product_code, p.market)) or 0
         dims = dims_by_product.get((p.product_code, p.market))

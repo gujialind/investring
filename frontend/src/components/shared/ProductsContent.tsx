@@ -31,7 +31,7 @@ import Link from "next/link";
 import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, TrendingUp, Eye, Tags, Filter } from "lucide-react";
 import { Product } from "@/types/product";
 import { useUIStore } from "@/stores/uiStore";
-import { cn, formatNav } from "@/lib/utils";
+import { cn, formatNav, formatProductCodeLabel } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import EmptyState from "@/components/shared/EmptyState";
@@ -510,7 +510,10 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
               <TableBody>
                 {products.map((product) => (
                   <TableRow key={`${product.code}-${product.market || "null"}`}>
-                    <TableCell className="font-medium">{product.code}</TableCell>
+                    {/* #705 代码列出显示码；港互认双码并列。行 key/操作入参仍用原始 code */}
+                    <TableCell className="font-medium">
+                      {formatProductCodeLabel(product.display_code, product.code, product.market)}
+                    </TableCell>
                     <TableCell>{product.market || "--"}</TableCell>
                     <TableCell>{product.name}</TableCell>
                     <TableCell>{product.product_type}</TableCell>
@@ -630,7 +633,15 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>
-              {selectedProduct?.name} ({selectedProduct?.code}) 价格走势
+              {selectedProduct?.name} (
+              {selectedProduct
+                ? formatProductCodeLabel(
+                    selectedProduct.display_code,
+                    selectedProduct.code,
+                    selectedProduct.market
+                  )
+                : "--"}
+              ) 价格走势
             </DialogTitle>
             <DialogDescription>
               最近 30 条价格记录

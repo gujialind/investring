@@ -148,6 +148,7 @@ cd backend && pytest tests -q
   | `position_service.py`（可用现金/份额） | `pytest tests/unit/test_position_service.py tests/integration -q -k "position or in_transit or cash"` |
   | `cumulative_profit_service.py`（累计收益读侧，#598；消费方含 #595 聚合端点） | `pytest tests/integration/test_cumulative_profits.py tests/integration/test_holding_aggregation.py tests/unit/test_position_service.py -q` |
   | `holding_aggregation_service.py`（#595 按产品/按平台聚合读侧） | `pytest tests/integration/test_holding_aggregation.py -q` |
+  | `product_service.py` / 产品显示码与港互认销售码（`utils/product_code.py`、`Product.hk_sale_code`、迁移 0021，#705） | `pytest tests/unit/test_product_code.py tests/integration/test_product_display_code.py tests/unit/test_migration_0021.py -q`（`-k product` 抓不到迁移那条，须显式列出） |
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | `cash_transfer_service.py`（跨天现金转移，两腿 Trade） | `pytest tests/integration/test_trades*.py tests/integration/test_cash_transfers*.py tests/integration/test_trade_cash_check.py -q` |

@@ -1,6 +1,6 @@
 "use client";
 
-import { formatMarketName } from "@/lib/utils";
+import { formatMarketName, formatProductCodeLabel } from "@/lib/utils";
 
 /**
  * 产品主次双行单元格（visual-spec §8）：名称主行 + `代码 · 市场名` 次行；名称缺失回退单行只显示代码。
@@ -8,21 +8,27 @@ import { formatMarketName } from "@/lib/utils";
  * 次行 nowrap——`代码 · 市场名` 长度有界，防窄列下在中点处折行重演「市场」列竖排（#355）；
  * 主行不 nowrap，长基金名需允许换行以免撑破列宽。
  * #355 调仓页与份额变动页产品列提取共用，消除两页样式漂移。
+ * #705 次行代码用显示码（后端 display_code 优先，缺位走 formatProductDisplayCode 兜底）；
+ * 港互认显示码为 6 位内地销售码，与 10 位机器码不同 → 双码并列 `968050（1001767344）`，机器码可核对。
+ * 并列与否由 formatProductCodeLabel 单点决定。
  */
 export default function ProductCell({
   code,
   name,
   market,
+  displayCode,
 }: {
   code: string;
   name?: string;
   market?: string;
+  displayCode?: string | null;
 }) {
   const suffix = market ? ` · ${formatMarketName(market)}` : "";
+  const codeText = formatProductCodeLabel(displayCode, code, market);
   if (!name) {
     return (
       <div className="whitespace-nowrap text-sm">
-        {code}
+        {codeText}
         {suffix}
       </div>
     );
@@ -31,7 +37,7 @@ export default function ProductCell({
     <>
       <div className="text-sm font-medium">{name}</div>
       <div className="whitespace-nowrap text-xs text-muted-foreground">
-        {code}
+        {codeText}
         {suffix}
       </div>
     </>

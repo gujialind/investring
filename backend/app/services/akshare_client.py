@@ -463,16 +463,24 @@ def _ensure_hk_code_map(ak) -> Dict[str, str]:
 
     键是排名表 `基金代码`（968050 这类 6 位码）。库内 `product.code` 存的是 10 位
     `香港基金代码`，故港互认主路径不经此处（见 `_resolve_hk10`）。
+
+    取数走 `_retry`（本模块唯一的「上游任何异常 → 归一 AkshareAPIError」单点，#705
+    评审）：直调 `fund_hk_rank_em` 会让超时/连接失败/上游结构变化以非领域异常冒出
+    service 层，落到全局 handler 变 500，而建档侧承诺的是 422 `HK_CODE_UNMAPPED`。
     """
     global _hk_code_map
     if _hk_code_map is None:
-        df = ak.fund_hk_rank_em()
-        _hk_code_map = {}
-        for _, row in df.iterrows():
-            code6 = str(row["基金代码"]).strip()
-            code10 = str(row["香港基金代码"]).strip()
-            if code6 and code10:
-                _hk_code_map[code6] = code10
+        def _fetch() -> Dict[str, str]:
+            df = ak.fund_hk_rank_em()
+            mapping: Dict[str, str] = {}
+            for _, row in df.iterrows():
+                code6 = str(row["基金代码"]).strip()
+                code10 = str(row["香港基金代码"]).strip()
+                if code6 and code10:
+                    mapping[code6] = code10
+            return mapping
+
+        _hk_code_map = _retry(_fetch, "获取东财港基排名表失败")
     return _hk_code_map
 
 
@@ -495,6 +503,28 @@ def _resolve_hk10(code: str) -> str:
     if not hk10:
         raise AkshareAPIError(f"未找到 6 位代码 {code6} 对应的香港基金代码")
     return hk10
+
+
+def resolve_hk_code_pair(code: str) -> Tuple[str, Optional[str]]:
+    """港互认录入归一（#705）：返回 ``(入库 code, hk_sale_code)``。
+
+    6 位内地销售码经排名表解析为 10 位香港基金码（查不到抛 AkshareAPIError，
+    由调用方转业务错误——入库码不能靠猜）；10 位码原样入库并**尽力**反查 6 位
+    （反查失败不抛：展示码缺失由读侧 `display_code` 回退原码，不值得阻断录入）；
+    其他形态原样返回 ``(code, None)``。
+    """
+    stripped = code.strip()
+    if stripped.isdigit() and len(stripped) == 6:
+        return _resolve_hk10(stripped), stripped
+    if stripped.isdigit() and len(stripped) == 10:
+        try:
+            import akshare as ak
+
+            reverse = {v: k for k, v in _ensure_hk_code_map(ak).items()}
+            return stripped, reverse.get(stripped)
+        except Exception:  # 反查是展示码锦上添花：网络/依赖/清单缺失都不阻断录入
+            return stripped, None
+    return stripped, None
 
 
 def _dashed_bound(value: Optional[str], field: str) -> str:

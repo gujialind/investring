@@ -590,7 +590,12 @@ export default function TradesContent({
         {trade.product_code === "CASH" && !isPairMain ? (
           <span className="text-sm">{cashOrphanLabel(trade)}</span>
         ) : (
-          <ProductCell code={trade.product_code} name={trade.product_name} market={trade.market} />
+          <ProductCell
+            code={trade.product_code}
+            name={trade.product_name}
+            market={trade.market}
+            displayCode={trade.display_code}
+          />
         )}
       </TableCell>
       <TableCell>
@@ -1118,7 +1123,11 @@ export default function TradesContent({
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">产品</span>
                     <span>
-                      {formatProductName(editingTrade.product_name, editingTrade.product_code)}
+                      {formatProductName(
+                        editingTrade.product_name,
+                        editingTrade.product_code,
+                        editingTrade.display_code
+                      )}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -1282,7 +1291,11 @@ export default function TradesContent({
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">产品</span>
                     <span>
-                      {formatProductName(arrivalTrade.product_name, arrivalTrade.product_code)}
+                      {formatProductName(
+                        arrivalTrade.product_name,
+                        arrivalTrade.product_code,
+                        arrivalTrade.display_code
+                      )}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
