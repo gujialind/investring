@@ -14,6 +14,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
+import { navBasisLabels } from "@/lib/navBasis";
 import {
   cn,
   formatCurrency,
@@ -117,6 +118,9 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     // 首屏在途为假（isPending 时 isRefetching=false），故不必再造派生谓词。
     isRefetching: analysisRevalidating,
   } = useNavAnalysis(productCode, market, range);
+  // #703：整段历史无累计净值时后端回退单位净值口径，标题与注记随 basis 变（单点见
+  // lib/navBasis.ts，与平台-产品页共用）
+  const navLabels = navBasisLabels(analysis?.nav_basis, market);
 
   // 历史净值「首屏 5 行 + 查看更多」：按页并行查询后按页序拼接（keepPreviousData
   // 的单页 hook 不适合追加式加载；页间数据由后端分页契约保证不重叠）
@@ -300,7 +304,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
       // opacity 类名——定位器契约禁止按 Tailwind 工具类定位（手法同 #650 的 aria-current）
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
-      <h3 className="text-lg font-semibold">累计净值走势</h3>
+      <h3 className="text-lg font-semibold">{navLabels.curveTitle}</h3>
+      {navLabels.note && (
+        <p className="mt-1 text-xs text-muted-foreground" data-testid="nav-basis-note">
+          {navLabels.note}
+        </p>
+      )}
       {analysisRevalidating && (
         <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}
@@ -342,7 +351,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
       data-testid="product-returns-card"
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
-      <h3 className="text-lg font-semibold">区间收益率</h3>
+      <h3 className="text-lg font-semibold">{navLabels.returnsTitle}</h3>
+      {navLabels.note && (
+        <p className="mt-1 text-xs text-muted-foreground" data-testid="returns-basis-note">
+          {navLabels.note}
+        </p>
+      )}
       {analysisRevalidating && (
         <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}

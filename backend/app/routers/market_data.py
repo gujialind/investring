@@ -108,7 +108,11 @@ def get_nav_analysis_endpoint(
     db: Session = Depends(get_db),
     current_user: Investor = Depends(get_current_user),
 ):
-    """产品净值分析（#595 §5.3）：区间累计净值曲线 + 六窗区间收益率（同一序列同口径）。"""
+    """产品净值分析（#595 §5.3）：区间净值曲线 + 六窗区间收益率（同一序列同口径）。
+
+    `nav_basis` 原样透传（#703）：整段历史无累计净值时服务端回退到单位净值口径，前端
+    据此改卡片标题并加「不含分红再投资」注记。
+    """
     try:
         result = get_nav_analysis(db, code, market, range_code)
         return ProductNavAnalysis(
@@ -116,6 +120,7 @@ def get_nav_analysis_endpoint(
             interval_returns=ProductIntervalReturns(
                 **result["interval_returns"]
             ),
+            nav_basis=result["nav_basis"],
         )
     except HTTPException:
         raise

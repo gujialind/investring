@@ -190,7 +190,8 @@ export function useSyncProductHistory() {
 // --- #595 §5.3 产品详情页净值数据 hooks ---
 
 /**
- * 区间累计净值曲线 + 六窗区间收益率；range 变化即换 key 重查。
+ * 区间净值曲线 + 六窗区间收益率（口径随 nav_basis，仅 accumulated 下是累计净值，
+ * 见 lib/navBasis.ts）；range 变化即换 key 重查。
  * keepPreviousData：切 Tab 只换曲线，六窗数值取自全量序列与 range 无关，
  * 重查期间不闪占位（#638 L2 S5）。
  */

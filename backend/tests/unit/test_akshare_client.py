@@ -259,6 +259,49 @@ class TestHkMutualNavParsing:
         assert akshare_client.get_fund_hk_mutual(HK, "20260914", "20260922") == []
         assert log_lines(json_log_capture) == []
 
+    def test_accnav_is_read_per_row_and_never_backfilled_by_unit_nav(self, hk_pages):
+        """#703：ACCNAV 逐基金分档——968024 形态有值、968050 形态为空串。
+
+        此前这里硬编码 `accumulated_nav: None`（理由写的是「上游 ACCNAV 实测为空串」，
+        那只是 968050 一只的形态），有值的那批基金被一并丢成 NULL。缺值只能落 NULL、
+        由读侧按 basis 回退单位净值，不得在此用单位净值顶替——那会把「不含分红再投资」
+        的数字伪装成累计净值。
+        """
+        hk_pages(
+            [
+                [
+                    _hk_row("2026-09-15", 10.54, ACCNAV="12.3456"),
+                    _hk_row("2026-09-14", 10.55),
+                ]
+            ]
+        )
+
+        rows = akshare_client.get_fund_hk_mutual(HK, "20260914", "20260915")
+
+        assert [r["accumulated_nav"] for r in rows] == [12.3456, None]
+        assert rows[0]["accumulated_nav"] != rows[0]["unit_price"]
+
+    def test_bad_accnav_is_null_and_not_counted_malformed(self, hk_pages, json_log_capture):
+        """累计净值坏值只丢这一列：不进 malformed、不打 WARNING、更不抛错。
+
+        与 #692 的日涨跌同族——让展示列驱动 #651 的响亮判据，一列漂移就打死整段可用
+        历史。写入侧 `_usable_nav` 还会再判一次「像不像净值」（#701）。
+        """
+        hk_pages(
+            [
+                [
+                    _hk_row("2026-09-15", 10.54, ACCNAV="--"),
+                    _hk_row("2026-09-14", 10.55, ACCNAV="nan"),
+                ]
+            ]
+        )
+
+        rows = akshare_client.get_fund_hk_mutual(HK, "20260914", "20260915")
+
+        assert [r["trade_date"] for r in rows] == ["20260915", "20260914"]
+        assert [r["accumulated_nav"] for r in rows] == [None, None]
+        assert log_lines(json_log_capture) == []
+
 
 class TestHkMutualNavTransport:
     """信封、分页与线上参数形态。"""

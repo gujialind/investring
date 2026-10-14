@@ -18,6 +18,7 @@ import CashTransferDialog from "./dialogs/CashTransferDialog";
 import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
+import { navBasisLabels } from "@/lib/navBasis";
 import {
   cn,
   formatCurrency,
@@ -110,6 +111,9 @@ export default function PlatformProductDetailContent({
     // 首屏在途为假（isPending 时 isRefetching=false），故不必再造派生谓词。
     isRefetching: analysisRevalidating,
   } = useNavAnalysis(productCode, market, range);
+  // #703：整段历史无累计净值时后端回退单位净值口径，标题与注记随 basis 变（单点见
+  // lib/navBasis.ts，与产品详情页共用）
+  const navLabels = navBasisLabels(analysis?.nav_basis, market);
 
   const [visiblePages, setVisiblePages] = useState(1);
   // S1：现金产品无净值端点（market="" 会 404），非现金且 market 非空时才请求
@@ -277,7 +281,12 @@ export default function PlatformProductDetailContent({
       // opacity 类名——定位器契约禁止按 Tailwind 工具类定位（手法同 #650 的 aria-current）
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
-      <h3 className="text-lg font-semibold">累计净值走势</h3>
+      <h3 className="text-lg font-semibold">{navLabels.curveTitle}</h3>
+      {navLabels.note && (
+        <p className="mt-1 text-xs text-muted-foreground" data-testid="nav-basis-note">
+          {navLabels.note}
+        </p>
+      )}
       {analysisRevalidating && (
         <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}
@@ -319,7 +328,12 @@ export default function PlatformProductDetailContent({
       data-testid="platform-product-returns-card"
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
-      <h3 className="text-lg font-semibold">区间收益率</h3>
+      <h3 className="text-lg font-semibold">{navLabels.returnsTitle}</h3>
+      {navLabels.note && (
+        <p className="mt-1 text-xs text-muted-foreground" data-testid="returns-basis-note">
+          {navLabels.note}
+        </p>
+      )}
       {analysisRevalidating && (
         <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}

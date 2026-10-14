@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import date
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class PriceDataResponse(BaseModel):
@@ -24,8 +24,9 @@ class PriceDataSyncRequest(BaseModel):
 class NavHistoryItem(BaseModel):
     """历史净值行：单位净值必有；累计净值与日涨跌可空，两者成因不同（#692 更正归因）。
 
-    累计净值可空：场内行情源与港互认上游不提供该字段，只有场外净值源（tushare 与
-    akshare，#704）有值——净值曲线与区间收益率按累计净值算，故在缺值市场上为空。
+    累计净值可空：场内行情源不提供该字段；场外净值源（tushare 与 akshare，#704）逐日
+    有值；港互认上游 `ACCNAV` 逐基金分档（#703），缺值基金整列为空。净值曲线与区间
+    收益率优先按累计净值算，累计净值覆盖不足时回退单位净值（见 `ProductNavAnalysis.nav_basis`）。
     日涨跌可空：该产品首条记录无基准，或上游未提供且本地不满足推导条件（基准缺失/非正）。
     日涨跌为百分数（1.2195 即 1.2195%），在写侧产生点量化到 4 位。
     """
@@ -50,7 +51,12 @@ class NavHistoryPage(BaseModel):
 
 
 class NavCurvePoint(BaseModel):
-    """累计净值曲线点（仅含累计净值非空的记录）。"""
+    """净值曲线点。
+
+    字段名沿用 `accumulated_nav`（#703 取舍：改名 `nav` 更诚实，但会同时扩大前端与
+    CLI 字段面的改动，契约收益不值）——`nav_basis="unit"` 时装的是单位净值，场内产品
+    即收盘价（市价）。
+    """
 
     date: date
     accumulated_nav: float
@@ -68,7 +74,15 @@ class ProductIntervalReturns(BaseModel):
 
 
 class ProductNavAnalysis(BaseModel):
-    """产品净值分析：所选区间累计净值曲线 + 六窗区间收益率（同一份序列算，口径一致）。"""
+    """产品净值分析：所选区间净值曲线 + 六窗区间收益率（同一份序列算，口径一致）。
+
+    `nav_basis`（#703）标明这批数字按哪一列算：`accumulated` = 累计净值（含分红再投资，
+    原口径）；`unit` = 单位净值，即累计净值覆盖不足单位净值半数时的回退口径（港互认
+    缺值/稀疏基金、场内行情源、存量未回补的增量同步），此时收益率**不含分红再投资**、
+    场内为市价涨跌，前端须明示。两者皆空时曲线为空、六窗全 None，`nav_basis` 仍报
+    `accumulated`（空态与口径无关）。
+    """
 
     curve: List[NavCurvePoint]
     interval_returns: ProductIntervalReturns
+    nav_basis: Literal["accumulated", "unit"]

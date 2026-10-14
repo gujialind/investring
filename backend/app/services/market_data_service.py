@@ -112,11 +112,15 @@ def get_price_records(
 _NAV_CURVE_RANGE_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
 # 曲线区间码 → 响应字段名（ProductIntervalReturns 的 m1/m3/m6/y1）
 _INTERVAL_FIELD_BY_RANGE = {"1m": "m1", "3m": "m3", "6m": "m6", "1y": "y1"}
+# 净值口径 → 取数列（#703）。键即响应字段 `nav_basis` 的取值，前端据此改标题与注记：
+# `unit` 在净值源上是单位净值（不含分红再投资）、在场内行情源上是收盘价（市价）。
+_NAV_COLUMN_BY_BASIS = {"accumulated": "accumulated_nav", "unit": "unit_price"}
 
 
 # 六窗区间收益率的窗口锚点：1m/3m 用 30/90 自然日、6m/1y 用日历月/年，与
 # performance_service 组合级逐一对齐——产品详情页与组合绩效卡的四个固定窗口
-# 因此语义一致，同名数字可互相印证（#637 L2 S2）。
+# 因此语义一致，同名数字可互相印证（#637 L2 S2）。#703 起产品级可能回退到单位净值
+# 口径（响应 `nav_basis="unit"`），那时这条互证不成立、组合级数字仍是原口径。
 # 注意曲线区间（_NAV_CURVE_RANGE_MONTHS）仍按日历月过滤，与同名窗口锚点不必相同
 # （评审 Nit1）；ytd 产品级 clip_to_first、组合级不 clip，分叉理由见 get_nav_analysis
 # （评审 S3 只落在产品级）——「与组合级一致」仅指 m1/m3/m6/y1 四窗。
@@ -167,12 +171,16 @@ def _nav_interval_return(
     records: List[PriceRecord],
     start: date,
     *,
+    column: str,
     clip_to_first: bool = False,
 ) -> Optional[float]:
     """区间收益率（百分数，4dp）：以 start 当日或之后首条记录为基准，至最新记录。
 
+    `column` 是取值的列名（`accumulated_nav` 或回退口径的 `unit_price`，#703），由调用
+    方与曲线共用同一份 `records` 传入，保证「六窗与曲线同 basis」是结构事实而非约定。
+
     基序算法与 performance_service._period_return 同构（#595 spec §5.3 要求统一
-    量化口径）：基准与最新同日、基准累计净值非正时返回 None，前端显示占位而非
+    量化口径）：基准与最新同日、基准净值非正时返回 None，前端显示占位而非
     虚高数字。历史未覆盖 start 时默认返回 None（固定长度窗口不足窗口期会虚高）；
     ``clip_to_first=True`` 供变长窗口（ytd）使用——本年内的收益从本年首个有价日
     起算天经地义，「窗口起点早于首条记录」不是不足而是全部历史（#637 L2 评审
@@ -189,10 +197,26 @@ def _nav_interval_return(
     latest = records[-1]
     if base is None or base.price_date >= latest.price_date:
         return None
-    base_nav = float(base.accumulated_nav)
+    base_nav = float(getattr(base, column))
     if base_nav <= 0:
         return None
-    return round((float(latest.accumulated_nav) / base_nav - 1) * 100, 4)
+    return round((float(getattr(latest, column)) / base_nav - 1) * 100, 4)
+
+
+def _nav_records(db: Session, product_code: str, market: str, column: str) -> List[PriceRecord]:
+    """该产品该市场下 `column` 非空的价格记录，日期升序（#703 两 basis 共用取数）。"""
+    return (
+        db.query(PriceRecord)
+        .filter(
+            and_(
+                PriceRecord.product_code == product_code,
+                PriceRecord.market == market,
+                getattr(PriceRecord, column).isnot(None),
+            )
+        )
+        .order_by(PriceRecord.price_date.asc())
+        .all()
+    )
 
 
 def get_nav_analysis(
@@ -201,24 +225,34 @@ def get_nav_analysis(
     market: str,
     range_code: str,
 ) -> dict:
-    """产品净值分析：所选区间累计净值曲线 + 六窗区间收益率。
+    """产品净值分析：所选区间净值曲线 + 六窗区间收益率 + 本批口径 `nav_basis`。
 
-    曲线只画累计净值非空的记录（场内 ETF 行情源常无累计净值，此时曲线为空、
-    区间收益率为 None，由前端空态承接）；六窗与曲线取自同一升序序列，口径一致。
-    区间收益率含 None（固定长度窗口历史不足），响应字段全部 Optional。
+    **两段式取数（#703）**：先取累计净值非空的记录（`nav_basis="accumulated"`，原口
+    径）；累计净值覆盖不足单位净值半数时回退到单位净值记录（`nav_basis="unit"`）。此前
+    只认累计净值，而港互认缺值基金与场内行情源该列**恒 NULL**，1773 行完好的
+    `unit_price` 被整段过滤掉，两张卡永久空白且响应仍是 200（前端失败态不触发）。回退
+    判据用「覆盖度过半」而非「整列为空」：写侧改逐行读 ACCNAV 后，存量未回补的增量同步
+    与 ACCNAV 稀疏的基金会呈现「零星几行有累计净值」，若仍钉在 accumulated，曲线只剩那
+    几行、「成立以来」错按部署日（首个有累计净值的交易日）为基准、五个窗口因历史不足全
+    None。用覆盖度而非严格计数相等，是为 #701 非正丢列留容差——OTC 产品偶发个别
+    `accumulated_nav` 非正被丢，覆盖度仍近满，个别坏值不应把整支产品切到单位净值口径。
+    皆空才返回空曲线与全 None 六窗，此时 `nav_basis` 报 `accumulated`（空态与口径无关，
+    不给前端第三种取值）。六窗与曲线取自同一份 `records` 与同一个 `column`，口径一致由
+    结构保证。
+
+    回退口径的语义差异（不含分红再投资、场内为市价）由前端按 `nav_basis` 明示，本层
+    不做换算：把单位净值「补成」累计净值需要逐日分红数据，本地没有。
     """
-    records = (
-        db.query(PriceRecord)
-        .filter(
-            and_(
-                PriceRecord.product_code == product_code,
-                PriceRecord.market == market,
-                PriceRecord.accumulated_nav.isnot(None),
-            )
-        )
-        .order_by(PriceRecord.price_date.asc())
-        .all()
-    )
+    column = _NAV_COLUMN_BY_BASIS["accumulated"]
+    records = _nav_records(db, product_code, market, column)
+    unit_records = _nav_records(db, product_code, market, _NAV_COLUMN_BY_BASIS["unit"])
+    nav_basis = "accumulated"
+    # 累计净值非空行数不足单位净值半数 → 序列过于破碎，回退单位净值（#703 L2 Blocker 2）。
+    # 进入此分支必有 unit_records 非空（否则 2*len(records) < 0 恒假），故 records 不会变空。
+    if len(records) * 2 < len(unit_records):
+        column = _NAV_COLUMN_BY_BASIS["unit"]
+        records = unit_records
+        nav_basis = "unit"
 
     curve: List[dict] = []
     interval_returns: Dict[str, Optional[float]] = {
@@ -226,31 +260,33 @@ def get_nav_analysis(
         "y1": None, "ytd": None, "all": None,
     }
     if not records:
-        return {"curve": curve, "interval_returns": interval_returns}
+        return {"curve": curve, "interval_returns": interval_returns, "nav_basis": nav_basis}
 
     latest_date = records[-1].price_date
 
     months = _NAV_CURVE_RANGE_MONTHS[range_code]
     curve_start = latest_date - relativedelta(months=months)
     curve = [
-        {"date": r.price_date, "accumulated_nav": float(r.accumulated_nav)}
+        {"date": r.price_date, "accumulated_nav": float(getattr(r, column))}
         for r in records
         if r.price_date >= curve_start
     ]
 
     for field in _INTERVAL_FIELD_BY_RANGE.values():
         interval_returns[field] = _nav_interval_return(
-            records, _window_start(latest_date, field)
+            records, _window_start(latest_date, field), column=column
         )
     # ytd 是变长窗口：历史全部落在本年时从首条记录起算（clip_to_first），
     # 本年新成立产品的「今年以来」== 「成立以来」，不得显示占位（#637 L2 评审 S3）
     interval_returns["ytd"] = _nav_interval_return(
-        records, date(latest_date.year, 1, 1), clip_to_first=True
+        records, date(latest_date.year, 1, 1), column=column, clip_to_first=True
     )
     # 成立以来 = 首条记录为基准
-    interval_returns["all"] = _nav_interval_return(records, records[0].price_date)
+    interval_returns["all"] = _nav_interval_return(
+        records, records[0].price_date, column=column
+    )
 
-    return {"curve": curve, "interval_returns": interval_returns}
+    return {"curve": curve, "interval_returns": interval_returns, "nav_basis": nav_basis}
 
 
 def get_latest_price(
@@ -598,7 +634,9 @@ def _derive_otc_pct_change(
     相邻比值会把分红算成假暴跌，而修正需要产品级 ex_date 表——本仓没有
     （`task_runner._detect_dividends` 只为有持仓的组合建组合级事件，港互认无任何事件
     源）。accum_nav 在除息日不跳变（现金分红同步计入累计分红），推导值连续，且与同页
-    「区间收益率」（`_nav_interval_return`，同为 accum 比值）同源，两列可互相印证。
+    「区间收益率」（`_nav_interval_return`，同为 accum 比值）同源，两列可互相印证
+    ——**该互证只在 `nav_basis="accumulated"` 时成立**（#703）：产品整段历史都没有
+    累计净值时区间收益率回退到单位净值口径，与这里的 accum 推导值不再同源。
 
     已知限制（成文，不做自动检测）：
     - **份额折算日**基金公司按比例同时缩放 unit_nav 与 accum_nav，当日推导值失真一天，
