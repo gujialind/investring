@@ -48,10 +48,22 @@ import {
   productTrigger,
 } from './helpers';
 
-/** LOF 双市场种子常量（与 backend/tests/seed_base.py 的 #259 种子一致） */
+/** LOF 双市场种子常量（与 backend/tests/seed_base.py 的 #259 种子一致）
+ * displayCode（#705）：去后缀显示码——两市场去后缀后同为 161017，选项行靠市场 Badge 区分
+ * （issue 验收第 4 条：市场列/`· 市场名` 标签不得移除）；data-code 定位仍用原始 code */
 const LOF_NAME = '富国中证500指数增强(LOF)A';
-const LOF_SZ = { code: '161017.SZ', market: 'CN_EXCHANGE', marketName: 'A股场内' };
-const LOF_OTC = { code: '161017.OF', market: 'CN_OTC', marketName: '内地场外' };
+const LOF_SZ = {
+  code: '161017.SZ',
+  displayCode: '161017',
+  market: 'CN_EXCHANGE',
+  marketName: 'A股场内',
+};
+const LOF_OTC = {
+  code: '161017.OF',
+  displayCode: '161017',
+  market: 'CN_OTC',
+  marketName: '内地场外',
+};
 
 /**
  * 打开产品选择弹层，返回弹层 Locator。
@@ -98,9 +110,9 @@ test.describe('产品选择器市场标识（防 #259 回归）', () => {
     // 三段式契约：名称 / (code) / 市场 Badge 各自独立元素——exact 文本匹配仅当
     // 该文本独占一个元素时命中，长名称截断时 (code) 与市场标识仍是独立可见元素
     await expect(szOption.getByText(LOF_NAME, { exact: true })).toBeVisible();
-    await expect(szOption.getByText(`(${LOF_SZ.code})`, { exact: true })).toBeVisible();
+    await expect(szOption.getByText(`(${LOF_SZ.displayCode})`, { exact: true })).toBeVisible();
     await expect(szOption.getByText(LOF_SZ.marketName, { exact: true })).toBeVisible();
-    await expect(otcOption.getByText(`(${LOF_OTC.code})`, { exact: true })).toBeVisible();
+    await expect(otcOption.getByText(`(${LOF_OTC.displayCode})`, { exact: true })).toBeVisible();
     await expect(otcOption.getByText(LOF_OTC.marketName, { exact: true })).toBeVisible();
 
     // 两行市场标识文案不同（场内/场外可分辨，不出现同一文案或缺失）
@@ -110,11 +122,11 @@ test.describe('产品选择器市场标识（防 #259 回归）', () => {
     // 行 title 悬停给出完整「名称 (code) · 市场」（截断部分的全文出口）
     await expect(szOption).toHaveAttribute(
       'title',
-      `${LOF_NAME} (${LOF_SZ.code}) · ${LOF_SZ.marketName}`
+      `${LOF_NAME} (${LOF_SZ.displayCode}) · ${LOF_SZ.marketName}`
     );
     await expect(otcOption).toHaveAttribute(
       'title',
-      `${LOF_NAME} (${LOF_OTC.code}) · ${LOF_OTC.marketName}`
+      `${LOF_NAME} (${LOF_OTC.displayCode}) · ${LOF_OTC.marketName}`
     );
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
@@ -135,11 +147,11 @@ test.describe('产品选择器市场标识（防 #259 回归）', () => {
     // 市场后缀使场外项与场内项回显可分辨
     const trigger = productTrigger(dlg, LOF_OTC.marketName);
     await expect(trigger).toBeVisible();
-    await expect(trigger).toContainText(`${LOF_NAME} (${LOF_OTC.code})`);
+    await expect(trigger).toContainText(`${LOF_NAME} (${LOF_OTC.displayCode})`);
     // 触发按钮挂 title 全文本（名称截断时的悬停全文出口）
     await expect(trigger.locator('[title]')).toHaveAttribute(
       'title',
-      `${LOF_NAME} (${LOF_OTC.code}) · ${LOF_OTC.marketName}`
+      `${LOF_NAME} (${LOF_OTC.displayCode}) · ${LOF_OTC.marketName}`
     );
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
@@ -311,7 +323,7 @@ test.describe('产品选择器市场筛选（#324）', () => {
     await expect(popover.getByPlaceholder('搜索产品代码/名称')).toHaveCount(0);
     const trigger = productTrigger(dlg, LOF_OTC.marketName);
     await expect(trigger).toBeVisible();
-    await expect(trigger).toContainText(`${LOF_NAME} (${LOF_OTC.code})`);
+    await expect(trigger).toContainText(`${LOF_NAME} (${LOF_OTC.displayCode})`);
 
     // 重开：筛选复位「全部市场」（非"内地场外"），列表恢复双市场两条（证明筛选已弃）
     const popover2 = productPopover(page);

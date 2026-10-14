@@ -1,6 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import List, Optional
 from datetime import datetime
+
+from app.utils.product_code import display_code as _display_code
 
 
 class ProductBase(BaseModel):
@@ -73,9 +75,22 @@ class ProductResponse(ProductBase):
     sync_result: Optional[dict] = None
     # issue #232：market 随行迁移后的提示（建议重新 sync-history 等）
     market_change_hint: Optional[str] = None
+    # 港互认 6 位内地销售代码（#705，迁移 0021 入库）：仅 HK_MUTUAL 有值，
+    # 映射不可得为 NULL。列可空故声明 Optional（null_guard 同名列配对）
+    hk_sale_code: Optional[str] = None
+    # 显示码（#705）：人眼口径的标准代码，读侧派生（非 DB 列），由 model_validator
+    # 从 code/market/hk_sale_code 单点推导（app.utils.product_code.display_code），
+    # 保证产品域所有出口口径一致；标识符用途（路由/key/CLI 入参）仍用 code
+    display_code: str = ""
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def _derive_display_code(self):
+        # 恒由三源重算：调用方显式传入的 display_code 不作数（单一口径，防漂移）
+        self.display_code = _display_code(self.code, self.market, self.hk_sale_code)
+        return self
 
 
 class PaginatedProductResponse(BaseModel):

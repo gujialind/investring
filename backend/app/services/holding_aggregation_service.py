@@ -52,6 +52,7 @@ from app.models.product import Product
 from app.services.cumulative_profit_service import compute_cumulative_profits
 from app.services.exceptions import NotFoundError
 from app.services.position_service import compute_derived_fields
+from app.utils.product_code import display_code
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +121,14 @@ def _load_product_meta(db: Session, rows) -> dict:
     """
     codes = {r.product_code for r in rows}
     name_map = {}
+    display_map = {}
     dims_by_product = {}
     dim_codes = set()
     transit_keys = set()
     if codes:
         for prod in db.query(
             Product.code, Product.market, Product.name, Product.product_type,
+            Product.hk_sale_code,
             Product.asset_class_code, Product.region_code, Product.style_code,
             Product.size_code, Product.segment_code,
         ).filter(Product.code.in_(codes)).all():
@@ -133,6 +136,9 @@ def _load_product_meta(db: Session, rows) -> dict:
                 transit_keys.add((prod.code, prod.market))
                 continue
             name_map[(prod.code, prod.market)] = prod.name
+            display_map[(prod.code, prod.market)] = display_code(
+                prod.code, prod.market, prod.hk_sale_code
+            )
             dims = (prod.asset_class_code, prod.region_code, prod.style_code,
                     prod.size_code, prod.segment_code)
             dims_by_product[(prod.code, prod.market)] = dims
@@ -145,6 +151,7 @@ def _load_product_meta(db: Session, rows) -> dict:
             dim_name_by_code[ac_code] = ac_name
     return {
         "name_map": name_map,
+        "display_map": display_map,
         "dims_by_product": dims_by_product,
         "dim_name_by_code": dim_name_by_code,
         "transit_keys": transit_keys,
@@ -294,6 +301,7 @@ def aggregate_holdings_by_product(
             "product_code": row.product_code,
             "market": row.market,
             "product_name": meta["name_map"].get(key),
+            "display_code": meta["display_map"].get(key),
             "market_value": _ZERO,
             "shares": None,
             "cash_amount": None,

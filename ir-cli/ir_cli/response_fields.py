@@ -10,7 +10,7 @@ RESPONSE_FIELDS: dict = {
     "position": {
         "list": {
             "shape": "list",
-            "fields": "*portfolio_code:str,*product_code:str,*market:str?,*platform_code:str?,*shares:num?,frozen_shares:num?,cost_price:num?,*unit_price:num?,*market_value:num?,*cash_amount:num?,frozen_amount:num?,*snapshot_date:date,*id:int,created_at:datetime?,product_name:str?,profit_loss:num?,profit_loss_percent:num?,asset_class_code:str?,asset_class_name:str?,region_code:str?,region_name:str?,style_code:str?,style_name:str?,size_code:str?,size_name:str?,segment_code:str?,segment_name:str?,daily_profit:num?,is_qdii:bool?,nav_lag_days:int?,platform_name:str?",
+            "fields": "*portfolio_code:str,*product_code:str,*market:str?,*platform_code:str?,*shares:num?,frozen_shares:num?,cost_price:num?,*unit_price:num?,*market_value:num?,*cash_amount:num?,frozen_amount:num?,*snapshot_date:date,*id:int,created_at:datetime?,product_name:str?,display_code:str?,profit_loss:num?,profit_loss_percent:num?,asset_class_code:str?,asset_class_name:str?,region_code:str?,region_name:str?,style_code:str?,style_name:str?,size_code:str?,size_name:str?,segment_code:str?,segment_name:str?,daily_profit:num?,is_qdii:bool?,nav_lag_days:int?,platform_name:str?",
             "notes": {
                 "shares": "净值型资产有值，CASH行为null",
                 "cash_amount": "仅CASH行有值，基金行恒为null（CHECK约束shares/cash_amount二选一），市值请用market_value"
@@ -68,7 +68,7 @@ RESPONSE_FIELDS: dict = {
     "trade": {
         "list": {
             "shape": "list",
-            "fields": "*portfolio_code:str,*product_code:str,*market:str?,*platform_code:str?,*trade_type:str,transfer_group:str?,*shares:num?,*amount:num?,*price:num?,fee:num,actual_amount:num?,*trade_date:date,*confirm_date:date?,*status:str,notes:str?,*id:int,created_at:datetime?,updated_at:datetime?,product_name:str?,*cash_platform_code:str?,*cash_confirm_date:date?",
+            "fields": "*portfolio_code:str,*product_code:str,*market:str?,*platform_code:str?,*trade_type:str,transfer_group:str?,*shares:num?,*amount:num?,*price:num?,fee:num,actual_amount:num?,*trade_date:date,*confirm_date:date?,*status:str,notes:str?,*id:int,created_at:datetime?,updated_at:datetime?,product_name:str?,display_code:str?,*cash_platform_code:str?,*cash_confirm_date:date?",
             "notes": {
                 "cash_platform_code": "读侧派生（按配对CASH腿）：买入=扣款平台、卖出=到账平台；null=无配对现金腿（如待确认卖出，到账信息在确认时录入），CASH腿自身恒为null",
                 "cash_confirm_date": "读侧派生（按配对CASH腿）：买入=扣款日T、卖出=到账日A（缺省A=C）；null=无配对现金腿，CASH腿自身恒为null"
@@ -84,7 +84,7 @@ RESPONSE_FIELDS: dict = {
     "share-event": {
         "list": {
             "shape": "list",
-            "fields": "portfolio_code:str,event_type:str,ex_date:date,entitlement_date:date,cash_pay_date:date?,platform_code:str?,parent_event_id:int?,product_code:str?,market:str?,event_source:str,entitlement_shares:num?,shares_before:num?,shares_change:num?,shares_after:num?,cash_change:num?,cash_product_code:str?,div_cash:num?,reinvest_nav:num?,ratio:num?,status:str,tushare_event_id:str?,notes:str?,id:int,created_at:datetime?,updated_at:datetime?,product_name:str?",
+            "fields": "portfolio_code:str,event_type:str,ex_date:date,entitlement_date:date,cash_pay_date:date?,platform_code:str?,parent_event_id:int?,product_code:str?,market:str?,event_source:str,entitlement_shares:num?,shares_before:num?,shares_change:num?,shares_after:num?,cash_change:num?,cash_product_code:str?,div_cash:num?,reinvest_nav:num?,ratio:num?,status:str,tushare_event_id:str?,notes:str?,id:int,created_at:datetime?,updated_at:datetime?,product_name:str?,display_code:str?",
             "notes": {
                 "product_name": "读侧派生：仅 list 端点 join 产品表填充，产品缺失为null；get/单对象端点恒为null"
             }

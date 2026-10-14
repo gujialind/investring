@@ -50,11 +50,13 @@ def get_products(
     if market:
         query = query.filter(Product.market == market)
     if keyword:
-        # code/name 模糊 OR 匹配（issue #155）：用户输入的 %/_/ 须转义字面化
+        # code/name/hk_sale_code 模糊 OR 匹配（issue #155；#705 增 6 位销售码，
+        # 使「968050」能搜到库内 10 位码产品）：用户输入的 %/_/ 须转义字面化
         kw = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         query = query.filter(or_(
             Product.code.ilike(f"%{kw}%", escape="\\"),
             Product.name.ilike(f"%{kw}%", escape="\\"),
+            Product.hk_sale_code.ilike(f"%{kw}%", escape="\\"),
         ))
     if data_source:
         query = query.filter(Product.data_source == data_source)

@@ -6,6 +6,7 @@ import {
   formatCurrency,
   formatMarketName,
   formatNumber,
+  formatProductCodeLabel,
   formatSharesUnit,
   getReturnColorClass,
 } from "@/lib/utils";
@@ -44,6 +45,12 @@ export default function HoldingProductCard({
   snapshotDate?: string | null;
 }) {
   const isCash = product.product_code === CASH_PRODUCT_CODE;
+  // #705 row2 代码用显示码；港互认双码并列（isCash 判定与跳转仍用原始 product_code）
+  const codeLabel = formatProductCodeLabel(
+    product.display_code,
+    product.product_code,
+    product.market
+  );
   const mmdd = snapshotDate ? snapshotDate.slice(5, 10).replace("-", "/") : "";
   return (
     <div
@@ -52,7 +59,7 @@ export default function HoldingProductCard({
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-sm font-semibold truncate">
-          {product.product_name || product.product_code}
+          {product.product_name || codeLabel}
         </span>
         <span className="text-lg font-bold number-cell flex-shrink-0 text-foreground">
           {formatCurrency(product.market_value)}
@@ -62,7 +69,7 @@ export default function HoldingProductCard({
         <span className="text-xs text-muted-foreground truncate">
           {isCash
             ? cashSubtitle(product)
-            : `${product.product_code} · ${formatMarketName(product.market)}`}
+            : `${codeLabel} · ${formatMarketName(product.market)}`}
         </span>
         <span className="text-xs number-cell flex-shrink-0 text-muted-foreground">
           占比 {percent.toFixed(1)}%

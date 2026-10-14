@@ -21,6 +21,7 @@ import {
   formatDate,
   formatMarketName,
   formatNav,
+  formatProductCodeLabel,
   formatReturnRate,
   formatSharesUnit,
   formatSignedCurrency,
@@ -189,6 +190,8 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   }
 
   const snapshotDate = holdings?.snapshot_date;
+  // #705 页头代码用显示码；港互认双码并列（路由 href/key 仍用原始 productCode）
+  const codeLabel = formatProductCodeLabel(product.display_code, product.product_code, market);
   const tradesLink = `${basePath}/${portfolioCode}/trades?product=${encodeURIComponent(productCode)}&market=${encodeURIComponent(market)}`;
   // #646：操作行「事件」落事件录入页（原 href 是不带参数的裸 tradesLink，与「查看全部」
   // 完全相同，跳到没有事件录入的调仓列表）
@@ -496,9 +499,9 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           </Link>
         </Button>
         <div>
-          <h1 className="text-lg font-semibold">{product.product_name || product.product_code}</h1>
+          <h1 className="text-lg font-semibold">{product.product_name || codeLabel}</h1>
           <p className="text-sm text-muted-foreground">
-            {product.product_code} · {formatMarketName(product.market)}
+            {codeLabel} · {formatMarketName(product.market)}
           </p>
         </div>
       </div>

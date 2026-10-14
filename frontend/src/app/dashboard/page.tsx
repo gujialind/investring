@@ -2,7 +2,7 @@
 
 import MainLayout from "@/components/layout/MainLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCurrency, formatSharesUnit, formatReturnRate, getReturnColorClass, getStatusBadgeVariant } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatReturnRate, getReturnColorClass, getStatusBadgeVariant, formatProductCodeLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ArrowRightLeft } from "lucide-react";
 import Link from "next/link";
@@ -100,7 +100,8 @@ export default function DashboardPage() {
                 {pendingTrades.slice(0, 3).map((trade) => (
                   <div key={trade.id} className="flex items-center justify-between text-sm">
                     <span className="text-warning-foreground">
-                      {trade.trade_type === "buy" ? "买入" : "卖出"} - {trade.product_code}
+                      {trade.trade_type === "buy" ? "买入" : "卖出"} -{" "}
+                      {formatProductCodeLabel(trade.display_code, trade.product_code, trade.market)}
                     </span>
                     <span className="text-warning-foreground number-cell">
                       {trade.trade_type === "buy"

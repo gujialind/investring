@@ -3,6 +3,10 @@ export interface Product {
   market?: string;
   name: string;
   product_type: string;
+  /** 港互认 6 位内地销售代码（#705）：仅 HK_MUTUAL 有值，映射不可得为 null */
+  hk_sale_code?: string | null;
+  /** 显示码（#705）：人眼口径标准代码，后端单点派生；标识符用途仍用 code */
+  display_code: string;
   // 五维度标签（issue #128）：股票必填 region/style/size；债券必填 region+segment；
   // 商品/现金 region/style/size 为 NULL；IN_TRANSIT 虚拟产品全 NULL
   asset_class_code?: string | null;

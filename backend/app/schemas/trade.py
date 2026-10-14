@@ -65,6 +65,9 @@ class TradeResponse(TradeBase):
     # product_name 读侧派生（非 DB 列）：仅 list 端点批量 join 产品表填充，
     # create/get/update/preview 响应恒为 None；同 positions 模式（#175）
     product_name: Optional[str] = None
+    # 显示码读侧派生（#705，非 DB 列）：填充时机与 product_name 完全同批
+    # （仅 list 端点）；单对象端点恒为 None，消费方回退本地格式化
+    display_code: Optional[str] = None
     # #493 只读派生（非 DB 列，不落库）：仅**基金腿**从实际配对 CASH 腿读取；
     # 无现金腿（如待确认卖出）时为 null，CASH 腿自身不回填。批量来源见
     # trade_service.build_paired_cash_leg_map

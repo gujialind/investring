@@ -40,6 +40,8 @@ class PositionResponse(PositionBase):
     # 读侧派生字段（issue：前端持仓表产品名称/盈亏/收益率三列）：
     # product_name 来自 product 表；盈亏 = market_value − shares×cost_price（仅净值型资产）
     product_name: Optional[str] = None
+    # 显示码读侧派生（#705，非 DB 列）：与 product_name 同批填充（仅 list 端点）
+    display_code: Optional[str] = None
     profit_loss: Optional[float] = None
     profit_loss_percent: Optional[float] = None
     # 读侧派生字段（issue #128）：五维度标签 code+name 成对，来自 product 表
@@ -115,6 +117,8 @@ class HoldingProductAggregate(BaseModel):
     product_code: str
     market: str
     product_name: Optional[str] = None
+    # 显示码读侧派生（#705，非 DB 列）：与 product_name 同批填充
+    display_code: Optional[str] = None
     # 五维度标签（前端大类/维度分组元数据，与 PositionResponse 同构）
     asset_class_code: Optional[str] = None
     asset_class_name: Optional[str] = None

@@ -7,6 +7,9 @@
 # `requests.get` 打桩，不碰真网络。
 # ============================================================================
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from app.services import akshare_client
@@ -454,8 +457,9 @@ class _RowFrame:
     也不必为两条 CN 用例破例（#651 的解析改动同样不需要 pandas）。
 
     `columns`（#692）按各行键的并集推导：真实 DataFrame 的列是矩形对齐的，替身从
-    dict 行反推即可，且必须存在——场外路径靠 `_OTC_PCT_COLUMN in df.columns` 区分
-    「上游没给这列」与「给了但这行是空值」，替身缺该属性会让漂移判据整条测不到。
+    dict 行反推即可，且必须存在——场外路径靠 `_OTC_PCT_COLUMN in df.columns` 与
+    `_OTC_ACCUM_COLUMN in df.columns`（#704）区分「上游没给这列」与「给了但这行是
+    空值」，替身缺该属性会让漂移判据整条测不到。
     """
 
     def __init__(self, rows):
@@ -477,6 +481,26 @@ class _RowFrame:
         return enumerate(self._rows)
 
 
+def _patch_otc(monkeypatch, unit_rows, accum_rows=None):
+    """按 `indicator` 分发两个 DataFrame，顶掉 `fund_open_fund_info_em`（#704）。
+
+    场外路径自 #704 起对同一接口函数打两次（「单位净值走势」+「累计净值走势」），故替身
+    必须按指标分发——不分发就会把单位净值序列当成累计净值序列读，掩盖两条序列各自的
+    缺日/坏值/列漂移行为。`accum_rows` 缺省为空序列，即「该品种上游没有累计净值」
+    （货币基金形态），此时 `accum_nav` 全为 None 且不留日志。
+    """
+    calls = []
+
+    def fake_em(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("indicator") == akshare_client._OTC_ACCUM_INDICATOR:
+            return _RowFrame(accum_rows or [])
+        return _RowFrame(unit_rows)
+
+    monkeypatch.setattr("akshare.fund_open_fund_info_em", fake_em)
+    return calls
+
+
 class TestCnAkshareRowsAreScreened:
     """CN_OTC / CN_EXCHANGE 套用同一行级判据（akshare 的 CN 路径也是位置重命名）。
 
@@ -487,27 +511,23 @@ class TestCnAkshareRowsAreScreened:
 
     def test_otc_misbound_date_column_raises_instead_of_empty(self, monkeypatch, json_log_capture):
         """CN_OTC 若也发生 #651 那种错位（日期列变成币种），必须响亮失败。"""
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "元", "单位净值": 342652919208.0},
-                {"净值日期": "元", "单位净值": 342652919209.0},
-            ]),
-        )
+        calls = _patch_otc(monkeypatch, [
+            {"净值日期": "元", "单位净值": 342652919208.0},
+            {"净值日期": "元", "单位净值": 342652919209.0},
+        ])
 
         with pytest.raises(AkshareAPIError, match="无一行可解析"):
             akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
 
         only_log_line(json_log_capture, level="ERROR", operation="fetch_fund_nav_otc")
+        # 单位净值整段解析不出来时本次同步已失败，不该再白打一次累计净值请求（#704）
+        assert len(calls) == 1
 
     def test_otc_keeps_good_rows_and_drops_bad_nav(self, monkeypatch, json_log_capture):
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.1215},
-                {"净值日期": "2026-09-14", "单位净值": "", "日增长率": ""},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.1215},
+            {"净值日期": "2026-09-14", "单位净值": "", "日增长率": ""},
+        ])
 
         rows = akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
 
@@ -520,12 +540,9 @@ class TestCnAkshareRowsAreScreened:
         """akshare 把净值日期转成 date/Timestamp 对象——str() 后是 dashed，须照常接受。"""
         from datetime import date as _date
 
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": _date(2026, 9, 14), "单位净值": 1.0, "日增长率": 0.5},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": _date(2026, 9, 14), "单位净值": 1.0, "日增长率": 0.5},
+        ])
 
         assert akshare_client.get_fund_nav_otc("000051") == [
             {"trade_date": "20260914", "unit_nav": 1.0, "accum_nav": None, "pct_change": 0.5}
@@ -623,13 +640,10 @@ class TestFetchLayerDoesNotJudgeSign:
     """
 
     def test_zero_and_negative_nav_stay_parseable_rows(self, monkeypatch):
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "2026-09-15", "单位净值": 0.0, "日增长率": -100.0},
-                {"净值日期": "2026-09-14", "单位净值": -1.5, "日增长率": 0.0},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 0.0, "日增长率": -100.0},
+            {"净值日期": "2026-09-14", "单位净值": -1.5, "日增长率": 0.0},
+        ])
 
         rows = akshare_client.get_fund_nav_otc("000051")
 
@@ -648,12 +662,9 @@ class TestPctChangePassthrough:
 
     def test_otc_flat_day_zero_is_preserved(self, monkeypatch):
         """平盘日 0.0 折成 None 会让前端读成「无数据」而不是 0%。"""
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.0},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.0},
+        ])
 
         assert akshare_client.get_fund_nav_otc("000051") == [
             {"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
@@ -662,13 +673,10 @@ class TestPctChangePassthrough:
 
     def test_otc_bad_pct_value_is_none_and_not_malformed(self, monkeypatch, json_log_capture):
         """坏值 → None，且不进 malformed：局部漂移 WARNING 只由净值/日期坏行触发。"""
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": "元"},
-                {"净值日期": "2026-09-14", "单位净值": 1.230, "日增长率": float("nan")},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": "元"},
+            {"净值日期": "2026-09-14", "单位净值": 1.230, "日增长率": float("nan")},
+        ])
 
         rows = akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
 
@@ -681,12 +689,9 @@ class TestPctChangePassthrough:
         self, monkeypatch, json_log_capture
     ):
         """整列被改名：可用历史照常返回，另留一条 column_drift 线索。"""
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "2026-09-15", "单位净值": 1.234, "日涨幅": 0.12},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 1.234, "日涨幅": 0.12},
+        ])
 
         rows = akshare_client.get_fund_nav_otc("000051")
 
@@ -701,23 +706,38 @@ class TestPctChangePassthrough:
         assert line["market"] == "CN_OTC"
 
     def test_otc_empty_frame_does_not_warn_about_drift(self, monkeypatch, json_log_capture):
-        """合法空窗（周末、净值未发布）不该顺带报一条列漂移——那是假报警。"""
-        monkeypatch.setattr("akshare.fund_open_fund_info_em", lambda **kw: _RowFrame([]))
+        """合法空窗（周末、净值未发布）不该顺带报一条列漂移——那是假报警。
+
+        也不该再打一次累计净值请求（#704 评审）：没有行会消费它，而两个指标各自都要
+        重新下载并解析整份 `pingzhongdata/{symbol}.js`，`run_nav_sync` 又是按产品串行，
+        空窗日的无效成本会被产品数放大。
+        """
+        calls = _patch_otc(monkeypatch, [])
 
         assert akshare_client.get_fund_nav_otc("000051", "20260926", "20260927") == []
         assert log_lines(json_log_capture) == []
+        assert [c["indicator"] for c in calls] == ["单位净值走势"]
+
+    def test_otc_window_outside_history_skips_accum_request(
+        self, monkeypatch, json_log_capture
+    ):
+        """上游有行但全落在请求窗口外，同样是合法空窗：不打第二次请求、不留日志。"""
+        calls = _patch_otc(monkeypatch, [
+            {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+        ])
+
+        assert akshare_client.get_fund_nav_otc("000051", "20260926", "20260927") == []
+        assert log_lines(json_log_capture) == []
+        assert [c["indicator"] for c in calls] == ["单位净值走势"]
 
     def test_otc_drift_warning_survives_a_total_parse_failure(
         self, monkeypatch, json_log_capture
     ):
         """整段解析不出来时列漂移正是最可能的成因，必须先于抛错留痕。"""
-        monkeypatch.setattr(
-            "akshare.fund_open_fund_info_em",
-            lambda **kw: _RowFrame([
-                {"净值日期": "元", "单位净值": 342652919208.0},
-                {"净值日期": "元", "单位净值": 342652919209.0},
-            ]),
-        )
+        _patch_otc(monkeypatch, [
+            {"净值日期": "元", "单位净值": 342652919208.0},
+            {"净值日期": "元", "单位净值": 342652919209.0},
+        ])
 
         with pytest.raises(AkshareAPIError, match="无一行可解析"):
             akshare_client.get_fund_nav_otc("000051", "20260914", "20260915")
@@ -745,6 +765,197 @@ class TestPctChangePassthrough:
         assert rows == [{"trade_date": "20260915", "unit_price": 10.54,
                          "accumulated_nav": None, "pct_change": None}]
         assert log_lines(json_log_capture) == []
+
+
+class TestOtcAccumulatedNav:
+    """#704：场外累计净值取自同接口的「累计净值走势」指标，按净值日期合并。
+
+    三条语义各自独立钉住：合并靠日期映射而非位置对齐（缺日/日期不对齐落 NULL，**不拿
+    单位净值顶替**）；坏值是展示列级事件（不计 malformed、不打死单位净值历史，与 #692
+    日涨跌同族）；整段失效降级为全 NULL + 一条 WARNING，且该请求同样经 `_retry` 限流
+    与重试。
+
+    **整段失效必须与合法空序列分开**（评审 Blocker）：请求重试耗尽、缺「累计净值」列、
+    有列但零条日期可解析，三种都在行上打 `accum_degraded`，写入侧据此在冲突行保留既有
+    `accumulated_nav`；货币基金那种「上游 0 行」不打标，照既有语义落 NULL。
+    """
+
+    def test_accum_series_is_merged_by_date(self, monkeypatch):
+        calls = _patch_otc(
+            monkeypatch,
+            [
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+                {"净值日期": "2026-09-14", "单位净值": 1.230, "日增长率": 0.10},
+            ],
+            accum_rows=[
+                {"净值日期": "2026-09-15", "累计净值": 3.721},
+                {"净值日期": "2026-09-14", "累计净值": 3.710},
+            ],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001", "20260914", "20260915")
+
+        assert rows == [
+            {"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": 3.721,
+             "pct_change": 0.12},
+            {"trade_date": "20260914", "unit_nav": 1.230, "accum_nav": 3.710,
+             "pct_change": 0.10},
+        ]
+        assert [c["indicator"] for c in calls] == ["单位净值走势", "累计净值走势"]
+        assert [c["symbol"] for c in calls] == ["000001", "000001"]
+
+    def test_missing_accum_day_is_null_not_unit_nav(self, monkeypatch, json_log_capture):
+        """两条序列日期不对齐：缺的那一天只能是 NULL，顶替等于伪造累计净值。"""
+        _patch_otc(
+            monkeypatch,
+            [
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+                {"净值日期": "2026-09-14", "单位净值": 1.230, "日增长率": 0.10},
+            ],
+            accum_rows=[{"净值日期": "2026-09-15", "累计净值": 3.721}],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001", "20260914", "20260915")
+
+        assert [r["accum_nav"] for r in rows] == [3.721, None]
+        assert [r["unit_nav"] for r in rows] == [1.234, 1.230]
+        # 缺日是正常形态（净值发布时差），不该留任何日志
+        assert log_lines(json_log_capture) == []
+
+    def test_bad_accum_value_is_null_and_not_malformed(self, monkeypatch, json_log_capture):
+        """坏值只丢这一列，不计 malformed——否则一列展示字段能打死整段可用历史。"""
+        _patch_otc(
+            monkeypatch,
+            [
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+                {"净值日期": "2026-09-14", "单位净值": 1.230, "日增长率": 0.10},
+            ],
+            accum_rows=[
+                {"净值日期": "2026-09-15", "累计净值": "元"},
+                {"净值日期": "2026-09-14", "累计净值": float("nan")},
+            ],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001", "20260914", "20260915")
+
+        assert [r["accum_nav"] for r in rows] == [None, None]
+        assert [r["unit_nav"] for r in rows] == [1.234, 1.230]
+        assert log_lines(json_log_capture) == []
+        # 日期可解析、只是逐日坏值：不是整段失效，不得打上降级标记
+        assert all("accum_degraded" not in r for r in rows)
+
+    def test_empty_accum_series_is_silent(self, monkeypatch, json_log_capture):
+        """货币基金等品种上游本就没有累计净值序列：空 DataFrame 不是漂移，不告警。"""
+        _patch_otc(
+            monkeypatch,
+            [{"净值日期": "2026-09-15", "单位净值": 1.0, "日增长率": 0.01}],
+            accum_rows=[],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001")
+
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.0, "accum_nav": None,
+                         "pct_change": 0.01}]
+        assert log_lines(json_log_capture) == []
+
+    def test_missing_accum_column_warns_once(self, monkeypatch, json_log_capture):
+        """「累计净值」整列被改名：可用历史照常返回，另留一条 column_drift 线索。"""
+        _patch_otc(
+            monkeypatch,
+            [{"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12}],
+            accum_rows=[{"净值日期": "2026-09-15", "累计净资": 3.721}],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001")
+
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+                         "pct_change": 0.12, "accum_degraded": True}]
+        line = only_log_line(
+            json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
+            column_drift=True,
+        )
+        assert line["missing_column"] == akshare_client._OTC_ACCUM_COLUMN
+        assert line["market"] == "CN_OTC"
+
+    def test_accum_date_column_drift_is_loud_and_degraded(
+        self, monkeypatch, json_log_capture
+    ):
+        """有「累计净值」列、但零条日期可解析：整段失效，不得静默按合法空序列处理。
+
+        真实 akshare 会把不可解析日期转成 `NaT`，故列名不变、日期列整体漂移时正是这个
+        形态。此前它与货币基金那种「上游 0 行」共用 `{}` 且零日志，写入侧无从区分，
+        重叠同步会把已有的 accumulated_nav 抹成 NULL。
+        """
+        _patch_otc(
+            monkeypatch,
+            [{"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12}],
+            accum_rows=[
+                {"净值日期": "NaT", "累计净值": 3.721},
+                {"净值日期": "NaT", "累计净值": 3.710},
+            ],
+        )
+
+        rows = akshare_client.get_fund_nav_otc("000001")
+
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+                         "pct_change": 0.12, "accum_degraded": True}]
+        line = only_log_line(
+            json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
+            accum_date_drift=True,
+        )
+        assert line["upstream_rows"] == 2
+        assert line["parsed"] == 0
+        assert line["market"] == "CN_OTC"
+
+    def test_accum_request_failure_degrades_without_killing_unit_nav(
+        self, monkeypatch, json_log_capture
+    ):
+        """累计净值请求整段失败：单位净值行照常返回，降级留一条 accum_degraded WARNING。"""
+        def fake_em(**kwargs):
+            if kwargs.get("indicator") == akshare_client._OTC_ACCUM_INDICATOR:
+                raise ConnectionError("对端拒绝")
+            return _RowFrame([
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+            ])
+
+        monkeypatch.setattr("akshare.fund_open_fund_info_em", fake_em)
+
+        rows = akshare_client.get_fund_nav_otc("000001")
+
+        assert rows == [{"trade_date": "20260915", "unit_nav": 1.234, "accum_nav": None,
+                         "pct_change": 0.12, "accum_degraded": True}]
+        # _retry 自己的 2 条重试 WARNING + 1 条 ERROR 之外，降级线索恰好一条
+        only_log_line(
+            json_log_capture, level="WARNING", operation="fetch_fund_nav_otc",
+            accum_degraded=True,
+        )
+
+    def test_accum_request_is_rate_limited_and_retried(self, monkeypatch):
+        """第二次请求同样经 `_retry`：限流不稀释，瞬时故障重试后成功。"""
+        attempts = []
+        sleeps = []
+        monkeypatch.setattr(
+            akshare_client, "_rate_limit_sleep", lambda: sleeps.append(1)
+        )
+
+        def fake_em(**kwargs):
+            if kwargs.get("indicator") == akshare_client._OTC_ACCUM_INDICATOR:
+                attempts.append(1)
+                if len(attempts) < 2:
+                    raise ConnectionError("网络抖动")
+                return _RowFrame([{"净值日期": "2026-09-15", "累计净值": 3.721}])
+            return _RowFrame([
+                {"净值日期": "2026-09-15", "单位净值": 1.234, "日增长率": 0.12},
+            ])
+
+        monkeypatch.setattr("akshare.fund_open_fund_info_em", fake_em)
+
+        rows = akshare_client.get_fund_nav_otc("000001")
+
+        assert rows[0]["accum_nav"] == 3.721
+        assert len(attempts) == 2
+        # 单位净值 1 次尝试 + 累计净值 2 次尝试，每次尝试前各限流一次
+        assert len(sleeps) == 3
 
 
 class TestHkMutualCodeResolution:
@@ -784,3 +995,73 @@ class TestHkMutualCodeResolution:
 
         with pytest.raises(AkshareAPIError, match="未找到 6 位代码 123456"):
             akshare_client.get_fund_hk_mutual("123456")
+
+
+class _FakeRankFrame:
+    """`fund_hk_rank_em` 的最小 DataFrame 替身：只提供 `iterrows()`。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def iterrows(self):
+        return enumerate(self._rows)
+
+
+class TestHkCodeMapNormalization:
+    """排名表取数经 `_retry` 归一（#705 评审 Blocker）。
+
+    直调 `fund_hk_rank_em` 时，超时/连接失败/上游结构变化会以非领域异常冒出
+    service 层 → 全局 handler → 500；建档侧承诺的是 422 `HK_CODE_UNMAPPED`，
+    故归一必须发生在取数点，而不是在调用方各加一层 `except`。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self, monkeypatch):
+        """映射是进程内懒加载缓存：不清零就测不到取数分支。"""
+        monkeypatch.setattr(akshare_client, "_hk_code_map", None)
+
+    def test_rank_table_parsed_into_six_to_ten_map(self):
+        fake_ak = SimpleNamespace(
+            fund_hk_rank_em=lambda: _FakeRankFrame([
+                {"基金代码": "968050", "香港基金代码": HK},
+                {"基金代码": " 968052 ", "香港基金代码": " 1001767346 "},
+                # 任一列为空的行不入表（空键会污染反查）
+                {"基金代码": "", "香港基金代码": "1001767999"},
+            ])
+        )
+
+        assert akshare_client._ensure_hk_code_map(fake_ak) == {
+            "968050": HK, "968052": "1001767346",
+        }
+
+    def test_upstream_failure_normalized_to_akshare_error(self):
+        def unreachable():
+            raise RuntimeError("上游 fund_hk_rank_em 超时/连接失败")
+
+        fake_ak = SimpleNamespace(fund_hk_rank_em=unreachable)
+
+        with pytest.raises(AkshareAPIError, match="获取东财港基排名表失败"):
+            akshare_client._ensure_hk_code_map(fake_ak)
+
+    def test_six_digit_resolve_surfaces_normalized_error(self, monkeypatch):
+        """6 位建档路径拿到的是 AkshareAPIError，调用方的 422 收口才接得住。"""
+        def unreachable():
+            raise ConnectionError("DNS 解析失败")
+
+        monkeypatch.setitem(
+            sys.modules, "akshare", SimpleNamespace(fund_hk_rank_em=unreachable)
+        )
+
+        with pytest.raises(AkshareAPIError):
+            akshare_client.resolve_hk_code_pair("968050")
+
+    def test_ten_digit_reverse_lookup_still_swallows_upstream_failure(self, monkeypatch):
+        """反查是展示码锦上添花：归一后的异常同样不得阻断 10 位码录入。"""
+        def unreachable():
+            raise ConnectionError("DNS 解析失败")
+
+        monkeypatch.setitem(
+            sys.modules, "akshare", SimpleNamespace(fund_hk_rank_em=unreachable)
+        )
+
+        assert akshare_client.resolve_hk_code_pair(HK) == (HK, None)

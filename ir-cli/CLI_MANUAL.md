@@ -959,6 +959,8 @@ ir market sync-history <PRODUCT_CODE> <MARKET>
 
 ### 4.9 `ir product` — 产品管理
 
+> **代码口径（issue #705）**：库内 `code` 是**上游机器码**（tushare 带 `.SH`/`.SZ`/`.OF` 后缀，港互认为 10 位香港基金代码），它同时是全部接口的标识符。响应另带只读派生字段 `display_code`（人眼口径标准码：去后缀；港互认为 6 位内地销售码 `hk_sale_code`，映射不可得时回落原始码），产品行还带 `hk_sale_code`。**CLI 入参一律不归一化**：`--product-code` / `ir product get <CODE>` 等只认库内原始码——界面显示 `510300` 后照抄 `510300` 过滤会静默 0 命中，请从 `ir product list` 的 `code` 字段（或 `--fields code,display_code`）取值，不要用 `display_code` 当入参。唯一例外是**创建**港互认产品时可填 6 位内地销售码（见下）。
+
 #### `ir product list`
 
 获取产品列表。
@@ -983,7 +985,7 @@ ir product create --code <代码> --market <市场> --name <名称> --product-ty
 
 | 参数 | 必填 | 说明 |
 |------|:----:|------|
-| `--code` | 是 | 产品代码（如 `000051.OF`） |
+| `--code` | 是 | 产品代码（如 `000051.OF`）。`--market HK_MUTUAL` 时可填 6 位内地销售码（如 `968050`），后端按东财港基排名表解析为 10 位香港基金代码入库并回填 `hk_sale_code`；填 10 位码时反查销售码（反查失败不阻断创建，`hk_sale_code` 留空）。解析不到（不在排名表内，或排名表暂不可得——上游不可达 / akshare 未安装）返回 422 `HK_CODE_UNMAPPED`，不落库（#705） |
 | `--market` | 是 | 市场：`CN_EXCHANGE` / `CN_OTC` / `HK_MUTUAL` |
 | `--name` | 是 | 产品名称 |
 | `--product-type` | 是 | 类型：`ETF` / `OEF` / `LOF` / `CASH` / `IN_TRANSIT` |

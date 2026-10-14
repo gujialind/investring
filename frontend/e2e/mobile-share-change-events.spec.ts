@@ -110,13 +110,16 @@ test.describe('移动端份额变动事件页（#276）', () => {
     try {
       await page.getByRole('link', { name: '份额变动事件' }).click();
 
-      // 列表展示（#342 → #355 双行）：产品列主行名称、次行 `代码 · 市场名`（虚拟产品 market 为空则无后缀）
-      const row = page.locator('table tbody tr').filter({ hasText: created.product_code }).first();
+      // 列表展示（#342 → #355 双行）：产品列主行名称、次行 `显示码 · 市场名`（虚拟产品 market 为空则无后缀）
+      // #705：行内代码位是显示码而非机器码，故按列表端点派生的 display_code 定位（产品列表
+      // 端点必带该字段；创建响应是单对象端点、不批量派生，故不用 created.product_code）
+      const shownCode = product.display_code;
+      const row = page.locator('table tbody tr').filter({ hasText: shownCode }).first();
       await expect(row).toBeVisible({ timeout: 15_000 });
       if (product.name) {
         await expect(row.getByText(product.name)).toBeVisible();
       }
-      await expect(row.getByText(new RegExp(`^${created.product_code}( · .+)?$`))).toBeVisible();
+      await expect(row.getByText(new RegExp(`^${shownCode}( · .+)?$`))).toBeVisible();
 
       // pending 父记录有编辑入口
       await row.locator('button[title="编辑"]').click();
@@ -182,12 +185,20 @@ test.describe('移动端份额变动事件页（#276）', () => {
       await page.request.get(`/api/positions?portfolio_code=${E2E_ACTIVE}&page_size=50`, { headers })
     ).json();
     const held = (
-      positions.items as { product_code: string; market: string; platform_code: string }[]
+      positions.items as {
+        product_code: string;
+        market: string;
+        platform_code: string;
+        display_code: string | null;
+      }[]
     ).find((p) => p.product_code !== 'CASH');
     if (!held) test.skip(true, 'E2E_ACTIVE 无基金持仓，无法构造平台级事件');
     const heldProduct = held!.product_code;
     const heldMarket = held!.market;
     const heldPlatform = held!.platform_code;
+    // #705：列表行内代码位是显示码，行定位改用它（持仓列表端点派生 display_code；
+    // 事件创建响应是单对象端点、不带该字段）
+    const heldDisplay = held!.display_code ?? heldProduct;
 
     // 造一条 pending 强制调整（用户直填值）：修复前弹窗对任何事件都渲染列表行的
     // NULL 字段（兜底成 0.00），故直填值能精确暴露该缺陷。取非零且非整的值，
@@ -234,7 +245,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
       await page.getByRole('link', { name: '份额变动事件' }).click();
       // 同产品两条事件，按事件类型文案区分行
       const row = page.locator('table tbody tr')
-        .filter({ hasText: created.product_code })
+        .filter({ hasText: heldDisplay })
         .filter({ hasText: '强制调整' })
         .first();
       await expect(row).toBeVisible({ timeout: 15_000 });
@@ -246,7 +257,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
 
       // 自动计算型事件 pending 行两列恒 NULL → 显示「--」而非误导性的 0.00（#424 附带项守门）
       const divRow = page.locator('table tbody tr')
-        .filter({ hasText: divEvent.product_code })
+        .filter({ hasText: heldDisplay })
         .filter({ hasText: '现金分红' })
         .first();
       await expect(divRow.getByTestId('event-shares-change')).toHaveText('--');

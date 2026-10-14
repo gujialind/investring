@@ -4,7 +4,7 @@
 confirm_days 计算（单一实现）与产品 CRUD，从路由层提取供 REST 与 CLI 共用。
 service 层只抛领域异常，不 commit。
 """
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.models.share_change_event import ShareChangeEvent
 from app.models.trade import Trade
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.null_guard import reject_explicit_nulls
+from app.utils.product_code import HK_MUTUAL_MARKET, display_code
 
 # issue #232：product_type 合法枚举（create/update 共用校验）；
 # market 枚举仅 update 守卫使用（create 不校验 market）
@@ -200,19 +201,30 @@ def resolve_product_market(
     return product_code, markets[0]
 
 
-def build_product_name_map(db: Session, pairs: set) -> dict:
-    """读侧派生公共助手（#175/#342 单一实现）：批量建 (code, market) -> name 映射（防 N+1）。
-    pairs 为 {(product_code, market)}；LOF 一码多市场查出的冗余行按 pairs 过滤。"""
+def build_product_label_maps(db: Session, pairs: set) -> Tuple[dict, dict]:
+    """读侧派生公共助手（#175/#342 名称，#705 显示码）：一次查询建两张
+    `(code, market)` 键的映射，返回 `(name_map, display_map)`（防 N+1）。
+
+    两个消费方（trades / share-change-events 列表）都要同键的名称与显示码，故合并成
+    单次往返——分成两个 helper 会对同一批键查两遍产品表（#705 评审）。pairs 为
+    {(product_code, market)}；LOF 一码多市场查出的冗余行按 pairs 过滤。显示码口径
+    单点见 app.utils.product_code.display_code。
+    """
     if not pairs:
-        return {}
+        return {}, {}
     codes = {c for c, _ in pairs if c}
-    return {
-        (p.code, p.market): p.name
-        for p in db.query(Product.code, Product.market, Product.name)
+    name_map: dict = {}
+    display_map: dict = {}
+    for p in (
+        db.query(Product.code, Product.market, Product.name, Product.hk_sale_code)
         .filter(Product.code.in_(codes))
         .all()
-        if (p.code, p.market) in pairs
-    }
+    ):
+        if (p.code, p.market) not in pairs:
+            continue
+        name_map[(p.code, p.market)] = p.name
+        display_map[(p.code, p.market)] = display_code(p.code, p.market, p.hk_sale_code)
+    return name_map, display_map
 
 
 def validate_product_type(product_type: str) -> None:
@@ -443,7 +455,25 @@ def create_product(
 
     sync_history=True 时（issue #90）创建后立即回填历史净值；
     同步失败不回滚产品创建，结果挂在返回对象的瞬态属性 sync_result。
+
+    港互认录入归一（#705）：market=HK_MUTUAL 时 6 位内地销售码经排名表解析为
+    10 位香港基金码入 `code`、6 位码落 `hk_sale_code`；映射不可得抛
+    HK_CODE_UNMAPPED（422，入库码不能靠猜）——「不可得」含查无此码、排名表上游
+    不可达与 akshare 未安装三形态，后两者由 akshare_client 的 `_retry` 归一为
+    AkshareAPIError 后在此收口，不漏成 500。
     """
+    hk_sale_code: Optional[str] = None
+    if market == HK_MUTUAL_MARKET:
+        from app.services.akshare_client import AkshareAPIError, resolve_hk_code_pair
+
+        try:
+            code, hk_sale_code = resolve_hk_code_pair(code)
+        except AkshareAPIError as e:
+            raise BusinessError(
+                "HK_CODE_UNMAPPED",
+                f"代码 {code} 未能解析为香港基金代码（东财港基排名表查无此码，或排名表暂不可得）",
+                details={"product_code": code, "market": market},
+            ) from e
     existing = db.query(Product).filter(
         Product.code == code, Product.market == market
     ).first()
@@ -472,6 +502,7 @@ def create_product(
         market=market or "",
         name=name,
         product_type=product_type,
+        hk_sale_code=hk_sale_code,
         confirm_days=confirm_days,
         nav_lag_days=nav_lag_days,
         is_qdii=is_qdii,

@@ -17,7 +17,7 @@ import {
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { useProductList } from "@/hooks/useProduct";
 import { MARKET_OPTIONS } from "@/lib/market";
-import { cn, formatMarketName } from "@/lib/utils";
+import { cn, formatMarketName, formatProductDisplayCode } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ProductSelection } from "@/components/shared/ProductFilterDialog";
 
@@ -30,12 +30,16 @@ interface SearchableProductSelectProps {
   id?: string;
 }
 
+/** 选项回显缓存项（#705）：名称与显示码都只来自产品列表结果集 */
+type ProductMeta = { name: string; displayCode: string };
+
 /**
  * 表单单选可搜索下拉（issue #162，提交交易表单）：h-10 触发按钮 + Popover
  * 关键词防抖搜索 + 点选即回传并关闭。选项粒度 code|market（LOF 一码多市场分行）。
- * 市场标识（#259）：选项行三段式——名称可截断 / (code) 独立不截断 / 尾部市场
- * Badge（market 为空不渲染），行挂完整 title；选中回显「名称 (code) · 市场名」，
- * 名称截断、后缀不截断，触发按钮挂 title。E2E 定位：product-option + data-code/data-market。
+ * 市场标识（#259）：选项行三段式——名称可截断 / (显示码) 独立不截断 / 尾部市场
+ * Badge（market 为空不渲染），行挂完整 title；选中回显「名称 (显示码) · 市场名」，
+ * 名称截断、后缀不截断，触发按钮挂 title。E2E 定位：product-option + data-code/data-market
+ * （data-code 恒为库内原始码，#705 显示码只上人眼文案）。
  * 市场筛选（#324）：搜索框与列表之间一行 Select（全部市场/A股场内/内地场外/香港互认），
  * 服务端过滤（market 参数），数据层消除 LOF 一码多市场歧义；筛选不持久——
  * 点选即弃、重开复位「全部市场」，不同步 market、不加拦截。
@@ -70,38 +74,45 @@ export default function SearchableProductSelect({
   );
   const items = useMemo(() => data?.items ?? [], [data?.items]);
 
-  // 名称缓存：选中项回显 name (code)；name 仅来自当前/历史结果集，缺失时回退 code
-  const nameByKey = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const p of items) map.set(`${p.code}|${p.market ?? ""}`, p.name);
+  // 名称/显示码缓存：选中项回显 name (显示码)（#705）；两者仅来自当前/历史结果集，
+  // 缺失时名称回退显示码、显示码回退本地剥后缀（港互认销售码前端无来源，只能等结果集带到）
+  const metaByKey = useMemo(() => {
+    const map = new Map<string, ProductMeta>();
+    for (const p of items)
+      map.set(`${p.code}|${p.market ?? ""}`, {
+        name: p.name,
+        displayCode: p.display_code || formatProductDisplayCode(p.code, p.market),
+      });
     return map;
   }, [items]);
-  const [nameCache, setNameCache] = useState<Map<string, string>>(new Map());
+  const [metaCache, setMetaCache] = useState<Map<string, ProductMeta>>(new Map());
   useEffect(() => {
-    setNameCache((prev) => {
+    setMetaCache((prev) => {
       let changed = false;
       const next = new Map(prev);
-      for (const [k, v] of nameByKey) {
-        if (next.get(k) !== v) {
+      for (const [k, v] of metaByKey) {
+        const cur = next.get(k);
+        if (!cur || cur.name !== v.name || cur.displayCode !== v.displayCode) {
           next.set(k, v);
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [nameByKey]);
+  }, [metaByKey]);
 
   const selectionKey = (s: ProductSelection) => `${s.code}|${s.market}`;
   const isSelected = (s: ProductSelection) =>
     !!value && value.code === s.code && value.market === s.market;
 
-  // 选中回显（#259）：「名称 (code)」基础标签 + 可选「 · 市场名」后缀；
+  // 选中回显（#259）：「名称 (显示码)」基础标签 + 可选「 · 市场名」后缀；
   // market 为空不拼后缀（无 `· --` 残留）；名称部分 truncate、后缀 shrink-0，
   // 触发按钮 span 挂 title 全文本供悬停查看被截断部分
   const baseLabel = value
     ? (() => {
-        const name = nameCache.get(selectionKey(value));
-        return name ? `${name} (${value.code})` : value.code;
+        const meta = metaCache.get(selectionKey(value));
+        const shown = meta?.displayCode ?? formatProductDisplayCode(value.code, value.market);
+        return meta?.name ? `${meta.name} (${shown})` : shown;
       })()
     : placeholder;
   const marketSuffix = value?.market ? formatMarketName(value.market) : "";
@@ -186,13 +197,15 @@ export default function SearchableProductSelect({
               // 市场标识（#259）：尾部独立徽章，market 为空不渲染；悬停 title 给出
               // 完整「名称 (code) · 市场」，长名称截断不丢信息
               const marketName = s.market ? formatMarketName(s.market) : "";
+              // #705 选项行代码用显示码（选择结果 data-code / onChange 仍传原始码）
+              const shownCode = p.display_code || formatProductDisplayCode(p.code, s.market);
               return (
                 <div
                   key={selectionKey(s)}
                   data-testid="product-option"
                   data-code={p.code}
                   data-market={s.market}
-                  title={marketName ? `${p.name} (${p.code}) · ${marketName}` : `${p.name} (${p.code})`}
+                  title={marketName ? `${p.name} (${shownCode}) · ${marketName}` : `${p.name} (${shownCode})`}
                   className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-muted"
                   onClick={() => {
                     onChange(s);
@@ -206,7 +219,7 @@ export default function SearchableProductSelect({
                     )}
                   />
                   <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
-                  <span className="shrink-0 text-sm text-muted-foreground">({p.code})</span>
+                  <span className="shrink-0 text-sm text-muted-foreground">({shownCode})</span>
                   {s.market && (
                     <Badge variant="neutral" className="shrink-0">
                       {marketName}

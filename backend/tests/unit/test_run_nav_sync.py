@@ -6,6 +6,7 @@ run_nav_sync / run_snapshot_generate 测试（P5.4，#156 任务剥离）
 - 增量起点 = MAX(date)+1
 - run_nav_sync 不再串联快照生成（无 snapshots_generated 键、不调 _generate_snapshots_for_date）
 - 无 ShareChangeEvent 写入（D1 跳过分红检测）
+- 累计净值整段降级的产品仍算 success，但进 degraded_products 且明细留痕（#704）
 - run_snapshot_generate 仅处理 active 且开启 auto_snapshot_enabled 的组合
 - auto_confirm_after_snapshot 被调用
 """
@@ -117,6 +118,42 @@ class TestSnapshotNotGatedByFailures:
 
         mock_snap.assert_not_called()
         assert "snapshots_generated" not in result
+
+
+class TestAccumDegradedTerminalState:
+    """#704：累计净值整段降级的产品仍算 success，但要在任务终态显式可见。"""
+
+    @patch("app.services.market_data_service.sync_product_prices")
+    def test_degraded_product_is_reported_and_not_failed(self, mock_sync, test_db):
+        """降级产品进 degraded_products 且明细留痕；未降级的产品明细保持干净。"""
+        def fake_sync(*, db, product_code, market, start_date, end_date):
+            return {
+                "success": True, "synced_count": 1, "source": "akshare",
+                "accum_degraded": product_code == "000300.OF",
+            }
+
+        mock_sync.side_effect = fake_sync
+
+        result = run_nav_sync(test_db, _task_log_id(test_db))
+
+        assert result["failed_products"] == []
+        assert result["degraded_products"] == ["000300.OF"]
+
+        details = {d.product_code: d for d in test_db.query(NavSyncDetail).all()}
+        assert details["000300.OF"].status == "success"
+        assert "累计净值降级" in details["000300.OF"].error_message
+        assert details["510300.SH"].status == "success"
+        assert details["510300.SH"].error_message is None
+
+    @patch("app.services.market_data_service.sync_product_prices")
+    def test_no_degraded_key_still_yields_empty_list(self, mock_sync, test_db):
+        """打桩返回值不带 accum_degraded（历史形态）时不得炸，degraded_products 为空。"""
+        mock_sync.return_value = {"success": True, "synced_count": 0, "source": "tushare"}
+
+        result = run_nav_sync(test_db, _task_log_id(test_db))
+
+        assert result["degraded_products"] == []
+        assert all(d.error_message is None for d in test_db.query(NavSyncDetail).all())
 
 
 class TestAutoConfirmCalled:

@@ -24,10 +24,9 @@ class PriceDataSyncRequest(BaseModel):
 class NavHistoryItem(BaseModel):
     """历史净值行：单位净值必有；累计净值与日涨跌可空，两者成因不同（#692 更正归因）。
 
-    累计净值可空：场内行情源不提供该字段；场外源 tushare 逐日有值、akshare 待 #704
-    落地后逐日有值（当前 `get_fund_nav_otc` 仍返回 `accum_nav: None`）；港互认上游
-    `ACCNAV` 逐基金分档（#703），缺值基金整列为空。净值曲线与区间收益率优先按累计净值
-    算，累计净值覆盖不足时回退单位净值（见 `ProductNavAnalysis.nav_basis`）。
+    累计净值可空：场内行情源不提供该字段；场外净值源（tushare 与 akshare，#704）逐日
+    有值；港互认上游 `ACCNAV` 逐基金分档（#703），缺值基金整列为空。净值曲线与区间
+    收益率优先按累计净值算，累计净值覆盖不足时回退单位净值（见 `ProductNavAnalysis.nav_basis`）。
     日涨跌可空：该产品首条记录无基准，或上游未提供且本地不满足推导条件（基准缺失/非正）。
     日涨跌为百分数（1.2195 即 1.2195%），在写侧产生点量化到 4 位。
     """

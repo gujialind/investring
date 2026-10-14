@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/popover";
 import { ChevronDown, Loader2, SlidersHorizontal } from "lucide-react";
 import { useProductList } from "@/hooks/useProduct";
-import { cn, formatMarketName } from "@/lib/utils";
+import { cn, formatMarketName, formatProductDisplayCode } from "@/lib/utils";
 import ProductFilterDialog, { ProductSelection } from "@/components/shared/ProductFilterDialog";
 
 interface ProductFilterSelectProps {
@@ -25,6 +25,9 @@ interface ProductFilterSelectProps {
 }
 
 const selectionKey = (s: ProductSelection) => `${s.code}|${s.market}`;
+
+/** 选项回显缓存项（#705）：名称与显示码都只来自产品列表结果集 */
+type ProductMeta = { name: string; displayCode: string };
 
 /**
  * 筛选栏产品多选合并组件（issue #162）：outline 触发器内三区——文本区/ChevronDown
@@ -55,26 +58,32 @@ export default function ProductFilterSelect({
   );
   const items = useMemo(() => data?.items ?? [], [data?.items]);
 
-  // 名称缓存：置顶已选项回显 name (code)；跨条件/跨结果集累积，缺失时回退 code
-  const nameByKey = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const p of items) map.set(`${p.code}|${p.market ?? ""}`, p.name);
+  // 名称/显示码缓存：置顶已选项回显 name (显示码)（#705）；跨条件/跨结果集累积，
+  // 缺失时名称回退显示码、显示码回退本地剥后缀（港互认销售码前端无来源，只能等结果集带到）
+  const metaByKey = useMemo(() => {
+    const map = new Map<string, ProductMeta>();
+    for (const p of items)
+      map.set(`${p.code}|${p.market ?? ""}`, {
+        name: p.name,
+        displayCode: p.display_code || formatProductDisplayCode(p.code, p.market),
+      });
     return map;
   }, [items]);
-  const [nameCache, setNameCache] = useState<Map<string, string>>(new Map());
+  const [metaCache, setMetaCache] = useState<Map<string, ProductMeta>>(new Map());
   useEffect(() => {
-    setNameCache((prev) => {
+    setMetaCache((prev) => {
       let changed = false;
       const next = new Map(prev);
-      for (const [k, v] of nameByKey) {
-        if (next.get(k) !== v) {
+      for (const [k, v] of metaByKey) {
+        const cur = next.get(k);
+        if (!cur || cur.name !== v.name || cur.displayCode !== v.displayCode) {
           next.set(k, v);
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [nameByKey]);
+  }, [metaByKey]);
 
   const isChecked = (s: ProductSelection) =>
     value.some((v) => v.code === s.code && v.market === s.market);
@@ -87,28 +96,32 @@ export default function ProductFilterSelect({
   const resultKeys = new Set(items.map((p) => `${p.code}|${p.market ?? ""}`));
   const pinned = value.filter((v) => !resultKeys.has(selectionKey(v)));
 
-  const renderRow = (key: string, name: string | undefined, s: ProductSelection) => (
-    <div
-      key={key}
-      className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-muted"
-      onClick={() => toggle(s)}
-    >
-      {/* checkbox 自身点击阻止冒泡避免双重切换 */}
-      <span onClick={(e) => e.stopPropagation()}>
-        <Checkbox
-          checked={isChecked(s)}
-          onCheckedChange={() => toggle(s)}
-          aria-label={`选择 ${name ?? s.code}`}
-        />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm">
-        {name ? `${name} (${s.code})` : s.code}
-        {s.market ? (
-          <span className="text-muted-foreground"> · {formatMarketName(s.market)}</span>
-        ) : null}
-      </span>
-    </div>
-  );
+  const renderRow = (key: string, meta: ProductMeta | undefined, s: ProductSelection) => {
+    // #705 行内代码用显示码；勾选态/toggle 传回的 selection 仍是原始码
+    const shown = meta?.displayCode ?? formatProductDisplayCode(s.code, s.market);
+    return (
+      <div
+        key={key}
+        className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-muted"
+        onClick={() => toggle(s)}
+      >
+        {/* checkbox 自身点击阻止冒泡避免双重切换 */}
+        <span onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={isChecked(s)}
+            onCheckedChange={() => toggle(s)}
+            aria-label={`选择 ${meta?.name ?? shown}`}
+          />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm">
+          {meta?.name ? `${meta.name} (${shown})` : shown}
+          {s.market ? (
+            <span className="text-muted-foreground"> · {formatMarketName(s.market)}</span>
+          ) : null}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -153,7 +166,7 @@ export default function ProductFilterSelect({
             {pinned.length > 0 && (
               <>
                 {pinned.map((v) =>
-                  renderRow(`pinned-${selectionKey(v)}`, nameCache.get(selectionKey(v)), v)
+                  renderRow(`pinned-${selectionKey(v)}`, metaCache.get(selectionKey(v)), v)
                 )}
                 <div className="my-1 border-t" />
               </>
@@ -168,7 +181,10 @@ export default function ProductFilterSelect({
               items.map((p) =>
                 renderRow(
                   selectionKey({ code: p.code, market: p.market ?? "" }),
-                  p.name,
+                  {
+                    name: p.name,
+                    displayCode: p.display_code || formatProductDisplayCode(p.code, p.market),
+                  },
                   { code: p.code, market: p.market ?? "" }
                 )
               )
