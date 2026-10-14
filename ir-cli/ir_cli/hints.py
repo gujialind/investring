@@ -31,7 +31,7 @@ ERROR_HINTS: dict = {
     "CASH_CONFIRM_DATE_NOT_ALLOWED": "现金日在不允许的时机传入：卖出到账日改在确认时传 ir trade confirm <id> --cash-confirm-date <到账日>（缺省 = 基金确认日）；买入扣款日固定为下单日 T，不可改",
     "CASH_LEG_MISSING": "该卖出没有配对 CASH 到账腿，无法改到账日：先 ir trade unconfirm <id> 再 ir trade confirm <id> --cash-confirm-date <到账日> 重建到账腿",
     "PRICE_NAV_MISMATCH": "传入价格与 T 日净值不一致: ir market price 查询净值核对，或省略 --price 由后端取 T 日净值",
-    "MISSING_NAV": "T 日净值尚未同步: ir market sync-history <product_code> <market> 回填后重试，或 ir trade confirm <id> --sync-nav 自动同步并确认",
+    "MISSING_NAV": "净值缺失: 增量同步已回看最近 10 个交易日（#698），迟披露缺口会在下一次 nav_sync 后自动回补；需即刻处理按错误信息点名的日期定点回补 ir market sync <product_code> <market> --start-date <缺失日> --end-date <缺失日> 后重试，或 ir trade confirm <id> --sync-nav 自动同步并确认",
     "MISSING_OR_INVALID_PRICE": "场内交易必须传入有效 --price（成交价）",
     "CANNOT_CANCEL_EXCHANGE": "场内交易当天确认、不可 cancel；已确认的用 unconfirm 回退",
     "TRANSFER_NOT_READY": "转移未到确认日，到 confirm_date 当日再执行 ir cash-transfer confirm",

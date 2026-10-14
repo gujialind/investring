@@ -5,7 +5,7 @@ import math
 from typing import List, Dict, Any, Optional, Tuple
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 
 from app.models.price_record import PriceRecord
 from app.models.product import Product
@@ -378,6 +378,59 @@ def get_nav_coverage(
     }
 
 
+# 增量同步窗口的回看深度（#698）：下界 = min(MAX+1 自然日, MAX 往前第 N 个交易日)。
+# 单位取交易日而非自然日：现场乱序形态是 1 步（2026-09-30 被 10-08 越过），N=10 留 10 倍
+# 余量；而交易日步长与假期长度解耦——国庆 8 个自然日、春节 11 个自然日在交易日轴上都只是
+# 1 步，按自然日定 K 会把「闭市多长」与「上游迟披露几步」混进同一个参数（#698 根因第 6 条：
+# 成洞取决于披露顺序，不取决于假期长度）。代价只是载荷：每产品每次多回捞约 N 行，三条取数
+# 路径的请求条数恒为 1/产品/运行（tushare 单次、akshare CN_OTC 本就拉全量、HK_MUTUAL 单页
+# 1000 行远不到第 2 页），tushare 限频按 per-call，等待预算不变；写入侧 `_bulk_upsert_prices`
+# 是 ON DUPLICATE KEY UPDATE，重放同区间幂等——这是本方案的前提，也是回看段能顺带传播
+# 上游对近日净值修订的原因。
+# 刻意不做配置项/迁移：运行期改它等于改同步语义，调参属代码审查面。
+NAV_LOOKBACK_TRADING_DAYS = 10
+
+
+def resolve_incremental_start_date(
+    db: Session,
+    product_code: str,
+    market: str,
+) -> Optional[date]:
+    """增量同步窗口的下界（#698）：min(MAX(price_date)+1 自然日, MAX 往前第 N 个交易日)。
+
+    为什么不能只是 MAX+1：上游乱序披露（某交易日净值晚于其后交易日披露）会让 MAX 被右侧
+    日跳推过去，左侧中间空洞从此不在任何一次增量窗内、永不回补；长假后首个交易日的快照
+    随即被 MISSING_NAV 阻断。回看 N 个交易日起窗，使「迟披露 ≤N 步」的空洞在下一次运行
+    自动回填（写入幂等，重放无害）。
+
+    MAX 查询刻意内聚在本函数：#698 的成因正是 `task_runner.run_nav_sync` 与
+    `_run_price_sync_job_impl` 两处各算各的；调用点收敛到这里之后，「两处同口径」由结构
+    保证，测试各自断言 `== 本函数返回值`（任一处绕过单点即红，强于两调用点互比）。
+
+    日历不足时的三档降级**都不抛 CALENDAR_NOT_SYNCED**（与取价侧 `_prev_trading_day`
+    刻意相反，#591 的分工）：本函数返回值只是「问上游要哪段区间」，不写进任何财务数据；
+    抛错会把「日历短」升级成「该产品净值从此不再更新」，而真正的缺净值仍由快照侧响亮报
+    MISSING_NAV。降级也不伪造日期——返回的恒是日历里真实存在的开市日，或旧口径 MAX+1。
+    不按 exchange 过滤（全仓一致口径；回看只是放宽抓取区间，HK 产品借 SSE 日历无害）。
+    """
+    latest = db.query(func.max(PriceRecord.price_date)).filter(
+        PriceRecord.product_code == product_code,
+        PriceRecord.market == market,
+    ).scalar()
+    if latest is None:
+        return None                          # 新产品：不设下界，保持全量历史语义
+    floor = latest + timedelta(days=1)       # 旧口径，日历救不到时的兜底
+    open_days = db.query(TradingCalendar.calendar_date).filter(
+        TradingCalendar.calendar_date < latest,
+        TradingCalendar.is_open.is_(True),
+    ).order_by(TradingCalendar.calendar_date.desc()).limit(
+        NAV_LOOKBACK_TRADING_DAYS
+    ).all()
+    if not open_days:
+        return floor                         # MAX 前无任何开市日：退回旧口径，不抛错
+    return min(floor, open_days[-1][0])      # 回看日恒早于 floor；min 把「不窄于旧口径」写成代码事实
+
+
 # 累计净值整段降级的统一留痕文案（#704）。同步终态（NavSyncDetail.error_message）与
 # 单产品同步返回的 message 共用同一句，避免两处措辞漂移。
 ACCUM_DEGRADED_NOTE = "累计净值降级：本批未取到累计净值，已有值保留"
@@ -447,10 +500,11 @@ def sync_product_prices(
 
     if not raw_data:
         # 空 raw_data 有两种含义，此处只该放行其中一种（#651）：
-        #   1. 上游这段区间确实没有数据——周末、停市日、净值尚未发布。实测东财对无效
-        #      代码与周末窗口返回逐字节同形，无法在传输层区分，故这里保持 success。
-        #      若照 #651 原文改判 failed，`run_nav_sync` 的增量窗 [本地最大+1, 昨天]
-        #      会让每个周一、每个港股假日都给健康产品记一次失败，噪音反过来淹没真故障。
+        #   1. 上游这段区间确实没有数据——无效代码，或该段历史被整段下架清除。实测
+        #      东财对无效代码与周末窗口返回逐字节同形，无法在传输层区分，故这里保持
+        #      success。若照 #651 原文改判 failed，每次运行都整段空的产品就会天天被
+        #      记一次失败，噪音反过来淹没真故障。#698 起增量窗含回看段，已有本地历史
+        #      的健康产品通常能从存量区间带回行，周末/停市窗基本不再走到这里。
         #   2. 上游给了行而我们解析不出任何一条（接口结构变动）。这种形态已在
         #      akshare_client 的响亮判据处抛 AkshareAPIError，走上面 except 分支落
         #      failed + sync_error，不会到达这里。
@@ -642,6 +696,8 @@ def _derive_otc_pct_change(
     - **份额折算日**基金公司按比例同时缩放 unit_nav 与 accum_nav，当日推导值失真一天，
       次日以新基准自动恢复（一次性、不累积）。事后修正路径 = 人工把受影响行 pct_change
       置 NULL 后重跑迁移 0020（幂等只补 NULL），或等上游勘误后 sync-history 覆盖。
+      注意 #698 起增量窗会重放回看段（约 11 个交易日），窗内的人工置 NULL 会被下一次
+      nav_sync 重新推导填回——置 NULL 修正只对滑出回看窗的日期稳定。
     - 港互认与 akshare 场外走上游字段透传，语义是**单位净值**日涨跌（除息日含跳水），
       与此处的总收益口径在除息日存在一次性口径差。
 
@@ -865,7 +921,6 @@ def _run_price_sync_job_impl(job_id: int):
     from app.database import SessionLocal
     from app.models.sync_job import SyncJob
     from app.models.nav_sync_detail import NavSyncDetail
-    from sqlalchemy import func as sa_func
 
     db = SessionLocal()
     try:
@@ -902,12 +957,11 @@ def _run_price_sync_job_impl(job_id: int):
             try:
                 start_date = None
                 if params.get("job_type") == "price_incremental_sync":
-                    latest = db.query(sa_func.max(PriceRecord.price_date)).filter(
-                        PriceRecord.product_code == product.code,
-                        PriceRecord.market == product.market,
-                    ).scalar()
-                    if latest:
-                        start_date = latest + timedelta(days=1)
+                    # 与 run_nav_sync 同一实现，「两处窗口口径分叉」（#698 根因第 2 条）
+                    # 自此由结构排除
+                    start_date = resolve_incremental_start_date(
+                        db, product.code, product.market
+                    )
                 elif params.get("start_date"):
                     start_date = datetime.strptime(params["start_date"], "%Y-%m-%d").date()
 

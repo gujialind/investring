@@ -13,6 +13,8 @@ sync_product_prices 改造测试（P5.2）
 - 净值列的非正形态过滤（#701）：0.0/负单价与坏值同族跳过，非正累计净值只丢这一列
 - 累计净值整段降级的写入侧保留（#704）：降级批次的冲突行不清空既有 accumulated_nav，
   而逐日缺值与合法空序列仍按既有语义写 NULL
+- 增量窗口下界的回看语义（#698）：下界 = min(MAX+1, MAX 往前第 N 个交易日)，
+  上游迟披露的中间空洞在下一次运行自动回填；日历不足三档降级不抛错
 """
 import logging
 
@@ -23,12 +25,14 @@ from sqlalchemy.orm import Session
 
 from app.models.price_record import PriceRecord
 from app.models.product import Product
+from app.models.trading_calendar import TradingCalendar
 from decimal import Decimal
 
 from app.services.market_data_service import (
     sync_product_prices, _normalize_raw, _bulk_upsert_prices,
     _mark_failed, _mark_skipped, _usable_price, _usable_nav,
     _derive_otc_pct_change, _db_prev_accum_nav, _optional_pct, get_nav_coverage,
+    resolve_incremental_start_date, NAV_LOOKBACK_TRADING_DAYS,
 )
 
 MARKET_DATA_LOGGER = "app.services.market_data_service"
@@ -487,11 +491,12 @@ class TestHkMutualNavFailureIsLoud:
     def test_benign_empty_window_is_still_success(
         self, mock_fetch, test_db: Session
     ):
-        """上游这段确实没数据（周末/停市/尚未发布）→ 仍是 success + 「无新数据」。
+        """上游这段确实没数据（无效代码/该段历史被整段下架）→ 仍是 success + 「无新数据」。
 
-        这条是反向保险：`run_nav_sync` 的增量窗是 [本地最大+1, 昨天] 且只在 A 股交易日
-        跑，若照 #651 原文把空集一律判 failed，每个周一都会给健康产品记一次失败并写
-        system_error_log，噪音反过来淹没真故障。改判此处即测试先红。
+        这条是反向保险：若照 #651 原文把空集一律判 failed，每次运行都整段空的产品就会
+        天天被记失败并写 system_error_log，噪音反过来淹没真故障。#698 起增量窗含回看段，
+        已有本地历史的健康产品通常能从存量区间带回行，周末/停市窗基本不再走到这里；
+        放行判据本身不变。改判此处即测试先红。
         """
         mock_fetch.return_value = []
 
@@ -934,7 +939,8 @@ class TestAccumDegradedPreservesExisting:
     缺值是两件事：后者写 NULL 是既有语义（见
     `TestUpsertPctCoverage::test_resync_overwrites_pct_unconditionally`），刻意**不**改成
     全局「NULL 永不覆盖」；前者若不区分，一次上游抖动就能撤销已成功写入的历史累计净值，
-    而增量窗从本地最大 `price_date + 1` 起，不会回头自愈。
+    而增量窗只回看本地最大起最近十个交易日（#698），窗口滑过仍未修复的降级不再被回访，
+    不能指望「以后再自愈」。
     """
 
     @pytest.fixture(autouse=True)
@@ -1042,3 +1048,92 @@ class TestAccumDegradedPreservesExisting:
         assert _dec(self._row(test_db, date(2026, 9, 15)).accumulated_nav) == Decimal("3.7300")
         assert self._row(test_db, date(2026, 9, 16)).accumulated_nav is None
         assert result["accum_degraded"] is False
+
+
+class TestResolveIncrementalStartDate:
+    """#698 增量窗口下界 = min(MAX+1 自然日, MAX 往前第 N 个交易日)。
+
+    期望日期按种子日历「2025-01-01 起连续工作日」（tests/seed_base.py）推得；
+    种子日历形态若变动，本类日期需同步复核。
+    """
+
+    @staticmethod
+    def _seed_max(db, day):
+        db.add(PriceRecord(product_code="510300.SH", market="CN_EXCHANGE",
+                           price_date=day, unit_price=1.0, source="tushare"))
+        db.commit()
+
+    def test_lookback_lands_on_the_nth_trading_day_before_max(self, test_db, sample_etf_product):
+        assert NAV_LOOKBACK_TRADING_DAYS == 10  # 钉决策值，取值依据见常量注释（#698）
+        self._seed_max(test_db, date(2025, 6, 13))
+        # MAX=06-13（周五），严格早于它的第 10 个开市日：
+        # 06-12/11/10/09、06-06/05/04/03/02、05-30
+        assert resolve_incremental_start_date(test_db, "510300.SH", "CN_EXCHANGE") == date(2025, 5, 30)
+
+    def test_closed_days_are_skipped_when_counting_lookback(self, test_db, sample_etf_product):
+        self._seed_max(test_db, date(2025, 6, 13))
+        test_db.query(TradingCalendar).filter(
+            TradingCalendar.calendar_date == date(2025, 6, 9)
+        ).update({"is_open": False})
+        test_db.commit()
+        # 06-09 闭市后，第 10 个开市日再往前挪一格
+        assert resolve_incremental_start_date(test_db, "510300.SH", "CN_EXCHANGE") == date(2025, 5, 29)
+
+    def test_short_calendar_backfills_to_earliest_open_day(self, test_db, sample_etf_product):
+        """早于 MAX 的开市日不足 N 个：回看到日历尽头，不抛错（降级第二档）。"""
+        self._seed_max(test_db, date(2025, 1, 6))
+        # 01-06 之前只有 01-01/02/03 三个开市日
+        assert resolve_incremental_start_date(test_db, "510300.SH", "CN_EXCHANGE") == date(2025, 1, 1)
+
+    def test_no_open_day_before_max_falls_back_to_max_plus_one(self, test_db, sample_etf_product):
+        """MAX 前无任何开市日：退回旧口径 MAX+1，不抛 CALENDAR_NOT_SYNCED（降级第三档）。"""
+        self._seed_max(test_db, date(2025, 1, 1))
+        assert resolve_incremental_start_date(test_db, "510300.SH", "CN_EXCHANGE") == date(2025, 1, 2)
+
+    def test_product_without_price_records_keeps_start_none(self, test_db, sample_otc_product):
+        """新产品（无价格记录）保持 start=None 全量历史语义，与修复前一致。"""
+        assert resolve_incremental_start_date(test_db, "000300.OF", "CN_OTC") is None
+
+    @patch("app.services.market_data_service.get_fund_nav")
+    def test_hole_inside_lookback_is_backfilled_and_coverage_clears(
+        self, mock_nav, test_db, sample_otc_product
+    ):
+        """issue #698 验收第 1 条：中间独缺一个交易日，一次增量运行即回填、盘点清零。
+
+        模拟「迟披露」：D-2 与 D 已入库、D-1 迟到。回看下界恒 ≤ D-1（MAX=06-13 → 05-30），
+        打桩上游返回含 06-12；第二次重放同窗口行数不翻倍——写入幂等是本方案的前提。
+        """
+        _seed_price(test_db, "000300.OF", "CN_OTC", date(2025, 6, 11), unit=1.5, accum=1.5)
+        _seed_price(test_db, "000300.OF", "CN_OTC", date(2025, 6, 13), unit=1.53, accum=1.53)
+        test_db.commit()
+
+        mock_nav.return_value = [
+            {"trade_date": "20250611", "unit_nav": 1.5000, "accum_nav": 1.5000},
+            {"trade_date": "20250612", "unit_nav": 1.5200, "accum_nav": 1.5200},
+            {"trade_date": "20250613", "unit_nav": 1.5300, "accum_nav": 1.5300},
+        ]
+
+        start = resolve_incremental_start_date(test_db, "000300.OF", "CN_OTC")
+        assert start <= date(2025, 6, 12), "回看下界必须覆盖空洞日"
+
+        result = sync_product_prices(test_db, "000300.OF", "CN_OTC",
+                                     start_date=start, end_date=date(2025, 6, 13))
+        test_db.commit()
+        assert result["success"] is True
+
+        hole = test_db.query(PriceRecord).filter(
+            PriceRecord.product_code == "000300.OF",
+            PriceRecord.price_date == date(2025, 6, 12),
+        ).first()
+        assert hole is not None and _dec(hole.unit_price) == Decimal("1.5200")
+        coverage = get_nav_coverage(test_db, "000300.OF", "CN_OTC",
+                                    date(2025, 6, 11), date(2025, 6, 13))
+        assert coverage["missing_dates"] == []
+
+        sync_product_prices(test_db, "000300.OF", "CN_OTC",
+                            start_date=start, end_date=date(2025, 6, 13))
+        test_db.commit()
+        assert test_db.query(PriceRecord).filter(
+            PriceRecord.product_code == "000300.OF",
+        ).count() == 3, "重放同窗口不得翻倍"
+        assert mock_nav.call_count == 2, "每产品每次运行恒 1 次上游调用"
