@@ -130,6 +130,23 @@ NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不�
 重启遗留的未终态行由 `main.py` lifespan 的 `recover_orphan_task_executions()` 标
 `interrupted`（与 `sync_job` 的对偶回收同批落地，否则残留行会让该任务永久 409）。
 
+**单 active 锁不区分触发来源**：`submit_task` 的锁按 `task_code` + `status ∈
+(pending, running)` 计数，不带 `trigger_type` 过滤。因此**每日定时（cron）任务正在跑时，
+运维在页面/CLI 手动点「执行」同样会拿到 409 `TASK_ALREADY_RUNNING`**——这是防重的预期
+行为，不是故障。反方向仍有残留：手动任务跑着时 cron 到点仍会起第二条（调度侧只做
+MySQL `GET_LOCK` 挡调度器自身重入，不读本表），待单独评估。
+
+**锁是尽力而为、不是互斥量**：`submit_task` 的「查 count → 建 pending → commit」三步之间
+没有 DB 级互斥，毫秒级并发（双击、两个终端同时提交）理论上仍可能各起一份；生产
+`--workers 2` 下单个 worker 重启跑的 `recover_orphan_task_executions()` 也会误标另一
+worker 正在跑的行、提前松锁。两者都比 #714 之前（完全无保护）好，收紧需要 DB 级归属
+标记或唯一约束，暂沿用 `recover_orphan_jobs`（#592）的既有取舍。
+
+**手动任务与价格同步共享后台线程池**（`market_data_service._get_executor`，2 线程，
+`sync_worker_count`）：长回补 job 占满线程时，手动提交会停在 `pending`（前端「排队中」、
+CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `price-sync-*`，排障时勿被误导。
+
+
 **状态取值**：`pending` → `running` → `success` / `failed` / `partial_success` /
 `interrupted`。前两个是进行中，后四个是终态；`interrupted` 表示「未被执行体接管或
 进程重启打断」，不是任务自身失败，可重新触发。

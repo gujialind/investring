@@ -752,6 +752,13 @@ def recover_orphan_task_executions() -> int:
     接管，不回收就会**永久 409 掉该 code 的后续手动触发**——把「假失败」换成「永久拒绝」
     比原问题更糟。判据与 `recover_orphan_jobs` 一致（#592）：本函数只在启动期调用，此时
     线程池是全新的进程内单例，任何未终态行都不可能被执行，故无需时间阈值。
+
+    多 worker 取舍（与 `recover_orphan_jobs` 同族，成文接受、不视为缺陷）：生产为
+    `--workers 2`（backend/Dockerfile），任一 worker 重启都会跑本函数，它按 status 全表
+    扫描、不区分进程归属，故会把**另一个仍在运行的 worker** 正跑着的 running 行标成
+    `interrupted`，提前松开单 active 锁（此后同 code 可再投一份）。「单 worker 内任何未
+    终态行都不可能被执行」这句前提只在单进程成立；跨进程收紧需要 DB 级归属标记或时间
+    阈值，收益不抵复杂度，暂沿用 #592 的既有取舍。
     """
     from app.database import SessionLocal
 

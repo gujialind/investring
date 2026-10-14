@@ -59,6 +59,7 @@ def run(
 
     if state.get("status") == "success":
         success(data=state)
+        return
     error(
         "TASK_EXECUTION_NOT_SUCCESS",
         f"任务 {code} 执行终态为 {state.get('status')}",

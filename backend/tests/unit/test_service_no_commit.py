@@ -28,6 +28,7 @@ from app.models import (
     PortfolioValueSnapshot,
     PriceRecord,
     SyncJob,
+    TaskExecutionLog,
     TradingCalendar,
 )
 from app.services.market_data_service import ConflictError, submit_price_sync_job
@@ -190,6 +191,39 @@ class TestTaskSubmissionSessionOwnership:
         test_db.commit()
         with pytest.raises(ConflictError, match="已有价格同步任务在运行中"):
             submit_price_sync_job({"scope": "all"}, triggered_by="manual")
+
+    def test_submit_task_delivery_failure_marks_failed_not_pending(self, test_db, monkeypatch):
+        """submit_task（#714 手动异步投递入口）投递抛错 → 执行记录终态 failed。
+
+        与上面的 price_sync 版同型但对象是 TaskExecutionLog：这段收口是本次新增代码里
+        最容易在重构中丢失的一处（改成只 flush、或删掉 except 里的 status="failed"），
+        故单独钉住——failed 终态不再占单 active 锁，后续提交不被永久 409。
+        """
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value.submit.side_effect = RuntimeError("线程池已关闭")
+            with pytest.raises(RuntimeError, match="线程池已关闭"):
+                submit_task("log_cleanup")
+
+        log = test_db.query(TaskExecutionLog).order_by(TaskExecutionLog.id.desc()).first()
+        assert log.status == "failed"
+        assert log.error_message and "任务投递失败" in log.error_message
+        assert log.finished_at is not None
+
+        # 关键回归：failed 终态不再阻塞后续提交（pending 孤儿会永久 409）
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            second_id = submit_task("log_cleanup")
+        assert second_id > log.id
+
+    def test_submit_task_conflict_lock_rejects_when_active_row_exists(self, test_db, monkeypatch):
+        """submit_task 的单 active 锁：已有 pending/running 行时抛 ConflictError（409）。"""
+        patch_non_closing_session_local(monkeypatch, test_db)
+        test_db.add(TaskExecutionLog(task_code="log_cleanup", trigger_type="manual",
+                                     status="running"))
+        test_db.commit()
+        with pytest.raises(ConflictError, match="仍在执行中"):
+            submit_task("log_cleanup")
 
 
 def _setup_cash_snapshot(db, portfolio_code: str, snapshot_date: date, amount: float = 10000.0):

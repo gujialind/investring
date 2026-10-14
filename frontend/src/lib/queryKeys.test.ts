@@ -127,7 +127,12 @@ describe("queryKeys 全域工厂", () => {
       },
       {
         root: queryKeys.tasks.root,
-        keys: [queryKeys.tasks.list(), queryKeys.tasks.executions(), queryKeys.tasks.executions({ page: 1 })],
+        keys: [
+          queryKeys.tasks.list(),
+          queryKeys.tasks.executions(),
+          queryKeys.tasks.executions({ page: 1 }),
+          queryKeys.tasks.execution(7),
+        ],
       },
       { root: queryKeys.tradingCalendar.root, keys: [queryKeys.tradingCalendar.byYear(2026)] },
     ];
