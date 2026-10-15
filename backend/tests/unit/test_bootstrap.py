@@ -368,6 +368,13 @@ def test_lifespan_checks_before_runtime_writes_and_always_stops_started_schedule
     monkeypatch.setattr(main, "SessionLocal", session)
     monkeypatch.setattr(main, "init_scheduled_tasks", lambda db: calls.append("tasks"))
     monkeypatch.setattr(market_data_service, "recover_orphan_jobs", lambda: calls.append("recover"))
+    # #714：手动触发改异步后，未终态执行记录会占住同 code 的单 active 锁，
+    # 故任务侧回收同样属于启动期动作，且排在调度初始化之前。
+    from app.services import task_runner
+
+    monkeypatch.setattr(
+        task_runner, "recover_orphan_task_executions", lambda: calls.append("task_recover")
+    )
     monkeypatch.setattr(scheduler_service, "init_scheduler", start)
     monkeypatch.setattr(scheduler_service, "shutdown_scheduler", lambda: calls.append("stop"))
 
@@ -381,7 +388,7 @@ def test_lifespan_checks_before_runtime_writes_and_always_stops_started_schedule
     else:
         asyncio.run(run())
     assert calls == (["check"] if fail_at == "check" else
-                     ["check", "session", "tasks", "close", "recover", "scheduler"] +
+                     ["check", "session", "tasks", "close", "recover", "task_recover", "scheduler"] +
                      ([] if fail_at == "scheduler" else ["serve"]) + ["stop"])
 
 

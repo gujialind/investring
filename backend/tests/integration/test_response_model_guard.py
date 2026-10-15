@@ -96,8 +96,6 @@ WHITELIST: dict[tuple[str, str], str] = {
         "数据源列表，元素是脱敏 api_key 后的即席 dict（无 ORM 行泄漏）",
     ("PUT", "/api/system/data-sources/{name}"):
         "更新回执 dict（message/name/is_enabled），随数据源分支变化",
-    ("POST", "/api/system/tasks/{code}/run"):
-        "#406 刻意保持 message + 任务 runner 结果的动态键（log_cleanup 与其它任务两套形态）",
     # ---- 包装型：message + 既有 Response 嵌套，非单一模型 ----
     ("POST", "/api/subscriptions/{id}/confirm"):
         "回执 message + SubscriptionResponse 嵌在 subscription 键，另平铺 8 个标量"

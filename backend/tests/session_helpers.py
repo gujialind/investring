@@ -2,8 +2,8 @@
 # 自持会话入口的测试替身 (session_helpers.py)
 # ============================================================================
 # 溯源：issue #592 方案 A——任务投递入口（submit_price_sync_job /
-#       submit_snapshot_recalc_job / recover_orphan_jobs）不再接受注入会话，
-#       改为自持 SessionLocal。
+#       submit_snapshot_recalc_job / submit_task / recover_orphan_jobs /
+#       recover_orphan_task_executions）不再接受注入会话，改为自持 SessionLocal。
 # 现状：app.database.SessionLocal 绑定 pytest 测试引擎，但工作在其**独立事务**里，
 #       真实 commit 会逃逸 test_db 的 SAVEPOINT 回滚、泄漏到后续用例（单 active 锁
 #       对残留 pending/running 行极敏感）。行为用例一律用

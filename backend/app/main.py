@@ -36,6 +36,11 @@ async def lifespan(app: FastAPI):
     from app.services.market_data_service import recover_orphan_jobs
     recover_orphan_jobs()
 
+    # #714：手动触发改为「提交 + 轮询」后，未终态的执行记录会占住同 code 的单 active
+    # 锁。进程崩溃遗留的 pending/running 行不会再被执行体接管，故启动期一并回收。
+    from app.services.task_runner import recover_orphan_task_executions
+    recover_orphan_task_executions()
+
     from app.services.scheduler_service import init_scheduler, shutdown_scheduler
     try:
         init_scheduler()

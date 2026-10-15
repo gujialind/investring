@@ -531,6 +531,7 @@ def run_task(
     db: Session,
     task_code: str,
     trigger_type: str = TRIGGER_MANUAL,
+    execution_id: Optional[int] = None,
 ) -> dict:
     """任务执行记录的单一编排入口（#406）：建 log → 跑任务 → 落终态。
 
@@ -550,6 +551,10 @@ def run_task(
       error_stack=traceback；异常原样上抛，交调用方决定 HTTP 映射（router → 500）。
     - 未知 task_code → 抛 NotFoundError，**不建 log 行**（没执行过的任务不该有执行记录）。
     - `task.last_run_at` 在任务真正执行后写入（成功与失败都写），未知 code 不写。
+
+    `execution_id`（#714）：手动异步路径接管 `submit_task` 预建的 pending 记录行，
+    不新建行——提交（pending）与真正开始执行（running）分两段，单 active 锁才有
+    可计数的对象。调度触发与既有同步调用都不传，行为逐字不变。
     """
     if task_code not in _TASK_DISPATCH:
         raise NotFoundError(
@@ -559,13 +564,28 @@ def run_task(
         )
 
     started_at = datetime.now()
-    log = TaskExecutionLog(
-        task_code=task_code,
-        trigger_type=trigger_type,
-        status="running",
-        started_at=started_at,
-    )
-    db.add(log)
+    if execution_id is None:
+        log = TaskExecutionLog(
+            task_code=task_code,
+            trigger_type=trigger_type,
+            status="running",
+            started_at=started_at,
+        )
+        db.add(log)
+    else:
+        log = (
+            db.query(TaskExecutionLog)
+            .filter(TaskExecutionLog.id == execution_id)
+            .first()
+        )
+        if log is None:
+            raise NotFoundError(
+                code="TASK_NOT_FOUND",
+                message=f"任务执行记录 {execution_id} 不存在",
+                details={"task_code": task_code},
+            )
+        log.status = "running"
+        log.started_at = started_at
     db.commit()
     db.refresh(log)
 
@@ -611,3 +631,153 @@ def run_task(
     if failure is not None:
         raise failure
     return result
+
+
+# ---------------------------------------------------------------------------
+# 手动触发投递入口（#714）
+# ---------------------------------------------------------------------------
+
+
+def submit_task(task_code: str, triggered_by: str = TRIGGER_MANUAL) -> int:
+    """提交后台任务执行，立即返回 TaskExecutionLog.id。
+
+    为什么需要它（#714）：`POST /api/system/tasks/{code}/run` 原先在请求内同步跑完任务，
+    请求寿命 = 任务时长，而 nginx `location /api/` 的 `proxy_read_timeout` 是 60s——
+    nav_sync 实测 162s 会被网关切断成 504，任务却在服务端照常成功，调用方只看到
+    「假失败」。改为提交 + 轮询后 HTTP 请求与任务时长解耦。
+
+    单 active 锁：同一 task_code 已有 pending/running 记录时抛 ConflictError。
+    此前手动路径**完全没有**并发保护（连击会并发跑两份 nav_sync，各自建一条记录），
+    调度侧的 MySQL `GET_LOCK`（scheduler_service）只挡调度、不挡 HTTP，故在此补上。
+
+    事务与 session（backend/AGENTS.md「分层目录与职责」节的任务投递入口口径，#592 方案 A）：
+    **自持 SessionLocal、不接受注入会话**——后台线程另开会话按 execution_id 取任务，
+    只 flush 会丢任务；正因这里必须 commit，才不得借用调用方的会话。
+    """
+    from app.context import get_request_id
+    from app.database import SessionLocal
+    from app.services.market_data_service import ConflictError, _get_executor
+
+    if task_code not in _TASK_DISPATCH:
+        raise NotFoundError(
+            code="TASK_NOT_FOUND",
+            message=f"未知任务: {task_code}",
+            details={"available_tasks": sorted(_TASK_DISPATCH)},
+        )
+
+    # 须在请求线程内读取，且早于投递（同 snapshot_recalc_job 的理由）
+    request_id = get_request_id()
+
+    db = SessionLocal()
+    try:
+        active = (
+            db.query(TaskExecutionLog)
+            .filter(
+                TaskExecutionLog.task_code == task_code,
+                TaskExecutionLog.status.in_(["pending", "running"]),
+            )
+            .count()
+        )
+        if active > 0:
+            raise ConflictError(
+                f"任务 {task_code} 仍在执行中，请等待上一次完成后再触发"
+            )
+
+        log = TaskExecutionLog(
+            task_code=task_code,
+            trigger_type=triggered_by,
+            status="pending",
+        )
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        execution_id = log.id
+
+        # 投递失败不得留下 pending 孤儿：单 active 锁计 pending+running，一行永不执行的
+        # pending 会此后 409 掉该 code 的所有提交，只有重启才清得掉。
+        # submit 抛出即任务从未入队，不会有执行体抢先改状态，此处改写终态无竞态。
+        try:
+            _get_executor().submit(
+                _run_task_in_background,
+                execution_id,
+                task_code,
+                triggered_by,
+                request_id,
+            )
+        except Exception as e:
+            log.status = "failed"
+            log.error_message = f"任务投递失败: {e}"[:ERROR_MESSAGE_MAX]
+            log.finished_at = datetime.now()
+            db.commit()
+            raise
+        return execution_id
+    finally:
+        db.close()
+
+
+def _run_task_in_background(
+    execution_id: int,
+    task_code: str,
+    trigger_type: str,
+    request_id: Optional[str] = None,
+) -> None:
+    """后台线程执行体：自持 Session，接管提交时预建的 pending 记录行。
+
+    上下文传播同 #405：绑定触发请求的 request_id，使任务日志可与该请求串联；
+    actor 刻意不传播——后台执行无请求主体。
+    """
+    from app.context import RequestContext, request_context_var
+    from app.database import SessionLocal
+
+    token = request_context_var.set(RequestContext(request_id=request_id))
+    db = SessionLocal()
+    try:
+        run_task(db, task_code, trigger_type=trigger_type, execution_id=execution_id)
+    except BaseException:
+        # run_task 已落终态（failed + error_message/error_stack）并 logger.error 带栈，
+        # 再原样上抛。这里不重复记录：Future 的异常默认无人 join、静默丢弃，
+        # 显式吞掉比留一条「看起来没处理」的歧义好。
+        pass
+    finally:
+        db.close()
+        request_context_var.reset(token)
+
+
+def recover_orphan_task_executions() -> int:
+    """启动时把遗留的 pending/running 执行记录标记为 interrupted（#714）。
+
+    与 `submit_task` 的单 active 锁配套：进程在提交后崩溃留下的未终态行不会再被执行体
+    接管，不回收就会**永久 409 掉该 code 的后续手动触发**——把「假失败」换成「永久拒绝」
+    比原问题更糟。判据与 `recover_orphan_jobs` 一致（#592）：本函数只在启动期调用，此时
+    线程池是全新的进程内单例，任何未终态行都不可能被执行，故无需时间阈值。
+
+    多 worker 取舍（与 `recover_orphan_jobs` 同族，成文接受、不视为缺陷）：生产为
+    `--workers 2`（backend/Dockerfile），任一 worker 重启都会跑本函数，它按 status 全表
+    扫描、不区分进程归属，故会把**另一个仍在运行的 worker** 正跑着的 running 行标成
+    `interrupted`，提前松开单 active 锁（此后同 code 可再投一份）。「单 worker 内任何未
+    终态行都不可能被执行」这句前提只在单进程成立；跨进程收紧需要 DB 级归属标记或时间
+    阈值，收益不抵复杂度，暂沿用 #592 的既有取舍。
+    """
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        orphans = (
+            db.query(TaskExecutionLog)
+            .filter(TaskExecutionLog.status.in_(["pending", "running"]))
+            .all()
+        )
+        for log in orphans:
+            reason = (
+                "提交后未被执行体接管" if log.status == "pending" else "可能上次崩溃遗留"
+            )
+            log.status = "interrupted"
+            log.error_message = (
+                (log.error_message or "")
+                + f" [启动时标记为 interrupted：{reason}]"
+            )[:ERROR_MESSAGE_MAX]
+            log.finished_at = datetime.now()
+        db.commit()
+        return len(orphans)
+    finally:
+        db.close()

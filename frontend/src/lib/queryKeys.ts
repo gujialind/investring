@@ -118,6 +118,7 @@ export const queryKeys = {
     root: ["tasks"] as const,
     list: () => ["tasks", "list"] as const,
     executions: (params?: unknown) => ["tasks", "executions", params] as const,
+    execution: (id: number | null) => ["tasks", "execution", id] as const,
   },
   tradingCalendar: {
     root: ["trading-calendar"] as const,

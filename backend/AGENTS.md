@@ -23,7 +23,7 @@
 
 * **领域异常统一**：service 抛 `app/services/exceptions.py::BusinessError`（携 `code`/`message`/`http_status`/`details`）；`main.py` 全局 handler 映射为 `JSONResponse{"detail": {"error": code, "message": message}}`（保持前端契约；默认 422、重复创建类 400、NOT\_FOUND 404）。service 内**禁止** import/抛 `HTTPException`。
 
-守门见 [test_service_no_commit.py](tests/unit/test_service_no_commit.py)：递归 AST 检查服务的 HTTPException 依赖（含别名、模块限定和嵌套导入）；既有普通 service 动态用例同时禁止注入会话 commit/rollback，保留 savepoint。**任务投递入口**（`submit_price_sync_job`、`submit_snapshot_recalc_job`）方向相反——它**必须** commit（后台线程另开会话按 job_id 取任务，只 flush 会丢任务），正因如此一律自持 `SessionLocal`、**不接受注入会话**（注入形态下的 commit 会连带提交调用方未提交的写入且 rollback 撤不回，#592 方案 A）；`test_service_no_commit.py::TestTaskSubmissionSessionOwnership` 同时钉住签名（不得重新出现 db/session 形参）、跨会话可见性与投递失败不留 pending 孤儿三条。
+守门见 [test_service_no_commit.py](tests/unit/test_service_no_commit.py)：递归 AST 检查服务的 HTTPException 依赖（含别名、模块限定和嵌套导入）；既有普通 service 动态用例同时禁止注入会话 commit/rollback，保留 savepoint。**任务投递入口**（`submit_price_sync_job`、`submit_snapshot_recalc_job`、`submit_task`）方向相反——它**必须** commit（后台线程另开会话按 job_id 取任务，只 flush 会丢任务），正因如此一律自持 `SessionLocal`、**不接受注入会话**（注入形态下的 commit 会连带提交调用方未提交的写入且 rollback 撤不回，#592 方案 A）；`test_service_no_commit.py::TestTaskSubmissionSessionOwnership` 同时钉住签名（不得重新出现 db/session 形参）、跨会话可见性与投递失败不留 pending 孤儿三条。
 
 * **面向用户的 `detail` 文案一律中文**（口径由 #664 定、#679 改鉴权与 500 兜底、#680 收尾 router 层 45 处）：`app/routers/**` 的裸字符串 `detail` 与结构化 `detail.message` 都是用户可见文案——前端 `frontend/src/lib/api/client.ts` 的 `detailMessage` 对裸字符串**原样透传**（刻意不建码→文案映射表：那是「哪些文案要翻译」这份清单的又一处不可见维护面），`ir-cli` 亦直出，所以后端写英文就等于界面写英文。新增端点不得写英文文案；404 用 `f"{对象} {code} 不存在"` 与 service 层 `NotFoundError` 逐字同形（标识符是用户输入的业务码时回显，DB 自增 id 用短形，如 `交易不存在`）；403 分两种语义不得混写——纯角色门槛是 `需要管理员权限`（`dependencies.py`），资源归属门是 `无权查看/操作该 X`。残余自查（从仓库根；两条各管一种右值形态，右值是变量调用时都不成立）：`grep -rn 'detail="' backend/app/routers/ | grep -vP 'detail="[^"]*[一-鿿]'` 与 `grep -rn 'detail=f"' backend/app/routers/ | grep -vP 'detail=f"[^"]*[一-鿿]'` 均应为空——#680 起 routers 有 26 处 `detail=f"`，只跑第一条会对其完全失明并给出假绿。守门：`tests/integration/test_router_error_locale.py`（表驱动逐站点断**整体响应体相等**；它一半是契约、一半是门禁——#680 实测只改文案时 45 处改动行仅 22% 被既有测试执行，`diff-cover --fail-under=80` 必红）。
 
@@ -77,7 +77,7 @@
 
 * **审计与系统错误**只经 `audit_service.record_audit` / `record_system_error`，不 commit；Core INSERT + 连接级 savepoint 的理由、失败隔离与载荷规则统一见[审计规范](../docs/reference/logging.md#logging-audit)。不要套用 auto_confirm 的 ORM savepoint。
   - **`system_error_log` 的覆盖面含 router 兜底**（#553）：`HTTPException` 由中间件链内侧就地渲染、冒不到全局 `Exception` handler，故 `app/routers/**` 里「`except Exception` → 抛 5xx」的分支**必须自己留痕**——统一走 `app/error_reporting.py::report_unexpected(e, operation=...)`（ERROR 带原异常堆栈 + 落 `system_error_log`，`error_type` 取原始异常类名；`raise` / `db.rollback()` 仍归调用点，错误码与响应契约不变）。**只给 catch-all 用**：`BusinessError` / `ValueError` 走全局 handler 的 WARNING 口径。守门：`tests/unit/test_catchall_logging_guard.py`（AST 扫 `app/routers/**`，缺出口即判红并点名 `文件:行`）+ `tests/integration/test_router_catchall_observability.py`（行为）。
-* **任务记录**只经 `task_runner.run_task`；这是分阶段提交的事务例外，session 归调用方、不 close。编排、跳过、NULL 语义与异常收口见[任务执行规范](../docs/reference/logging.md#logging-tasks)。
+* **任务记录**只经 `task_runner.run_task`；这是分阶段提交的事务例外，session 归调用方、不 close。手动触发经 `task_runner.submit_task` 提交即返（`pending` 行 + 线程池执行体接管后改 `running`，#714），进程重启遗留的未终态行由 `main.py` lifespan 的 `recover_orphan_task_executions()` 标 `interrupted`。编排、跳过、NULL 语义与异常收口见[任务执行规范](../docs/reference/logging.md#logging-tasks)。
 
 <a id="backend-models"></a>
 ### 1.4 数据模型与关键约束

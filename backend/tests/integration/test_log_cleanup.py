@@ -118,7 +118,21 @@ class TestCleanupOldLogsForeignKey:
 class TestLogCleanupRouter:
     """任务经 router 全程走通：不抛 500、任务日志记 success"""
 
-    def test_run_log_cleanup_marks_success(self, client, admin_headers, test_db):
+    def test_run_log_cleanup_marks_success(self, client, admin_headers, test_db, monkeypatch):
+        """router 全程走通：老化行真被删、本次运行记录落 success。
+
+        #714 后请求只负责投递，清理发生在执行体里，故捕获投递后同步调用执行体。
+        `deleted_logs` 响应键随同步契约一起退役——清理行数由执行记录的
+        records_total/records_success 承载（口径见 task_runner._derive_log_fields）。
+        """
+        from unittest.mock import MagicMock, patch
+
+        from tests.session_helpers import patch_non_closing_session_local
+
+        # 执行体与投递入口的自持会话都要重定向回 test_db：老化行尚在外层事务里，
+        # 独立会话看不见；重定向后 close() 归零、commit 原样，用例结束整体回滚。
+        patch_non_closing_session_local(monkeypatch, test_db)
+
         task = test_db.query(ScheduledTask).filter_by(code="log_cleanup").first()
         if task is None:
             task = ScheduledTask(code="log_cleanup", name="日志清理", is_enabled=True)
@@ -132,19 +146,28 @@ class TestLogCleanupRouter:
         ))
         test_db.commit()
 
-        resp = client.post("/api/system/tasks/log_cleanup/run", headers=admin_headers)
+        captured = []
+        executor = MagicMock()
+        executor.submit.side_effect = lambda fn, *a: captured.append((fn, a))
+        with patch("app.services.market_data_service._get_executor", return_value=executor):
+            resp = client.post("/api/system/tasks/log_cleanup/run", headers=admin_headers)
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["deleted_logs"]["task_logs"] == 1
-        assert body["deleted_logs"]["nav_sync_details"] == 1
-        assert body["deleted_logs"]["error_logs"] == 1
-        # 本次运行自己的任务日志是新行：保留且记 success
+        assert body["status"] == "pending"
+        assert len(captured) == 1, "清理应在执行体内发生，不在请求线程内"
+
+        fn, args = captured[0]
+        fn(*args)
+
+        assert test_db.query(TaskExecutionLog).filter_by(id=aged_parent.id).first() is None
+        # 本次运行自己的记录是新行：保留且记 success
         run_log = (
             test_db.query(TaskExecutionLog)
-            .filter_by(task_code="log_cleanup")
-            .order_by(TaskExecutionLog.id.desc())
-            .first()
+            .filter_by(id=body["execution_id"])
+            .one()
         )
-        assert run_log is not None
         assert run_log.status == "success"
+        # 3 = 1 条任务日志 + 1 条净值同步明细 + 1 条系统错误日志
+        assert run_log.records_total == 3
+        assert run_log.records_success == 3

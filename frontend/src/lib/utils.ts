@@ -297,6 +297,8 @@ const STATUS_BADGE_VARIANTS: Record<string, StatusBadgeVariant> = {
   running: "warning",
   partial_success: "warning",
   in_transit: "warning",
+  // #714：任务/作业被启动期回收标记为 interrupted，属"未完成"而非"失败"，取 warning
+  interrupted: "warning",
   failed: "destructive",
   error: "destructive",
   cancelled: "neutral",

@@ -6158,6 +6158,54 @@
         }
       }
     },
+    "/api/system/tasks/executions/{execution_id}": {
+      "get": {
+        "tags": [
+          "任务管理"
+        ],
+        "summary": "Get Task Execution",
+        "description": "按执行记录 id 查询单条状态（#714：手动触发后的轮询入口）。",
+        "operationId": "get_task_execution_api_system_tasks_executions__execution_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Execution Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskExecutionLogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/system/tasks/{code}/run": {
       "post": {
         "tags": [
@@ -6186,7 +6234,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TaskRunAcceptedResponse"
+                }
               }
             }
           },
@@ -14011,6 +14061,35 @@
           "name"
         ],
         "title": "TaskResponse"
+      },
+      "TaskRunAcceptedResponse": {
+        "properties": {
+          "execution_id": {
+            "type": "integer",
+            "title": "Execution Id"
+          },
+          "task_code": {
+            "type": "string",
+            "title": "Task Code"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "execution_id",
+          "task_code",
+          "status",
+          "message"
+        ],
+        "title": "TaskRunAcceptedResponse",
+        "description": "手动触发的异步回执（#714）：提交即返，终态经执行记录查询。\n\n刻意不回传任务结果字段（旧响应把 result dict 摊平进 body）——请求返回时任务\n还没跑完；执行进度与 records/error 一律看 GET /api/system/tasks/executions/{id}。"
       },
       "TradeCreate": {
         "properties": {

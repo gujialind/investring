@@ -12,13 +12,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Play, Pause, RotateCcw, Loader2 } from "lucide-react";
-import { useTaskList, useTaskExecutions, useRunTask, useEnableTask, useDisableTask } from "@/hooks/useTask";
+import { useTaskList, useTaskExecutions, useRunTask, useEnableTask, useDisableTask, useWatchedTaskExecution } from "@/hooks/useTask";
 import { usePortfolioList, useUpdatePortfolio } from "@/hooks/usePortfolio";
 import { formatDate, getStatusBadgeVariant } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import { useState } from "react";
 import type { Portfolio } from "@/types/portfolio";
+
+// 执行记录状态文案（#714：手动触发变为异步，故新增 pending / interrupted 两态）。
+// 徽章配色仍由 getStatusBadgeVariant 单点决定，这里只管措辞。
+const EXECUTION_STATUS_LABELS: Record<string, string> = {
+  pending: "排队中",
+  running: "执行中",
+  success: "成功",
+  failed: "失败",
+  partial_success: "部分成功",
+  interrupted: "已中断",
+};
 
 // 触发方式徽章（#406）：手动/自动是「来源」标识，无状态语义，故按
 // docs/design/visual-spec.md §1.3 末段用 neutral / outline，不占用 success/warning/destructive
@@ -63,6 +74,8 @@ export default function TasksContent() {
   const runTask = useRunTask();
   const enableTask = useEnableTask();
   const disableTask = useDisableTask();
+  // #714：提交后跟踪该执行记录直到终态（慢任务的成败只能在这时说）
+  const { track: trackExecution, runningCode } = useWatchedTaskExecution();
   const [pendingRunCode, setPendingRunCode] = useState<string | null>(null);
 
   const handleToggle = (code: string, isEnabled: boolean) => {
@@ -153,13 +166,28 @@ export default function TasksContent() {
                       {task.is_enabled ? "启用" : "禁用"}
                     </Badge>
                   </TableCell>
-                  <TableCell>{task.last_run_at ? formatDate(task.last_run_at) : "从未执行"}</TableCell>
+                  <TableCell>
+                    {runningCode === task.code ? (
+                      // #714：任务在后台跑，这里给一个进行中的显式信号（旧形态点完就阻塞在请求里）
+                      <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        执行中
+                      </span>
+                    ) : task.last_run_at ? (
+                      formatDate(task.last_run_at)
+                    ) : (
+                      "从未执行"
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => handleRun(task.code)}
-                      disabled={runTask.isPending}
+                      disabled={runTask.isPending || runningCode === task.code}
+                      aria-label={
+                        runningCode === task.code ? `${task.code} 执行中` : `执行 ${task.code}`
+                      }
                     >
                       <RotateCcw className="h-4 w-4" />
                     </Button>
@@ -219,7 +247,7 @@ export default function TasksContent() {
                     <TableCell className="font-medium">{exec.task_code}</TableCell>
                     <TableCell>
                       <Badge variant={getStatusBadgeVariant(exec.status)}>
-                        {exec.status === "success" ? "成功" : exec.status === "failed" ? "失败" : exec.status === "partial_success" ? "部分成功" : "运行中"}
+                        {EXECUTION_STATUS_LABELS[exec.status] ?? exec.status}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -256,7 +284,13 @@ export default function TasksContent() {
         description={`确定要立即执行任务 ${pendingRunCode} 吗？`}
         confirmText="执行"
         onConfirm={() => {
-          if (pendingRunCode) runTask.mutate(pendingRunCode);
+          if (pendingRunCode) {
+            const code = pendingRunCode;
+            // #714：run 只返回受理回执，拿 execution_id 才能跟踪到终态并出结果 toast
+            runTask.mutate(code, {
+              onSuccess: (accepted) => trackExecution(code, accepted.execution_id),
+            });
+          }
           setPendingRunCode(null);
         }}
       />
