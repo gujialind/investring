@@ -156,7 +156,25 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 | 取值 | 来源 |
 | --- | --- |
 | `manual` | 手动触发（`routers/tasks.py`） |
-| `scheduled` | 调度器自动运行（`scheduler_service`） |
+| `scheduled` | 调度器每日定时首跑（`scheduler_service`） |
+| `retry` | 定时首跑终态非 success 后的自动重试（`scheduler_service`，#715） |
+| `cascade` | 重试成功后联动补跑的当日快照（`scheduler_service`，#715） |
+
+**定时失败的有界自动重试（#715）**：`nav_sync` 每日 07:00 定时首跑（`scheduled`）终态
+为 `partial_success` / `failed` 时，`scheduler_service` 注册一个一次性 date job
+（`nav_sync_retry_<日期>_<序号>`，`replace_existing`）在 +2h 后重试，最多 3 次
+（`NAV_RETRY_MAX_ATTEMPTS`）；重试运行的 `trigger_type=retry`。重试直调 `run_task`
+（不经 `submit_task`），仍走 `_should_run_today` 的 MySQL `GET_LOCK` 闸门，多 worker 下
+只有抢到锁的那个执行——与 cron job 同一套互斥。job 存共享 jobstore 且
+`misfire_grace_time=None`，故进程重启跨过触发时刻后重试仍会发生。序号耗尽即停手、留记录
+交人工处置。**手动触发（`manual`）不重试**：终态检查只挂在 scheduled/retry 触发体上。
+
+**重试成功后的快照联动补跑（#715）**：重试运行终态为 `success` 时，查当日
+`snapshot_generate` 是否已有任一触发来源的 `success` 记录——没有则持
+`SNAPSHOT_GENERATE_LOCK` 调 `run_task(..., TRIGGER_CASCADE)` 补跑一次当日快照
+（`trigger_type=cascade`），已成功则跳过。联动自身失败不再追（交次日自愈）。仅「重试成功」
+触发联动，首跑即成功不触发。之所以需要它：`nav_sync` 失败会让 07:30 的
+`snapshot_generate` 因缺净值 fail-fast，若不补跑则当日组合估值滞后一整天。
 
 **跳过不是执行**：GET_LOCK 被别的进程持有、当日非交易日这两类跳过**不建记录**——
 否则每个非交易日为每条 job 各积一行无信息量的「未执行」噪音。
@@ -171,8 +189,10 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 | `error_stack` | 异常路径的 traceback |
 
 `records_*` 逐任务：`nav_sync` = 产品数 / 差额 / 失败产品数；`snapshot_generate` =
-处理组合数 / 差额 / `auto_confirm_failed` 条数；`trading_calendar_sync`、`log_cleanup`
-只填 total 与 success。
+处理组合数 / 差额 / `auto_confirm_failed` 条数 + `failed_portfolios` 条数（#715：
+fail-fast 中断回补的组合此前只落运行日志、终态仍 success，现计入失败并落
+`partial_success`，快照联动补跑据此判断「当日快照未成功」）；`trading_calendar_sync`、
+`log_cleanup` 只填 total 与 success。
 
 > **`records_failed` 为 NULL 表示「未度量」，不是「零失败」**。读侧（含前端与 CLI）不得
 > 把 NULL 折算成 0——本表的初衷就是消灭「恒 null 的摆设列」，那要求空值能表达「不知道」、
@@ -181,7 +201,7 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 ### 执行与事务边界
 
 - run_task 先建 running 行并 commit，再经 `_TASK_DISPATCH` 执行，按 `_derive_log_fields` 落终态并 commit。复用调用方 session、不 close；异常路径不 rollback（running 已落库），任务未提交业务由自身编排收口：run_nav_sync 逐产品 checkpoint、`_generate_snapshots_for_date` 逐日 rollback/commit。
-- trigger_type 使用 `TRIGGER_MANUAL` / `TRIGGER_SCHEDULED` 常量，不写字面量；跳过判定统一在 `scheduler_service._should_run_today`，两条 job 共用。
+- trigger_type 使用 `TRIGGER_MANUAL` / `TRIGGER_SCHEDULED` / `TRIGGER_RETRY` / `TRIGGER_CASCADE` 常量，不写字面量；跳过判定统一在 `scheduler_service._should_run_today`，两条 job 及重试触发体共用。重试参数（间隔 2h、上限 3 次）是 `scheduler_service` 模块常量，不做配置旋钮（#715）。
 - 归一的输入分别为 products_count/failed_products、portfolios_processed/auto_confirm_failed、synced_count、删除行数求和。#305 的 warnings / auto_confirm_failed 归并及 1000 字符摘要不改变。
 - 任务异常写 failed、str(e) 摘要与 traceback 后**原样上抛**，HTTP 映射留给 router/global handler；未知 task_code 抛 NotFoundError，不建执行行。
 - `run_nav_sync(db, log_id)` 的 log_id 必填，逐产品 NavSyncDetail 要挂父行；`run_snapshot_generate(db)` 没有逐日明细表，不添加无消费者的 log_id。

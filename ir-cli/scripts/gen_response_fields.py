@@ -73,6 +73,7 @@ NOTES_OVERRIDES = {
     "trade.list.cash_confirm_date": "读侧派生（按配对CASH腿）：买入=扣款日T、卖出=到账日A（缺省A=C）；null=无配对现金腿，CASH腿自身恒为null",
     "task.run": "提交即返的受理回执（#714）：status 恒为 pending，任务在服务端后台跑，不代表已执行完；进度与结果看 ir task execution <execution_id>",
     "task.execution.status": "pending/running=进行中；success/failed/partial_success/interrupted=终态（interrupted=进程重启导致未完成，可重新触发）",
+    "task.execution.trigger_type": "manual=手动；scheduled=定时首跑；retry=定时失败后自动重试（间隔2h、上限3次，#715）；cascade=重试成功后联动补跑当日快照（#715）",
 }
 
 # openapi 类型 → 缩写

@@ -120,6 +120,7 @@ RESPONSE_FIELDS: dict = {
             "shape": "object",
             "fields": "id:int,task_code:str,trigger_type:str?,status:str,started_at:datetime?,finished_at:datetime?,duration_ms:int?,records_total:int?,records_success:int?,records_failed:int?,error_message:str?,error_stack:str?,created_at:datetime?",
             "notes": {
+                "trigger_type": "manual=手动；scheduled=定时首跑；retry=定时失败后自动重试（间隔2h、上限3次，#715）；cascade=重试成功后联动补跑当日快照（#715）",
                 "status": "pending/running=进行中；success/failed/partial_success/interrupted=终态（interrupted=进程重启导致未完成，可重新触发）"
             }
         }

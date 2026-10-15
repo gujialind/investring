@@ -16,7 +16,9 @@ import pytest
 from app.services.exceptions import NotFoundError
 from app.services.task_runner import (
     ERROR_MESSAGE_MAX,
+    TRIGGER_CASCADE,
     TRIGGER_MANUAL,
+    TRIGGER_RETRY,
     TRIGGER_SCHEDULED,
     _TASK_DISPATCH,
     _derive_log_fields,
@@ -29,7 +31,17 @@ class TestTriggerTypeConstants:
 
     def test_values_fit_column_width(self):
         assert (TRIGGER_MANUAL, TRIGGER_SCHEDULED) == ("manual", "scheduled")
-        assert all(len(v) <= 20 for v in (TRIGGER_MANUAL, TRIGGER_SCHEDULED))
+        assert all(
+            len(v) <= 20
+            for v in (TRIGGER_MANUAL, TRIGGER_SCHEDULED, TRIGGER_RETRY, TRIGGER_CASCADE)
+        )
+
+    def test_retry_and_cascade_are_distinguishable_triggers(self):
+        """#715：重试与联动各自独立取值——同一 nav_sync/snapshot_generate 的多次运行
+        必须能从执行记录上分辨「定时首跑」「自动重试」「重试成功后的快照联动」。"""
+        values = (TRIGGER_MANUAL, TRIGGER_SCHEDULED, TRIGGER_RETRY, TRIGGER_CASCADE)
+        assert (TRIGGER_RETRY, TRIGGER_CASCADE) == ("retry", "cascade")
+        assert len(set(values)) == 4
 
 
 class TestDispatchCoverage:
@@ -260,6 +272,48 @@ class TestSnapshotGenerateDerivation:
             "warnings": [], "auto_confirm_failed": [],
         })
         assert (status, total, success, failed) == ("success", 0, 0, 0)
+
+    def test_failed_portfolios_is_partial_success_with_detail(self):
+        """#715：fail-fast 中断回补的组合计入 records_failed → partial_success，
+        error_message 带 组合@日期 与错误码，运维据此定位「当日快照未成功」。"""
+        status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 2,
+            "warnings": [], "auto_confirm_failed": [],
+            "failed_portfolios": [
+                {"portfolio_code": "P1", "date": "2025-09-02",
+                 "code": "MISSING_NAV", "error": "缺净值"},
+            ],
+        })
+        assert status == "partial_success"
+        assert (total, success, failed) == (2, 1, 1)
+        assert message == "快照生成失败: P1@2025-09-02 MISSING_NAV: 缺净值"
+
+    def test_failed_portfolios_and_auto_confirm_failed_are_both_counted(self):
+        """两类失败并存：records_failed 求和，error_message 分段（快照失败段在前）"""
+        status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 3,
+            "warnings": [],
+            "auto_confirm_failed": [{"code": "NEGATIVE_CASH", "error": "负现金"}],
+            "failed_portfolios": [
+                {"portfolio_code": "P1", "date": "2025-09-02",
+                 "code": "MISSING_NAV", "error": "缺净值"},
+            ],
+        })
+        assert status == "partial_success"
+        assert (total, success, failed) == (3, 1, 2)
+        assert message == "快照生成失败: P1@2025-09-02 MISSING_NAV: 缺净值 | NEGATIVE_CASH: 负现金"
+
+    def test_failed_portfolios_message_truncated_to_1000(self):
+        many = [
+            {"portfolio_code": "P" * 20, "date": "2025-09-02",
+             "code": "MISSING_NAV", "error": "x" * 100}
+            for _ in range(50)
+        ]
+        _, _, _, _, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1, "warnings": [], "auto_confirm_failed": [],
+            "failed_portfolios": many,
+        })
+        assert len(message) == ERROR_MESSAGE_MAX
 
 
 class TestOtherTaskDerivation:
