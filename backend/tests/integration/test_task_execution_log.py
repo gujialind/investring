@@ -95,8 +95,8 @@ class TestManualTrigger:
         # >= 0 时丢掉了它，恒 0 的缺陷从此无人拦），区间判据守住「与落库两列量级自洽」。
         assert log.duration_ms is not None
         # > 0 而非 >= 0：即便 sync_product_prices 被 mock，run_nav_sync 仍对每个产品做真实
-        # DB I/O（SELECT max(price_date) + INSERT NavSyncDetail），派发不会亚毫秒——
-        # 与 TestScheduledTrigger 同口径的那条断言一致。
+        # DB I/O（SELECT max(price_date) + 回看窗日历查询，#698 + INSERT NavSyncDetail），
+        # 派发不会亚毫秒——与 TestScheduledTrigger 同口径的那条断言一致。
         assert log.duration_ms > 0
         wall_ms = int((log.finished_at - log.started_at).total_seconds() * 1000)
         assert _duration_matches_wall_clock(log.duration_ms, wall_ms)

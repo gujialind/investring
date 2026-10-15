@@ -117,10 +117,9 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
     已落库、既有 accumulated_nav 已保留，不计入 `failed_products`，但经
     `_derive_log_fields` 落到任务终态的 error_message 上，避免与完全正常的成功同形。
     """
-    from app.services.market_data_service import sync_product_prices, ACCUM_DEGRADED_NOTE
-    from app.models.trading_calendar import TradingCalendar
-    from app.models.price_record import PriceRecord
-    from sqlalchemy import func
+    from app.services.market_data_service import (
+        sync_product_prices, resolve_incremental_start_date, ACCUM_DEGRADED_NOTE,
+    )
 
     target_date = (datetime.now().date() - timedelta(days=1))
 
@@ -144,11 +143,9 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
 
     for product in products:
         try:
-            latest = db.query(func.max(PriceRecord.price_date)).filter(
-                PriceRecord.product_code == product.code,
-                PriceRecord.market == product.market,
-            ).scalar()
-            start_date = (latest + timedelta(days=1)) if latest else None
+            # 下界含回看段，使上游迟披露的中间空洞在下一次运行自动回补（#698）；
+            # 单点实现见 resolve_incremental_start_date，与 _run_price_sync_job_impl 共用
+            start_date = resolve_incremental_start_date(db, product.code, product.market)
 
             result = sync_product_prices(
                 db=db,
@@ -216,7 +213,8 @@ def run_snapshot_generate(db: Session) -> dict:
     """执行组合快照生成任务（issue #156，自 run_nav_sync 剥离）。
 
     仅处理 active 且开启自动快照（auto_snapshot_enabled）的组合；依赖当日净值
-    同步先成功，缺净值将由快照校验 fail-fast 并记入日志（次日回补自愈）。
+    同步先成功，缺净值将由快照校验 fail-fast 并记入日志，回补后次日重试自然带出
+    （迟披露缺口的回补主体是 nav_sync 的回看窗，#698，不是本任务）。
 
     #305：返回值含逐日告警与自动确认失败条目，供手动触发响应与任务日志可见。
     #406：`portfolios_processed` 供任务执行记录归一为 records_total——快照链路

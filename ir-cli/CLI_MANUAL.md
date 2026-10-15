@@ -949,7 +949,7 @@ ir market sync <PRODUCT_CODE> <MARKET> [--start-date YYYY-MM-DD] [--end-date YYY
 
 #### `ir market sync-history`
 
-同步产品全部历史数据（不设下界，上界为今天；原文误作「近 90 天」，实现自始传 `start_date=None`）。需限定区间改用 `ir market sync --start-date/--end-date`。港互认自 #651 起按 `TotalCount` 分页取净，历史不再封顶在最近 1000 行。
+同步产品全部历史数据（不设下界，上界为今天；原文误作「近 90 天」，实现自始传 `start_date=None`）。需限定区间改用 `ir market sync --start-date/--end-date`；单日/少数日期缺失的定点回补也用它（#698），不要拿本命令治单日缺口。港互认自 #651 起按 `TotalCount` 分页取净，历史不再封顶在最近 1000 行。
 
 ```bash
 ir market sync-history <PRODUCT_CODE> <MARKET>
@@ -1106,7 +1106,7 @@ ir platform delete <CODE> --yes
 ir snapshot generate --portfolio-code <组合> --target-date YYYY-MM-DD
 ```
 
-> - 净值严格匹配（issue #96/#178，#228 起由产品 `nav_lag_days` 驱动）：取价日 = `nav_lag_days=0` 时的 target_date 当日净值，`nav_lag_days=N` 时的前第 N 个交易日净值（场外 QDII / 香港互认基金为 1，即 T-1）；禁止向前回退，任一持仓缺失即失败并返回 `MISSING_NAV`（错误信息按取价规则分组列出缺失产品与所需日期，形如 `[T=2025-06-10]` / `[T-1=2025-06-09]`），先用 `ir market sync-history <product_code> <market>` 回填净值后重试
+> - 净值严格匹配（issue #96/#178，#228 起由产品 `nav_lag_days` 驱动）：取价日 = `nav_lag_days=0` 时的 target_date 当日净值，`nav_lag_days=N` 时的前第 N 个交易日净值（场外 QDII / 香港互认基金为 1，即 T-1）；禁止向前回退，任一持仓缺失即失败并返回 `MISSING_NAV`（错误信息按取价规则分组列出缺失产品与所需日期，形如 `[T=2025-06-10]` / `[T-1=2025-06-09]`）。净值增量窗口自 #698 起含 10 个交易日回看，上游迟披露的缺口会在下一次 `ir task run nav_sync` 后自动回补；缺口更早或需即刻处理时，按错误信息点名的日期定点回补 `ir market sync <product_code> <market> --start-date <缺失日> --end-date <缺失日>` 后重试——不要用 `ir market sync-history` 治单日缺口，它不设下界、重刷全部历史
 > - `is_qdii` 不参与取价判断（纯展示标签）；交易确认侧仍恒取 T 日净值，不受 `nav_lag_days` 影响
 > - 生成失败不产生任何快照数据（目标日仍缺失，可修复数据后安全重试）
 > - **零快照防呆**（issue #180）：组合尚无任何快照且目标日之前已有确认交易时报 `SNAPSHOT_REQUIRES_RECALCULATE`（单日生成会漏掉早期到账记录），改用 `ir snapshot recalculate` 从最早确认日起逐日重建

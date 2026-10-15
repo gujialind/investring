@@ -3,7 +3,7 @@ run_nav_sync / run_snapshot_generate 测试（P5.4，#156 任务剥离）
 
 验证：
 - target_date = yesterday(T)（D3）
-- 增量起点 = MAX(date)+1
+- 增量起点 = resolve_incremental_start_date（MAX+1 与「MAX 往前第 N 个交易日」取早者，#698）
 - run_nav_sync 不再串联快照生成（无 snapshots_generated 键、不调 _generate_snapshots_for_date）
 - 无 ShareChangeEvent 写入（D1 跳过分红检测）
 - 累计净值整段降级的产品仍算 success，但进 degraded_products 且明细留痕（#704）
@@ -23,6 +23,7 @@ from app.models.task_execution_log import TaskExecutionLog
 from app.services.task_runner import (
     run_nav_sync, run_snapshot_generate, _generate_snapshots_for_date,
 )
+from app.services.market_data_service import resolve_incremental_start_date
 
 
 def _task_log_id(db) -> int:
@@ -60,12 +61,12 @@ class TestTargetDateYesterday:
 
 
 class TestIncrementalStart:
-    """增量起点 = MAX(date)+1"""
+    """增量起点 = resolve_incremental_start_date（#698：MAX+1 与回看日取早者）"""
 
     @patch("app.services.market_data_service.sync_product_prices")
     @patch("app.services.task_runner._generate_snapshots_for_date")
-    def test_start_date_from_max_date_plus_one(self, mock_snap, mock_sync, test_db):
-        """有历史数据时，start_date = MAX(date)+1"""
+    def test_start_date_is_the_shared_lookback_lower_bound(self, mock_snap, mock_sync, test_db):
+        """有历史数据时，窗口下界来自共享 helper，且不再是旧的 MAX+1。"""
         yesterday = datetime.now().date() - timedelta(days=1)
         day_before = yesterday - timedelta(days=1)
 
@@ -86,7 +87,36 @@ class TestIncrementalStart:
             if c.kwargs.get("product_code") == "510300.SH"
         )
         passed_start_date = target_call.kwargs.get("start_date")
-        assert passed_start_date == day_before + timedelta(days=1)
+        # 等于单点实现：任一处绕过 helper 自行 MAX+1 即红（强于两调用点互比）
+        assert passed_start_date == resolve_incremental_start_date(
+            test_db, "510300.SH", "CN_EXCHANGE"
+        )
+        # 钉住回看语义：下界须与已存日期重叠。helper 若哪天退回 MAX+1，本断言即失败
+        assert passed_start_date <= day_before, "回看段须重叠库内最近 N 个交易日，#698 不得复发"
+
+    @patch("app.services.market_data_service.sync_product_prices")
+    @patch("app.services.task_runner._generate_snapshots_for_date")
+    def test_sync_called_once_per_product(self, mock_snap, mock_sync, test_db):
+        """#698 验收第 6 条的断言级证据：窗口放宽不增加调用——恒 1 次/产品/运行。"""
+        mock_sync.return_value = {"success": True, "synced_count": 0, "source": "tushare"}
+
+        result = run_nav_sync(test_db, _task_log_id(test_db))
+
+        assert mock_sync.call_count == result["products_count"]
+
+    @patch("app.services.market_data_service.sync_product_prices")
+    @patch("app.services.task_runner._generate_snapshots_for_date")
+    def test_product_without_history_still_passes_start_none(self, mock_snap, mock_sync, test_db):
+        """新产品（无价格记录）保持 start=None 全量历史语义，不受回看改动影响。"""
+        mock_sync.return_value = {"success": True, "synced_count": 0, "source": "tushare"}
+
+        run_nav_sync(test_db, _task_log_id(test_db))
+
+        otc_call = next(
+            c for c in mock_sync.call_args_list
+            if c.kwargs.get("product_code") == "000300.OF"
+        )
+        assert otc_call.kwargs.get("start_date") is None
 
 
 class TestNoShareChangeEvent:
