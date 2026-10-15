@@ -301,6 +301,10 @@ test.describe("平台详情页", () => {
     await expect(rows.nth(2)).toContainText(/现金 · 申赎确认/);
     // Blocker 1 回归：pending 场外价格不应渲染成 0.0000
     await expect(card).not.toContainText("0.0000");
+    // #719：本卡取数只按平台过滤（不带产品条件）→ 现金腿**今天就在**这张卡里，是三处卡片中
+    // 最早会自己踩到 `-- @ 1.0000` 的那一处。文案虽收敛到 tradeCardDetailLine 单点，但谁在
+    // 本文件把判据改回 `shares !== undefined` 都不会让另两处卡片的断言变红，故在此单独钉住。
+    await expect(card).not.toContainText("-- @");
     await expect(card.getByRole("link", { name: "查看全部" })).toHaveAttribute(
       "href",
       new RegExp(`/trades\\?platform=HBZQ`)
