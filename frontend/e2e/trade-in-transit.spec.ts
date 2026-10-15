@@ -811,9 +811,12 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // 移动端筛选栏默认折叠，先展开（桌面端 no-op，#383 口径）
     await openFilterPanelIfMobile(page, testInfo);
     // 孤儿行造法 = 状态筛选收窄到「已确认」：买入组里基金腿 pending 被滤掉、
-    // confirmed 扣款腿单独成行 → 现金孤儿行（现金 · 调仓）。**不能按产品 = CASH
-    // 筛选**：/api/products 默认排除虚拟产品（#327，CASH/IN_TRANSIT 不可交易），
-    // 产品筛选弹层永远列不出 CASH——这是组件刻意行为，不是数据缺失。
+    // confirmed 扣款腿单独成行 → 现金行（现金 · 调仓）。#719 后产品筛选里 CASH 已可选，
+    // 但本用例**故意不走那条链路**：它钉的是「这条现金腿自己不该有生命周期按钮」，
+    // 与后端读侧派生无关；改用产品 = CASH 会让判据顺带依赖 `paired_leg` 的填充
+    // （派生子行的形态由 trade-cash-pairing.spec.ts 覆盖）。主行仍标「现金 · 调仓」：
+    // 派生 pair 的主行保留来源标注，产品列不换「现金类资产」（见 TradesContent 的
+    // `keepCashSourceLabel`）。
     const statusTrigger = page.getByRole('combobox').filter({ hasText: '全部状态' });
     const confirmedOption = page.getByRole('option', { name: '已确认' });
     await openPopover(page, statusTrigger, confirmedOption);

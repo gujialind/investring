@@ -15,6 +15,7 @@ import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/ap
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import { navBasisLabels } from "@/lib/navBasis";
+import { cashRowLabel, isCashLeg, tradeCardDetailLine } from "@/lib/tradePairs";
 import {
   cn,
   formatCurrency,
@@ -463,16 +464,24 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                     style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
                   />
                   <span className="truncate">
-                    {TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type}
-                    {" · "}
-                    {trade.platform_code
-                      ? (platformNameMap.get(trade.platform_code) ?? trade.platform_code)
-                      : "--"}
+                    {/* 现金腿：主行是产品页，平台列才是变量 → 用资金流向 + 本平台
+                        （#719；列表主行仍走 §5.8 的 cashOrphanLabel 来源口径） */}
+                    {isCashLeg(trade)
+                      ? cashRowLabel(
+                          trade,
+                          trade.platform_code
+                            ? platformNameMap.get(trade.platform_code)
+                            : undefined
+                        )
+                      : `${TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type} · ${
+                          trade.platform_code
+                            ? (platformNameMap.get(trade.platform_code) ?? trade.platform_code)
+                            : "--"
+                        }`}
                   </span>
                 </div>
-                <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
-                  {trade.shares !== undefined && `${formatSharesUnit(trade.shares)} @ ${formatNav(trade.price)} · `}
-                  {formatDate(trade.trade_date)}
+                <div className="truncate text-xs text-muted-foreground tabular-nums">
+                  {tradeCardDetailLine(trade, platformNameMap)}
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-0.5">

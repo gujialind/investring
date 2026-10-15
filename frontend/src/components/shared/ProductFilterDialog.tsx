@@ -114,6 +114,10 @@ export default function ProductFilterDialog({
     style_code: dimFilters.style,
     size_code: dimFilters.size,
     segment_code: dimFilters.segment,
+    // #719 收掉既有死选项：类型下拉里的「现金」自 #327 起被虚拟产品默认排除挡住 → 恒空。
+    // 只在**选中现金这一档**时显式带虚拟产品（AND 语义下只会命中 CASH 一条）；
+    // 无条件传 true 会连带放进 3 条在途虚拟产品（从不出现在 trade 表）→ 再造 3 个死选项。
+    include_virtual: productType === "CASH" || undefined,
   });
   const resultItems = useMemo(() => data?.items ?? [], [data?.items]);
 
