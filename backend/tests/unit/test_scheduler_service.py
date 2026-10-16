@@ -15,15 +15,24 @@
 #    真实 MySQL 上的 GET_LOCK 语义由 CI 的 backend-test-mysql job 覆盖。
 # ============================================================================
 
-from datetime import date
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from app.models.scheduled_task import ScheduledTask
 from app.models.task_execution_log import TaskExecutionLog
 from app.services import scheduler_service
-from app.services.task_runner import TRIGGER_SCHEDULED, _TASK_DISPATCH, run_task
+from app.services.task_runner import (
+    TRIGGER_CASCADE,
+    TRIGGER_MANUAL,
+    TRIGGER_RETRY,
+    TRIGGER_SCHEDULED,
+    _TASK_DISPATCH,
+    run_task,
+)
 
 
 def _acquired(value: int) -> MagicMock:
@@ -283,3 +292,508 @@ class TestTriggerBodyRuns:
         log = test_db.query(TaskExecutionLog).one()
         assert log.trigger_type == "scheduled"
         assert log.records_total == result["products_count"]
+
+
+# ============================================================================
+# nav_sync 有界自动重试 + 快照联动补跑（issue #715）
+# ============================================================================
+
+
+class _FakeScheduler:
+    """捕获 add_job 调用的调度器替身：timezone 必须是真 tzinfo（datetime.now 要用）。"""
+
+    def __init__(self):
+        self.timezone = ZoneInfo("Asia/Shanghai")
+        self.jobs = []  # [(func, kwargs), ...]
+
+    def add_job(self, func, **kwargs):
+        self.jobs.append((func, kwargs))
+
+
+def _session_with_locks(test_db, decisions):
+    """只拦截 GET_LOCK/RELEASE_LOCK 的会话替身，query/add/commit 全走真实实现。
+
+    用于 `_maybe_cascade_snapshot`：它要对 TaskExecutionLog 做真实计数查询、经
+    run_task 真实落库，同时又要 SQLite 上并不存在的 GET_LOCK 互斥。execute 替身只
+    接这两条锁 SQL，其余原样委托真实 `Session.execute`（与 `_run_trigger` 同源）。
+    """
+    counter = {"get": 0, "release": 0}
+    handler = _lock_handler(decisions, counter)
+
+    class _LockSession(type(test_db)):
+        def execute(self, *args, **kwargs):
+            return handler(self, *args, **kwargs)
+
+    db = _LockSession(bind=test_db.get_bind())
+    patches = [patch.object(_LockSession, "close")]
+    for p in patches:
+        p.start()
+    return db, counter, patches
+
+
+class TestMaybeScheduleNavRetry:
+    """`_maybe_schedule_nav_retry`：终态判定 + 有界序号 + 一次性 date job 参数形态"""
+
+    def test_success_does_not_schedule(self, monkeypatch):
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        assert scheduler_service._maybe_schedule_nav_retry("success", attempt=1) is False
+        assert fake.jobs == []
+
+    def test_partial_success_registers_bounded_date_job(self, monkeypatch):
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        before = datetime.now(fake.timezone)
+        assert scheduler_service._maybe_schedule_nav_retry("partial_success", attempt=1) is True
+
+        func, kwargs = fake.jobs[0]
+        assert func is scheduler_service._trigger_nav_sync_retry
+        assert kwargs["trigger"] == "date"
+        assert kwargs["jobstore"] == "default"          # 持久化 → 重启存活
+        assert kwargs["replace_existing"] is True        # 确定性 id 去重
+        assert kwargs["misfire_grace_time"] is None      # 停机跨过触发时刻仍补跑
+        assert kwargs["args"] == [1]
+        assert kwargs["id"] == f"nav_sync_retry_{date.today().isoformat()}_1"
+        # run_date ≈ now + 2h（放宽下界，避免时钟抖动误判）
+        assert kwargs["run_date"] >= before + scheduler_service.NAV_RETRY_INTERVAL - timedelta(seconds=5)
+
+    def test_failed_status_also_schedules(self, monkeypatch):
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        assert scheduler_service._maybe_schedule_nav_retry("failed", attempt=3) is True
+        assert fake.jobs[0][1]["args"] == [3]
+
+    def test_attempts_bounded_at_max(self, monkeypatch):
+        """序号超过上限即停手，不再注册（有界，不无限打上游）"""
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        over = scheduler_service.NAV_RETRY_MAX_ATTEMPTS + 1
+        assert scheduler_service._maybe_schedule_nav_retry("partial_success", attempt=over) is False
+        assert fake.jobs == []
+
+    def test_no_scheduler_is_noop(self, monkeypatch):
+        """调度器未初始化（如测试期 SCHEDULER_ENABLED=false）时安静跳过，不崩"""
+        monkeypatch.setattr(scheduler_service, "_scheduler", None)
+        assert scheduler_service._maybe_schedule_nav_retry("partial_success", attempt=1) is False
+
+
+class TestFirstRunSchedulesRetry:
+    """首跑定时触发体：非全量成功 → 注册第 1 次重试；全量成功 → 不注册"""
+
+    def _task(self, test_db, code):
+        task = test_db.query(ScheduledTask).filter_by(code=code).first()
+        if task is None:
+            task = ScheduledTask(code=code, name=code, is_enabled=True)
+            test_db.add(task)
+            test_db.commit()
+        return task
+
+    def test_partial_first_run_schedules_attempt_1(self, test_db, monkeypatch):
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "products_count": 2, "failed_products": ["A.OF"],
+            "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        log = test_db.query(TaskExecutionLog).one()
+        assert log.trigger_type == TRIGGER_SCHEDULED
+        assert log.status == "partial_success"
+        assert len(fake.jobs) == 1
+        assert fake.jobs[0][1]["args"] == [1]
+
+    def test_success_first_run_schedules_nothing(self, test_db, monkeypatch):
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 2, "products_count": 2, "failed_products": [],
+            "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        assert test_db.query(TaskExecutionLog).one().status == "success"
+        assert fake.jobs == []
+
+
+class TestRetryTriggerBody:
+    """重试触发体：success → 联动快照；非 success → 注册下一次；耗尽 → 停手"""
+
+    def _task(self, test_db, code):
+        task = test_db.query(ScheduledTask).filter_by(code=code).first()
+        if task is None:
+            task = ScheduledTask(code=code, name=code, is_enabled=True)
+            test_db.add(task)
+            test_db.commit()
+        return task
+
+    def test_retry_success_writes_retry_log_and_cascades(self, test_db, monkeypatch):
+        self._task(test_db, "nav_sync")
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", _FakeScheduler())
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 2, "products_count": 2, "failed_products": [],
+            "target_date": date.today().isoformat(),
+        })
+
+        counter = _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(1),
+                               decisions=[1], calendar=MagicMock(is_open=True))
+
+        assert counter == {"get": 1, "release": 1}
+        log = test_db.query(TaskExecutionLog).one()
+        assert log.trigger_type == TRIGGER_RETRY == "retry"
+        assert log.status == "success"
+        cascade.assert_called_once()  # 全量成功 → 检查快照联动
+
+    def test_retry_partial_schedules_next_attempt(self, test_db, monkeypatch):
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "products_count": 2, "failed_products": ["A.OF"],
+            "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(1),
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        assert test_db.query(TaskExecutionLog).one().trigger_type == TRIGGER_RETRY
+        cascade.assert_not_called()          # 未全量成功不联动
+        assert len(fake.jobs) == 1
+        assert fake.jobs[0][1]["args"] == [2]  # 序号递增
+
+    def test_retry_gate_denied_warns_and_terminates_chain(self, test_db, monkeypatch, caplog):
+        """#715 复核 Suggestion：重试时刻闸门拒绝（锁被占/非交易日）→ 重试链静默终止是
+        本 PR 要消灭的「失败不可见」。断言：不落执行记录、不注册下一次、留一条 WARNING。"""
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        ran = []
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync",
+                            lambda db, log_id: ran.append(1) or {
+                                "synced_count": 0, "products_count": 0, "failed_products": []})
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="app.services.scheduler_service"):
+            _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(2),
+                         decisions=[0], calendar=MagicMock(is_open=True))  # 锁被占
+
+        assert ran == []                              # 未执行 nav_sync
+        assert fake.jobs == []                        # 未注册下一次重试
+        assert test_db.query(TaskExecutionLog).count() == 0
+        assert any("重试链终止" in r.message and "第 2 次" in r.message
+                   for r in caplog.records)
+
+    def test_retry_exhausted_stops(self, test_db, monkeypatch):
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", MagicMock())
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "products_count": 2, "failed_products": ["A.OF"],
+            "target_date": date.today().isoformat(),
+        })
+
+        last = scheduler_service.NAV_RETRY_MAX_ATTEMPTS
+        _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(last),
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        assert fake.jobs == []  # 第 last 次仍失败 → 尝试 last+1 超上限 → 停手
+
+
+class TestSnapshotCascade:
+    """联动补跑：当日快照已成功→跳过；未成功→补跑一次(cascade)；补跑失败→不再追"""
+
+    def _seed_snapshot_log(self, test_db, status, trigger=TRIGGER_SCHEDULED):
+        log = TaskExecutionLog(
+            task_code="snapshot_generate", trigger_type=trigger, status=status,
+            started_at=datetime.now(),
+        )
+        test_db.add(log)
+        test_db.commit()
+        return log
+
+    def test_already_succeeded_today_skips(self, test_db, monkeypatch):
+        self._seed_snapshot_log(test_db, "success")
+        called = []
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
+                            lambda db, log_id: called.append(1) or {
+                                "portfolios_processed": 0, "warnings": [], "auto_confirm_failed": []})
+
+        db, counter, patches = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert called == []                       # 未补跑
+        assert counter["get"] == 0                # 连快照锁都没取
+        assert test_db.query(TaskExecutionLog).count() == 1  # 只有种子行
+
+    def test_not_succeeded_today_cascades_once(self, test_db, monkeypatch):
+        self._seed_snapshot_log(test_db, "partial_success")  # 当日定时快照非成功
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", lambda db, log_id: {
+            "snapshots_generated": 1, "portfolios_processed": 1,
+            "warnings": [], "auto_confirm_failed": [],
+        })
+
+        db, counter, patches = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert counter == {"get": 1, "release": 1}  # 取/放快照锁各一次
+        cascade_logs = [
+            log for log in test_db.query(TaskExecutionLog).all()
+            if log.trigger_type == TRIGGER_CASCADE
+        ]
+        assert len(cascade_logs) == 1
+        assert cascade_logs[0].task_code == "snapshot_generate"
+        assert cascade_logs[0].status == "success"
+
+    def test_no_snapshot_log_today_cascades(self, test_db, monkeypatch):
+        """当日从未跑过快照（无记录）也视为「未成功」→ 补跑"""
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", lambda db, log_id: {
+            "snapshots_generated": 0, "portfolios_processed": 0,
+            "warnings": [], "auto_confirm_failed": [],
+        })
+
+        db, _counter, patches = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        cascade_logs = [
+            log for log in test_db.query(TaskExecutionLog).all()
+            if log.trigger_type == TRIGGER_CASCADE
+        ]
+        assert len(cascade_logs) == 1
+
+    def test_cascade_failure_does_not_recurse(self, test_db, monkeypatch):
+        """补跑自身失败：run_task 落 failed 并 re-raise，联动吞掉不追（只此一次）"""
+        def boom(db, log_id):
+            raise RuntimeError("快照依赖缺失")
+
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", boom)
+
+        db, counter, patches = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)  # 不抛
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert counter == {"get": 1, "release": 1}  # 失败仍释放锁
+        logs = test_db.query(TaskExecutionLog).all()
+        assert len(logs) == 1                        # 只有一次 cascade 记录，无二次
+        assert logs[0].trigger_type == TRIGGER_CASCADE
+        assert logs[0].status == "failed"
+
+    def test_snapshot_lock_held_defers_to_recheck(self, test_db, monkeypatch):
+        """快照锁被占（当日快照首跑仍在进行）→ 本次不并发补跑，但登记有界延迟复查，
+        不当作联动终态永久丢弃（#715 复核 Blocker）。"""
+        ran = []
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
+                            lambda db, log_id: ran.append(1) or {
+                                "portfolios_processed": 0, "warnings": [], "auto_confirm_failed": []})
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+
+        db, counter, patches = _session_with_locks(test_db, [0])  # GET_LOCK 返回 0
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert ran == []                        # 本次未补跑（不并发）
+        assert counter["get"] == 1
+        assert counter["release"] == 0          # 未取到锁不释放
+        assert test_db.query(TaskExecutionLog).count() == 0
+        # 登记了第 1 次延迟复查而非静默丢弃
+        assert len(fake.jobs) == 1
+        func, kwargs = fake.jobs[0]
+        assert func is scheduler_service._trigger_snapshot_cascade_recheck
+        assert kwargs["args"] == [1]
+        assert kwargs["id"] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+
+    def test_lock_held_recheck_runs_once_after_holder_fails(self, test_db, monkeypatch):
+        """时序①：锁持有者最终失败/部分成功 → 延迟复查（锁已释放）后恰好补跑一次 cascade。"""
+        self._seed_snapshot_log(test_db, "partial_success")  # 当日定时快照非成功
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", lambda db, log_id: {
+            "snapshots_generated": 1, "portfolios_processed": 1,
+            "warnings": [], "auto_confirm_failed": [],
+        })
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+
+        # 首次联动：锁被占（decisions=[0]）→ 只登记复查，不补跑
+        db0, c0, p0 = _session_with_locks(test_db, [0])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db0)
+        finally:
+            for p in reversed(p0):
+                p.stop()
+        assert len(fake.jobs) == 1
+        assert not [l for l in test_db.query(TaskExecutionLog).all()
+                    if l.trigger_type == TRIGGER_CASCADE]
+
+        # 复查触发（锁已释放，decisions=[1]）→ 重查当日仍无成功记录 → 补跑一次
+        db1, c1, p1 = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db1, recheck_attempt=1)
+        finally:
+            for p in reversed(p1):
+                p.stop()
+
+        cascade_logs = [l for l in test_db.query(TaskExecutionLog).all()
+                        if l.trigger_type == TRIGGER_CASCADE]
+        assert len(cascade_logs) == 1           # 恰好补跑一次
+        assert cascade_logs[0].status == "success"
+        assert c1 == {"get": 1, "release": 1}
+
+    def test_lock_held_recheck_skips_after_holder_succeeds(self, test_db, monkeypatch):
+        """时序②：锁持有者最终成功 → 复查时当日已有 success 记录 → 不补跑。"""
+        ran = []
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
+                            lambda db, log_id: ran.append(1) or {
+                                "portfolios_processed": 0, "warnings": [], "auto_confirm_failed": []})
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+
+        # 首次联动：锁被占 → 登记复查
+        db0, _c0, p0 = _session_with_locks(test_db, [0])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db0)
+        finally:
+            for p in reversed(p0):
+                p.stop()
+        assert len(fake.jobs) == 1
+
+        # 持锁的定时快照最终成功落库
+        self._seed_snapshot_log(test_db, "success")
+
+        # 复查触发：重查当日成功记录 → 跳过，连快照锁都不取，不补跑
+        db1, c1, p1 = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db1, recheck_attempt=1)
+        finally:
+            for p in reversed(p1):
+                p.stop()
+
+        assert ran == []
+        assert c1["get"] == 0
+        assert not [l for l in test_db.query(TaskExecutionLog).all()
+                    if l.trigger_type == TRIGGER_CASCADE]
+
+
+class TestMaybeScheduleSnapshotCascadeRecheck:
+    """`_maybe_schedule_snapshot_cascade_recheck`：有界序号 + 确定性 id 去重 + 一次性 date job 形态"""
+
+    def test_registers_bounded_date_job(self, monkeypatch):
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        before = datetime.now(fake.timezone)
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(1) is True
+
+        func, kwargs = fake.jobs[0]
+        assert func is scheduler_service._trigger_snapshot_cascade_recheck
+        assert kwargs["trigger"] == "date"
+        assert kwargs["jobstore"] == "default"          # 持久化 → 重启存活
+        assert kwargs["replace_existing"] is True        # 确定性 id 去重
+        assert kwargs["misfire_grace_time"] is None
+        assert kwargs["args"] == [1]
+        assert kwargs["id"] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert kwargs["run_date"] >= before + scheduler_service.SNAPSHOT_CASCADE_RECHECK_INTERVAL - timedelta(seconds=5)
+
+    def test_attempts_bounded_at_max(self, monkeypatch):
+        """序号超上限即停手，交次日自愈（有界，不无限复查）"""
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        over = scheduler_service.SNAPSHOT_CASCADE_RECHECK_MAX_ATTEMPTS + 1
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(over) is False
+        assert fake.jobs == []
+
+    def test_no_scheduler_is_noop(self, monkeypatch):
+        monkeypatch.setattr(scheduler_service, "_scheduler", None)
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(1) is False
+
+    def test_deterministic_id_dedups_same_day(self, monkeypatch):
+        """同日同序号重复登记 → 同一确定性 job id（多 worker 下只排一个，同日最多补跑一次）"""
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        scheduler_service._maybe_schedule_snapshot_cascade_recheck(1)
+        scheduler_service._maybe_schedule_snapshot_cascade_recheck(1)
+        ids = [kwargs["id"] for _func, kwargs in fake.jobs]
+        assert ids[0] == ids[1] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert all(kwargs["replace_existing"] for _f, kwargs in fake.jobs)
+
+
+class TestManualRunDoesNotRetry:
+    """手动触发不经调度重试：run_task 自身不注册重试（重试只在调度触发体上挂）"""
+
+    def test_manual_partial_success_schedules_nothing(self, test_db, monkeypatch):
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        task = test_db.query(ScheduledTask).filter_by(code="nav_sync").first()
+        if task is None:
+            test_db.add(ScheduledTask(code="nav_sync", name="nav_sync", is_enabled=True))
+            test_db.commit()
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "products_count": 2, "failed_products": ["A.OF"],
+            "target_date": date.today().isoformat(),
+        })
+
+        run_task(test_db, "nav_sync", trigger_type=TRIGGER_MANUAL)
+
+        assert test_db.query(TaskExecutionLog).one().status == "partial_success"
+        assert fake.jobs == []  # run_task 不挂重试逻辑
+
+
+class TestRetryJobPersistence:
+    """重启存活：重试 job 落持久化 JobStore，新调度器实例能读回"""
+
+    def test_retry_job_survives_scheduler_restart(self, tmp_path, monkeypatch):
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
+        url = f"sqlite:///{tmp_path / 'jobs.db'}"
+        job_id = f"nav_sync_retry_{date.today().isoformat()}_1"
+
+        def make_scheduler():
+            return BackgroundScheduler(
+                jobstores={"default": SQLAlchemyJobStore(url=url)},
+                timezone="Asia/Shanghai",
+            )
+
+        s1 = make_scheduler()
+        s1.start()
+        try:
+            monkeypatch.setattr(scheduler_service, "_scheduler", s1)
+            assert scheduler_service._maybe_schedule_nav_retry("partial_success", 1) is True
+            assert s1.get_job(job_id) is not None
+        finally:
+            s1.shutdown(wait=False)
+
+        # 模拟进程重启：全新调度器实例连同一 JobStore，应能读回未触发的重试 job
+        s2 = make_scheduler()
+        s2.start()
+        try:
+            assert s2.get_job(job_id) is not None
+        finally:
+            s2.shutdown(wait=False)
+

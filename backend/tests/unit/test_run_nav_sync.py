@@ -271,6 +271,14 @@ class TestBackfillLoop:
         # 首日 09-02 失败即 break，不继续 09-03
         assert result["generated"] == 0
         assert mock_gen.call_count == 1
+        # #715：中断的组合进 failed_portfolios，使终态可判为 partial_success
+        #（此前只 logger.error，终态仍 success，联动补跑无从判断「当日快照未成功」）
+        assert len(result["failed_portfolios"]) == 1
+        entry = result["failed_portfolios"][0]
+        assert entry["portfolio_code"] == "BACKFILL_FAIL"
+        assert entry["date"] == date(2025, 9, 2).isoformat()
+        # 非 BusinessError → code 取异常类名（见 task_runner except 分支）
+        assert entry["code"] == "ValueError"
 
     @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
     @patch("app.services.snapshot_service.generate_daily_snapshots")
@@ -392,6 +400,33 @@ class TestRunSnapshotGenerate:
         mock_snap.assert_called_once()
         assert mock_snap.call_args.args[1] == yesterday
 
+    @patch("app.services.task_runner._generate_snapshots_for_date")
+    def test_failed_portfolios_surfaced_in_return(self, mock_snap, test_db):
+        """#715：回补层的 failed_portfolios 经 run_snapshot_generate 透传，
+        才能被 _derive_log_fields 归一为 partial_success（否则联动补跑判据永远为假）。"""
+        mock_snap.return_value = {
+            "generated": 0, "portfolios_processed": 1,
+            "warnings": [], "auto_confirm_failed": [],
+            "failed_portfolios": [
+                {"portfolio_code": "P1", "date": "2025-09-02",
+                 "code": "MISSING_NAV", "error": "缺净值"},
+            ],
+        }
+
+        result = run_snapshot_generate(test_db)
+
+        assert result["failed_portfolios"] == mock_snap.return_value["failed_portfolios"]
+
+    @patch("app.services.task_runner._generate_snapshots_for_date")
+    def test_missing_failed_portfolios_key_yields_empty_list(self, mock_snap, test_db):
+        """回补层返回历史形态（无 failed_portfolios 键）时不得炸，透传为空列表。"""
+        mock_snap.return_value = {
+            "generated": 0, "portfolios_processed": 0,
+            "warnings": [], "auto_confirm_failed": [],
+        }
+
+        assert run_snapshot_generate(test_db)["failed_portfolios"] == []
+
     @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
     @patch("app.services.snapshot_service.generate_daily_snapshots")
     def test_fail_fast_preserved_for_enabled_portfolio(self, mock_gen, mock_auto, test_db):
@@ -417,3 +452,5 @@ class TestRunSnapshotGenerate:
 
         assert result["generated"] == 0
         assert mock_gen.call_count == 1
+        # #715：中断组合进 failed_portfolios（终态可见），联动补跑据此判断当日快照未成功
+        assert [e["portfolio_code"] for e in result["failed_portfolios"]] == ["SNAP_FAIL"]

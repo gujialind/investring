@@ -33,8 +33,12 @@ logger = logging.getLogger(__name__)
 
 # 执行来源（task_execution_log.trigger_type，列宽 String(20)）。
 # 埋点处禁止写字面量：漏改一处会让前端「触发方式」列静默显示为空。
+# retry / cascade（#715）：定时 nav_sync 非全量成功后的自动重试、重试全量成功后
+# 对当日快照的联动补跑，与首跑 scheduled 在执行历史中可区分。
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULED = "scheduled"
+TRIGGER_RETRY = "retry"
+TRIGGER_CASCADE = "cascade"
 
 # error_message 落库上限（Text 列本身无界，此处按 #305 既有口径截断）
 ERROR_MESSAGE_MAX = 1000
@@ -220,6 +224,9 @@ def run_snapshot_generate(db: Session) -> dict:
     #406：`portfolios_processed` 供任务执行记录归一为 records_total——快照链路
     没有 NavSyncDetail 那样的逐日明细表，故此处不带 log_id 入参（曾有过的
     `log_id` 参数自始至终是死参数，已移除）。
+    #715：`failed_portfolios` 让 fail-fast（如缺净值 MISSING_NAV）在任务终态可见
+    （此前只落运行日志、终态仍 success），调度侧的快照联动补跑据此判断
+    「当日快照未成功」。
     """
     target_date = datetime.now().date() - timedelta(days=1)
     gen = _generate_snapshots_for_date(db, target_date)
@@ -228,6 +235,7 @@ def run_snapshot_generate(db: Session) -> dict:
         "portfolios_processed": gen["portfolios_processed"],
         "warnings": gen["warnings"],
         "auto_confirm_failed": gen["auto_confirm_failed"],
+        "failed_portfolios": gen.get("failed_portfolios") or [],
         "target_date": target_date.isoformat(),
     }
 
@@ -247,6 +255,9 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     ——告警逐条补 date 键；自动确认失败条目透传（含 code）。
     #406 增 `portfolios_processed`：进入逐日回补循环的组合数，供 records_total 归一
     （与 `generated` 不同——后者是「组合×日」的成功日数）。
+    #715 增 `failed_portfolios`：fail-fast 中断回补的组合条目（portfolio_code/date/
+    code/error），经 _derive_log_fields 落终态 partial_success——此前只 logger.error，
+    终态仍 success，调度侧无从判断「当日快照未成功」。
     """
     from app.services.snapshot_service import generate_daily_snapshots, auto_confirm_after_snapshot
     from app.services.exceptions import BusinessError
@@ -261,6 +272,7 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
         "portfolios_processed": 0,
         "warnings": [],
         "auto_confirm_failed": [],
+        "failed_portfolios": [],
     }
 
     # 调度回补把「日历到头」当合法控制流（#591）：用 try_* 显式探测，None 即无日可补。
@@ -306,8 +318,11 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
                 for w in gen_result.get("warnings") or []:
                     outcome["warnings"].append({**w, "date": current.isoformat()})
                 auto_results = auto_confirm_after_snapshot(db=db, portfolio_code=portfolio.code, snapshot_date=current)
+                # 附 portfolio_code：records_failed 按唯一组合去重计数需要组合身份
+                # （auto_confirm_failed 条目本身只带 subscription/event 粒度字段，#715 复核 Blocker）
                 outcome["auto_confirm_failed"].extend(
-                    r for r in auto_results if r.get("action") == "auto_confirm_failed"
+                    {**r, "portfolio_code": portfolio.code}
+                    for r in auto_results if r.get("action") == "auto_confirm_failed"
                 )
                 db.commit()
                 outcome["generated"] += 1
@@ -317,6 +332,14 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
                 logger.error(
                     f"组合 {portfolio.code} 于 {current} 快照生成失败: code={code}, error={str(e)}"
                 )
+                # #715：fail-fast 中断的组合落终态可见条目（此前只有上面这行运行日志，
+                # 任务终态仍 success，快照联动补跑无从判断当日快照是否真的成功）
+                outcome["failed_portfolios"].append({
+                    "portfolio_code": portfolio.code,
+                    "date": current.isoformat(),
+                    "code": code,
+                    "error": str(e),
+                })
                 break
             nxt = try_get_next_trading_day(db, current, days=1)
             if nxt is None:
@@ -465,8 +488,12 @@ def _derive_log_fields(
     - `nav_sync`：total=products_count、failed=len(failed_products)、success=差额，
       满足 total == success + failed；`degraded_products`（#704）不改 status/records
       （降级批次单位净值已同步），只落到 error_message；
-    - `snapshot_generate`：total=portfolios_processed、failed=len(auto_confirm_failed)、
-      success=差额；#305 的 warnings / auto_confirm_failed 归并语义与 1000 字符截断
+    - `snapshot_generate`：total=portfolios_processed（每组合 +1）、failed=出现失败的
+      **唯一组合数**（auto_confirm_failed 与 failed_portfolios 按 portfolio_code 去重，
+      #715 复核：三计数同单位，杜绝多日回补 × 每日多条自动确认失败、或同一组合既
+      auto_confirm_failed 又 failed_portfolios 时把 success 算成负数；fail-fast 中断
+      回补的组合计入失败 → 终态 partial_success）、success=差额；逐条失败明细仍留在
+      error_message；#305 的 warnings / auto_confirm_failed 归并语义与 1000 字符截断
       原样保留（原先写在 routers/tasks.py 的按 code 分支里）；
     - `trading_calendar_sync`：total=success=synced_count，failed 为 None
       （成功即写入的交易日数，「失败」无度量口径）；
@@ -493,18 +520,39 @@ def _derive_log_fields(
     if task_code == "snapshot_generate":
         warnings = result.get("warnings") or []
         failed_items = result.get("auto_confirm_failed") or []
+        failed_portfolios = result.get("failed_portfolios") or []
         total = result.get("portfolios_processed") or 0
-        error_message = None
-        if failed_items:
-            status = "partial_success"
-            summary = "; ".join(
-                f"{r.get('code', 'UNKNOWN')}: {r.get('error', '')}" for r in failed_items
+        # records_* 三计数同单位（唯一组合，#715 复核 Blocker）：failed 按出现失败的组合
+        # 去重计数——按事件求和会在多日回补/同组合多条失败时把 success 算成负数。逐条明细
+        # 仍留在 error_message。min(total) 兜住畸形输入（组合身份缺失或越界）下 failed 不
+        # 超过 total，保住 success 非负与 total == success + failed 守恒。
+        failed_codes = {
+            code
+            for code in (
+                r.get("portfolio_code") for r in (*failed_items, *failed_portfolios)
             )
+            if code is not None
+        }
+        failed_count = min(len(failed_codes), total)
+        error_message = None
+        if failed_items or failed_portfolios:
+            status = "partial_success"
+            segments = []
+            if failed_portfolios:
+                segments.append("快照生成失败: " + "; ".join(
+                    f"{r.get('portfolio_code', 'UNKNOWN')}@{r.get('date', '?')} "
+                    f"{r.get('code', 'UNKNOWN')}: {r.get('error', '')}"
+                    for r in failed_portfolios
+                ))
+            if failed_items:
+                segments.append("; ".join(
+                    f"{r.get('code', 'UNKNOWN')}: {r.get('error', '')}" for r in failed_items
+                ))
             if warnings:
-                summary += " | warnings: " + "; ".join(
+                segments.append("warnings: " + "; ".join(
                     w.get("type", "unknown") for w in warnings
-                )
-            error_message = summary[:ERROR_MESSAGE_MAX]
+                ))
+            error_message = " | ".join(segments)[:ERROR_MESSAGE_MAX]
         elif warnings:
             status = "success"
             error_message = (
@@ -512,7 +560,7 @@ def _derive_log_fields(
             )[:ERROR_MESSAGE_MAX]
         else:
             status = "success"
-        return status, total, total - len(failed_items), len(failed_items), error_message
+        return status, total, total - failed_count, failed_count, error_message
 
     if task_code == "trading_calendar_sync":
         synced = result.get("synced_count") or 0
