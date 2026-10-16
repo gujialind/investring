@@ -7,16 +7,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { useUIStore } from "@/stores/uiStore";
 import type { TaskExecution } from "@/types/log";
 
-// 定时任务列表 Hook（后端返回分页对象）
-export function useTaskList(params?: { page?: number; page_size?: number }) {
-  return useQuery({
-    queryKey: queryKeys.tasks.list(),
-    queryFn: () => taskApi.list(params),
-    staleTime: 10 * 1000,
-  });
-}
-
-// 全局执行历史 Hook
+// 全局执行历史 Hook（分页/过滤参数进 queryKey，换页换过滤即换键重取）
 export function useTaskExecutions(params?: {
   task_code?: string;
   page?: number;
@@ -119,38 +110,4 @@ function terminalToast(execution: TaskExecution, code: string) {
     title: "任务执行失败",
     message: execution.error_message || `任务 ${code} 执行失败`,
   };
-}
-
-// 启用任务 Hook
-export function useEnableTask() {
-  const queryClient = useQueryClient();
-  const addToast = useUIStore((state) => state.addToast);
-
-  return useMutation({
-    mutationFn: (code: string) => taskApi.enable(code),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.list() });
-      addToast({ type: "success", title: "启用成功", message: "任务已启用" });
-    },
-    onError: (error: unknown) => {
-      addToast({ type: "error", title: "操作失败", message: getErrorMessage(error, "请稍后重试") });
-    },
-  });
-}
-
-// 禁用任务 Hook
-export function useDisableTask() {
-  const queryClient = useQueryClient();
-  const addToast = useUIStore((state) => state.addToast);
-
-  return useMutation({
-    mutationFn: (code: string) => taskApi.disable(code),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.list() });
-      addToast({ type: "success", title: "禁用成功", message: "任务已禁用" });
-    },
-    onError: (error: unknown) => {
-      addToast({ type: "error", title: "操作失败", message: getErrorMessage(error, "请稍后重试") });
-    },
-  });
 }

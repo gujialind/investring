@@ -20,19 +20,17 @@ import {
 import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
 
 test.describe('页面渲染回归（防 P0 复发）', () => {
-  // 防 P0-2：taskApi.list 返回分页对象却按数组处理，导致 tasks.map is not a function 白屏
-  test('任务管理页应正常渲染，不出现客户端崩溃', async ({ page }) => {
-    const errors = collectPageErrors(page);
-
+  // #715：任务页（双端）下线，功能迁到设置页「日志管理」Tab 与产品页「批量净值同步」。
+  // 防回归：导航项与旧路由都不该复活（旧 P0-2「tasks.map 白屏」随页面删除已无载体）。
+  test('任务页已下线：侧边栏无「任务」项、/settings/tasks 不再渲染任务管理页（#715）', async ({
+    page,
+  }) => {
+    await page.goto('/dashboard');
+    // 桌面侧边栏（aside）无任务项；mobile 项目 aside 本就不渲染，count 0 恒成立
+    await expect(page.locator('aside a[href="/settings/tasks"]')).toHaveCount(0);
+    // 旧路由已删：standalone 落 not-found，绝不再出现「任务管理」标题
     await page.goto('/settings/tasks');
-
-    await expect(page.getByRole('heading', { name: '任务管理' })).toBeVisible();
-    // 页面内「定时任务」文本存在多处（标题/描述），用 heading 角色精确定位
-    await expect(page.getByRole('heading', { name: '定时任务' })).toBeVisible();
-    // 执行历史区必须渲染（可以是空态，但不能是崩溃）
-    await expect(page.getByText('执行历史')).toBeVisible();
-    await expect(page.getByText(/Application error/i)).toHaveCount(0);
-    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+    await expect(page.getByRole('heading', { name: '任务管理' })).toHaveCount(0);
   });
 
   // 防 P0-7：侧边栏曾有指向不存在页面的「日志」死链
@@ -268,6 +266,56 @@ test.describe('产品列表失败态（#663⑤）', () => {
     );
     await retry.click();
     await refetched;
+  });
+});
+
+// #715：任务页下线后，执行历史与 log_cleanup 手动触发迁到设置页「日志管理」Tab，
+// 批量净值同步迁到产品页。这里钉三件：读侧失败不伪装空态（口径①，照 nav-history 范例）、
+// 迁移后入口可达、批量同步按钮在产品页可见。E2E 只有 admin 会话，viewer 不可见由
+// AdminGuard / useRoleCheck 结构保证，不在此断。
+test.describe('日志管理 Tab 与批量同步迁移（#715）', () => {
+  test('登录日志读取失败 → 失败态而非「暂无登录日志」，重试真重发', async ({ page }) => {
+    // 判据限定 /api/system/logs/login：同页还会打 audit/error/executions 端点，
+    // 写宽了会以错误理由变红/变绿。scope 到卡内断言，避免命中 toast 等旁路文案。
+    await page.route(/\/api\/system\/logs\/login(\?|$)/, (route) =>
+      route.fulfill({
+        status: 500,
+        json: { detail: { error: 'INTERNAL', message: '登录日志服务暂不可用' } },
+      }),
+    );
+    await page.goto('/settings');
+    await page.getByRole('tab', { name: '日志管理' }).click();
+    const card = page.getByTestId('login-logs-card');
+    await expect(card).toContainText('加载失败：登录日志服务暂不可用', { timeout: 10_000 });
+    // 承重负向：失败不得伪装成空态（这是迁移前 TasksContent/日志读侧的病）
+    await expect(card).not.toContainText('暂无登录日志');
+    const retry = card.getByRole('button', { name: '重试' });
+    await expect(retry).toBeVisible();
+    // 必须在失败态可见后注册，否则 react-query 首取的自动重试会在「没点重试」时也命中
+    const refetched = page.waitForRequest(
+      (r) => r.method() === 'GET' && /\/api\/system\/logs\/login(\?|$)/.test(r.url()),
+      { timeout: 10_000 },
+    );
+    await retry.click();
+    await refetched;
+  });
+
+  test('执行历史子 Tab 可达：卡片、task 过滤、「立即清理」按钮均在（log_cleanup 迁移后入口）', async ({
+    page,
+  }) => {
+    await page.goto('/settings');
+    await page.getByRole('tab', { name: '日志管理' }).click();
+    await page.getByRole('tab', { name: '执行历史' }).click();
+    const card = page.getByTestId('executions-card');
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    // 只断 chrome（卡片 + 控件），不断行集：E2E 库执行记录可能为空，空态即 EmptyState
+    await expect(card.getByTestId('executions-task-filter')).toBeVisible();
+    await expect(card.getByTestId('log-cleanup-run')).toBeVisible();
+  });
+
+  test('产品页「批量净值同步」按钮可见（nav_sync 迁移后入口）', async ({ page }) => {
+    await page.goto('/products');
+    await expect(page.getByTestId('batch-nav-sync')).toBeVisible({ timeout: 10_000 });
   });
 });
 

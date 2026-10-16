@@ -54,6 +54,7 @@ import {
   useSyncProductPrice,
   useSyncProductHistory,
 } from "@/hooks/useProduct";
+import { useRunTask, useWatchedTaskExecution } from "@/hooks/useTask";
 
 interface ProductsContentProps {
   variant?: "desktop" | "mobile";
@@ -132,6 +133,21 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
     useProductList(listParams);
 
   const deleteProduct = useDeleteProduct();
+
+  // 批量净值同步（#715）：任务页下线后 nav_sync 的唯一 UI 入口迁到产品管理页。走
+  // POST /system/tasks/nav_sync/run（复用任务逻辑：增量 + 分红检测 + 执行记录落库），
+  // 不另接 sync-jobs/price，避免两条批量路径逻辑分叉。#714 提交即返 + 轮询终态，
+  // 进行中/结果反馈由 useWatchedTaskExecution 给出；409（TASK_ALREADY_RUNNING）与
+  // 400（disabled）经 useRunTask 的 onError → getErrorMessage toast 呈现后端消息，
+  // 不会被写成「同步失败」误文案。admin 门控由页面壳 AdminGuard 承担，组件内不再判角色。
+  const runTask = useRunTask();
+  const { track: trackExecution, runningCode } = useWatchedTaskExecution();
+  const navSyncRunning = runningCode === "nav_sync";
+  const handleBatchNavSync = () => {
+    runTask.mutate("nav_sync", {
+      onSuccess: (accepted) => trackExecution("nav_sync", accepted.execution_id),
+    });
+  };
 
   const products = data?.items || [];
   const total = data?.total ?? 0;
@@ -438,17 +454,32 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
             管理基金产品和数据源
           </p>
         </div>
-        <ProductFormDialog
-          open={isDialogOpen}
-          onOpenChange={setIsDialogOpen}
-          editingProduct={editingProduct}
-          trigger={
-            <Button onClick={() => setEditingProduct(null)}>
-              <Plus className="mr-2 h-4 w-4" />
-              添加产品
-            </Button>
-          }
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            data-testid="batch-nav-sync"
+            onClick={handleBatchNavSync}
+            disabled={runTask.isPending || navSyncRunning}
+          >
+            {navSyncRunning ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            批量净值同步
+          </Button>
+          <ProductFormDialog
+            open={isDialogOpen}
+            onOpenChange={setIsDialogOpen}
+            editingProduct={editingProduct}
+            trigger={
+              <Button onClick={() => setEditingProduct(null)}>
+                <Plus className="mr-2 h-4 w-4" />
+                添加产品
+              </Button>
+            }
+          />
+        </div>
       </div>
 
       {/* 移动端入口：分类矩阵管理页。lg:hidden 按**视口宽度**分流而非按端（桌面窄屏同样
