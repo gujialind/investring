@@ -318,8 +318,11 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
                 for w in gen_result.get("warnings") or []:
                     outcome["warnings"].append({**w, "date": current.isoformat()})
                 auto_results = auto_confirm_after_snapshot(db=db, portfolio_code=portfolio.code, snapshot_date=current)
+                # 附 portfolio_code：records_failed 按唯一组合去重计数需要组合身份
+                # （auto_confirm_failed 条目本身只带 subscription/event 粒度字段，#715 复核 Blocker）
                 outcome["auto_confirm_failed"].extend(
-                    r for r in auto_results if r.get("action") == "auto_confirm_failed"
+                    {**r, "portfolio_code": portfolio.code}
+                    for r in auto_results if r.get("action") == "auto_confirm_failed"
                 )
                 db.commit()
                 outcome["generated"] += 1
@@ -485,10 +488,13 @@ def _derive_log_fields(
     - `nav_sync`：total=products_count、failed=len(failed_products)、success=差额，
       满足 total == success + failed；`degraded_products`（#704）不改 status/records
       （降级批次单位净值已同步），只落到 error_message；
-    - `snapshot_generate`：total=portfolios_processed、failed=len(auto_confirm_failed)
-      + len(failed_portfolios)（#715：fail-fast 中断回补的组合计入失败，终态
-      partial_success）、success=差额；#305 的 warnings / auto_confirm_failed 归并
-      语义与 1000 字符截断原样保留（原先写在 routers/tasks.py 的按 code 分支里）；
+    - `snapshot_generate`：total=portfolios_processed（每组合 +1）、failed=出现失败的
+      **唯一组合数**（auto_confirm_failed 与 failed_portfolios 按 portfolio_code 去重，
+      #715 复核：三计数同单位，杜绝多日回补 × 每日多条自动确认失败、或同一组合既
+      auto_confirm_failed 又 failed_portfolios 时把 success 算成负数；fail-fast 中断
+      回补的组合计入失败 → 终态 partial_success）、success=差额；逐条失败明细仍留在
+      error_message；#305 的 warnings / auto_confirm_failed 归并语义与 1000 字符截断
+      原样保留（原先写在 routers/tasks.py 的按 code 分支里）；
     - `trading_calendar_sync`：total=success=synced_count，failed 为 None
       （成功即写入的交易日数，「失败」无度量口径）；
     - `log_cleanup`：total=success=删除总行数，failed 为 None（同上）。
@@ -516,7 +522,18 @@ def _derive_log_fields(
         failed_items = result.get("auto_confirm_failed") or []
         failed_portfolios = result.get("failed_portfolios") or []
         total = result.get("portfolios_processed") or 0
-        failed_count = len(failed_items) + len(failed_portfolios)
+        # records_* 三计数同单位（唯一组合，#715 复核 Blocker）：failed 按出现失败的组合
+        # 去重计数——按事件求和会在多日回补/同组合多条失败时把 success 算成负数。逐条明细
+        # 仍留在 error_message。min(total) 兜住畸形输入（组合身份缺失或越界）下 failed 不
+        # 超过 total，保住 success 非负与 total == success + failed 守恒。
+        failed_codes = {
+            code
+            for code in (
+                r.get("portfolio_code") for r in (*failed_items, *failed_portfolios)
+            )
+            if code is not None
+        }
+        failed_count = min(len(failed_codes), total)
         error_message = None
         if failed_items or failed_portfolios:
             status = "partial_success"

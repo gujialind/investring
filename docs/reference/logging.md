@@ -175,6 +175,12 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 （`trigger_type=cascade`），已成功则跳过。联动自身失败不再追（交次日自愈）。仅「重试成功」
 触发联动，首跑即成功不触发。之所以需要它：`nav_sync` 失败会让 07:30 的
 `snapshot_generate` 因缺净值 fail-fast，若不补跑则当日组合估值滞后一整天。
+**锁被占不是联动终态**（#715 复核 Blocker）：补跑前 `SNAPSHOT_GENERATE_LOCK` 被别的进程
+（当日定时快照首跑）持有时，不当场丢弃联动，而是登记一次性有界延迟复查
+（`snapshot_cascade_recheck_<日期>_<序号>`，间隔 15 分钟、上限 3 次，`replace_existing` +
+持久化 jobstore + `misfire_grace_time=None`，与重试 job 同手法）；复查时重查当日成功记录——
+持锁者最终成功则跳过、否则补跑。复查链由 `SNAPSHOT_GENERATE_LOCK` 跨进程互斥 + 当日成功
+记录判据收敛为**同日最多补跑一次**。
 
 **跳过不是执行**：GET_LOCK 被别的进程持有、当日非交易日这两类跳过**不建记录**——
 否则每个非交易日为每条 job 各积一行无信息量的「未执行」噪音。
@@ -189,9 +195,11 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 | `error_stack` | 异常路径的 traceback |
 
 `records_*` 逐任务：`nav_sync` = 产品数 / 差额 / 失败产品数；`snapshot_generate` =
-处理组合数 / 差额 / `auto_confirm_failed` 条数 + `failed_portfolios` 条数（#715：
-fail-fast 中断回补的组合此前只落运行日志、终态仍 success，现计入失败并落
-`partial_success`，快照联动补跑据此判断「当日快照未成功」）；`trading_calendar_sync`、
+处理组合数 / 差额 / **出现失败的唯一组合数**（`auto_confirm_failed` 与 `failed_portfolios`
+按 `portfolio_code` 去重，#715 复核：三计数同单位，杜绝多日回补 × 每日多条自动确认失败、
+或同一组合既 `auto_confirm_failed` 又 `failed_portfolios` 时把 success 算成负数；逐条明细
+仍留在 `error_message`。fail-fast 中断回补的组合此前只落运行日志、终态仍 success，现计入
+失败并落 `partial_success`，快照联动补跑据此判断「当日快照未成功」）；`trading_calendar_sync`、
 `log_cleanup` 只填 total 与 success。
 
 > **`records_failed` 为 NULL 表示「未度量」，不是「零失败」**。读侧（含前端与 CLI）不得

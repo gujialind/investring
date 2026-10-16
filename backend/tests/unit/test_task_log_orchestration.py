@@ -221,18 +221,65 @@ class TestSnapshotGenerateDerivation:
         assert "calendar_exhausted" in message
 
     def test_auto_confirm_failed_is_partial_success_with_codes(self):
-        """#305：有 auto_confirm_failed → partial_success，error_message 含逐条 code: error"""
+        """#305：有 auto_confirm_failed → partial_success，error_message 含逐条 code: error。
+        #715 复核：records_failed 按唯一组合计——两条失败分属两个组合 P1/P2 → failed=2。"""
         status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
             "portfolios_processed": 3,
             "warnings": [],
             "auto_confirm_failed": [
-                {"code": "MISSING_NAV", "error": "缺净值"},
-                {"code": "NEGATIVE_CASH", "error": "负现金"},
+                {"code": "MISSING_NAV", "error": "缺净值", "portfolio_code": "P1"},
+                {"code": "NEGATIVE_CASH", "error": "负现金", "portfolio_code": "P2"},
             ],
         })
         assert status == "partial_success"
         assert (total, success, failed) == (3, 1, 2)
+        assert 0 <= failed <= total and total == success + failed
         assert message == "MISSING_NAV: 缺净值; NEGATIVE_CASH: 负现金"
+
+    def test_same_portfolio_many_auto_confirm_failed_counts_once(self):
+        """#715 复核 Blocker 反例①：同一组合多日回补产生 50 条 auto_confirm_failed，
+        按事件求和会算出 success=-49；按唯一组合计 → failed=1、success 非负、守恒。"""
+        many = [{"code": "MISSING_NAV", "error": "x" * 100, "portfolio_code": "P1"}
+                for _ in range(50)]
+        status, total, success, failed, _ = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1, "warnings": [], "auto_confirm_failed": many,
+        })
+        assert status == "partial_success"
+        assert (total, success, failed) == (1, 0, 1)
+        assert 0 <= failed <= total and total == success + failed
+
+    def test_same_portfolio_in_both_failure_lists_counts_once(self):
+        """#715 复核 Blocker 反例②：同一组合既有 auto_confirm_failed 又有 failed_portfolios，
+        按事件求和会算出 success=-1；按唯一组合去重 → failed=1、success 非负、守恒。
+        error_message 两段明细都保留（去重只改计数，不吞明细）。"""
+        status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1,
+            "warnings": [],
+            "auto_confirm_failed": [{"code": "NEGATIVE_CASH", "error": "负现金", "portfolio_code": "P1"}],
+            "failed_portfolios": [
+                {"portfolio_code": "P1", "date": "2025-09-02", "code": "MISSING_NAV", "error": "缺净值"},
+            ],
+        })
+        assert status == "partial_success"
+        assert (total, success, failed) == (1, 0, 1)
+        assert 0 <= failed <= total and total == success + failed
+        assert message == "快照生成失败: P1@2025-09-02 MISSING_NAV: 缺净值 | NEGATIVE_CASH: 负现金"
+
+    def test_failed_never_exceeds_total_on_malformed_input(self):
+        """守恒兜底：组合身份越界（distinct code 多于 portfolios_processed）时 failed 钳到 total，
+        success 不为负。真实运行器数据不会触发（失败组合必属已处理组合），此为纯函数边界防线。"""
+        status, total, success, failed, _ = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1,
+            "warnings": [],
+            "failed_portfolios": [
+                {"portfolio_code": "P1", "date": "d", "code": "C", "error": "e"},
+                {"portfolio_code": "P2", "date": "d", "code": "C", "error": "e"},
+                {"portfolio_code": "P3", "date": "d", "code": "C", "error": "e"},
+            ],
+        })
+        assert status == "partial_success"
+        assert (total, success, failed) == (1, 0, 1)
+        assert 0 <= failed <= total and total == success + failed
 
     def test_failed_and_warnings_are_joined(self):
         """两者并存时 warnings 追加在同一行（原 router 分支语义）"""
@@ -289,11 +336,12 @@ class TestSnapshotGenerateDerivation:
         assert message == "快照生成失败: P1@2025-09-02 MISSING_NAV: 缺净值"
 
     def test_failed_portfolios_and_auto_confirm_failed_are_both_counted(self):
-        """两类失败并存：records_failed 求和，error_message 分段（快照失败段在前）"""
+        """两类失败分属不同组合（P1 fail-fast、P2 自动确认失败）：records_failed 各计一次，
+        error_message 分段（快照失败段在前）。"""
         status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
             "portfolios_processed": 3,
             "warnings": [],
-            "auto_confirm_failed": [{"code": "NEGATIVE_CASH", "error": "负现金"}],
+            "auto_confirm_failed": [{"code": "NEGATIVE_CASH", "error": "负现金", "portfolio_code": "P2"}],
             "failed_portfolios": [
                 {"portfolio_code": "P1", "date": "2025-09-02",
                  "code": "MISSING_NAV", "error": "缺净值"},
@@ -301,6 +349,7 @@ class TestSnapshotGenerateDerivation:
         })
         assert status == "partial_success"
         assert (total, success, failed) == (3, 1, 2)
+        assert 0 <= failed <= total and total == success + failed
         assert message == "快照生成失败: P1@2025-09-02 MISSING_NAV: 缺净值 | NEGATIVE_CASH: 负现金"
 
     def test_failed_portfolios_message_truncated_to_1000(self):

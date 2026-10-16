@@ -471,6 +471,28 @@ class TestRetryTriggerBody:
         assert len(fake.jobs) == 1
         assert fake.jobs[0][1]["args"] == [2]  # 序号递增
 
+    def test_retry_gate_denied_warns_and_terminates_chain(self, test_db, monkeypatch, caplog):
+        """#715 复核 Suggestion：重试时刻闸门拒绝（锁被占/非交易日）→ 重试链静默终止是
+        本 PR 要消灭的「失败不可见」。断言：不落执行记录、不注册下一次、留一条 WARNING。"""
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        ran = []
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync",
+                            lambda db, log_id: ran.append(1) or {
+                                "synced_count": 0, "products_count": 0, "failed_products": []})
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="app.services.scheduler_service"):
+            _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(2),
+                         decisions=[0], calendar=MagicMock(is_open=True))  # 锁被占
+
+        assert ran == []                              # 未执行 nav_sync
+        assert fake.jobs == []                        # 未注册下一次重试
+        assert test_db.query(TaskExecutionLog).count() == 0
+        assert any("重试链终止" in r.message and "第 2 次" in r.message
+                   for r in caplog.records)
+
     def test_retry_exhausted_stops(self, test_db, monkeypatch):
         self._task(test_db, "nav_sync")
         fake = _FakeScheduler()
@@ -581,12 +603,15 @@ class TestSnapshotCascade:
         assert logs[0].trigger_type == TRIGGER_CASCADE
         assert logs[0].status == "failed"
 
-    def test_snapshot_lock_held_skips_cascade(self, test_db, monkeypatch):
-        """快照锁被占（当日快照首跑仍在进行）→ 跳过补跑，不并发"""
+    def test_snapshot_lock_held_defers_to_recheck(self, test_db, monkeypatch):
+        """快照锁被占（当日快照首跑仍在进行）→ 本次不并发补跑，但登记有界延迟复查，
+        不当作联动终态永久丢弃（#715 复核 Blocker）。"""
         ran = []
         monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
                             lambda db, log_id: ran.append(1) or {
                                 "portfolios_processed": 0, "warnings": [], "auto_confirm_failed": []})
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
 
         db, counter, patches = _session_with_locks(test_db, [0])  # GET_LOCK 返回 0
         try:
@@ -595,10 +620,127 @@ class TestSnapshotCascade:
             for p in reversed(patches):
                 p.stop()
 
-        assert ran == []
+        assert ran == []                        # 本次未补跑（不并发）
         assert counter["get"] == 1
-        assert counter["release"] == 0  # 未取到锁不释放
+        assert counter["release"] == 0          # 未取到锁不释放
         assert test_db.query(TaskExecutionLog).count() == 0
+        # 登记了第 1 次延迟复查而非静默丢弃
+        assert len(fake.jobs) == 1
+        func, kwargs = fake.jobs[0]
+        assert func is scheduler_service._trigger_snapshot_cascade_recheck
+        assert kwargs["args"] == [1]
+        assert kwargs["id"] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+
+    def test_lock_held_recheck_runs_once_after_holder_fails(self, test_db, monkeypatch):
+        """时序①：锁持有者最终失败/部分成功 → 延迟复查（锁已释放）后恰好补跑一次 cascade。"""
+        self._seed_snapshot_log(test_db, "partial_success")  # 当日定时快照非成功
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", lambda db, log_id: {
+            "snapshots_generated": 1, "portfolios_processed": 1,
+            "warnings": [], "auto_confirm_failed": [],
+        })
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+
+        # 首次联动：锁被占（decisions=[0]）→ 只登记复查，不补跑
+        db0, c0, p0 = _session_with_locks(test_db, [0])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db0)
+        finally:
+            for p in reversed(p0):
+                p.stop()
+        assert len(fake.jobs) == 1
+        assert not [l for l in test_db.query(TaskExecutionLog).all()
+                    if l.trigger_type == TRIGGER_CASCADE]
+
+        # 复查触发（锁已释放，decisions=[1]）→ 重查当日仍无成功记录 → 补跑一次
+        db1, c1, p1 = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db1, recheck_attempt=1)
+        finally:
+            for p in reversed(p1):
+                p.stop()
+
+        cascade_logs = [l for l in test_db.query(TaskExecutionLog).all()
+                        if l.trigger_type == TRIGGER_CASCADE]
+        assert len(cascade_logs) == 1           # 恰好补跑一次
+        assert cascade_logs[0].status == "success"
+        assert c1 == {"get": 1, "release": 1}
+
+    def test_lock_held_recheck_skips_after_holder_succeeds(self, test_db, monkeypatch):
+        """时序②：锁持有者最终成功 → 复查时当日已有 success 记录 → 不补跑。"""
+        ran = []
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
+                            lambda db, log_id: ran.append(1) or {
+                                "portfolios_processed": 0, "warnings": [], "auto_confirm_failed": []})
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+
+        # 首次联动：锁被占 → 登记复查
+        db0, _c0, p0 = _session_with_locks(test_db, [0])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db0)
+        finally:
+            for p in reversed(p0):
+                p.stop()
+        assert len(fake.jobs) == 1
+
+        # 持锁的定时快照最终成功落库
+        self._seed_snapshot_log(test_db, "success")
+
+        # 复查触发：重查当日成功记录 → 跳过，连快照锁都不取，不补跑
+        db1, c1, p1 = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db1, recheck_attempt=1)
+        finally:
+            for p in reversed(p1):
+                p.stop()
+
+        assert ran == []
+        assert c1["get"] == 0
+        assert not [l for l in test_db.query(TaskExecutionLog).all()
+                    if l.trigger_type == TRIGGER_CASCADE]
+
+
+class TestMaybeScheduleSnapshotCascadeRecheck:
+    """`_maybe_schedule_snapshot_cascade_recheck`：有界序号 + 确定性 id 去重 + 一次性 date job 形态"""
+
+    def test_registers_bounded_date_job(self, monkeypatch):
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        before = datetime.now(fake.timezone)
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(1) is True
+
+        func, kwargs = fake.jobs[0]
+        assert func is scheduler_service._trigger_snapshot_cascade_recheck
+        assert kwargs["trigger"] == "date"
+        assert kwargs["jobstore"] == "default"          # 持久化 → 重启存活
+        assert kwargs["replace_existing"] is True        # 确定性 id 去重
+        assert kwargs["misfire_grace_time"] is None
+        assert kwargs["args"] == [1]
+        assert kwargs["id"] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert kwargs["run_date"] >= before + scheduler_service.SNAPSHOT_CASCADE_RECHECK_INTERVAL - timedelta(seconds=5)
+
+    def test_attempts_bounded_at_max(self, monkeypatch):
+        """序号超上限即停手，交次日自愈（有界，不无限复查）"""
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        over = scheduler_service.SNAPSHOT_CASCADE_RECHECK_MAX_ATTEMPTS + 1
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(over) is False
+        assert fake.jobs == []
+
+    def test_no_scheduler_is_noop(self, monkeypatch):
+        monkeypatch.setattr(scheduler_service, "_scheduler", None)
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(1) is False
+
+    def test_deterministic_id_dedups_same_day(self, monkeypatch):
+        """同日同序号重复登记 → 同一确定性 job id（多 worker 下只排一个，同日最多补跑一次）"""
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        scheduler_service._maybe_schedule_snapshot_cascade_recheck(1)
+        scheduler_service._maybe_schedule_snapshot_cascade_recheck(1)
+        ids = [kwargs["id"] for _func, kwargs in fake.jobs]
+        assert ids[0] == ids[1] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert all(kwargs["replace_existing"] for _f, kwargs in fake.jobs)
 
 
 class TestManualRunDoesNotRetry:
