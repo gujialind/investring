@@ -21,6 +21,7 @@ import {
   toDateOnly,
   parseDateOnly,
   formatDate,
+  formatDateTime,
   formatMarketName,
   formatProductName,
   formatProductDisplayCode,
@@ -191,6 +192,13 @@ describe("日期格式化", () => {
     expect(parseDateOnly("2026-13-99")).toBeUndefined();
     expect(toDateOnly(undefined)).toBe("");
     expect(toDateOnly(new Date("invalid"))).toBe("");
+  });
+
+  it("formatDateTime 输出 YYYY-MM-DD HH:mm", () => {
+    const d = new Date(2026, 9, 17, 14, 5, 0);
+    expect(formatDateTime(d)).toBe("2026-10-17 14:05");
+    expect(formatDateTime("2026-10-17T08:30:00")).toBe("2026-10-17 08:30");
+    expect(formatDateTime("not-a-date")).toBe("--");
   });
 });
 

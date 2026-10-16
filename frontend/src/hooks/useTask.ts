@@ -78,7 +78,7 @@ export function useWatchedTaskExecution() {
   return {
     /** 提交成功后调用，开始跟踪该执行记录 */
     track: (code: string, executionId: number) => setWatched({ code, executionId }),
-    /** 正在执行的任务码：用于禁用重复触发并把「执行中」显示出来 */
+    /** 正在执行的任务码：用于显示「执行中」状态；提交到首轮轮询间的短暂窗口由后端 409 兜底 */
     // `watched &&` 只为把可空性交给 TS 收窄，语义仍由 isRunning 决定
     runningCode: watched && isRunning ? watched.code : null,
     runningExecution: watched && isRunning ? execution : null,

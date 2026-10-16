@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader2, Trash2 } from "lucide-react";
-import { cn, formatDate, getStatusBadgeVariant } from "@/lib/utils";
+import { cn, formatDateTime, getStatusBadgeVariant } from "@/lib/utils";
 import PaginationBar from "@/components/shared/PaginationBar";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import EmptyState from "@/components/shared/EmptyState";
@@ -199,8 +199,8 @@ function LoginLogsPanel({ variant }: { variant: "desktop" | "mobile" }) {
                       )}
                     </TableCell>
                     <TableCell>{log.ip_address || "--"}</TableCell>
-                    <TableCell>{log.failure_reason || "--"}</TableCell>
-                    <TableCell>{log.created_at ? formatDate(log.created_at) : "--"}</TableCell>
+                    <TableCell title={log.failure_reason || undefined}>{log.failure_reason || "--"}</TableCell>
+                    <TableCell>{log.created_at ? formatDateTime(log.created_at) : "--"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -264,7 +264,7 @@ function AuditLogsPanel({ variant }: { variant: "desktop" | "mobile" }) {
                     <TableCell>{log.resource_type}</TableCell>
                     <TableCell>{log.resource_name || log.resource_id || "--"}</TableCell>
                     <TableCell>{log.ip_address || "--"}</TableCell>
-                    <TableCell>{log.created_at ? formatDate(log.created_at) : "--"}</TableCell>
+                    <TableCell>{log.created_at ? formatDateTime(log.created_at) : "--"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -324,13 +324,13 @@ function ErrorLogsPanel({ variant }: { variant: "desktop" | "mobile" }) {
                   <TableRow key={log.id}>
                     <TableCell className="font-medium">{log.error_type}</TableCell>
                     <TableCell>{log.error_code || "--"}</TableCell>
-                    <TableCell className="max-w-[24rem] truncate">{log.error_message}</TableCell>
+                    <TableCell className="max-w-[24rem] truncate" title={log.error_message}>{log.error_message}</TableCell>
                     <TableCell>
                       {log.request_path
                         ? `${log.request_method || ""} ${log.request_path}`.trim()
                         : "--"}
                     </TableCell>
-                    <TableCell>{log.created_at ? formatDate(log.created_at) : "--"}</TableCell>
+                    <TableCell>{log.created_at ? formatDateTime(log.created_at) : "--"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -466,8 +466,8 @@ function ExecutionsPanel({ variant }: { variant: "desktop" | "mobile" }) {
                     <TableCell className="text-right">
                       {exec.duration_ms ? `${(exec.duration_ms / 1000).toFixed(1)}s` : "--"}
                     </TableCell>
-                    <TableCell>{exec.started_at ? formatDate(exec.started_at) : "--"}</TableCell>
-                    <TableCell>{exec.finished_at ? formatDate(exec.finished_at) : "--"}</TableCell>
+                    <TableCell>{exec.started_at ? formatDateTime(exec.started_at) : "--"}</TableCell>
+                    <TableCell>{exec.finished_at ? formatDateTime(exec.finished_at) : "--"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

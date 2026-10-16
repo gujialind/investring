@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +55,8 @@ import {
   useSyncProductHistory,
 } from "@/hooks/useProduct";
 import { useRunTask, useWatchedTaskExecution } from "@/hooks/useTask";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 
 interface ProductsContentProps {
   variant?: "desktop" | "mobile";
@@ -143,6 +145,15 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
   const runTask = useRunTask();
   const { track: trackExecution, runningCode } = useWatchedTaskExecution();
   const navSyncRunning = runningCode === "nav_sync";
+  const queryClient = useQueryClient();
+  const wasNavSyncRunning = useRef(false);
+  useEffect(() => {
+    if (wasNavSyncRunning.current && !navSyncRunning) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.products.root });
+    }
+    wasNavSyncRunning.current = navSyncRunning;
+  }, [navSyncRunning, queryClient]);
+  const [navSyncConfirmOpen, setNavSyncConfirmOpen] = useState(false);
   const handleBatchNavSync = () => {
     runTask.mutate("nav_sync", {
       onSuccess: (accepted) => trackExecution("nav_sync", accepted.execution_id),
@@ -458,7 +469,7 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
           <Button
             variant="outline"
             data-testid="batch-nav-sync"
-            onClick={handleBatchNavSync}
+            onClick={() => setNavSyncConfirmOpen(true)}
             disabled={runTask.isPending || navSyncRunning}
           >
             {navSyncRunning ? (
@@ -721,6 +732,18 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
         onConfirm={() => {
           if (pendingDelete) deleteProduct.mutate(pendingDelete);
           setPendingDelete(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={navSyncConfirmOpen}
+        onOpenChange={setNavSyncConfirmOpen}
+        title="批量净值同步"
+        description="将同步全部产品净值，耗时数十秒到数分钟，期间不可取消。确定继续吗？"
+        confirmText="开始同步"
+        onConfirm={() => {
+          setNavSyncConfirmOpen(false);
+          handleBatchNavSync();
         }}
       />
     </div>

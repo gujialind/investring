@@ -50,6 +50,7 @@ describe("queryKeys 全域工厂", () => {
     expect(queryKeys.shareChangeEvents.root).toEqual(["share-change-events"]);
     expect(queryKeys.cashTransfers.root).toEqual(["cash-transfers"]);
     expect(queryKeys.tasks.root).toEqual(["tasks"]);
+    expect(queryKeys.logs.root).toEqual(["logs"]);
     expect(queryKeys.tradingCalendar.root).toEqual(["trading-calendar"]);
     // dataSources 域无 root，仅单键查询
     expect(queryKeys.dataSources.config()).toEqual(["data-source-config"]);
