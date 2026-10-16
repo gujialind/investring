@@ -365,6 +365,79 @@ class TestSnapshotGenerateDerivation:
         assert len(message) == ERROR_MESSAGE_MAX
 
 
+class TestRunnerAttachesPortfolioCodeForDedup:
+    """串联守门（#715 复审 Suggestion 1）：Blocker 2 的「按唯一组合去重计数」依赖 runner
+    在 `_generate_snapshots_for_date` 里给每条 `auto_confirm_failed` 附 `portfolio_code`
+    （task_runner.py 附件行），而计数逻辑在 `_derive_log_fields`——两处之间此前没有用例
+    串起来：删掉附件行时上面所有纯函数用例仍全绿，`records_failed` 会静默退化为 0
+    （终态写着 partial_success 却报 0 失败，比负数更难发现）。本用例真跑 runner，钉住契约。
+    """
+
+    def test_multi_day_backfill_one_portfolio_counts_once(self, test_db, monkeypatch):
+        """一个组合在多日回补里产生多条 auto_confirm_failed（真实条目**不带**组合身份）：
+        runner 须为每条补上 portfolio_code，去重后 (total, success, failed) == (1, 0, 1)。
+        删掉附件行 → 条目缺 portfolio_code → failed 退化为 0 → 本用例红。"""
+        from decimal import Decimal
+
+        from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
+        from app.models.trading_calendar import TradingCalendar
+        from app.services import snapshot_service
+        from app.services.task_runner import _generate_snapshots_for_date
+        from tests.factories import create_portfolio
+
+        # 从种子日历取连续 4 个交易日 d0<d1<d2<d3：最新快照落在 d0、target=d3，
+        # 回补循环覆盖 d1/d2/d3 三天（next_trading_day 沿开放日链推进，与日历间隔无关）。
+        open_days = [
+            row.calendar_date
+            for row in test_db.query(TradingCalendar)
+            .filter_by(is_open=True)
+            .order_by(TradingCalendar.calendar_date)
+            .limit(4)
+            .all()
+        ]
+        d0, d3 = open_days[0], open_days[3]
+
+        create_portfolio(
+            test_db, code="P_DEDUP", name="去重组合",
+            status="active", auto_snapshot_enabled=True,
+        )
+        test_db.add(PortfolioValueSnapshot(
+            portfolio_code="P_DEDUP", snapshot_date=d0,
+            total_value=Decimal("10000"), total_shares=Decimal("10000"),
+            unit_price=Decimal("1.0000"),
+        ))
+        test_db.commit()
+
+        # 生成 no-op 成功；自动确认每天回一条**不带 portfolio_code** 的失败条目
+        # （还原真实 auto_confirm_after_snapshot 的形态：只带 subscription/event 粒度字段）。
+        monkeypatch.setattr(
+            snapshot_service, "generate_daily_snapshots",
+            lambda db, portfolio_code, target_date: {"warnings": []},
+        )
+        monkeypatch.setattr(
+            snapshot_service, "auto_confirm_after_snapshot",
+            lambda db, portfolio_code, snapshot_date: [
+                {"action": "auto_confirm_failed", "code": "NEGATIVE_CASH",
+                 "error": "负现金", "id": 1, "sub_type": "subscribe"},
+            ],
+        )
+
+        outcome = _generate_snapshots_for_date(test_db, d3)
+
+        # d1/d2/d3 三天各一条失败，同属一个组合
+        assert len(outcome["auto_confirm_failed"]) == 3
+        assert outcome["portfolios_processed"] == 1
+        # 契约本体：runner 为每条补上 portfolio_code（删附件行即缺，下面归一会退化为 0 失败）
+        assert all(
+            r.get("portfolio_code") == "P_DEDUP" for r in outcome["auto_confirm_failed"]
+        )
+        # 归一：一个组合 → total=1；三条失败同组合去重 → failed=1、success=0、守恒
+        status, total, success, failed, _ = _derive_log_fields("snapshot_generate", outcome)
+        assert status == "partial_success"
+        assert (total, success, failed) == (1, 0, 1)
+        assert 0 <= failed <= total and total == success + failed
+
+
 class TestOtherTaskDerivation:
     """trading_calendar_sync / log_cleanup：failed 留 None（未度量）"""
 

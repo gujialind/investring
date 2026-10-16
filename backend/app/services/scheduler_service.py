@@ -23,7 +23,11 @@ GET_LOCK 收敛为单执行；重启后 job 自 JobStore 重载（misfire_grace_
 job id + replace_existing，与重试 job 同手法），复查时重查当日成功记录——持锁者
 最终成功则跳过、否则补跑，避免「nav 重试成功时快照锁恰被占」导致当日联动被永久
 丢弃。复查链由 SNAPSHOT_GENERATE_LOCK（跨进程互斥）+ 当日成功记录判据收敛为同日
-最多补跑一次。
+最多补跑一次。复查窗口总长 45 分钟（15min × 3）；复查触发体不再过交易日闸门、判据用
+当时的 `date.today()`，故若窗口跨过午夜，最后一次复查按**次日**判据执行（本质是又一次
+catch-up，最坏只多一条 trigger_type=cascade 记录，不破坏账本）——与 job id 取主机本地日
+属同一套既有假设，单独改复查会与 `_should_run_today` 产生新的口径不一致，故不改代码。
+默认 cron（07:00 / 07:30）下重试落在 09:00–13:00、复查落在其后 45 分钟内，不跨午夜。
 
 **重试是全量 nav_sync 的取舍**（#715 复核 Suggestion）：每次重试都遍历全部产品并
 对同一 nav_date 再写一套 NavSyncDetail（该表无唯一约束，只堆行数不撞错），慢性
