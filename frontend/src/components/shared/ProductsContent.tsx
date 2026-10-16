@@ -143,16 +143,16 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
   // 400（disabled）经 useRunTask 的 onError → getErrorMessage toast 呈现后端消息，
   // 不会被写成「同步失败」误文案。admin 门控由页面壳 AdminGuard 承担，组件内不再判角色。
   const runTask = useRunTask();
-  const { track: trackExecution, runningCode } = useWatchedTaskExecution();
+  const { track: trackExecution, runningCode, watching } = useWatchedTaskExecution();
   const navSyncRunning = runningCode === "nav_sync";
   const queryClient = useQueryClient();
-  const wasNavSyncRunning = useRef(false);
+  const wasWatching = useRef(false);
   useEffect(() => {
-    if (wasNavSyncRunning.current && !navSyncRunning) {
+    if (wasWatching.current && !watching) {
       queryClient.invalidateQueries({ queryKey: queryKeys.products.root });
     }
-    wasNavSyncRunning.current = navSyncRunning;
-  }, [navSyncRunning, queryClient]);
+    wasWatching.current = watching;
+  }, [watching, queryClient]);
   const [navSyncConfirmOpen, setNavSyncConfirmOpen] = useState(false);
   const handleBatchNavSync = () => {
     runTask.mutate("nav_sync", {

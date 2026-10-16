@@ -199,7 +199,7 @@ function LoginLogsPanel({ variant }: { variant: "desktop" | "mobile" }) {
                       )}
                     </TableCell>
                     <TableCell>{log.ip_address || "--"}</TableCell>
-                    <TableCell title={log.failure_reason || undefined}>{log.failure_reason || "--"}</TableCell>
+                    <TableCell>{log.failure_reason || "--"}</TableCell>
                     <TableCell>{log.created_at ? formatDateTime(log.created_at) : "--"}</TableCell>
                   </TableRow>
                 ))}

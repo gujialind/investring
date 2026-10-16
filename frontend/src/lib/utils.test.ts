@@ -198,6 +198,7 @@ describe("日期格式化", () => {
     const d = new Date(2026, 9, 17, 14, 5, 0);
     expect(formatDateTime(d)).toBe("2026-10-17 14:05");
     expect(formatDateTime("2026-10-17T08:30:00")).toBe("2026-10-17 08:30");
+    expect(formatDateTime("2026-10-17")).toBe("2026-10-17 00:00");
     expect(formatDateTime("not-a-date")).toBe("--");
   });
 });
