@@ -7,16 +7,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { useUIStore } from "@/stores/uiStore";
 import type { TaskExecution } from "@/types/log";
 
-// 定时任务列表 Hook（后端返回分页对象）
-export function useTaskList(params?: { page?: number; page_size?: number }) {
-  return useQuery({
-    queryKey: queryKeys.tasks.list(),
-    queryFn: () => taskApi.list(params),
-    staleTime: 10 * 1000,
-  });
-}
-
-// 全局执行历史 Hook
+// 全局执行历史 Hook（分页/过滤参数进 queryKey，换页换过滤即换键重取）
 export function useTaskExecutions(params?: {
   task_code?: string;
   page?: number;
@@ -87,7 +78,9 @@ export function useWatchedTaskExecution() {
   return {
     /** 提交成功后调用，开始跟踪该执行记录 */
     track: (code: string, executionId: number) => setWatched({ code, executionId }),
-    /** 正在执行的任务码：用于禁用重复触发并把「执行中」显示出来 */
+    /** 是否正在跟踪一次执行（track() → 终态 setWatched(null)），不依赖中间态 */
+    watching: watched !== null,
+    /** 正在执行的任务码：用于显示「执行中」状态；提交到首轮轮询间的短暂窗口由后端 409 兜底 */
     // `watched &&` 只为把可空性交给 TS 收窄，语义仍由 isRunning 决定
     runningCode: watched && isRunning ? watched.code : null,
     runningExecution: watched && isRunning ? execution : null,
@@ -119,38 +112,4 @@ function terminalToast(execution: TaskExecution, code: string) {
     title: "任务执行失败",
     message: execution.error_message || `任务 ${code} 执行失败`,
   };
-}
-
-// 启用任务 Hook
-export function useEnableTask() {
-  const queryClient = useQueryClient();
-  const addToast = useUIStore((state) => state.addToast);
-
-  return useMutation({
-    mutationFn: (code: string) => taskApi.enable(code),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.list() });
-      addToast({ type: "success", title: "启用成功", message: "任务已启用" });
-    },
-    onError: (error: unknown) => {
-      addToast({ type: "error", title: "操作失败", message: getErrorMessage(error, "请稍后重试") });
-    },
-  });
-}
-
-// 禁用任务 Hook
-export function useDisableTask() {
-  const queryClient = useQueryClient();
-  const addToast = useUIStore((state) => state.addToast);
-
-  return useMutation({
-    mutationFn: (code: string) => taskApi.disable(code),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.list() });
-      addToast({ type: "success", title: "禁用成功", message: "任务已禁用" });
-    },
-    onError: (error: unknown) => {
-      addToast({ type: "error", title: "操作失败", message: getErrorMessage(error, "请稍后重试") });
-    },
-  });
 }
