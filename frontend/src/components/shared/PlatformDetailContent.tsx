@@ -13,13 +13,18 @@ import QueryErrorState from "@/components/shared/QueryErrorState";
 import HoldingProductCard from "./HoldingProductCard";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
-import { groupTradeRows, cashSubMeta, cashLegArrived, isCashLeg, cashOrphanLabel } from "@/lib/tradePairs";
+import {
+  groupTradeRows,
+  cashRowLabel,
+  cashSubMeta,
+  cashLegArrived,
+  isCashLeg,
+  tradeCardDetailLine,
+} from "@/lib/tradePairs";
 import {
   formatCurrency,
   formatDate,
-  formatNav,
   formatProductCodeLabel,
-  formatSharesUnit,
   formatSignedCurrency,
   getReturnColorClass,
   getStatusBadgeVariant,
@@ -28,6 +33,7 @@ import {
 } from "@/lib/utils";
 import { useHoldingsByProduct, useHoldingsByPlatform } from "@/hooks/usePosition";
 import { useTradeList } from "@/hooks/useTrade";
+import { usePlatformList } from "@/hooks/usePlatform";
 import type { Trade } from "@/types/trade";
 
 const TRADE_TYPE_LABELS: Record<string, string> = { buy: "买入", sell: "卖出" };
@@ -98,6 +104,15 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
     page: 1,
     page_size: 5,
   });
+
+  // 对手平台名（#719）：平台间转移的现金腿只在本平台出现，副行要说清「转到哪个平台」，
+  // 而本平台页拿不到对手平台的名字 → 与 ProductDetailContent 同口径按 code→name 映射，
+  // 映射缺失时由 tradeCardDetailLine 内部的对手腿文案回退显示平台码
+  const { data: platformsData } = usePlatformList({ page_size: 100 });
+  const platformNameMap = useMemo(
+    () => new Map((platformsData?.items ?? []).map((p) => [p.code, p.name])),
+    [platformsData?.items]
+  );
 
   const isLoading = productLoading || platformLoading;
   const isError = productError || platformError;
@@ -269,15 +284,15 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
             style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
           />
           <span className="truncate">
-            {/* R4-S1：CASH 孤儿行走 cashOrphanLabel（「现金 · 申赎确认」等），与 TradesContent 同口径 */}
+            {/* 现金行走资金流向标注（#719）：本页取数只按平台，平台名恒等于页头，
+                故不带平台后缀；来源口径（cashOrphanLabel）留给列表主行 */}
             {isCashLeg(trade)
-              ? cashOrphanLabel(trade)
+              ? cashRowLabel(trade)
               : `${TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type} · ${trade.product_name ?? formatProductCodeLabel(trade.display_code, trade.product_code, trade.market)}`}
           </span>
         </div>
-        <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
-          {trade.shares !== undefined && `${formatSharesUnit(trade.shares)} @ ${formatNav(trade.price)} · `}
-          {formatDate(trade.trade_date)}
+        <div className="truncate text-xs text-muted-foreground tabular-nums">
+          {tradeCardDetailLine(trade, platformNameMap)}
         </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5">
@@ -306,29 +321,27 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
       ) : (
         <ul className="mt-2">
           {tradeRows.map((row) => {
-            if (row.kind === "pair") {
-              const { main, sub } = row;
-              const meta = cashSubMeta(main, { arrived: cashLegArrived(sub) });
-              return (
-                <li key={main.id} data-testid="platform-trade-row" className="border-t border-border py-2 first:border-t-0">
-                  {renderTradeMainRow(main)}
-                  {/* 子行（配对现金腿） */}
-                  <div className="mt-1 flex items-center justify-between gap-2 pl-3">
-                    <span className="text-xs text-muted-foreground">
-                      {meta.label}{meta.sign === "+" ? ` +${formatCurrency(sub.amount ?? 0)}` : ` -${formatCurrency(sub.amount ?? 0)}`}
-                      {sub.confirm_date ? ` · ${formatDate(sub.confirm_date)}` : ""}
-                    </span>
-                  </div>
-                </li>
-              );
-            }
+            const trade = row.kind === "pair" ? row.main : row.trade;
+            // 结对子行只渲**现金**子行（配对腿的资金流向）。对手腿是基金腿时不另起一行——
+            // 现金主行的副行已由 tradeCardDetailLine 带出「↳ 对手腿」（#719 卡片形态：一行读完来源与去处）
+            const cashSub = row.kind === "pair" && isCashLeg(row.sub) ? row.sub : null;
+            const meta = cashSub ? cashSubMeta(trade, { arrived: cashLegArrived(cashSub) }) : null;
             return (
               <li
-                key={row.trade.id}
+                key={trade.id}
                 data-testid="platform-trade-row"
                 className="border-t border-border py-2 first:border-t-0"
               >
-                {renderTradeMainRow(row.trade)}
+                {renderTradeMainRow(trade)}
+                {cashSub && meta && (
+                  /* 子行（配对现金腿） */
+                  <div className="mt-1 flex items-center justify-between gap-2 pl-3">
+                    <span className="text-xs text-muted-foreground">
+                      {meta.label}{meta.sign === "+" ? ` +${formatCurrency(cashSub.amount ?? 0)}` : ` -${formatCurrency(cashSub.amount ?? 0)}`}
+                      {cashSub.confirm_date ? ` · ${formatDate(cashSub.confirm_date)}` : ""}
+                    </span>
+                  </div>
+                )}
               </li>
             );
           })}

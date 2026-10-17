@@ -79,7 +79,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **买卖在途资金**（#93，#493 起为单腿确认口径）：买入在途为 CASH sell 已 confirmed 且现金日 ≤ D、基金买入腿尚未在 D 生效（pending 或确认日 C > D）；卖出在途为基金 sell 已 confirmed 且 C ≤ D、CASH buy 尚未生效（pending 或到账日 A > D）。两腿均 confirmed 的跨期窗口与跨天现金转移规则保留；配对方向显式限定、cancelled 腿一律排除，金额按现金腿平台归属。两类在途每日独立计算、不继承前日，cash_amount 恒正，计入市值但不计入可用现金。
 - **分红在途**（#522）：对 confirmed 平台级现金分红，`ex_date <= D < cash_pay_date` 时，将该笔 `cash_change` 按事件平台归入 `product_code="IN_TRANSIT_DIVIDEND"`；与买卖在途共用每日绝对计算口径，不从前日余额递增或继承。计入组合市值及在途合计，不入 CASH、不计可用现金；到账日不再在途，现金窗口仅消费一次。NULL 或同日到账没有在途区间；计算不依赖 D 日仍持有基金，除息后清仓不能丢掉待到账分红。
 - **收益日期与现金日期分开**（#522）：基金分红收益仍按 `ex_date` 加回，现金日收益/累计收益的现金流基数按有效现金日纳入；到账只是分红在途转 CASH，不再确认分红收益，基金与现金不得双计。周末/节假日到账由下一交易日快照的 `(前快照日, D]` 窗口消费，现金收益基数使用同一窗口，不能只取 D 当日而制造虚假现金收益。
-- **快照现金行**按 `cash_amount IS NOT NULL` 判定（CHECK 保证与 shares 恰有其一），不看产品类型字符串，CASH 与在途均适用。**交易 CASH 腿**则按 `product_code == "CASH"` 判定；不能将两种数据对象的判据混用。
+- **快照现金行**按 `cash_amount IS NOT NULL` 判定（CHECK 保证与 shares 恰有其一），不看产品类型字符串，CASH 与在途均适用。**交易 CASH 腿**则按 `product_code == "CASH"` 判定；不能将两种数据对象的判据混用。现金腿自身**无份额、无净值语义**（`shares` 恒 NULL、`price` 恒为记账单位 1、`fee` 恒 0，`amount = actual_amount` = 真正进出账户的现金）：读侧不得把它渲成「份额 @ 净值」形态（`1.0000` 会伪装成净值型产品），现金行的来源与去处按[调仓](#rule-trade)的配对腿读侧口径取。
 - 市值 = Σ(场内份额 × 收盘价) + Σ(场外份额 × 净值) + Σ(现金行 cash_amount)；净值 `unit_price = total_value / total_shares`（4 位），在途合计另记 `portfolio_value_snapshot.in_transit_total`。
 
 <a id="rule-snapshot"></a>
@@ -175,6 +175,8 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 * 仅给 product\_code 且一码多市场（LOF）须显式指定 market（`MARKET_AMBIGUOUS`，`details.available_markets` 列可选项）；场内 trade 不可 cancel。
 
 * `trade.transfer_group` NOT NULL；REST 直接创建 `product_code="CASH"` 的交易 → `CASH_TRADE_FORBIDDEN`。
+
+* **配对腿的读侧口径**（#719）：**补信息，不补行**。交易列表给每行挂一个只读派生对象 `paired_leg` = 同 `(portfolio_code, transfer_group)` 内的**另一条腿**（方向不限：基金腿↔现金腿、跨平台转移的两条现金腿互指），界面据此在锚点行下合成配对子行。它是视图概念而非数据概念：`items` 行数、`total`、分页与排序键（`trade_date desc, transfer_group, id desc`）与不带该字段时逐字一致，被筛选条件（产品/平台/状态/分页）挡掉的对手腿照样回填（整页一次批量查询，不随行数产生 N+1），因此「按产品筛选后看不见现金腿」不需要靠放宽筛选解决。三档恒为 `null`：`sub_` 申赎腿（对手方是 subscription 记录、不是 trade 行，界面保持指向申赎页而不补对手信息）、无组号的行、组内行数 ≠ 2 的异常组（**宁可不补也不猜**对手腿）。对手腿**已作为真实行出现在结果集内时以真实行为准**，同一组现金信息只出现一次。填充时机同 `product_name` / `display_code`：只 `GET /api/trades` 产出，单对象与 preview 恒 `null`。该字段不回写任何列，也不改变[生命周期](#rule-lifecycle)的现金腿写侧门控（直接对 `rebal_` 组 CASH 腿 confirm/unconfirm/cancel/delete 或 PUT 改财务字段仍 `CASH_TRADE_FORBIDDEN`，**notes 例外**）。与 #493 的平铺字段 `cash_platform_code` / `cash_confirm_date` 并存不互写：那两个只讲基金腿→现金腿这一个方向的平台与日期。
 
 <a id="rule-event"></a>
 ## 份额变动事件
