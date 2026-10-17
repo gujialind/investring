@@ -152,6 +152,7 @@ cd backend && pytest tests -q
   | `trade_service.py` / 调仓交易路由 | `pytest tests/integration/test_trades*.py tests/integration/test_trade_cash_check.py -q` |
   | `subscription_service.py`（申赎） | `pytest tests/integration/test_subscriptions*.py -q` |
   | `cash_transfer_service.py`（跨天现金转移，两腿 Trade） | `pytest tests/integration/test_trades*.py tests/integration/test_cash_transfers*.py tests/integration/test_trade_cash_check.py -q` |
+  | `cash_flow_service.py`（现金流水聚合读侧，#725；余额列消费 `calculate_available_cash`） | `pytest tests/unit/test_cash_flow_service.py tests/integration -q -k "cash_flow or cash_transfers or in_transit"` |
   | 份额变动事件 | `pytest tests/integration -q -k "share_event or event_window or forced_adjustment"` |
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/integration/test_shares_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py tests/integration/test_snapshot_position_precision.py tests/integration/test_snapshot_holding_precision.py -q` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |

@@ -17,7 +17,7 @@ from app.request_context import (
     SCOPE_REQUEST_ID_KEY,
     RequestContextMiddleware,
 )
-from app.routers import auth, investors, portfolios, products, platforms, trading_calendar, data_sources, market_data, subscriptions, trades, share_change_events, positions, logs, tasks, notifications, snapshots, cash_transfers, sync_jobs, asset_classifications
+from app.routers import auth, investors, portfolios, products, platforms, trading_calendar, data_sources, market_data, subscriptions, trades, share_change_events, positions, logs, tasks, notifications, snapshots, cash_transfers, cash_flows, sync_jobs, asset_classifications
 from app.services.audit_service import record_system_error
 from app.services.exceptions import BusinessError
 from app.init_tasks import init_scheduled_tasks
@@ -154,6 +154,7 @@ app.include_router(tasks.router, prefix="/api/system/tasks", tags=["任务管理
 app.include_router(notifications.router, prefix="/api/system/notifications", tags=["通知"])
 app.include_router(snapshots.router, prefix="/api/snapshots", tags=["快照管理"])
 app.include_router(cash_transfers.router, prefix="/api/portfolios", tags=["现金转移"])
+app.include_router(cash_flows.router, prefix="/api/portfolios", tags=["现金流水"])
 app.include_router(sync_jobs.router, prefix="/api/sync-jobs", tags=["价格同步任务"])
 
 @app.get("/")
