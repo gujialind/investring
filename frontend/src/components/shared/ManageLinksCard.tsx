@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 
 /**
  * #595 组合详情页「管理」入口卡（M1/D1）：持仓管理 / 申赎赎回记录 / 调仓交易记录 /
- * 份额变动事件 / 快照管理。由移动端原有页尾列表抽取共享，桌面端同卡新增。
+ * 份额变动事件 / 快照管理 / 现金流水（#725）。由移动端原有页尾列表抽取共享，桌面端同卡新增。
  */
 export default function ManageLinksCard({
   basePath,
@@ -21,6 +21,7 @@ export default function ManageLinksCard({
     { href: `${basePath}/${code}/trades`, label: "调仓交易记录" },
     { href: `${basePath}/${code}/share-change-events`, label: "份额变动事件" },
     { href: `${basePath}/${code}/snapshots`, label: "快照管理" },
+    { href: `${basePath}/${code}/cash-flows`, label: "现金流水" },
   ];
   return (
     <Card>
