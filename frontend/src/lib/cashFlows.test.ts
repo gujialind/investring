@@ -10,6 +10,7 @@ import {
   normalizeMoneyText,
   formatBalanceCurrency,
   formatBareSigned,
+  cashFlowAmountText,
   CASH_FLOW_DOT_COLORS,
   CASH_FLOW_TYPE_OPTIONS,
   CASH_FLOW_STATUS_OPTIONS,
@@ -205,8 +206,24 @@ describe("formatBalanceCurrency", () => {
     expect(formatBalanceCurrency(0)).toBe("¥0.00");
     expect(formatBalanceCurrency("-1234.5")).toBe("-¥1,234.50");
   });
-  it("空值按 0 处理", () => {
-    expect(formatBalanceCurrency(null)).toBe("¥0.00");
+  it("空值/非法值 fallback --（§12 空值占位，#727 S4），真 0 不走 fallback", () => {
+    expect(formatBalanceCurrency(null)).toBe("--");
+    expect(formatBalanceCurrency(undefined)).toBe("--");
+    expect(formatBalanceCurrency("")).toBe("--");
+    expect(formatBalanceCurrency("abc")).toBe("--");
+    expect(formatBalanceCurrency("0")).toBe("¥0.00");
+  });
+});
+
+describe("cashFlowAmountText", () => {
+  it("重估行绝对值走存量档：正数不补 +（#727 N3）", () => {
+    expect(cashFlowAmountText(makeRow({ is_override: true, amount: "5000.0000" }))).toBe(
+      "¥5,000.00"
+    );
+  });
+  it("非重估行走流量档：± 在 ¥ 前", () => {
+    expect(cashFlowAmountText(makeRow({ amount: "1000.0000" }))).toBe("+¥1,000.00");
+    expect(cashFlowAmountText(makeRow({ amount: "-1000.0000" }))).toBe("-¥1,000.00");
   });
 });
 

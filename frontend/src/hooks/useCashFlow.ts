@@ -10,7 +10,8 @@ import { queryKeys } from "@/lib/queryKeys";
  * `keepPreviousData`：翻页/改筛选时保留上一页数据，避免整表闪空——与 useTradeList
  * 同口径。响应含 items + overview 四卡 + platform_breakdown，一次查询全部到位。
  * 页头三入口的写操作（现金转移 / 更新市值）与行级 confirm/revoke 复用各自既有
- * mutation hook，成功后失效 `queryKeys.cashFlows.root` 刷新本页（见 CashFlowsContent）。
+ * mutation hook，这些 hook 的 onSuccess 统一失效 `queryKeys.cashFlows.root`
+ * （含本列表与下方同日全组查询），写后本页自动刷新。
  */
 export function useCashFlowList(portfolioCode: string, params?: CashFlowListParams) {
   return useQuery({

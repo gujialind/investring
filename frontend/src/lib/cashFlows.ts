@@ -4,7 +4,7 @@ import type {
   CashFlowType,
 } from "@/types/cash-flow";
 import { CHART_COLORS } from "@/lib/colors";
-import { formatCurrency, formatNumber } from "@/lib/utils";
+import { formatCurrency, formatNumber, formatSignedCurrency } from "@/lib/utils";
 
 /**
  * 现金流水展示层纯函数（issue #725）。只吃后端行、吐展示值，无副作用、可单测。
@@ -142,14 +142,28 @@ export function normalizeMoneyText(text: string | null | undefined): string {
 }
 
 /**
- * 时点余额金额（可用现金 / 在途资金 / 平台日终余额）：符号在 ¥ 前、非负不补 +。
- * formatCurrency 会把负数渲染成「¥-1,234.00」（符号分居 ¥ 两侧，违 visual-spec §12），
- * 故余额一律走本函数得到「-¥1,234.00」；正值不带 + 是刻意的——余额是存量事实，
- * 不是流量增减（流量用 formatSignedCurrency 带 ± ）。
+ * 时点余额金额（可用现金 / 在途资金 / 平台日终余额 / 对账块期初期末）：符号在 ¥ 前、
+ * 非负不补 +。formatCurrency 会把负数渲染成「¥-1,234.00」（符号分居 ¥ 两侧，违
+ * visual-spec §12），故余额一律走本函数得到「-¥1,234.00」；正值不带 + 是刻意的——
+ * 余额是存量事实，不是流量增减（流量用 formatSignedCurrency 带 ± ）。
+ * 空值/非法值 fallback `--`（§12 空值占位；`prev_day_balance` 在交易日历覆盖不足时
+ * 为 null，#727 S4）——真 0 仍显示 ¥0.00，不走 fallback。
  */
 export function formatBalanceCurrency(value: string | number | null | undefined): string {
-  const n = toAmount(value);
+  if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
+    return "--";
+  }
+  const n = Number(value);
   return `${n < 0 ? "-" : ""}${formatCurrency(Math.abs(n))}`;
+}
+
+/**
+ * 行金额上屏文本（列表 / 卡片 / 弹窗金额行共用，#727 N3）：
+ * 重估行是**绝对值**不是流量——带 ± 会读成流入/流出（`+¥5,000.00` 像流入），故走
+ * 存量档 formatBalanceCurrency（正数不补 +）；其余行走流量档 formatSignedCurrency。
+ */
+export function cashFlowAmountText(row: CashFlowRow): string {
+  return row.is_override ? formatBalanceCurrency(row.amount) : formatSignedCurrency(row.amount);
 }
 
 /**

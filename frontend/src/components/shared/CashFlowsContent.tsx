@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useQueryClient } from "@tanstack/react-query";
 import { subYears } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import {
@@ -53,13 +52,13 @@ import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
 
-import { cn, formatSignedCurrency, toDateOnly } from "@/lib/utils";
-import { queryKeys } from "@/lib/queryKeys";
-import type { CashFlowListParams } from "@/lib/api";
+import { cn, formatNumber, formatSignedCurrency, toDateOnly } from "@/lib/utils";
+import { getErrorMessage, type CashFlowListParams } from "@/lib/api";
 import type { CashFlowRow, CashFlowStatusFilter, CashFlowType } from "@/types/cash-flow";
 import {
   amountNote,
   balanceSpans,
+  cashFlowAmountText,
   cashFlowDotColor,
   CASH_FLOW_STATUS_OPTIONS,
   CASH_FLOW_TYPE_OPTIONS,
@@ -113,7 +112,6 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const params = useParams();
   const code = params.code as string;
   const isMobile = variant === "mobile";
-  const queryClient = useQueryClient();
 
   // 筛选状态（visual-spec §9）：空字段 undefined，axios 不传参
   const [range, setRange] = useState<DateRange | undefined>(() => defaultRange());
@@ -148,9 +146,17 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const { data, isLoading, isFetching, isError, error, refetch } = useCashFlowList(code, listParams);
   const { data: platformsData } = usePlatformList({ page_size: 100 });
 
-  // 详情 / 当日弹窗打开时取同 (平台, 现金日期) 全组行（不带类型/状态筛选）
+  // 详情 / 当日弹窗打开时取同 (平台, 现金日期) 全组行（不带类型/状态筛选）。
+  // 对账块与「共 N 笔」计数一律消费**未过滤**的 dayGroupRows（#727 Blocker 2）：
+  // useCashFlowDay 本就不带 status，若再按页内状态筛选二次过滤，筛「在途」时打开
+  // pending 行详情会把同日已生效变动从对账块里筛掉，日终余额失去来源、自我否证。
   const dialogRow = detailRow ?? sameDayRow;
-  const { data: dayData } = useCashFlowDay(
+  const {
+    data: dayData,
+    isError: dayIsError,
+    error: dayErr,
+    refetch: refetchDay,
+  } = useCashFlowDay(
     code,
     dialogRow?.platform_code ?? null,
     dialogRow?.cash_date ?? null,
@@ -191,8 +197,12 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     setPage(1);
   };
 
-  const invalidateFlows = () =>
-    queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
+  // 撤销/删除使 total 收敛到更少的页时自动回到最后一页（#727 N1）：
+  // 否则停在越界页码，屏幕落「暂无现金流水」且分页条无可点页码、无法恢复。
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const spans = balanceSpans(rows);
 
@@ -244,13 +254,14 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const handleConfirm = (row: CashFlowRow) => {
     const group = row.origin_ref.transfer_group;
     if (!group) return;
-    confirmTransfer.mutate(group, { onSuccess: invalidateFlows });
+    // 读侧刷新由 useConfirmCashTransfer 的 onSuccess 统一失效 cashFlows.root（#727 B1）
+    confirmTransfer.mutate(group);
   };
   const handleRevoke = () => {
     if (!revokeRow) return;
     deleteOverride.mutate(
       { platformCode: revokeRow.platform_code, updateDate: revokeRow.cash_date },
-      { onSuccess: () => { setRevokeRow(null); invalidateFlows(); } }
+      { onSuccess: () => setRevokeRow(null) }
     );
   };
 
@@ -346,12 +357,46 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     );
   };
 
-  // 当日弹窗行集：解除类型筛选、保留当前状态筛选（mockup `sameDayRows` 口径）
+  // 同日全组行（未过滤，对账块与「共 N 笔」的唯一数据源）与当日弹窗表格行集
+  // （解除类型筛选、保留当前状态筛选——表格自身维持筛选行为，mockup `sameDayRows` 口径）
+  const dayGroupRows = useMemo(() => dayData?.items ?? [], [dayData?.items]);
   const dayRows = useMemo(() => {
-    const all = dayData?.items ?? [];
-    if (!statusFilter) return all;
-    return all.filter((r) => (statusFilter === "settled" ? r.settled : !r.settled));
-  }, [dayData?.items, statusFilter]);
+    if (!statusFilter) return dayGroupRows;
+    return dayGroupRows.filter((r) => (statusFilter === "settled" ? r.settled : !r.settled));
+  }, [dayGroupRows, statusFilter]);
+
+  // 弹窗内同日查询的加载 / 失败态（#727 S2，visual-spec §14 Dialog 形态：失败走
+  // destructive inline Alert + 重试）。不得在查询未落地时用单行兜底冒充全组对账。
+  const renderDayQueryState = (): ReactNode | null => {
+    if (dayIsError && !dayData) {
+      return (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive-soft p-3"
+          data-testid="day-query-error"
+        >
+          <p className="text-sm text-destructive-foreground">
+            同日流水加载失败：{getErrorMessage(dayErr, "请稍后重试")}
+          </p>
+          <Button type="button" variant="link" size="sm" onClick={() => refetchDay()}>
+            重试
+          </Button>
+        </div>
+      );
+    }
+    if (!dayData) {
+      return (
+        <div
+          className="flex items-center justify-center gap-2 rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground"
+          aria-busy="true"
+          data-testid="day-query-loading"
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          同日流水加载中…
+        </div>
+      );
+    }
+    return null;
+  };
 
   // ---- 筛选栏控件（visual-spec §9：时间 → 状态 → 实体 → 类型）----
   const rangeWidth = isMobile ? "h-9 w-full" : "h-9 w-[240px]";
@@ -492,7 +537,10 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-sm text-muted-foreground">{s.label}</span>
-                <span className="number-cell text-2xl font-semibold">{s.value}</span>
+                {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号 */}
+                <span className={cn("number-cell font-semibold", isMobile ? "text-xl" : "text-2xl")}>
+                  {s.value}
+                </span>
                 <span className={cn("text-xs", s.warn ? "text-warning-foreground" : "text-muted-foreground")}>
                   {s.note}
                 </span>
@@ -536,8 +584,9 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
 
-          {/* §14：筛选/翻页局部刷新保留旧数据，半透明 + 右上角 spinner */}
-          <div className={cn("relative", isFetching && "opacity-50")}>
+          {/* §14：筛选/翻页局部刷新保留旧数据，半透明 + 右上角 spinner + aria-busy
+              （#683 D-1 同形态；首屏在途走上方 LoadingState 提前返回，不在此列） */}
+          <div className={cn("relative", isFetching && "opacity-50")} aria-busy={isFetching}>
             {isFetching && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
@@ -560,7 +609,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                       </div>
                       <div className="mt-2 flex items-center justify-between">
                         <Badge variant={row.status.variant}>{row.status.label}</Badge>
-                        <span className="number-cell font-medium">{formatSignedCurrency(row.amount)}</span>
+                        <span className="number-cell font-medium">{cashFlowAmountText(row)}</span>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
                         日终余额 · {pname(row.platform_code)}{" "}
@@ -638,7 +687,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                           </div>
                         </TableCell>
                         <TableCell className="number-cell align-top">
-                          {formatSignedCurrency(row.amount)}
+                          {cashFlowAmountText(row)}
                           {note && <div className="text-xs font-normal text-muted-foreground">{note}</div>}
                         </TableCell>
                         {!merged && (
@@ -736,7 +785,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                   </div>
                 </DetailRow>
                 <DetailRow k="金额">
-                  <span className="number-cell">{formatSignedCurrency(detailRow.amount)}</span>
+                  <span className="number-cell">{cashFlowAmountText(detailRow)}</span>
                   {amountNote(detailRow) && (
                     <div className="text-xs text-muted-foreground">{amountNote(detailRow)}</div>
                   )}
@@ -769,7 +818,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                   </span>
                 </DetailRow>
               </div>
-              {renderRecon(detailRow, dayRows.length ? dayRows : [detailRow])}
+              {renderDayQueryState() ?? renderRecon(detailRow, dayGroupRows)}
               {(() => {
                 const proj = projectedBalance(detailRow);
                 if (proj === null) return null;
@@ -816,70 +865,76 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                   {pname(sameDayRow.platform_code)} · {sameDayRow.cash_date} 现金流水
                 </DialogTitle>
                 <DialogDescription>
-                  当日该平台共 {dayRows.length} 笔（含被当前筛选隐藏的行）。关闭后回到当前筛选视图，筛选条件不变。
+                  {dayData
+                    ? `当日该平台共 ${dayGroupRows.length} 笔（含被当前筛选隐藏的行）。关闭后回到当前筛选视图，筛选条件不变。`
+                    : "同日流水加载中，笔数以全组数据落地为准。"}
                 </DialogDescription>
               </DialogHeader>
-              {isMobile ? (
-                <div className="space-y-2">
-                  {dayRows.map((r) => (
-                    <div key={rowKey(r)} className="rounded-lg border p-3">
-                      <div className="flex items-center justify-between">
-                        {typeChip(r)}
-                        {rowKey(r) === rowKey(sameDayRow) && (
-                          <span className="text-xs text-muted-foreground">当前筛选命中</span>
-                        )}
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">{r.source_main}</div>
-                      <div className="mt-1 flex items-center justify-between">
-                        <Badge variant={r.status.variant}>{r.status.label}</Badge>
-                        <span className="number-cell text-sm">{formatSignedCurrency(r.amount)}</span>
-                      </div>
+              {renderDayQueryState() ?? (
+                <>
+                  {isMobile ? (
+                    <div className="space-y-2">
+                      {dayRows.map((r) => (
+                        <div key={rowKey(r)} className="rounded-lg border p-3">
+                          <div className="flex items-center justify-between">
+                            {typeChip(r)}
+                            {rowKey(r) === rowKey(sameDayRow) && (
+                              <span className="text-xs text-muted-foreground">当前筛选命中</span>
+                            )}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">{r.source_main}</div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <Badge variant={r.status.variant}>{r.status.label}</Badge>
+                            <span className="number-cell text-sm">{cashFlowAmountText(r)}</span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>流水类型</TableHead>
-                      <TableHead>来源 / 去向</TableHead>
-                      <TableHead className="number-cell">金额</TableHead>
-                      <TableHead>状态</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {dayRows.map((r) => (
-                      <TableRow key={rowKey(r)}>
-                        <TableCell>
-                          {typeChip(r)}
-                          {rowKey(r) === rowKey(sameDayRow) && (
-                            <div className="mt-0.5 text-xs text-muted-foreground">当前筛选命中</div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="text-sm font-medium">{r.source_main}</div>
-                          <div className="text-xs text-muted-foreground">{normalizeMoneyText(r.source_sub)}</div>
-                        </TableCell>
-                        <TableCell className="number-cell">
-                          {formatSignedCurrency(r.amount)}
-                          {!r.settled && (
-                            <div className="text-xs font-normal text-muted-foreground">
-                              {amountNote(r) ?? "未到账"}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={r.status.variant}>{r.status.label}</Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>流水类型</TableHead>
+                          <TableHead>来源 / 去向</TableHead>
+                          <TableHead className="number-cell">金额</TableHead>
+                          <TableHead>状态</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {dayRows.map((r) => (
+                          <TableRow key={rowKey(r)}>
+                            <TableCell>
+                              {typeChip(r)}
+                              {rowKey(r) === rowKey(sameDayRow) && (
+                                <div className="mt-0.5 text-xs text-muted-foreground">当前筛选命中</div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-sm font-medium">{r.source_main}</div>
+                              <div className="text-xs text-muted-foreground">{normalizeMoneyText(r.source_sub)}</div>
+                            </TableCell>
+                            <TableCell className="number-cell">
+                              {cashFlowAmountText(r)}
+                              {!r.settled && (
+                                <div className="text-xs font-normal text-muted-foreground">
+                                  {amountNote(r) ?? "未到账"}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={r.status.variant}>{r.status.label}</Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                  {renderRecon(sameDayRow, dayGroupRows)}
+                  <p className="text-xs text-muted-foreground">
+                    这就是列表里那一格合并余额的来历；未到账的腿不在其中。
+                  </p>
+                </>
               )}
-              {renderRecon(sameDayRow, dayRows.length ? dayRows : [sameDayRow])}
-              <p className="text-xs text-muted-foreground">
-                这就是列表里那一格合并余额的来历；未到账的腿不在其中。
-              </p>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setSameDayRow(null)}>
                   关闭
@@ -999,7 +1054,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               {(toAmount(breakdown.recon.inflow) !== 0 || toAmount(breakdown.recon.outflow) !== 0) && (
                 <p className="text-xs text-muted-foreground">
                   流入/流出各行<b>含</b>平台间转移（对该平台是真进出，与筛该平台时四卡一致）；合计行为<b>组合口径</b>、平台间转移属内部搬运不计，故这两列行和 ≠ 合计：差 = 本期已生效转移（转出{" "}
-                  {formatBareSigned(breakdown.recon.outflow)} / 转入 {formatBareSigned(breakdown.recon.inflow)}
+                  {/* 转出/转入按绝对值展示——「转出 -5,000.00」的负号与词义冗余（#727 N3） */}
+                  {formatNumber(Math.abs(toAmount(breakdown.recon.outflow)), 2)} / 转入 {formatNumber(Math.abs(toAmount(breakdown.recon.inflow)), 2)}
                   ，在途腿未生效不计）。可用现金 / 在途资金是时点值，行和 = 合计。
                 </p>
               )}
