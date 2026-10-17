@@ -19,6 +19,7 @@ from app.schemas.cash_flow import CashFlowRow, PaginatedCashFlowResponse
 from app.services import cash_flow_service
 from app.services.cash_flow_service import FLOW_TYPES, list_cash_flows
 from app.services.exceptions import BusinessError
+from app.services.trading_utils import get_next_trading_day
 from tests.factories import (
     create_manual_market_value,
     create_portfolio,
@@ -254,13 +255,68 @@ class TestDerivationRules:
         # computed_value 是 Numeric(15,4) 审计值，原值直出（T3：读侧不量化）
         assert row["source_sub"] == "覆盖前计算值 92400.0000"
         assert row["action"] == {"label": "撤销", "kind": "revoke"}
-        # 无快照 → 覆盖尚未烘焙进快照，note 点明（不改判在途，见 _revalue_rows）
+        # 无快照 → 覆盖尚未烘焙进快照：不得称「已生效」（余额列与可用现金都不含它）
+        assert row["settled"] is False
         assert row["status"] == {
-            "variant": "neutral",
-            "label": "已生效",
+            "variant": "warning",
+            "label": "待重算",
             "note": "覆盖尚未烘焙进快照，需重算快照后生效",
         }
         assert row["origin_ref"]["kind"] == "manual_market_value"
+
+    def test_unbaked_revalue_leaves_available_unchanged_and_out_of_settled(
+        self, test_db, flows_portfolio
+    ):
+        """PR #726 评审：未烘焙的覆盖 settled=False、可用现金不含它、也不进在途金额。"""
+        before = list_cash_flows(test_db, flows_portfolio, page_size=100)["overview"]
+
+        # 再加一条同日覆盖（MYCF），可用现金与在途金额都不动
+        create_manual_market_value(
+            test_db, portfolio_code=flows_portfolio, platform_code="MYCF",
+            product_code="CASH", record_date=PAST, market_value=1,
+        )
+        after = list_cash_flows(test_db, flows_portfolio, page_size=100)["overview"]
+        assert after["available"] == before["available"]
+        assert after["in_transit"] == before["in_transit"]
+
+        # status 筛选：settled 档不含未烘焙覆盖，in_transit 档含（尚未生效）
+        assert list_cash_flows(
+            test_db, flows_portfolio, status="settled", flow_type="revalue", page_size=50
+        )["total"] == 0
+        in_transit = list_cash_flows(
+            test_db, flows_portfolio, status="in_transit", flow_type="revalue", page_size=50
+        )
+        assert in_transit["total"] == 2
+        assert all(row["settled"] is False for row in in_transit["items"])
+
+    def test_confirmed_sub_buy_with_future_confirm_date_is_not_pending_label(self, test_db):
+        """PR #726 评审：T+1 确认的申购注资腿标「已确认 · 待入账」，不是「待确认」。"""
+        pc = "CF_SUBBUY"
+        create_portfolio(test_db, code=pc, name="申购标签组合", status="active")
+        confirm_day = get_next_trading_day(test_db, TODAY)
+
+        # 今天确认：apply_date=今天、confirm_date=下一交易日（确认路径写入的形态：
+        # CASH buy 腿 trade_date=apply_date、confirm_date=确认日、直接 confirmed）
+        sub = create_subscription(
+            test_db, portfolio_code=pc, investor_code="ADMIN", sub_type="subscribe",
+            amount=20000, apply_date=TODAY, confirm_date=confirm_day,
+            status="confirmed", platform_code="HBZQ",
+        )
+        create_trade(
+            test_db, portfolio_code=pc, product_code="CASH", market="",
+            trade_type="buy", amount=20000, platform_code="HBZQ", trade_date=TODAY,
+            confirm_date=confirm_day, transfer_group=f"sub_{sub.id}", status="confirmed",
+        )
+
+        (row,) = list_cash_flows(test_db, pc, flow_type="sub_buy", page_size=50)["items"]
+        assert row["cash_date"] == confirm_day          # 买入锚 confirm_date
+        assert row["settled"] is False
+        assert row["status"]["label"] == "已确认 · 待入账"
+        assert row["status"]["variant"] == "warning"
+        # pair_ref 与行同一锚点口径：确认日未到 → 同样未生效
+        assert row["pair_ref"]["kind"] == "subscription"
+        assert row["pair_ref"]["ref_date"] == confirm_day
+        assert row["pair_ref"]["settled"] is False
 
     def test_cancelled_legs_are_excluded(self, test_db, flows_portfolio):
         result = list_cash_flows(test_db, flows_portfolio, page_size=100)

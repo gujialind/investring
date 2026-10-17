@@ -7405,7 +7405,7 @@
           "现金流水"
         ],
         "summary": "Get Cash Flows",
-        "description": "现金流水列表（含页头概览四卡与按平台构成）。\n\n- `from_date` / `to_date`：现金日期闭区间，均可空（上界缺省开放，否则预计到账日\n  在未来的在途行会被默认视图藏掉）。\n- `status`：`settled`（已生效）/ `in_transit`（在途）——映射派生的 settled 两值，\n  不透出 raw `trade.status`；cancelled 腿不出行。\n- `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /\n  `transfer` / `revalue`。\n- 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。",
+        "description": "现金流水列表（含页头概览四卡与按平台构成）。\n\n- `from_date` / `to_date`：现金日期闭区间，均可空（上界缺省开放，否则预计到账日\n  在未来的在途行会被默认视图藏掉）。\n- `status`：`settled`（已生效）/ `in_transit`（在途）——映射派生的 settled 两值，\n  不透出 raw `trade.status`；cancelled 腿不出行。未烘焙进快照的重估行落\n  `in_transit` 档（尚未生效），但对 `overview.in_transit` 金额贡献为 0。\n  `platform_code` 空串等同未传（不做平台筛选）。\n- `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /\n  `transfer` / `revalue`。\n- 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。",
         "operationId": "get_cash_flows_api_portfolios__portfolio_code__cash_flows_get",
         "security": [
           {
@@ -8271,7 +8271,7 @@
           "label"
         ],
         "title": "CashFlowPairRef",
-        "description": "关联业务（转移对方腿 / 调仓基金腿 / 申赎记录）。\n\n`amount` 为对方记录自身口径的金额（转移腿带符号、基金腿为正值原额），\n`ref_date` 为该记录的锚点日（转移=对方现金日、基金腿=确认日、申赎=确认日）。"
+        "description": "关联业务（转移对方腿 / 调仓基金腿 / 申赎记录）。\n\n`amount` 为对方记录自身口径的金额（转移腿带符号、基金腿为正值原额），\n`ref_date` 为该记录的锚点日（转移=对方现金日、基金腿=确认日、申赎=确认日），\n`settled` 按**该锚点日**判定（confirmed 且 `ref_date <= 今天`），与本行自己的\n`settled` 各自独立——两者的锚点可以不同（如赎回行锚申请日、其申赎记录锚确认日）。"
       },
       "CashFlowRecon": {
         "properties": {
@@ -8437,7 +8437,7 @@
           "origin_ref"
         ],
         "title": "CashFlowRow",
-        "description": "一笔现金变动 = 某平台现金账本上的一行（平台间转移按腿拆两行）。\n\n- `cash_date`：该行参与排序/分组/余额查询的唯一权威日期（锚点见 rule-cash）。\n- `amount`：带符号（流入为正、流出为负）；`is_override=True` 的重估行是**绝对值**\n  而非增量，不得与增量求和。\n- `settled`：该笔现金效果是否已计入 as_of=today 的可用现金。False 的行不进\n  流入/流出、只进 `overview.in_transit`。\n- `platform_end_of_day_balance` / `prev_day_balance`：平台级时点值，同\n  (平台, 现金日期) 组内各行相同（前端据此 rowSpan 合并），与筛选无关。\n- `group_total_count`：同 (平台, 现金日期) 在**解除类型筛选**后的总笔数，\n  前端「当日另有 N 笔」= 该值 − 在屏同组行数。"
+        "description": "一笔现金变动 = 某平台现金账本上的一行（平台间转移按腿拆两行）。\n\n- `cash_date`：该行参与排序/分组/余额查询的唯一权威日期（锚点见 rule-cash）。\n- `amount`：带符号（流入为正、流出为负）；`is_override=True` 的重估行是**绝对值**\n  而非增量，不得与增量求和。\n- `settled`：该笔现金效果是否已计入 as_of=today 的可用现金。False 的行不进\n  流入/流出、只进 `overview.in_transit`。重估行（`is_override=True`）的判据是\n  **覆盖已烘焙进快照**（`value_date <= 最新快照日`）：未烘焙时覆盖值既不在可用\n  现金里、也不是在途资金，故 `settled=False` 但对 `in_transit` 贡献恒为 0。\n- `platform_end_of_day_balance` / `prev_day_balance`：平台级时点值，同\n  (平台, 现金日期) 组内各行相同（前端据此 rowSpan 合并），与筛选无关。\n- `group_total_count`：同 (平台, 现金日期) 在**解除类型筛选**后的总笔数，\n  前端「当日另有 N 笔」= 该值 − 在屏同组行数。"
       },
       "CashFlowStatus": {
         "properties": {
@@ -8467,7 +8467,7 @@
           "label"
         ],
         "title": "CashFlowStatus",
-        "description": "行状态（由 `settled` 派生，不透出 raw `trade.status`）。\n\nvariant: success=已生效 / warning=在途 / neutral=非流量（重估）。"
+        "description": "行状态（由 `settled` 派生，不透出 raw `trade.status`）。\n\nvariant: success=已生效 / warning=未生效（在途，或重估覆盖尚未烘焙进快照）/\nneutral=非流量且已生效（重估）。"
       },
       "CashPositionUpdate": {
         "properties": {

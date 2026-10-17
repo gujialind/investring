@@ -213,6 +213,17 @@ class TestParamValidation:
         detail = _get(client, admin_headers, flow_type="cash_adjust").json()["detail"]
         assert "rebal_buy" in detail["message"] and "revalue" in detail["message"]
 
+    def test_empty_platform_code_equals_omitted(self, client, admin_headers, api_portfolio):
+        """PR #726 评审：`?platform_code=` 空串归一为「未筛选」，与省略参数完全等价。"""
+        omitted = _get(client, admin_headers, page_size=100).json()
+        empty = _get(client, admin_headers, platform_code="", page_size=100).json()
+        assert empty == omitted
+        assert empty["total"] == 9                    # 行集不按空串过滤成空
+        # 可用现金与行集同 scope：不是「列表空 + 可用现金组合值」的矛盾组合
+        assert Decimal(empty["overview"]["available"]) == Decimal(
+            omitted["overview"]["available"]
+        )
+
 
 class TestTransferRows:
     """断言 4/6：一笔转移 = 两行、互指、分页计数 +2。"""
@@ -274,15 +285,24 @@ class TestTransferRows:
         in_transit = _get(
             client, admin_headers, status="in_transit", page_size=100
         ).json()
-        assert in_transit["total"] == 1                # 只有跨天转入腿
-        (row,) = in_transit["items"]
-        assert row["origin_ref"]["transfer_group"] == GROUP_CROSS_DAY
-        assert set(row["status"]) == {"variant", "label", "note"}
-        assert row["status"]["label"] == "待到账"
+        # 跨天转入腿（未到账）+ 未烘焙进快照的重估行（本组合无快照）
+        assert in_transit["total"] == 2
+        by_type = {row["flow_type"]: row for row in in_transit["items"]}
+        assert set(by_type) == {"transfer", "revalue"}
+        leg = by_type["transfer"]
+        assert leg["origin_ref"]["transfer_group"] == GROUP_CROSS_DAY
+        assert set(leg["status"]) == {"variant", "label", "note"}
+        assert leg["status"]["label"] == "待到账"
+        # 重估行落 in_transit 档（尚未生效）但对在途金额贡献为 0
+        assert by_type["revalue"]["status"]["label"] == "待重算"
+        assert Decimal(in_transit["overview"]["in_transit"]) == Decimal("1500")
 
         settled = _get(client, admin_headers, status="settled", page_size=100).json()
-        assert settled["total"] == 8
+        assert settled["total"] == 7
         assert all(item["settled"] is True for item in settled["items"])
+        assert {row["flow_type"] for row in settled["items"]} == {
+            "transfer", "sub_buy", "rebal_buy", "dividend",
+        }
 
 
 class TestFlowTypeFilter:

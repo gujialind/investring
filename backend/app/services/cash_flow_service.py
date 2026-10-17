@@ -57,6 +57,8 @@ FLOW_TYPES = tuple(FLOW_TYPE_LABELS)
 
 # status 筛选取值域：映射到派生的 settled 两值，不透出 raw `trade.status`
 # （confirmed + 未来到账日在余额语义上仍是「在途」，raw 值会误导）。
+# `in_transit` 档因此含未烘焙进快照的重估行，但它对 `overview.in_transit` 的金额
+# 贡献恒为 0——绝对值不是增量（见 _revalue_rows）。
 STATUS_SETTLED = "settled"
 STATUS_IN_TRANSIT = "in_transit"
 STATUS_VALUES = (STATUS_SETTLED, STATUS_IN_TRANSIT)
@@ -79,22 +81,30 @@ def _signed(amount: Decimal, is_buy: bool) -> Decimal:
     return amount if is_buy else -amount
 
 
-def _status_of(flow_type: str, direction: str, settled: bool, note: Optional[str]) -> dict:
+def _status_of(row: dict) -> dict:
     """行状态派生（variant/label/note）。direction: in | out | neutral。"""
+    flow_type = row["flow_type"]
+    settled = row["settled"]
+    note = row.get("_note")
     if flow_type == "revalue":
+        # settled = 覆盖已烘焙进快照；未烘焙时日终余额与可用现金都还不含它
         return {
             "variant": "neutral" if settled else "warning",
-            "label": "已生效" if settled else "未生效",
+            "label": "已生效" if settled else "待重算",
             "note": note,
         }
     if not settled:
         labels = {
             "rebal_buy": "待扣款",
             "rebal_sell": "现金待到账",
-            "sub_buy": "待确认",
+            # 申购确认即写入 confirmed 的 CASH buy 腿、锚点日是未来的确认日 C：
+            # 一律标「待确认」会与已确认的申赎记录及其 pair_ref 矛盾
+            "sub_buy": (
+                "已确认 · 待入账" if row["trade_status"] == "confirmed" else "待确认"
+            ),
             "redeem": "待支付",
             "dividend": "在途",
-            "transfer": "待到账" if direction == "in" else "待扣款",
+            "transfer": "待到账" if row["direction"] == "in" else "待扣款",
         }
         return {"variant": "warning", "label": labels[flow_type], "note": note}
     labels = {
@@ -103,7 +113,7 @@ def _status_of(flow_type: str, direction: str, settled: bool, note: Optional[str
         "sub_buy": "已入账",
         "redeem": "已支付",
         "dividend": "已到账",
-        "transfer": "已到账" if direction == "in" else "已扣款",
+        "transfer": "已到账" if row["direction"] == "in" else "已扣款",
     }
     return {"variant": "success", "label": labels[flow_type], "note": note}
 
@@ -277,9 +287,11 @@ def _event_rows(db: Session, portfolio_code: str, today: date) -> list:
 def _revalue_rows(db: Session, portfolio_code: str, today: date) -> list:
     """手动现金重估 → 重估行（绝对值，不参与求和）。
 
-    `settled` 只看覆盖日是否已到：重估经快照 baked-in 才被
-    `calculate_available_cash` 读到，未重算时用 note 点明，不改判在途
-    （它不是「钱在路上」，混进 in_transit 会把绝对值当增量）。
+    `settled` = 覆盖已**烘焙进快照**（`value_date <= today` 且 `<= 最新快照日`）：
+    覆盖值只经快照被 `calculate_available_cash` 读到，未烘焙时日终余额与可用现金都
+    不含它，故不得称「已生效」（否则行说已生效、余额列与存量卡都不含它）。仍不进
+    在途——它不是「钱在路上」，混进 in_transit 会把绝对值当增量；未烘焙由 status
+    标「待重算」并保留 note。
     """
     mmvs = (
         db.query(ManualMarketValue)
@@ -295,8 +307,8 @@ def _revalue_rows(db: Session, portfolio_code: str, today: date) -> list:
     latest_snapshot = get_latest_snapshot_date(db, portfolio_code)
     rows: list = []
     for m in mmvs:
-        settled = m.value_date <= today
         baked = latest_snapshot is not None and m.value_date <= latest_snapshot
+        settled = m.value_date <= today and baked
         note = None if baked else "覆盖尚未烘焙进快照，需重算快照后生效"
         rows.append({
             "source_kind": "revalue",
@@ -537,7 +549,11 @@ def _enrich_rows(
                     "platform_name": platform_names.get(sub.platform_code),
                     "ref_date": sub.confirm_date,
                     "amount": _dec(sub.amount),
-                    "settled": sub.status == "confirmed",
+                    # 与行的锚点同一口径（ref_date = 确认日）：confirmed 但确认日
+                    # 未到仍是未生效，否则 pair 说已生效、行说在途自相矛盾
+                    "settled": sub.status == "confirmed" and (
+                        sub.confirm_date is None or sub.confirm_date <= today
+                    ),
                 }
             else:
                 r["source_main"] = r["source_main"] or "申购赎回"
@@ -590,9 +606,7 @@ def _enrich_rows(
         elif flow_type == "revalue":
             r["platform_name"] = platform_names.get(r["platform_code"])
 
-        r["status"] = _status_of(
-            flow_type, r["direction"], r["settled"], r.get("_note")
-        )
+        r["status"] = _status_of(r)
         if flow_type == "revalue":
             r["action"] = {"label": "撤销", "kind": "revoke"}
         elif r["trade_status"] == "pending" and flow_type == "transfer":
@@ -675,6 +689,11 @@ def list_cash_flows(
     Returns:
         dict（可直接喂 `PaginatedCashFlowResponse`）。
     """
+    # 空串归一为「未筛选」：否则行集按 `== ""` 过滤成空，而
+    # `calculate_available_cash` 内部 `if platform_code:` 又走组合级，
+    # 响应变成「列表空 + 可用现金组合值」的自相矛盾组合。
+    platform_code = platform_code or None
+
     if status is not None and status not in STATUS_VALUES:
         raise BusinessError(
             "INVALID_PARAM",

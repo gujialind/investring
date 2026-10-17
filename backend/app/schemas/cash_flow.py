@@ -15,7 +15,8 @@ from pydantic import BaseModel
 class CashFlowStatus(BaseModel):
     """行状态（由 `settled` 派生，不透出 raw `trade.status`）。
 
-    variant: success=已生效 / warning=在途 / neutral=非流量（重估）。
+    variant: success=已生效 / warning=未生效（在途，或重估覆盖尚未烘焙进快照）/
+    neutral=非流量且已生效（重估）。
     """
     variant: str
     label: str
@@ -42,7 +43,9 @@ class CashFlowPairRef(BaseModel):
     """关联业务（转移对方腿 / 调仓基金腿 / 申赎记录）。
 
     `amount` 为对方记录自身口径的金额（转移腿带符号、基金腿为正值原额），
-    `ref_date` 为该记录的锚点日（转移=对方现金日、基金腿=确认日、申赎=确认日）。
+    `ref_date` 为该记录的锚点日（转移=对方现金日、基金腿=确认日、申赎=确认日），
+    `settled` 按**该锚点日**判定（confirmed 且 `ref_date <= 今天`），与本行自己的
+    `settled` 各自独立——两者的锚点可以不同（如赎回行锚申请日、其申赎记录锚确认日）。
     """
     kind: str
     id: int
@@ -61,7 +64,9 @@ class CashFlowRow(BaseModel):
     - `amount`：带符号（流入为正、流出为负）；`is_override=True` 的重估行是**绝对值**
       而非增量，不得与增量求和。
     - `settled`：该笔现金效果是否已计入 as_of=today 的可用现金。False 的行不进
-      流入/流出、只进 `overview.in_transit`。
+      流入/流出、只进 `overview.in_transit`。重估行（`is_override=True`）的判据是
+      **覆盖已烘焙进快照**（`value_date <= 最新快照日`）：未烘焙时覆盖值既不在可用
+      现金里、也不是在途资金，故 `settled=False` 但对 `in_transit` 贡献恒为 0。
     - `platform_end_of_day_balance` / `prev_day_balance`：平台级时点值，同
       (平台, 现金日期) 组内各行相同（前端据此 rowSpan 合并），与筛选无关。
     - `group_total_count`：同 (平台, 现金日期) 在**解除类型筛选**后的总笔数，
