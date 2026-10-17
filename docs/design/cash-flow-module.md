@@ -17,27 +17,28 @@
 - 页头四卡：可用现金 / 在途资金 / 本期流入 / 本期流出。默认组合级；平台筛选激活切该平台；筛选态的组合级由「按平台构成」弹窗合计行承担（下钻与上看同一弹窗）。
 - 筛选栏：区间（上界默认开放「至今」，否则预计到账日在未来的在途行会被默认视图藏掉）/ 状态 / 平台 / 流水类型（7 类，见 §3）。
 - 列表 7 列：`日期 · 平台` 组列（按 `(平台, 现金日期)` rowSpan 合并，内含「当日另有 N 笔」入口）/ 流水类型（chip + 日期含义副行）/ 来源 · 去向 / 金额 / 平台日终余额（与组列同段合并）/ 状态 / 操作。排序 = 现金日期降序 → 平台 code 升序 → 来源类型（`trade_leg` → `transfer` → `dividend` → `revalue`）→ 原始记录 id，因此同组行必然连续，合并段不会被分页以外的因素切断。
-- 三弹窗：当日该平台全部流水（仅解除类型筛选、标注命中行、关窗回原筛选）；流水详情（kv + 日终余额对账块 + 未到账行的投影块）；按平台构成（行值 = 筛该平台时四卡值、合计行 = 组合口径、行末「看明细」钻穿 / 「更新」以该平台预选启动更新现金市值、合计行无「更新」）。
+- 三弹窗：当日该平台全部流水（仅解除类型筛选、标注命中行、关窗回原筛选）；流水详情（kv + 日终余额对账块 + 未到账行的投影块；对账块按**组级**式渲染，见 §3）；按平台构成（行值 = 筛该平台时四卡值、合计行 = 组合口径、行末「看明细」钻穿 / 「更新」以该平台预选启动更新现金市值、合计行无「更新」）。
 - 页头入口：现金转移 / 转移记录 / 更新现金市值（三个弹窗均已是 `frontend/src/components/shared/dialogs/` 的共享组件，复用不新建）。
 - **方向口径（账本视角，不可反向）**：申购的 CASH buy 腿是**流入**（投资人注资入账，label「申购 · 注资入账」）、赎回的 CASH sell 腿是**流出**（组合向投资人支付，label「赎回 · 支付」）。mockup v3 按「基金申赎 = 扣款/到账」的直觉标了相反符号，与其自身余额列（= `calculate_available_cash` 单次调用）不可能同时成立——对账块会不闭合。PR-2 落地时按本条修正 mockup 帧。
 - 显示层口径四条（余额列）：平台级（列名「平台日终余额」，**无组合级余额列**）；时点值 = `calculate_available_cash(as_of=该行现金日期, platform=该行平台)` 单次调用；日终值同 `(平台, 日)` 合并一格；与类型/状态/区间筛选构造上免疫。
+- 状态列文案档位（后端 `status.label` 派生，前端不另算）：未生效行按类型给「待扣款 / 现金待到账 / 待支付 / 在途 / 待到账」；**申购注资腿按 `trade_status` 分档**——pending 是「待确认」、confirmed 但确认日 C 未到是「已确认 · 待入账」（T+1 确认的常态，一律标「待确认」会与已确认的申赎记录矛盾）；**重估行**已烘焙进快照是「已生效」（neutral），未烘焙是「待重算」（warning）+ note「需重算快照后生效」。
 - 显示层口径三条（补充）：「当日另有 N 笔」N = 后端给的 `group_total_count` − 在屏同组行数，N=0 不渲染；投影值（「预计到账后余额」）只出现在详情弹窗、由前端推算并明写「不是 `calculate_available_cash` 的结果」，**后端不出该字段**；平台间转移按平台-日拆两行、配对靠详情弹窗的关联业务块维持。
 - 移动端：卡片流不做行合并，每卡重复显示日终余额 + 平台名；「当日该平台另有 N 笔」放卡片操作行左侧；三个页头入口并排一行（补移动端 positions 页无转移入口的缺口）；分页简化为「共 N 条 + 第 x/y 页」。移动端**同样提供详情弹窗**（kv 卡片形态），断言 6/10 不豁免端。
 
 ## 3. 契约（后端聚合查询，PR-1 已实现）
 
 - 端点：`GET /api/portfolios/{portfolio_code}/cash-flows`（**复数**）。既有 `GET /api/portfolios/{portfolio_code}/cash-flow`（单数，`routers/portfolios.py`，申赎汇总）口径不同、并存不改名（改名是破坏性变更，超出 #725 范围）。
-- 参数：`from_date`、`to_date`（可空 = 开放上界）、`status`、`platform_code`、`flow_type`、`page`、`page_size`（1-100）。非法值 → `INVALID_PARAM`；`from_date > to_date` → `INVALID_DATE_RANGE`；组合不存在 → `PORTFOLIO_NOT_FOUND`（复用既有码，未新增错误码）。
+- 参数：`from_date`、`to_date`（可空 = 开放上界）、`status`、`platform_code`（**空串等同未传**，service 入口归一为 None，否则行集按空串过滤成空而 `calculate_available_cash` 仍走组合级 → 矛盾响应）、`flow_type`、`page`、`page_size`（1-100）。非法值 → `INVALID_PARAM`；`from_date > to_date` → `INVALID_DATE_RANGE`；组合不存在 → `PORTFOLIO_NOT_FOUND`（复用既有码，未新增错误码）。
 - 行 schema：见 `backend/app/schemas/cash_flow.py::CashFlowRow`（字段清单是生成契约 `backend/openapi.json` 的事实来源，本文不复制）。设计要点：
   - `source_kind ∈ {trade_leg, transfer, dividend, revalue}`：申赎属 `trade_leg`（由 `flow_type` 区分），不另立 source_kind；平台间转移虽也是 CASH 腿，但两腿互指、需要独立的 pair 语义，故单列。
   - `flow_type ∈ {rebal_buy, rebal_sell, sub_buy, redeem, dividend, transfer, revalue}`（7 类 = 筛选下拉值域）。`forced_adjustment` 归 `dividend` 值域、`flow_type_label` 显示「现金调整」——不为一类事件另立筛选值（§6 T5）。
   - `cash_date` 是排序/分组/余额查询的唯一权威日期，锚点规则表见 [rule-cash](../reference/business-constraints.md#rule-cash)（卖出锚 `trade_date`、买入锚 `confirm_date`、事件锚有效现金日、重估锚 `value_date`）；`cash_date_label` / `cash_date_sub` 给日期含义副行（扣款日 T / 到账日 A · 预计 / 确认日 C / 到账日 cash_pay_date / 除息日 ex_date / 转移日 / 覆盖日）。
-  - `platform_end_of_day_balance` + `prev_day_balance`：后者是详情弹窗对账块首行「{前日} 日终（或期初）」的数据来源——只有当日日终不足以让对账块闭合（§6 C3）。后端按 `(平台, 现金日期)` **去重后**批量取价；前一交易日走 `try_get_prev_trading_day`，日历覆盖不足时该值为空而不是让整个只读列表失败。rowSpan 合并是显示层行为，后端不合并。
+  - `platform_end_of_day_balance` + `prev_day_balance`：后者是详情弹窗对账块首行「{前日} 日终（或期初）」的数据来源——只有当日日终不足以让对账块闭合（§6 C3）。**对账式是组级**：前日日终 + 同日同平台**全部已生效流量** = 日终；重估日以覆盖值替换该式、不参与求和。「前日 + 本笔 = 日终」只在当日该平台恰好一笔且非重估日时成立，PR-2 的弹窗文案与 e2e 断言不得按单笔式写。后端按 `(平台, 现金日期)` **去重后**批量取价；前一交易日走 `try_get_prev_trading_day`，日历覆盖不足时该值为空而不是让整个只读列表失败。rowSpan 合并是显示层行为，后端不合并。
   - `group_total_count`：解除类型筛选、保留区间/平台/状态的同组总笔数（§6 C5）。
   - 金额一律 `Decimal` 4 位原值直出（JSON 字符串），后端不量化（§6 T3）。
 - 分页与计数：按现金变动笔数切页与计数（一笔平台间转移 = 两笔，与各平台账本同构）。
 - 概览与构成同响应携带：`overview {available, in_transit, inflow, outflow}` 与 `platform_breakdown {rows, total, recon}`（rows = 各平台口径、total = 组合口径、recon = 行和与合计之差 = 本期已生效转移腿净额）。流量卡跟随全部筛选并对**筛选后全集**聚合（不是当页）；存量卡只随平台筛选切 scope。单响应减少往返；若评审认为职责过重再拆 summary 端点（PR-1 未拆）。
-- 在途：unsettled 行不进余额链的流量与流入/流出，只进 `in_transit`，按到账/扣款平台归属；重估行永不进 `in_transit`。口径正文与「不等于快照 `IN_TRANSIT_*`」的边界见 [rule-cash](../reference/business-constraints.md#rule-cash)。
+- 在途：unsettled 行不进余额链的流量与流入/流出，只进 `in_transit`，按到账/扣款平台归属；重估行对 `in_transit` 的**金额**贡献恒为 0（绝对值不是增量）。未烘焙进快照的重估行 `settled=False`（判据见 [rule-cash](../reference/business-constraints.md#rule-cash)），故 `status=in_transit` 会选中它而存量卡金额不含它——筛选档与存量卡在重估行上刻意不同源。口径正文与「不等于快照 `IN_TRANSIT_*`」的边界见 [rule-cash](../reference/business-constraints.md#rule-cash)。
 - 投影值不进后端（§6 T7）；ir-cli 命令组不进 PR-1，follow-up chore 单独加（手册与契约不随本 PR 一起膨胀）。
 
 ## 4. PR #721 处理建议

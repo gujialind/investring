@@ -42,7 +42,9 @@ def get_cash_flows(
     - `from_date` / `to_date`：现金日期闭区间，均可空（上界缺省开放，否则预计到账日
       在未来的在途行会被默认视图藏掉）。
     - `status`：`settled`（已生效）/ `in_transit`（在途）——映射派生的 settled 两值，
-      不透出 raw `trade.status`；cancelled 腿不出行。
+      不透出 raw `trade.status`；cancelled 腿不出行。未烘焙进快照的重估行落
+      `in_transit` 档（尚未生效），但对 `overview.in_transit` 金额贡献为 0。
+      `platform_code` 空串等同未传（不做平台筛选）。
     - `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /
       `transfer` / `revalue`。
     - 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。

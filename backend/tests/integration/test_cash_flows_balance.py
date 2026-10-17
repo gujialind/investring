@@ -24,6 +24,7 @@ from app.services.snapshot_service import generate_daily_snapshots
 from app.services.trading_utils import try_get_prev_trading_day
 from tests.factories import (
     create_investor_holding,
+    create_manual_market_value,
     create_portfolio,
     create_position_snapshot,
     create_share_change_event,
@@ -36,6 +37,9 @@ D0 = date(2025, 6, 6)   # 周五：基线快照日
 D1 = date(2025, 6, 9)   # 周一：增量 + 重估日
 D2 = date(2025, 6, 10)  # 周二：跨天转移的预计到账日
 PORTFOLIO = "CF_BAL"
+GROUP_PORTFOLIO = "CF_BAL_GRP"
+BAKE_PORTFOLIO = "CF_BAL_BAKE"
+GROUP_SAME_DAY = "d4e5f6a1b2c3"
 GROUP_CROSS_DAY = "c3d4e5f6a1b2"
 BASE_CASH = Decimal("50000")
 OVERRIDE = Decimal("60000")
@@ -95,19 +99,19 @@ def balanced_portfolio(test_db) -> str:
     return PORTFOLIO
 
 
-def _rows(client, admin_headers, **params) -> list:
+def _rows(client, admin_headers, portfolio=PORTFOLIO, **params) -> list:
     params.setdefault("page_size", 100)
     response = client.get(
-        f"/api/portfolios/{PORTFOLIO}/cash-flows", headers=admin_headers, params=params
+        f"/api/portfolios/{portfolio}/cash-flows", headers=admin_headers, params=params
     )
     assert response.status_code == 200, response.text
     return response.json()["items"]
 
 
-def _overview(client, admin_headers, **params) -> dict:
+def _overview(client, admin_headers, portfolio=PORTFOLIO, **params) -> dict:
     params.setdefault("page_size", 1)
     response = client.get(
-        f"/api/portfolios/{PORTFOLIO}/cash-flows", headers=admin_headers, params=params
+        f"/api/portfolios/{portfolio}/cash-flows", headers=admin_headers, params=params
     )
     assert response.status_code == 200, response.text
     return response.json()["overview"]
@@ -242,3 +246,200 @@ class TestInTransitAndOverride:
         mycf = _overview(client, admin_headers, platform_code="MYCF")
         assert Decimal(mycf["inflow"]) == Decimal("3000")
         assert Decimal(mycf["outflow"]) == Decimal("-1500")
+
+
+@pytest.fixture
+def group_sum_portfolio(test_db) -> str:
+    """D0 基线 5 万（MYCF）；D1 该平台三笔已生效流量、**无重估**——供组级对账式和。"""
+    for day in (D0, D1):
+        ensure_trading_day(test_db, day, is_open=True)
+    create_portfolio(
+        test_db, code=GROUP_PORTFOLIO, name="现金流水组级对账组合", status="active"
+    )
+    create_position_snapshot(
+        test_db, GROUP_PORTFOLIO, "CASH", "", snapshot_date=D0,
+        cash_amount=float(BASE_CASH), unit_price=None, cost_price=None,
+        market_value=float(BASE_CASH), platform_code="MYCF",
+    )
+    create_value_snapshot(
+        test_db, GROUP_PORTFOLIO, D0, total_value=float(BASE_CASH),
+        total_shares=float(BASE_CASH), unit_price=1.0,
+    )
+    create_investor_holding(
+        test_db, GROUP_PORTFOLIO, "VIEWER", D0, shares=float(BASE_CASH)
+    )
+
+    # D1 ① 现金分红 +3000 ② 现金调整 −800（权益日均落 D0，避免被生成路径级联回退）
+    create_share_change_event(
+        test_db, portfolio_code=GROUP_PORTFOLIO, product_code="000300.OF",
+        market="CN_OTC", event_type="cash_dividend", ex_date=D1, entitlement_date=D0,
+        status="confirmed", platform_code="MYCF", cash_change=Decimal("3000"),
+        cash_pay_date=D1,
+    )
+    create_share_change_event(
+        test_db, portfolio_code=GROUP_PORTFOLIO, product_code="000300.OF",
+        market="CN_OTC", event_type="forced_adjustment", ex_date=D1,
+        entitlement_date=D0, status="confirmed", platform_code="MYCF",
+        cash_change=Decimal("-800"),
+    )
+    # D1 ③ 同日到账的平台间转移 MYCF → HBZQ 1500（两腿皆 confirmed）
+    create_trade(
+        test_db, portfolio_code=GROUP_PORTFOLIO, product_code="CASH", market="",
+        trade_type="sell", amount=1500, platform_code="MYCF", trade_date=D1,
+        confirm_date=D1, transfer_group=GROUP_SAME_DAY, status="confirmed",
+    )
+    create_trade(
+        test_db, portfolio_code=GROUP_PORTFOLIO, product_code="CASH", market="",
+        trade_type="buy", amount=1500, platform_code="HBZQ", trade_date=D1,
+        confirm_date=D1, transfer_group=GROUP_SAME_DAY, status="confirmed",
+    )
+    test_db.flush()
+    result = generate_daily_snapshots(test_db, GROUP_PORTFOLIO, D1)
+    assert result["success"] is True, result
+    test_db.flush()
+    return GROUP_PORTFOLIO
+
+
+class TestGroupReconciliation:
+    """rule-cash 的对账式是**组级**：前日 + 同日同平台全部已生效流量 = 日终。"""
+
+    def test_prev_plus_all_settled_group_flows_equals_end_of_day(
+        self, client, admin_headers, group_sum_portfolio
+    ):
+        rows = _rows(
+            client, admin_headers, portfolio=GROUP_PORTFOLIO,
+            platform_code="MYCF", from_date=D1, to_date=D1,
+        )
+        assert len(rows) == 3                    # 分红 +3000、现金调整 −800、转出 −1500
+        assert all(row["settled"] for row in rows)
+        assert not any(row["is_override"] for row in rows), "本组刻意不含重估日"
+
+        # 组内共享同一对余额（rowSpan 合并一格的前提）
+        end_of_day = {Decimal(row["platform_end_of_day_balance"]) for row in rows}
+        prev_day = {Decimal(row["prev_day_balance"]) for row in rows}
+        assert len(end_of_day) == 1 and len(prev_day) == 1
+        (end,) = end_of_day
+        (prev,) = prev_day
+
+        assert prev == BASE_CASH
+        flows = sum((Decimal(row["amount"]) for row in rows), Decimal("0"))
+        assert flows == Decimal("700")           # 3000 − 800 − 1500
+        assert prev + flows == end               # 组级式闭合
+
+        # 单笔式在同日多笔时必然不闭合——文档与前端文案不得写成「前日 + 本笔 = 日终」
+        assert all(prev + Decimal(row["amount"]) != end for row in rows)
+
+    def test_revalue_day_replaces_instead_of_summing(
+        self, test_db, client, admin_headers, balanced_portfolio
+    ):
+        """重估日不参与组级求和：日终 = 覆盖值，同日增量被吸收。"""
+        rows = _rows(
+            client, admin_headers, platform_code="MYCF", from_date=D1, to_date=D1
+        )
+        overrides = [row for row in rows if row["is_override"]]
+        increments = [row for row in rows if not row["is_override"]]
+        assert len(overrides) == 1 and len(increments) == 2
+        (prev,) = {Decimal(row["prev_day_balance"]) for row in rows}
+        (end,) = {Decimal(row["platform_end_of_day_balance"]) for row in rows}
+        flows = sum((Decimal(row["amount"]) for row in increments), Decimal("0"))
+        assert end == OVERRIDE
+        assert prev + flows != end               # 求和式在重估日不成立
+        assert prev + flows + Decimal(overrides[0]["amount"]) != end
+
+
+@pytest.fixture
+def unbaked_override_portfolio(test_db) -> str:
+    """D0 基线快照 5 万；D1 覆盖 6 万但**尚未生成 D1 快照** → 覆盖未烘焙进快照。"""
+    for day in (D0, D1):
+        ensure_trading_day(test_db, day, is_open=True)
+    create_portfolio(
+        test_db, code=BAKE_PORTFOLIO, name="现金重估烘焙组合", status="active"
+    )
+    create_position_snapshot(
+        test_db, BAKE_PORTFOLIO, "CASH", "", snapshot_date=D0,
+        cash_amount=float(BASE_CASH), unit_price=None, cost_price=None,
+        market_value=float(BASE_CASH), platform_code="MYCF",
+    )
+    create_value_snapshot(
+        test_db, BAKE_PORTFOLIO, D0, total_value=float(BASE_CASH),
+        total_shares=float(BASE_CASH), unit_price=1.0,
+    )
+    create_investor_holding(
+        test_db, BAKE_PORTFOLIO, "VIEWER", D0, shares=float(BASE_CASH)
+    )
+    update_cash_position(
+        test_db, portfolio_code=BAKE_PORTFOLIO, platform_code="MYCF",
+        amount=OVERRIDE, update_date=D1, created_by="ADMIN",
+    )
+    test_db.flush()
+    return BAKE_PORTFOLIO
+
+
+class TestRevalueBaking:
+    """PR #726 评审：重估行 settled = 覆盖已烘焙进快照，未烘焙标「待重算」。"""
+
+    def test_unbaked_override_is_unsettled_and_leaves_available_alone(
+        self, test_db, client, admin_headers, unbaked_override_portfolio
+    ):
+        (row,) = _rows(
+            client, admin_headers, portfolio=BAKE_PORTFOLIO, flow_type="revalue"
+        )
+        assert row["cash_date"] == D1.isoformat()
+        assert row["settled"] is False
+        assert row["status"] == {
+            "variant": "warning",
+            "label": "待重算",
+            "note": "覆盖尚未烘焙进快照，需重算快照后生效",
+        }
+        # 可用现金不含未烘焙的覆盖：仍是 D0 基线
+        overview = _overview(client, admin_headers, portfolio=BAKE_PORTFOLIO)
+        assert Decimal(overview["available"]) == BASE_CASH
+        assert Decimal(overview["available"]) == calculate_available_cash(
+            test_db, BAKE_PORTFOLIO, None
+        )
+        # 也不进在途金额（绝对值不是增量），但 status=in_transit 会选中它
+        assert Decimal(overview["in_transit"]) == Decimal("0")
+        (in_transit,) = _rows(
+            client, admin_headers, portfolio=BAKE_PORTFOLIO, status="in_transit"
+        )
+        assert in_transit["flow_type"] == "revalue"
+        assert _rows(
+            client, admin_headers, portfolio=BAKE_PORTFOLIO, status="settled"
+        ) == []
+
+    def test_generating_the_snapshot_flips_settled_to_true(
+        self, test_db, client, admin_headers, unbaked_override_portfolio
+    ):
+        """当天覆盖（无对应快照）同样 settled=False；烘焙按覆盖日逐条判定。"""
+        today_override = create_manual_market_value(
+            test_db, portfolio_code=BAKE_PORTFOLIO, platform_code="MYCF",
+            product_code="CASH", record_date=date.today(), market_value=1,
+        )
+        today_row = next(
+            row for row in _rows(client, admin_headers, portfolio=BAKE_PORTFOLIO)
+            if row["origin_ref"]["id"] == today_override.id
+        )
+        assert today_row["settled"] is False
+        assert today_row["status"]["label"] == "待重算"
+
+        result = generate_daily_snapshots(test_db, BAKE_PORTFOLIO, D1)
+        assert result["success"] is True, result
+        test_db.flush()
+
+        (row,) = _rows(
+            client, admin_headers, portfolio=BAKE_PORTFOLIO,
+            flow_type="revalue", from_date=D1, to_date=D1,
+        )
+        assert row["settled"] is True
+        assert row["status"] == {"variant": "neutral", "label": "已生效", "note": None}
+        overview = _overview(client, admin_headers, portfolio=BAKE_PORTFOLIO)
+        assert Decimal(overview["available"]) == OVERRIDE
+        assert Decimal(row["platform_end_of_day_balance"]) == OVERRIDE
+
+        # 当天那条覆盖仍未烘焙（最新快照日 = D1 < 今天）→ 不跟着一起翻
+        still_unbaked = next(
+            r for r in _rows(client, admin_headers, portfolio=BAKE_PORTFOLIO)
+            if r["origin_ref"]["id"] == today_override.id
+        )
+        assert still_unbaked["settled"] is False
+        assert still_unbaked["status"]["label"] == "待重算"
