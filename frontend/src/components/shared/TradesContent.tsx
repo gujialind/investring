@@ -587,7 +587,7 @@ export default function TradesContent({
 
   // 主行（普通单行 / 结对主行共用）；结对主行去下边框使主+子视觉成组（规范 §8 结对行）
   // keepCashSourceLabel（#719）：派生 pair 的主行就是那条现金腿本身，产品列**保持来源标注**
-  // （现金 · 调仓）而非换成「现金类资产」——筛选现金后读的是资金去向，不是产品名，
+  // （现金 · 调仓）而非换成「现金类资产」——补出对手腿时读的是资金去向，不是产品名，
   // 且主行列结构按 issue 口径不动。真实转移对（双 CASH，sell 主）不走这里，形态照旧。
   const renderMainRow = (trade: Trade, isPairMain: boolean, keepCashSourceLabel = false) => (
     <TableRow key={trade.id} className={isPairMain ? "border-b-0" : undefined}>
