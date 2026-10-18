@@ -163,7 +163,9 @@
 | 正文 | 14px / 400 / 1.6 | `text-sm` | 表格、表单、正文数值 |
 | 辅助 | 12px / 400 / 1.5 | `text-xs` | 标签、时间戳、secondary 信息 |
 
-配套规则：数值一律叠加 `number-cell`；**只允许上表四档**——`text-base` / `text-xl` / `text-3xl` 等中间档与 `text-[Npx]` 任意值均属违规（新增代码由 ESLint 拦截，见 §1.5；存量 1 处豁免登记在 §1.5，改动页面时顺手收敛，不强制一次性清零）。
+配套规则：表格与右置明细的数值一律叠加 `number-cell`（统计卡主数值不套 `number-cell`，对齐见下条）；**只允许上表四档**——`text-base` / `text-xl` / `text-3xl` 等中间档与 `text-[Npx]` 任意值均属违规（新增代码由 ESLint 拦截，见 §1.5；存量 1 处豁免登记在 §1.5，改动页面时顺手收敛，不强制一次性清零）。
+
+**统计卡（概览四卡）对齐**（#725 登记）：统计卡内**标签、主数值、注记同侧左对齐**，不因主数值是带符号/小数金额而右置——组合详情四卡（`PortfolioStatsCards`）与现金流水页概览四卡均为此口径。主数值保留数字形态（`font-mono tabular-nums whitespace-nowrap`）：拼类走 `getNumberCellClass()` 再以 `text-left` 覆盖（`cn`/twMerge 保证覆盖生效），不直接挂自带 `text-right` 的 `number-cell` utility。`number-cell` 的右对齐**只用于表格数值列（§8）与右置明细数值**（如 §12 对账明细紧凑列），不用于统计卡主数值。**既有例外（待收敛，本轮不改）**：产品详情 / 平台详情 / 平台-产品详情三处概览卡的「持仓市值」大字（`ProductDetailContent.tsx:207` / `PlatformDetailContent.tsx:144` / `PlatformProductDetailContent.tsx:193`，行号以 #725 登记时为准，形态 `mt-1 text-2xl font-semibold number-cell`）仍为右置，后续触及相关页面时按本条收敛。
 
 **字体栈（现状登记，2026-08-29）**：未自定义，走 Tailwind 默认栈——正文 `font-sans`（system-ui 系）、数值 `number-cell` 内 `font-mono`（ui-monospace/SFMono 系）。`tabular-nums` 依赖字体自带等宽数字特性，系统栈下各平台字形有差异（Windows 回退 Segoe UI / Consolas）；中文环境数字渲染一致性**未实测**。如需跨平台严格对齐的金融报表观感，后续可评估引入统一数字字体，届时在此更新决策。
 
@@ -289,7 +291,7 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 
 1. 颜色只出现语义 token 与 `lib/colors.ts` 导出，无调色板类名、无组件内 hex 字面量（ESLint 已过）。
 2. 涨跌数值色只来自 `getReturnColorClass` / `getReturnBgClass`；badge 状态色经 `getStatusBadgeVariant()`，未占用涨跌色（§1.1/§1.3）。
-3. 数字全部经 `lib/utils.ts` 格式化函数；表格数值列右对齐 + `number-cell`；占比走 `largestRemainderPercents`，无散装 `toFixed`（§3/§4/§8）。
+3. 数字全部经 `lib/utils.ts` 格式化函数；表格数值列右对齐 + `number-cell`，统计卡主数值与标签/注记同侧左对齐（§5）；占比走 `largestRemainderPercents`，无散装 `toFixed`（§3/§4/§8）。
 4. 字号只用四档（24/18/14/12）；无 `text-[Npx]`、`p-[Npx]`、`gap-[Npx]`、`rounded-[Npx]` 任意值（§5/§7）。
 5. 卡片无投影（浮层除外）；圆角走 `--radius` 派生档；间距走既有档位（桌面 `p-6`/`space-y-6`、移动 `p-3`/`space-y-4`）（§7）。
 6. 表格：表头 muted 常规字重、无底色无斑马纹；空态 / 首次加载 / 局部刷新加载按 §8/§14 既有形态，不自造。
@@ -337,3 +339,4 @@ token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——
 | 2026-10-17 | v1.x | §12 补回 `formatDateTime`（`YYYY-MM-DD HH:mm`，#501 删除后因 #715 日志管理 Tab 需要区分同日先后重新登记）；消费方：`LogsContent` 三类日志表 + 执行历史的 5 处时间列 | #715（PR #723 L2 处置） |
 | 2026-10-18 | v1.x | #725 现金流水页（PR-2 前端双端）落地：①§8 新增「多行合并段（rowSpan 组列 + 余额列）」形态——桌面 7 列，相邻同 `(平台,现金日期)` 段的「日期·平台」首列与「当日余额」列各以 `rowSpan` 合并，分组键/跨度由 `lib/cashFlows.ts` 纯函数单点持有（`cashFlowGroupKey`/`balanceSpans`），跨度按屏上行数算故筛选打散后退化为单行格、余额值与筛选无关，移动端卡片流不合并；②§12 新增「现金流水页金额符号三档例外」——存量走 `formatBalanceCurrency`（负号在 ¥ 前、正数不补 +，本页相对全站唯一新增取舍）/ 流量走既有 `formatSignedCurrency`（± 在 ¥ 前）/ 对账明细裸数字走 `formatBareSigned`（带 ± 不带 ¥），三者均建在 `formatCurrency`/`formatNumber` 上、边界限本页；③流水类型 chip = `Badge variant="neutral"` + `CHART_COLORS` 小圆点（流入 C1 / 流出 C6 / 在途 C3 / 中性 C7，§16 状态指示点用 solid 分类色、不占涨跌色），状态列 = `Badge` + 后端下发的 `status.variant`（success=已生效 / warning=在途 / neutral=非流量重估，前端不重算）；④三弹窗（当日另有 N 笔 / 流水详情 / 按平台构成）走 `Dialog`，撤销现金覆盖走 `ConfirmDialog`（AlertDialog 二次确认，§14 危险操作），转入/转出/明细/更新现金市值复用既有 `CashTransferDialog`/`CashTransferListDialog`/`CashMarketValueUpdateDialog`；⑤筛选栏符合 §9（时间 → 状态 → 平台 → 类型、控件 `h-9`、即时生效、移动折叠面板 + 激活计数 Badge），读侧失败走 `QueryErrorState`（§14），Dialog 高度限只加在内层容器（#640 U-1）；⑥`ManageLinksCard` 补第 6 项「现金流水」入口；⑦详情弹窗「预计到账后余额」投影块（`warning-soft` 底 + 明写「不是后端 calculate_available_cash 的结果」）只对 **pending 转入腿**（`action.kind="confirm"`）渲染——它是唯一「日终余额不含本笔」的形态；**confirmed 但到账日在未来的行**（调仓卖出到账腿 A>C、未来 cash_pay_date 分红）后端 `platform_end_of_day_balance = calculate_available_cash(as_of=cash_date)` 已含本笔、余额列即到账后值，再投影会重复计，故这些行不出投影块（判据单点在 `lib/cashFlows.ts::projectedBalance`）。为让 pending 转入腿的详情可达，「确认到账」行的操作格在按钮旁并列一个「详情」link（`data-testid="row-detail"`），与其余行「详情」入口同形 | #725 |
 | 2026-10-18 | v1.x | #727 L2 评审处置（现金流水页，屏上形态有小幅增量）：①§12 三档条款对齐实现——对账块/投影块的**期初、日终、合计**是存量、走 `formatBalanceCurrency`（原条款误写进裸数字档），裸数字 `formatBareSigned` 收窄为**增量明细行**（对账块逐笔「当日已生效」、投影块「本笔到账」）两类；②金额列新增单点分派 `cashFlowAmountText()`——**重估行**（`is_override`，绝对值覆盖不是增量）从流量档改走存量档（`+¥5,000.00` → `¥5,000.00`，带 + 会把「余额被覆盖为 X」误读成「流入 X」），其余行不变；③详情/当日弹窗的对账块与「共 N 笔」改用**不按 status 过滤**的同日全组数据（此前筛「在途」打开 pending 行详情会把同日已生效变动从对账块滤掉、日终余额失去来源），当日弹窗表格自身保留状态筛选；④弹窗内同日查询补 §14 Dialog 形态的加载态（`aria-busy` + spinner）与失败态（destructive inline Alert + 重试），查询未落地时不再以单行数据兜底冒充全组对账；⑤列表容器局部刷新补显式 `aria-busy`（#683 D-1 同形态，此前只有 opacity + spinner）；⑥构成弹窗 recon 句「转出/转入」金额按绝对值展示（`转出 -5,000.00` 的负号与词义冗余）；⑦`prev_day_balance` 为空显示 `--`（期初无数据不再按 0 上屏）；⑧撤销/删除使 `total` 收敛到更少页时自动回到最后一页，不再停在越界页码落「暂无现金流水」。写入口（现金转移/确认到账/更新现金市值/撤销覆盖）成功后统一失效 `queryKeys.cashFlows.root`，本页读侧免手动刷新（行为契约，无形态变化） | #725（PR #727 L2 处置） |
+| 2026-10-19 | v1.x | §5 新增「统计卡（概览四卡）对齐」条款：标签 / 主数值 / 注记同侧左对齐，`number-cell` 右对齐收窄为表格数值列与右置明细数值；配套修订 §5 配套规则「数值一律叠加 number-cell」的措辞与 §19 自检第 3 条。现金流水页概览四卡主数值随本条从 `number-cell`（右置）改为 `getNumberCellClass()` + `text-left`（左置，保留 mono/tabular-nums/nowrap 数字形态，双端同一处代码）；组合详情四卡本就左置、未动。产品 / 平台 / 平台-产品详情三处右置概览卡登记为待收敛例外（本轮不改） | #725 |
