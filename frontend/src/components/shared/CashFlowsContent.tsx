@@ -323,7 +323,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     return (
       <div className="rounded-md border bg-muted/30 p-3 text-sm" data-testid="recon-block">
         <div className="mb-2 font-medium">
-          {pname(origin.platform_code)} · {origin.cash_date} 日终余额对账
+          {pname(origin.platform_code)} · {origin.cash_date} 当日余额对账
         </div>
         <div className="flex items-center justify-between py-0.5">
           <span className="text-muted-foreground">
@@ -350,7 +350,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           </div>
         )}
         <div className="mt-1 flex items-center justify-between border-t pt-1 font-medium">
-          <span>日终余额</span>
+          <span>当日余额</span>
           <span className="number-cell">{formatBalanceCurrency(end)}</span>
         </div>
       </div>
@@ -612,7 +612,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                         <span className="number-cell font-medium">{cashFlowAmountText(row)}</span>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        日终余额 · {pname(row.platform_code)}{" "}
+                        当日余额 · {pname(row.platform_code)}{" "}
                         {formatBalanceCurrency(row.platform_end_of_day_balance)}
                         {note ? ` ｜ ${note}` : ""}
                         {row.status.note ? ` ｜ ${row.status.note}` : ""}
@@ -643,7 +643,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                     <TableHead>流水类型</TableHead>
                     <TableHead>来源 / 去向</TableHead>
                     <TableHead className="number-cell">金额</TableHead>
-                    <TableHead className="number-cell">平台日终余额</TableHead>
+                    <TableHead className="number-cell">当日余额</TableHead>
                     <TableHead>状态</TableHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
@@ -656,7 +656,11 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                     return (
                       <TableRow key={rowKey(row)} data-testid="cash-flow-row">
                         {!merged && (
-                          <TableCell rowSpan={spans[i]} className="align-top" data-testid="group-cell">
+                          <TableCell
+                            rowSpan={spans[i]}
+                            className={spans[i] > 1 ? "align-middle" : "align-top"}
+                            data-testid="group-cell"
+                          >
                             <div className="whitespace-nowrap text-sm">{row.cash_date}</div>
                             <div className="whitespace-nowrap text-xs text-muted-foreground">
                               {pname(row.platform_code)}
@@ -692,7 +696,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                         </TableCell>
                         {!merged && (
                           <TableCell
-                            className="number-cell align-top"
+                            className={cn("number-cell", spans[i] > 1 ? "align-middle" : "align-top")}
                             rowSpan={spans[i]}
                             data-testid="balance-cell"
                           >
@@ -828,7 +832,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                       预计到账后余额 · {pname(detailRow.platform_code)} · {detailRow.cash_date}（预计值）
                     </div>
                     <div className="flex items-center justify-between py-0.5">
-                      <span className="text-muted-foreground">当前日终余额（不含本笔）</span>
+                      <span className="text-muted-foreground">当前余额（不含本笔）</span>
                       <span className="number-cell">{formatBalanceCurrency(detailRow.platform_end_of_day_balance)}</span>
                     </div>
                     <div className="flex items-center justify-between py-0.5">
@@ -840,7 +844,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                       <span className="number-cell">{formatBalanceCurrency(proj)}</span>
                     </div>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      由「当前日终余额 + 本笔金额」推得，<b>不是</b>后端 calculate_available_cash 的结果；实际到账日与金额以平台为准。
+                      由「当前余额 + 本笔金额」推得，<b>不是</b>后端 calculate_available_cash 的结果；实际到账日与金额以平台为准。
                     </p>
                   </div>
                 );
