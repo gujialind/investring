@@ -11,6 +11,7 @@ import {
   formatBalanceCurrency,
   formatBareSigned,
   cashFlowAmountText,
+  dayQueryNotice,
   CASH_FLOW_DOT_COLORS,
   CASH_FLOW_TYPE_OPTIONS,
   CASH_FLOW_STATUS_OPTIONS,
@@ -257,5 +258,16 @@ describe("选项常量与后端逐字对齐", () => {
       { value: "settled", label: "已生效" },
       { value: "in_transit", label: "在途" },
     ]);
+  });
+});
+
+describe("dayQueryNotice", () => {
+  it("失败优先于「有缓存」：重取失败不把旧对账当当前结果（#727 L2 S3）", () => {
+    expect(dayQueryNotice(true, true)).toBe("error");
+    expect(dayQueryNotice(true, false)).toBe("error");
+  });
+  it("未失败时按有无数据分落地态 / 加载态", () => {
+    expect(dayQueryNotice(false, true)).toBeNull();
+    expect(dayQueryNotice(false, false)).toBe("loading");
   });
 });

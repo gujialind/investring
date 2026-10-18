@@ -7,6 +7,8 @@
  * 预计到账投影 + 前端推算文案）、按平台构成弹窗（看明细钻穿 / 更新预选平台 / 合计行无更新）、
  * 在途行「不计入余额」注记、ManageLinksCard 第 6 项入口；#727 评审补充：四卡/余额列/
  * 投影金额断言、写入口（现金转移）提交成功后读侧免刷新自动更新、对账块不被状态筛选污染。
+ * #727 第二轮 L2 补充：存量档金额的负向断言（子串匹配区分不了 `¥x` 与 `+¥x`）、「当日
+ * 另有 N 笔」N=0 不渲染、当日弹窗「当前筛选命中」标注、同日查询失败态优先于在屏行。
  *
  * 数据红线（M11 / helpers 种子契约）：**自建隔离组合**造数，绝不对 E2E_ACTIVE 做
  * recalculate/generate-next；导航用例（无写操作）才复用 E2E_ACTIVE 详情页只读点击。
@@ -212,6 +214,11 @@ test.describe('现金流水页（#725，双端）', () => {
       await expect(page.getByTestId(`stat-${k}`)).toBeVisible();
       await expect(page.getByTestId(`stat-${k}`)).toContainText(v);
     }
+    // 存量档不补 +（#727 L2 N4）：`toContainText('¥30,000.00')` 是子串匹配，把
+    // formatBalanceCurrency 换成 formatSignedCurrency 渲染成 `+¥30,000.00` 也不会红，
+    // 故存量两卡补负向断言（流量两卡本就带 ±，不在此列）。
+    await expect(page.getByTestId('stat-available')).not.toContainText('+¥');
+    await expect(page.getByTestId('stat-in_transit')).not.toContainText('+¥');
 
     const isMobile = testInfo.project.name === 'mobile';
     if (isMobile) {
@@ -222,6 +229,10 @@ test.describe('现金流水页（#725，双端）', () => {
       await expect(cards.filter({ hasText: '调仓 · 买入扣款' }).first()).toBeVisible();
       // 余额列（卡片形态：日终余额行）= calculate_available_cash(as_of=d, HBZQ)（#727 S5）
       await expect(cards.filter({ hasText: '申购 · 注资入账' }).first()).toContainText('¥30,000.00');
+      // 同卡金额列是流量档 `+¥40,000.00`，故负向断言只针对余额串本身（#727 L2 N4）
+      await expect(cards.filter({ hasText: '申购 · 注资入账' }).first()).not.toContainText(
+        '+¥30,000.00'
+      );
     } else {
       // #2 桌面：同 (平台,日) 两笔合并 → 2 行、1 个组格（rowspan=2）、1 个余额格
       await expect(page.getByTestId('cash-flow-row')).toHaveCount(2);
@@ -230,7 +241,13 @@ test.describe('现金流水页（#725，双端）', () => {
       await expect(page.getByTestId('group-cell')).toHaveAttribute('rowspan', '2');
       // 合并余额格的值（#727 S5）
       await expect(page.getByTestId('balance-cell')).toContainText('¥30,000.00');
+      await expect(page.getByTestId('balance-cell')).not.toContainText('+¥');
     }
+
+    // #7 的另一半（N=0 不渲染）：筛选前同组两行都在屏 → 无「当日另有 N 笔」次行。
+    // `cashFlows.test.ts` 只钉纯函数返回 0，钉不住组件的 `others > 0` 渲染守卫，
+    // 删掉守卫这条会红（#728 L2 S3）。
+    await expect(page.getByTestId('same-day-link')).toHaveCount(0);
 
     // #7：筛「调仓 · 买入扣款」后在屏只剩 1 行，同组总笔数 2 → 「当日另有 1 笔」
     await pickFlowType(page, testInfo, '调仓 · 买入扣款');
@@ -249,6 +266,11 @@ test.describe('现金流水页（#725，双端）', () => {
     ).toBeVisible({ timeout: 10_000 });
     await expect(sameDay.getByTestId('recon-block')).toBeVisible();
     await expect(sameDay.getByText('申购 · 注资入账').first()).toBeVisible();
+    // #8 的「标注命中行」半边：弹窗内只标注被点中的那一行（组件侧 `rowKey` 比对），
+    // 此前 e2e 全文无「命中」断言，删掉标注不会变红（#728 L2 S3）
+    await expect(sameDay.getByText('当前筛选命中')).toHaveCount(1);
+    // 同日取数未触后端 page_size 上限时不得出现截断提示（#727 L2 N3 的负向面）
+    await expect(sameDay.getByTestId('day-truncated')).toHaveCount(0);
     await sameDay.getByRole('button', { name: '关闭' }).click();
     await expect(sameDay).toBeHidden({ timeout: 15_000 });
     // 关窗回原筛选：类型筛选仍在（在屏仍只剩调仓行）
@@ -318,10 +340,17 @@ test.describe('现金流水页（#725，双端）', () => {
     await expect(page.getByTestId('stat-in_transit')).toContainText('¥5,000.00');
     await expect(page.getByTestId('stat-inflow')).toContainText('+¥40,000.00');
     await expect(page.getByTestId('stat-outflow')).toContainText('¥0.00');
+    // 存量两卡不补 +（#727 L2 N4）
+    await expect(page.getByTestId('stat-available')).not.toContainText('+¥');
+    await expect(page.getByTestId('stat-in_transit')).not.toContainText('+¥');
     // 余额列（申购行所在 (HBZQ, d) 组）：日终 = 40,000 - 5,000（转出腿已生效）
     await expect(
       page.getByTestId('cash-flow-row').filter({ hasText: '申购 · 注资入账' }).first()
     ).toContainText('¥35,000.00');
+    // 同卡/同行的金额列是流量档，故负向断言只钉余额串（#727 L2 N4）
+    await expect(
+      page.getByTestId('cash-flow-row').filter({ hasText: '申购 · 注资入账' }).first()
+    ).not.toContainText('+¥35,000.00');
 
     // 状态筛选「在途」→ 只剩转入 pending 腿
     await pickStatus(page, testInfo, '在途');
@@ -460,6 +489,56 @@ test.describe('现金流水页（#725，双端）', () => {
     await expect(recon).toContainText('¥10,000.00');
     // 投影块合计 = 日终 10,000 + 本笔到账 5,000（前端推算，#727 S5）
     await expect(detail.getByTestId('projection-block')).toContainText('¥15,000.00');
+    await detail.getByRole('button', { name: '关闭' }).click();
+    await expect(detail).toBeHidden({ timeout: 15_000 });
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  // #727 L2 S3：弹窗内同日查询失败必须**压过**在屏行/缓存——失败态优先，不以单行数据
+  // 兜底冒充全组对账（判序同主列表 `isError ? QueryErrorState : …`，lib `dayQueryNotice`
+  // 钉纯判定、这条钉接线）。URL 判据收口在同日查询自身：`page_size=100` 是它独有的
+  // （主列表用页内 pageSize），故主列表请求不受影响。
+  test('同日查询失败时弹窗走失败态而非旧数据（#727 L2 S3）', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const headers = await openAppAndAuth(page);
+    const d = await nearestTradingDay(page, headers);
+    const code = isolatedCode(testInfo, 'E');
+
+    await post(page, headers, '/api/portfolios', { code, name: `现金流水失败态 ${code}` });
+    await seedSubscription(page, headers, code, d);
+
+    await gotoPortfolioSubpage(page, code as PortfolioCode, 'cash-flows');
+    await expect(page.getByTestId('cash-flow-row')).toHaveCount(1, { timeout: 15_000 });
+
+    let failDay = true;
+    const isDayQuery = (url: URL) =>
+      url.pathname.endsWith('/cash-flows') && url.searchParams.get('page_size') === '100';
+    await page.route(isDayQuery, (route) =>
+      failDay
+        ? route.fulfill({
+            status: 500,
+            json: { detail: { error: 'INTERNAL', message: '同日流水取数暂不可用' } },
+          })
+        : route.continue()
+    );
+
+    await page.getByTestId('row-action').first().click();
+    const detail = dialogByTitle(page, '流水详情');
+    await detail.waitFor({ timeout: 10_000 });
+    // 后端 detail.message 上桌（不是本地兜底文案）
+    await expect(detail.getByTestId('day-query-error')).toContainText('同日流水取数暂不可用', {
+      timeout: 15_000,
+    });
+    // 失败优先：列表里那一行不得被当成全组对账渲染出来
+    await expect(detail.getByTestId('recon-block')).toHaveCount(0);
+
+    // 放行后点重试 → 对账块落地（失败态不是终局）
+    failDay = false;
+    await detail.getByRole('button', { name: '重试' }).click();
+    await expect(detail.getByTestId('recon-block')).toBeVisible({ timeout: 15_000 });
+    await expect(detail.getByTestId('day-query-error')).toHaveCount(0);
     await detail.getByRole('button', { name: '关闭' }).click();
     await expect(detail).toBeHidden({ timeout: 15_000 });
 
