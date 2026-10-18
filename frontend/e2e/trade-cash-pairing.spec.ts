@@ -53,29 +53,20 @@ interface RespTrade {
  * 由响应行集算出界面**应该**出现的行数，与前端 groupTradeRows + 派生兜底同判据：
  * - 真实两腿（同组基金腿与现金腿都在结果集内）折成 1 主 + 1 子，其中现金腿不独立成行；
  * - **只有现金锚点行**补派生子行：其 `paired_leg` 非空且 id 不在页内 → 补 1 条。
- *   基金主行即便带 `paired_leg`（指向已折进本组的现金腿）也不补——真实腿优先；
- * - 屏幕总 tr = 结果集行数 − 被折掉的真实现金腿 + 派生子行数。
+ *   基金主行即便带 `paired_leg`（指向同组现金腿）也不补——真实腿优先；
+ * - 屏幕总 tr = **结果集行数 + 派生子行数**。被结对折掉的现金腿仍然占一个 tr（它是那条
+ *   结对的真实现金子行），折进/落单只改变它落在哪一行，不改变总数——未筛选态 5 行 =
+ *   3 主 + 2 真实现金子行，正是同一条算式。
  */
 function predictRowCounts(rows: RespTrade[]) {
   const ids = new Set(rows.map((r) => r.id));
-  const fundGroups = new Set(
-    rows
-      .filter((r) => r.product_code !== CASH_CODE && r.transfer_group)
-      .map((r) => r.transfer_group as string),
-  );
-  const foldedCash = rows.filter(
-    (r) =>
-      r.product_code === CASH_CODE &&
-      r.transfer_group != null &&
-      fundGroups.has(r.transfer_group),
-  ).length;
   const derived = rows.filter(
     (r) =>
       r.product_code === CASH_CODE &&
       r.paired_leg != null &&
       !ids.has(r.paired_leg.id),
   ).length;
-  return { tr: rows.length - foldedCash + derived, derived };
+  return { tr: rows.length + derived, derived };
 }
 
 test.describe("交易列表的配对现金信息（#719）", () => {
