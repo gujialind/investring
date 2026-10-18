@@ -161,13 +161,9 @@ export default function TradesContent({
   const params = useParams();
   const code = params.code as string;
 
-  // #638 L2 S6 预填归一：products 参数是 (code, market) 精确匹配，trade_type 只认
-  // Select 实际提供的 buy/sell。
-  // #719：market 空串**曾经是歧义值**——既可能是「URL 漏拼 market 段」（按 #638 宁可不筛），
-  // 也可能是「显式空 market」（现金腿 market="" 是有效值，`?product=CASH&market=` 深链）。
-  // 两者在 prop 上不可区分，故分流放在能看见 `searchParams.has("market")` 的 page 层
-  //（漏拼段直接不传 initialProduct）；这里只挡 code 为空，不再顺手吃掉空 market。
-  const normalizedInitialProduct = initialProduct?.code ? initialProduct : undefined;
+  // #638 L2 S6 预填归一：products 参数是 (code, market) 精确匹配，缺 market 段宁可不筛
+  //（空串段 = 要求 market == ""，静默空列表）；trade_type 只认 Select 实际提供的 buy/sell。
+  const normalizedInitialProduct = initialProduct?.market ? initialProduct : undefined;
   const normalizedInitialTradeType =
     initialTradeType === "buy" || initialTradeType === "sell" ? initialTradeType : undefined;
   // #646：只认 create；其它值（含空串/拼错）一律视为无录入意图，不静默开弹窗

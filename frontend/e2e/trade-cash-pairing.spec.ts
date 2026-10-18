@@ -1,12 +1,16 @@
 /**
  * 前端 E2E 测试：交易列表的配对现金信息（#719「只补信息、不补行」）
  *
- * 覆盖三件事，全部走**种子契约组合** E2E_ACTIVE（只读展示，不做生命周期写入）：
+ * 覆盖两件事，全部走**种子契约组合** E2E_ACTIVE（只读展示，不做生命周期写入）：
  *   1. 未筛选形态逐行不变（真实腿结对、派生子行 0 条）——「零回归」与「真实行优先」两条验收断言；
- *   2. `?product=CASH&market=` 深链进入即「已筛现金」：现金腿各自补出「↳ 对手基金腿」派生子行，
- *      申赎腿（`sub_` 组）保持「现金 · 申赎确认」不补对手；派生行无任何操作入口；
- *   3. 产品筛选器能搜到并勾选「现金」（勾中后按 `products=CASH|` 生效），且**不**混入
- *      三条在途虚拟产品（#327 的默认排除没有被无条件放开）。
+ *   2. 状态筛选收窄到「已确认」使现金腿成为锚点行时，各自补出「↳ 对手基金腿」派生子行，
+ *      申赎腿（`sub_` 组）保持「现金 · 申赎确认」不补对手；派生行无任何操作入口。
+ *
+ * 为什么用状态筛选而不是产品筛选现金档：产品筛选里的「现金」档（快捷下拉现金项 +
+ * `include_virtual=true` 取数 + `?product=CASH&market=` 空段放行）不属本 PR 范围，
+ * 由 #725 PR-2 承接（届时深链形态另补用例）。本文件钉的是**读侧派生本身**，与对手腿
+ * 被哪一种筛选挡掉无关；状态 = 已确认恰好给出「2 条 confirmed 扣款腿 + 1 条申赎现金腿
+ * 成锚点、两条基金腿（1 confirmed + 1 pending）不在行集」这一最小可断形态。
  *
  * 为什么用 E2E_ACTIVE 而非自建隔离组合（与 trade-in-transit.spec.ts 的分工）：本文件断言的是
  * **行集形态与文案**，不需要「零快照 → 逐日生成」的起点；E2E_ACTIVE 的种子恰好给出
@@ -18,6 +22,8 @@
  * - D4 pending 买入 2,000@4.1（¥8,200）+ 配对 CASH sell（#493：创建即扣款 confirmed）；
  * - D1 申购 ¥100,000 → D2 确认，配对 CASH buy 腿（`sub_` 组）。
  * 未筛选 = 5 条真实行 → 2 对（主行 + 现金子行）+ 1 落单现金行 = 3 主 tr + 2 子 tr = 5 tr。
+ * 状态 = 已确认 → 4 条真实行（2 confirmed 基金/现金对中的 1 基金主行 + 1 现金子行、
+ * 1 confirmed 扣款腿孤儿、1 申赎现金腿）+ 2 条派生对手腿 = 6 tr。
  */
 import { test, expect, type Page } from "@playwright/test";
 import {
@@ -26,7 +32,6 @@ import {
   gotoPortfolioSubpage,
   openFilterPanelIfMobile,
   openPopover,
-  portfolioPath,
   settlePopovers,
 } from "./helpers";
 
@@ -37,13 +42,13 @@ function tableRows(page: Page) {
   return page.locator("table tbody tr");
 }
 
-/** 现金筛选生效的判据：请求带上 `products=CASH|`（空 market 段是有效值，不是「未传」） */
-function waitForCashTradeQuery(page: Page) {
+/** 状态筛选生效的判据：请求带上 `status=confirmed` */
+function waitForConfirmedTradeQuery(page: Page) {
   return page.waitForRequest(
     (r) =>
       r.method() === "GET" &&
       /\/api\/trades(\?|$)/.test(r.url()) &&
-      /products=CASH(%7C|\|)/.test(r.url()),
+      /[?&]status=confirmed(&|$)/.test(r.url()),
     { timeout: 10_000 },
   );
 }
@@ -63,29 +68,32 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 
-  test("筛现金深链 ?product=CASH&market=：进入即已筛现金，现金行补出对手腿", async (
-    { page },
-    testInfo,
-  ) => {
+  test("筛已确认使现金腿成锚点行：现金行补出对手腿", async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
-    const cashQuery = waitForCashTradeQuery(page);
-    await page.goto(`${portfolioPath(E2E_ACTIVE, "trades")}?product=CASH&market=`);
-    await cashQuery;
-
-    // 筛选栏回显「已选 1」而不是 placeholder（移动端筛选栏默认折叠，桌面 no-op，#383 口径）
+    await gotoPortfolioSubpage(page, E2E_ACTIVE, "trades");
+    await expect(tableRows(page).first()).toBeVisible({ timeout: 10_000 });
     await openFilterPanelIfMobile(page, testInfo);
-    await expect(page.getByRole("button", { name: "产品 · 已选 1" })).toBeVisible({
-      timeout: 10_000,
-    });
 
-    // 行集 = 3 条真实现金腿（2 调仓扣款 + 1 申赎确认）+ 2 条派生对手腿 = 5 tr
-    await expect(tableRows(page)).toHaveCount(5);
+    // 状态收窄到「已确认」：两条买入的基金腿一条 pending 被滤掉、另一条与其现金腿同页
+    //（该组不产派生子行），confirmed 扣款腿单独成行 → 现金锚点行
+    const confirmedQuery = waitForConfirmedTradeQuery(page);
+    const statusTrigger = page.getByRole("combobox").filter({ hasText: "全部状态" });
+    const confirmedOption = page.getByRole("option", { name: "已确认" });
+    await openPopover(page, statusTrigger, confirmedOption);
+    await confirmedOption.click({ timeout: 10_000 });
+    await settlePopovers(page);
+    await confirmedQuery;
+
+    // 行集 = 3 条真实现金腿（1 条折进 D2 买入的现金子行、2 条独立成行）+ 1 基金主行
+    //        + 2 条派生对手腿（两条落单扣款腿各一条）= 6 tr。
+    //        两条对手腿状态恒为「已确认」——状态筛选下 pending 基金腿不入行集，
+    //        「半确认组里读到对手腿自身状态」那一面由 backend 集成测试
+    //        test_trades_paired_leg.py 钉，本用例不重复。
+    await expect(tableRows(page)).toHaveCount(6);
     const counterparts = page.getByTestId("trade-counterpart-subrow");
     await expect(counterparts).toHaveCount(2);
-    // 调仓扣款腿的对手是基金腿：带产品名与**对手腿自身状态**（半确认组同样可见，#493 同源不变量）
+    // 落单扣款腿的对手是基金腿：带产品名与**对手腿自身状态**（半确认组同样可见，#493 同源不变量）
     await expect(counterparts.filter({ hasText: `↳ 买入 ${FUND_NAME}` })).toHaveCount(2);
-    await expect(counterparts.filter({ hasText: "已确认）" })).toHaveCount(1);
-    await expect(counterparts.filter({ hasText: "待确认）" })).toHaveCount(1);
     // 份额 @ 净值取自对手基金腿，费率无来源则不写（现金腿自身无份额无净值语义）
     await expect(counterparts.filter({ hasText: "份 @" })).toHaveCount(2);
     // 主行「产品」列保持现状（仍走 cashOrphanLabel 的来源口径，本设计只新增子行）
@@ -97,36 +105,6 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     for (const title of ["确认", "取消确认", "取消", "删除", "修改"]) {
       await expect(counterparts.locator(`button[title="${title}"]`)).toHaveCount(0);
     }
-    expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
-  });
-
-  test("产品筛选器可选现金；不混入在途虚拟产品", async ({ page }, testInfo) => {
-    const errors = collectPageErrors(page);
-    await gotoPortfolioSubpage(page, E2E_ACTIVE, "trades");
-    await expect(tableRows(page).first()).toBeVisible({ timeout: 10_000 });
-    await openFilterPanelIfMobile(page, testInfo);
-
-    const trigger = page.getByRole("button", { name: "全部产品" });
-    const searchBox = page.getByPlaceholder("搜索产品代码/名称");
-    await openPopover(page, trigger, searchBox);
-    // 现金单独取数（product_type=CASH + include_virtual=true），与真实产品之间一条分隔线
-    const cashOption = page.getByRole("checkbox", { name: "选择 现金类资产" });
-    await expect(cashOption).toBeVisible({ timeout: 10_000 });
-    // #327 的默认排除未被无条件放开：三条在途虚拟产品（从不出现在 trade 表）不得成为死选项
-    await expect(
-      page.getByRole("checkbox", { name: /选择 .*(买入|卖出|分红)在途资金/ }),
-    ).toHaveCount(0);
-
-    // 等请求的 waiter 必须先于点击挂上：点击后换键的请求可能在本行执行前就已完成
-    const cashQuery = waitForCashTradeQuery(page);
-    await cashOption.click();
-    // 勾选即时生效（筛选栏无「查询」按钮，§9），弹层仍开着——收掉它再断言行集
-    await page.keyboard.press("Escape");
-    await settlePopovers(page);
-    await cashQuery;
-    await expect(page.getByTestId("trade-counterpart-subrow")).toHaveCount(2, {
-      timeout: 10_000,
-    });
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 });

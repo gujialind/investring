@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/popover";
 import { ChevronDown, Loader2, SlidersHorizontal } from "lucide-react";
 import { useProductList } from "@/hooks/useProduct";
-import type { Product } from "@/types/product";
 import { cn, formatMarketName, formatProductDisplayCode } from "@/lib/utils";
 import ProductFilterDialog, { ProductSelection } from "@/components/shared/ProductFilterDialog";
 
@@ -59,48 +58,17 @@ export default function ProductFilterSelect({
   );
   const items = useMemo(() => data?.items ?? [], [data?.items]);
 
-  /**
-   * 现金项单独取数（#719）：产品列表默认排除虚拟产品（#327，保护写侧「虚拟产品不可交易」），
-   * 所以现金在筛选器里根本选不出来 → 平台间现金转移无法按现金筛。这里用**既有参数**
-   * `product_type=CASH + include_virtual=true` 精确命中那一条 CASH 产品，后端零改动。
-   *
-   * 不给整个列表无条件传 `include_virtual=true`：那会连带放进 3 条在途虚拟产品
-   * （IN_TRANSIT_BUY/SELL/DIVIDEND 从不出现在 trade 表），等于再造 3 个死选项。
-   * 也不依赖它出现在第一页里——按类型取数与产品总数、排序都无关。
-   */
-  const { data: cashData } = useProductList(
-    { page_size: 10, product_type: "CASH", include_virtual: true },
-    { enabled: hasOpened }
-  );
-
-  // 现金项与关键字同义时才出现（搜「300」还挂着「现金类资产」是噪音），并与列表去重。
-  // 与常规产品分两个数组而不是合成一个：中间要一条分隔线标明「这不是普通产品选项」（#719 视觉稿）
-  const { cashItems, otherItems } = useMemo(() => {
-    const kw = keyword.toLowerCase();
-    const cash = (cashData?.items ?? []).filter(
-      (p) =>
-        p.product_type === "CASH" &&
-        (!kw || p.name.toLowerCase().includes(kw) || p.code.toLowerCase().includes(kw))
-    );
-    const cashKeys = new Set(cash.map((p) => `${p.code}|${p.market ?? ""}`));
-    return {
-      cashItems: cash,
-      otherItems: items.filter((p) => !cashKeys.has(`${p.code}|${p.market ?? ""}`)),
-    };
-  }, [cashData?.items, items, keyword]);
-  const optionItems = useMemo(() => [...cashItems, ...otherItems], [cashItems, otherItems]);
-
   // 名称/显示码缓存：置顶已选项回显 name (显示码)（#705）；跨条件/跨结果集累积，
   // 缺失时名称回退显示码、显示码回退本地剥后缀（港互认销售码前端无来源，只能等结果集带到）
   const metaByKey = useMemo(() => {
     const map = new Map<string, ProductMeta>();
-    for (const p of optionItems)
+    for (const p of items)
       map.set(`${p.code}|${p.market ?? ""}`, {
         name: p.name,
         displayCode: p.display_code || formatProductDisplayCode(p.code, p.market),
       });
     return map;
-  }, [optionItems]);
+  }, [items]);
   const [metaCache, setMetaCache] = useState<Map<string, ProductMeta>>(new Map());
   useEffect(() => {
     setMetaCache((prev) => {
@@ -125,7 +93,7 @@ export default function ProductFilterSelect({
   };
 
   // 已选项不在当前结果集时固定显示在列表顶部（跨条件保留，语义同筛选弹窗）
-  const resultKeys = new Set(optionItems.map((p) => `${p.code}|${p.market ?? ""}`));
+  const resultKeys = new Set(items.map((p) => `${p.code}|${p.market ?? ""}`));
   const pinned = value.filter((v) => !resultKeys.has(selectionKey(v)));
 
   const renderRow = (key: string, meta: ProductMeta | undefined, s: ProductSelection) => {
@@ -154,17 +122,6 @@ export default function ProductFilterSelect({
       </div>
     );
   };
-
-  // 结果集行（现金项与常规产品项同形状，只差分组渲染的那条分隔线）
-  const renderOptionRow = (p: Product) =>
-    renderRow(
-      selectionKey({ code: p.code, market: p.market ?? "" }),
-      {
-        name: p.name,
-        displayCode: p.display_code || formatProductDisplayCode(p.code, p.market),
-      },
-      { code: p.code, market: p.market ?? "" }
-    );
 
   return (
     <div
@@ -218,16 +175,19 @@ export default function ProductFilterSelect({
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
-            ) : optionItems.length === 0 && pinned.length === 0 ? (
+            ) : items.length === 0 && pinned.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">无符合条件的产品</p>
             ) : (
-              <>
-                {cashItems.map(renderOptionRow)}
-                {cashItems.length > 0 && otherItems.length > 0 && (
-                  <div className="my-1 border-t" />
-                )}
-                {otherItems.map(renderOptionRow)}
-              </>
+              items.map((p) =>
+                renderRow(
+                  selectionKey({ code: p.code, market: p.market ?? "" }),
+                  {
+                    name: p.name,
+                    displayCode: p.display_code || formatProductDisplayCode(p.code, p.market),
+                  },
+                  { code: p.code, market: p.market ?? "" }
+                )
+              )
             )}
           </div>
           <div className="flex items-center justify-between border-t px-3 py-2">
