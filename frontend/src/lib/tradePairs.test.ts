@@ -11,6 +11,7 @@ import {
   isCashLeg,
   canEditArrivalDate,
   tradeCardDetailLine,
+  type TradeRow,
 } from "@/lib/tradePairs";
 import { toDateOnly } from "@/lib/utils";
 import type { Trade, TradePairedLeg } from "@/types/trade";
@@ -138,6 +139,52 @@ describe("groupTradeRows 规则 6（派生子行：真实优先、派生兜底�
     });
     const rows = groupTradeRows([cash]);
     expect(rows).toEqual([{ kind: "pair", main: cash, sub: cash.paired_leg, derived: true }]);
+  });
+
+  // #721 评审 S1：平台间转移被筛选/分页拆开后，屏幕上剩一条现金腿 + 一条**现金**对手腿。
+  // 规范 §8 只给这种派生子行承诺了 `↳ 转出/转入 平台名`（无 ± 前缀）那一档，文案单点在
+  // counterpartSubLabel 的现金分支——组行只负责把形态标成 derived=true，渲染端据此分流。
+  it("双 CASH 转移组只剩一条腿 → derived=true，子行文案走 ↳ 转入/转出（非 ± 现金子行）", () => {
+    const arrived = "2000-01-04";
+    const sell = makeTrade({
+      product_code: "CASH",
+      trade_type: "sell",
+      transfer_group: "0123456789ab",
+      confirm_date: arrived,
+      paired_leg: makeLeg({
+        id: 911,
+        product_code: "CASH",
+        trade_type: "buy",
+        platform_code: "MAYI",
+        status: "confirmed",
+        confirm_date: arrived,
+      }),
+    });
+    const rows = groupTradeRows([sell]);
+    expect(rows).toEqual([{ kind: "pair", main: sell, sub: sell.paired_leg, derived: true }]);
+    const sub = (rows[0] as Extract<TradeRow, { kind: "pair" }>).sub;
+    expect(counterpartSubLabel(sub, "蚂蚁基金")).toBe("↳ 转入 蚂蚁基金");
+    expect(counterpartSubLabel(sub)).toBe("↳ 转入 MAYI");
+
+    // 反向：只剩转入腿时，对手是转出腿（已 confirmed，资金已离开，不带待到账后缀）
+    const buy = makeTrade({
+      product_code: "CASH",
+      trade_type: "buy",
+      transfer_group: "0123456789ab",
+      status: "pending",
+      confirm_date: "2999-01-04",
+      paired_leg: makeLeg({
+        id: 912,
+        product_code: "CASH",
+        trade_type: "sell",
+        platform_code: "HBZQ",
+        confirm_date: arrived,
+      }),
+    });
+    const rows2 = groupTradeRows([buy]);
+    expect(rows2).toEqual([{ kind: "pair", main: buy, sub: buy.paired_leg, derived: true }]);
+    const sub2 = (rows2[0] as Extract<TradeRow, { kind: "pair" }>).sub;
+    expect(counterpartSubLabel(sub2, "华宝证券")).toBe("↳ 转出 华宝证券");
   });
 
   it("对手腿已在结果集内（真实行）→ 绝不重复派生", () => {
@@ -377,12 +424,58 @@ describe("cashRowLabel（现金腿自身的资金流向）", () => {
     ).toBe("现金转出");
     expect(
       cashRowLabel(
-        makeTrade({ product_code: "CASH", trade_type: "buy", transfer_group: "0123456789ab" })
+        makeTrade({
+          product_code: "CASH",
+          trade_type: "buy",
+          transfer_group: "0123456789ab",
+          status: "confirmed",
+          confirm_date: "2000-01-01",
+        })
       )
     ).toBe("现金转入");
     expect(cashRowLabel(makeTrade({ product_code: "CASH", transfer_group: "sub_9" }))).toBe(
       "现金 · 申赎确认"
     );
+  });
+
+  // #721 评审 S3：跨天转移的转入腿是 pending + 未来生效日（cash_transfer_service 只把
+  // 转出腿建成 confirmed）。列表子行按 #493 显示「现金待到账」，卡片恒写「现金转入」
+  // 会把同一笔在途钱在详情页说成已到账——两栈口径必须同一判据。
+  it("转移转入腿未到账（pending 或未来日）→ 现金待到账，与列表同口径", () => {
+    expect(
+      cashRowLabel(
+        makeTrade({
+          product_code: "CASH",
+          trade_type: "buy",
+          transfer_group: "0123456789ab",
+          status: "pending",
+          confirm_date: "2000-01-01",
+        })
+      )
+    ).toBe("现金待到账");
+    expect(
+      cashRowLabel(
+        makeTrade({
+          product_code: "CASH",
+          trade_type: "buy",
+          transfer_group: "0123456789ab",
+          status: "confirmed",
+          confirm_date: "2999-01-01",
+        })
+      )
+    ).toBe("现金待到账");
+    // 转出腿不判到账：扣款腿创建即 confirmed、转移日就是资金离开日（无「待转出」态）
+    expect(
+      cashRowLabel(
+        makeTrade({
+          product_code: "CASH",
+          trade_type: "sell",
+          transfer_group: "0123456789ab",
+          status: "confirmed",
+          confirm_date: "2999-01-01",
+        })
+      )
+    ).toBe("现金转出");
   });
 
   it("给了平台名才追加「 · 平台」，不给就不带", () => {
@@ -405,10 +498,71 @@ describe("counterpartSubLabel / counterpartDateText（对手腿一行文字）",
   });
 
   it("对手是另一条现金腿（平台间转移）→ 只说平台，优先名字、无名字回退平台码", () => {
-    const leg = makeLeg({ product_code: "CASH", platform_code: "MAYI", trade_type: "buy" });
+    // 已到账（confirmed 且生效日不在未来）不带状态后缀：主行状态列已说了「已确认」
+    const leg = makeLeg({
+      product_code: "CASH",
+      platform_code: "MAYI",
+      trade_type: "buy",
+      confirm_date: "2000-01-01",
+    });
     expect(counterpartSubLabel(leg, "蚂蚁基金")).toBe("↳ 转入 蚂蚁基金");
     expect(counterpartSubLabel(leg)).toBe("↳ 转入 MAYI");
-    expect(counterpartSubLabel(makeLeg({ product_code: "CASH", platform_code: null, trade_type: "buy" }))).toBeNull();
+    expect(
+      counterpartSubLabel(
+        makeLeg({
+          product_code: "CASH",
+          platform_code: null,
+          trade_type: "buy",
+          confirm_date: "2000-01-01",
+        })
+      )
+    ).toBeNull();
+  });
+
+  // #721 评审 S3：转入腿可 pending / 生效日在未来，而它挂在已 confirmed 的转出腿下面，
+  // 状态列讲的是转出腿——只写「↳ 转入 平台B」会把在途的钱读成已到账（与 cashRowLabel 同判据）
+  it("对手转入腿未到账 → 带（现金待到账）；转出腿不带（资金已离开）", () => {
+    const cash = { product_code: "CASH", platform_code: "MAYI" };
+    expect(
+      counterpartSubLabel(
+        makeLeg({ ...cash, trade_type: "buy", status: "pending", confirm_date: "2000-01-01" }),
+        "蚂蚁基金",
+      )
+    ).toBe("↳ 转入 蚂蚁基金（现金待到账）");
+    expect(
+      counterpartSubLabel(
+        makeLeg({ ...cash, trade_type: "buy", status: "confirmed", confirm_date: "2999-01-01" }),
+        "蚂蚁基金",
+      )
+    ).toBe("↳ 转入 蚂蚁基金（现金待到账）");
+    expect(
+      counterpartSubLabel(
+        makeLeg({ ...cash, trade_type: "sell", status: "confirmed", confirm_date: "2999-01-01" }),
+        "蚂蚁基金",
+      )
+    ).toBe("↳ 转出 蚂蚁基金");
+  });
+
+  it("详情页卡片：跨天转移的转入腿未到账 → 现金待到账 + 对手转出腿", () => {
+    const incoming = makeTrade({
+      product_code: "CASH",
+      trade_type: "buy",
+      transfer_group: "0123456789ab",
+      status: "pending",
+      confirm_date: "2999-01-06",
+      shares: null as unknown as number,
+      paired_leg: makeLeg({
+        product_code: "CASH",
+        platform_code: "HBZQ",
+        trade_type: "sell",
+        confirm_date: "2000-01-06",
+      }),
+    });
+    // 卡片主标签（本行方向 + 到账口径）与副行（对手腿）读出的都是「还没到」
+    expect(cashRowLabel(incoming, "蚂蚁基金")).toBe("现金待到账 · 蚂蚁基金");
+    expect(tradeCardDetailLine(incoming, new Map([["HBZQ", "华宝证券"]]))).toBe(
+      "↳ 转出 华宝证券 · 2999-01-06"
+    );
   });
 
   it("生效日：卖出腿标「到账」，买入腿不加前缀，无生效日回空串", () => {

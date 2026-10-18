@@ -728,7 +728,8 @@ export default function TradesContent({
     </TableRow>
   );
 
-  // 现金子行（规范 §8）：首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
+  // 现金子行（规范 §8，**仅限结果集里的真实现金腿**；派生对手腿走 renderCounterpartSubRow）：
+  // 首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
   // （资金流向非涨跌语义，禁用 gain/loss token）；操作列空、不单独响应 hover
   const renderCashSubRow = (main: Trade, sub: SubLeg) => {
     // #493 + 评审加固：现金腿生效日未到、或生效日已到但**仍未 confirmed**（跨天转移的
@@ -771,11 +772,15 @@ export default function TradesContent({
   };
 
   /**
-   * 对手腿子行（#719「只补信息、不补行」的渲染端）：主行是**现金腿**、同组对手腿
-   * 被产品筛选挡在结果集外时，用后端只读快照 `paired_leg` 合成这一行。
+   * 对手腿子行（#719「只补信息、不补行」的渲染端）：同组对手腿被筛选/分页挡在
+   * 结果集外时，用后端只读快照 `paired_leg` 合成这一行。**派生 pair 一律走这里**，
+   * 包括对手腿是另一条现金腿的平台间转移（§8 派生形态：`↳ 转出/转入 平台名`、
+   * 金额不带 +/-）——现金对手腿若走 renderCashSubRow 会渲成「现金到账 · 平台 +¥N」，
+   * 与三处详情卡（同取 counterpartSubLabel 现金分支）两种形态，且规范承诺的列表
+   * 形态不可达（#721 评审 S1）。
    * 与现金子行同一副列位（1 + 2 + 1 + 3 + 1 + 2 = 10，#355 colSpan 折叠算式），差别只在：
-   * ① 金额取对手**基金腿的 `amount`**（买入=扣费后净投入、卖出=成交额，#173 口径）且
-   *   **不加 +/- 前缀**——前缀讲的是资金流向，只属于现金子行；实扣/实到在本行主行的现金金额处读；
+   * ① 金额取对手腿的 `amount`（基金腿=买入扣费后净投入/卖出成交额，#173 口径）且
+   *   **不加 +/- 前缀**——前缀讲的是资金流向，只属于真实现金子行；实扣/实到在本行主行的现金金额处读；
    * ② 首列带 `↳` 前缀（#719 视觉稿），标明这是「另一条腿」而非本行的现金子记录；
    * ③ 无操作入口（派生快照不是可导航的真实行），不响应 hover。
    */
@@ -1115,11 +1120,12 @@ export default function TradesContent({
                   row.kind === "pair" ? (
                     <Fragment key={row.main.id}>
                       {renderMainRow(row.main, true, row.derived)}
-                      {/* 子行两种来源（#719）：配对腿是现金 → 资金流向子行（既有形态）；
-                          是基金腿（现金主行的对手）→ 对手腿子行。真实腿与派生快照走同一渲染 */}
-                      {isCashLeg(row.sub)
-                        ? renderCashSubRow(row.main, row.sub)
-                        : renderCounterpartSubRow(row.sub)}
+                      {/* 子行两条渲染路径（#719 + #721 评审 S1）：真实腿配对且配对腿是现金 →
+                          资金流向子行（± 前缀，既有形态）；派生 pair 一律走对手腿子行
+                          （基金对手 `↳ 买入/卖出 产品名（状态）`、现金对手 `↳ 转出/转入 平台名`） */}
+                      {row.derived || !isCashLeg(row.sub)
+                        ? renderCounterpartSubRow(row.sub)
+                        : renderCashSubRow(row.main, row.sub)}
                     </Fragment>
                   ) : (
                     renderMainRow(row.trade, false)

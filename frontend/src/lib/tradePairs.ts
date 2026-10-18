@@ -206,6 +206,10 @@ const TRADE_TYPE_LABELS: Record<string, string> = { buy: "买入", sell: "卖出
  *
  * 「现金到账」仍要过 `cashLegArrived`（#493 口径：confirmed 且生效日不在未来才算已到账）——
  * 卖出到账腿可以携带未来 `confirm_date`，只看日期会把在途现金标成已到账。
+ * 转移的转入腿同样走这条判据（#721 评审 S3）：跨天转移的转入腿是 **pending + 未来
+ * `confirm_date`**（`cash_transfer_service` 转出腿创建即 confirmed、转入腿等到账日确认），
+ * 列表子行按 #493 显示「现金待到账」，卡片若恒写「现金转入」就是同一笔钱两套口径。
+ * 转出腿不判：扣款腿创建即 confirmed、转移日 = 资金离开日，与买入扣款腿同源（无「待转出」态）。
  */
 export function cashRowLabel(trade: Trade, platformName?: string | null): string {
   const origin = cashLegOrigin(trade);
@@ -214,7 +218,7 @@ export function cashRowLabel(trade: Trade, platformName?: string | null): string
   if (origin === "subscription") {
     label = "现金 · 申赎确认";
   } else if (origin === "transfer") {
-    label = isSell ? "现金转出" : "现金转入";
+    label = isSell ? "现金转出" : cashLegArrived(trade) ? "现金转入" : "现金待到账";
   } else {
     label = isSell ? "现金扣款" : cashLegArrived(trade) ? "现金到账" : "现金待到账";
   }
@@ -227,6 +231,11 @@ export function cashRowLabel(trade: Trade, platformName?: string | null): string
  * 哪只产品的哪个方向、外加**对手自己的状态**——主行状态列讲的是本行，
  * 半确认组里「基金腿待确认 / 扣款已完成」这种分歧只有在这里才读得出来。
  *
+ * 现金对手腿也带状态，但只在**尚未到账**时补「（现金待到账）」（#721 评审 S3）：
+ * 跨天转移的转入腿是 pending + 未来生效日，而它挂在已 confirmed 的转出腿下面，
+ * 状态列讲的是转出腿——只写「↳ 转入 平台B」会把在途的钱读成已到账。已到账时不加
+ * 后缀（`（已确认）` 与主行状态列重复，是噪音），保持规范 §8 承诺的 `↳ 转入 平台名`。
+ *
  * 返回 null = 没有可说的对手（转移腿但两侧平台名都取不到），调用方据此不渲子行，
  * 而不是退化成 `--`（宁可少一行信息，不造一个读不懂的占位）。
  */
@@ -236,7 +245,9 @@ export function counterpartSubLabel(
 ): string | null {
   if (isCashLeg(sub)) {
     const name = counterpartPlatformName ?? sub.platform_code;
-    return name ? `↳ ${sub.trade_type === "sell" ? "转出" : "转入"} ${name}` : null;
+    if (!name) return null;
+    if (sub.trade_type !== "buy") return `↳ 转出 ${name}`;
+    return cashLegArrived(sub) ? `↳ 转入 ${name}` : `↳ 转入 ${name}（现金待到账）`;
   }
   const shown =
     sub.product_name ?? formatProductCodeLabel(sub.display_code, sub.product_code, sub.market);

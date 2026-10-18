@@ -402,9 +402,12 @@ test.describe("平台-产品详情页", () => {
     // #719「只补信息、不补行」把各自的现金腿以**派生子行**补回 → 2 主行 + 2 子行 = 4 个 tr，
     // 按 testid 数子行而非按 class（定位器契约 #382）
     await expect(page.locator("table tbody tr")).toHaveCount(4, { timeout: 10_000 });
-    const cashSubRows = page.getByTestId("trade-cash-subrow");
+    // #721 评审 S1：现金对手腿是**派生**的，按 §8 走对手腿形态（`↳ 转出 平台名`、金额不带 ±），
+    // 不再是 ± 现金子行——± 只属于结果集里的真实现金腿（未筛选态见 trade-cash-pairing.spec.ts）
+    const cashSubRows = page.getByTestId("trade-counterpart-subrow");
     await expect(cashSubRows).toHaveCount(2);
-    await expect(cashSubRows.first()).toContainText("现金扣款");
+    await expect(cashSubRows.first()).toContainText("↳ 转出");
+    await expect(page.getByTestId("trade-cash-subrow")).toHaveCount(0);
     // 子行是附属说明，不是可操作行：不露任何生命周期入口
     await expect(cashSubRows.locator('button[title="确认"]')).toHaveCount(0);
     await expect(cashSubRows.locator('button[title="删除"]')).toHaveCount(0);
