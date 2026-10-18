@@ -116,9 +116,14 @@ export const queryKeys = {
   },
   tasks: {
     root: ["tasks"] as const,
-    list: () => ["tasks", "list"] as const,
     executions: (params?: unknown) => ["tasks", "executions", params] as const,
     execution: (id: number | null) => ["tasks", "execution", id] as const,
+  },
+  logs: {
+    root: ["logs"] as const,
+    login: (params?: unknown) => ["logs", "login", params] as const,
+    audit: (params?: unknown) => ["logs", "audit", params] as const,
+    error: (params?: unknown) => ["logs", "error", params] as const,
   },
   tradingCalendar: {
     root: ["trading-calendar"] as const,

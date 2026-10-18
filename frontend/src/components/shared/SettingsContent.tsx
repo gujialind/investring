@@ -15,15 +15,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Save, Calendar, Loader2, RefreshCw, CheckCircle, XCircle, Building2, PlayCircle } from "lucide-react";
+import { Save, Calendar, Loader2, RefreshCw, CheckCircle, XCircle, Building2 } from "lucide-react";
 import Link from "next/link";
 import { getErrorMessage } from "@/lib/api";
 import { useUIStore } from "@/stores/uiStore";
 import { useChangePassword, useRoleCheck } from "@/hooks/useAuth";
 import { useTradingCalendar } from "@/hooks/useTradingCalendar";
 import { useDataSourceConfig, useUpdateDataSource, useSyncTradingCalendar } from "@/hooks/useSystem";
+import LogsContent from "@/components/shared/LogsContent";
 
-export default function SettingsContent() {
+interface SettingsContentProps {
+  variant?: "desktop" | "mobile";
+}
+
+export default function SettingsContent({ variant = "desktop" }: SettingsContentProps) {
   const addToast = useUIStore((state) => state.addToast);
   const changePassword = useChangePassword();
   const { isAdmin } = useRoleCheck();
@@ -154,26 +159,21 @@ export default function SettingsContent() {
 
   return (
     <div className="space-y-6">
-      {/* 移动端管理入口（#650）：平台/任务不进底部 Tab（位宽有限，见 navItems 的
-          mobileTab 说明），改从设置页这一移动一级 Tab 到达。
+      {/* 移动端管理入口（#650）：平台不进底部 Tab（位宽有限，见 navItems 的
+          mobileTab 说明），改从设置页这一移动一级 Tab 到达。任务管理入口已随任务页
+          下线（#715），日志管理改为设置页内 Tab（下方 logs Tab），不再是独立页入口。
           注意 lg:hidden 是**按视口宽度**分流、不是按端：桌面视口 <1024px 时本块同样显示
           （而 Sidebar 是 hidden lg:block，此时也不显示），href 写死 /m/ 后靠 proxy.ts 按
           UA 弹回 /platforms；反向缺口（移动 UA 且视口 ≥1024px）本块与底部 Tab 同时隐藏、
-          这两页重新无入口，属 #650 已登记的已知限制。返回出口在 MobileLayout 按
+          该页重新无入口，属 #650 已登记的已知限制。返回出口在 MobileLayout 按
           navItems 的 mobileEntryHost 统一补，不在这里各写一份。
-          形态照 ProductsContent 的「分类」入口（Link + outline Button） */}
+          形态照 ProductsContent 的「分类」入口（Link + outline Button）；仅剩单项故 grid-cols-1 */}
       {isAdmin && (
-        <div className="grid grid-cols-2 gap-2 lg:hidden">
+        <div className="grid grid-cols-1 gap-2 lg:hidden">
           <Link href="/m/platforms">
             <Button variant="outline" size="sm" className="w-full">
               <Building2 className="mr-2 h-4 w-4" />
               平台管理
-            </Button>
-          </Link>
-          <Link href="/m/settings/tasks">
-            <Button variant="outline" size="sm" className="w-full">
-              <PlayCircle className="mr-2 h-4 w-4" />
-              任务管理
             </Button>
           </Link>
         </div>
@@ -189,6 +189,9 @@ export default function SettingsContent() {
           <TabsTrigger value="calendar">交易日历同步</TabsTrigger>
           <TabsTrigger value="password">修改密码</TabsTrigger>
           <TabsTrigger value="system">系统信息</TabsTrigger>
+          {/* 日志管理 admin-only（#715）：水合前 useRoleCheck 按非 admin，Tab 不渲染，
+              与 navItems 的角色门控同口径；viewer 永远看不到触发器与内容 */}
+          {isAdmin && <TabsTrigger value="logs">日志管理</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="datasource" className="space-y-4">
@@ -452,6 +455,12 @@ export default function SettingsContent() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="logs" className="space-y-4">
+            <LogsContent variant={variant} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

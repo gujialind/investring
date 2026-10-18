@@ -127,7 +127,7 @@
 
 * 服务版本：`FastAPI(version=…)` 取仓库根 `VERSION` 文件（`app.main._resolve_version`，`APP_VERSION` 环境变量优先）；版本变更必须同 commit 重导出 `openapi.json`（`check_openapi.py` 全量比对含 `info.version`），发布流程见 `docs/reference/versioning.md`。
 
-* 调度：`scheduler_enabled`；两条独立每日 job——`daily_nav_sync`（净值同步+分红检测）与 `daily_snapshot_generate`（快照生成，#156），各持 MySQL `GET_LOCK` 互斥锁，cron 分别取 `scheduler_cron_daily` / `scheduler_cron_snapshot`；自动快照仅处理 `auto_snapshot_enabled=True` 的活跃组合（组合级开关默认 False，opt-in，只约束自动任务，手动生成/重算端点不受影响）。`init_tasks.py` 确保任务记录存在并同步文案，但不覆盖已有 cron\_expr。**自动运行同样落 `TaskExecutionLog`**（#406，`trigger_type="scheduled"`，与手动共用 `task_runner.run_task`，见[任务执行规范](../docs/reference/logging.md#logging-tasks)）；两处闸门收敛在 `_should_run_today`（GET\_LOCK 互斥 → 交易日判断），**锁被占与非交易日两类跳过不落执行记录**。
+* 调度：`scheduler_enabled`；两条独立每日 job——`daily_nav_sync`（净值同步+分红检测）与 `daily_snapshot_generate`（快照生成，#156），各持 MySQL `GET_LOCK` 互斥锁，cron 分别取 `scheduler_cron_daily` / `scheduler_cron_snapshot`；自动快照仅处理 `auto_snapshot_enabled=True` 的活跃组合（组合级开关默认 False，opt-in，只约束自动任务，手动生成/重算端点不受影响）。`init_tasks.py` 确保任务记录存在并同步文案，但不覆盖已有 cron\_expr。**自动运行同样落 `TaskExecutionLog`**（#406，`trigger_type="scheduled"`，与手动共用 `task_runner.run_task`，见[任务执行规范](../docs/reference/logging.md#logging-tasks)）；两处闸门收敛在 `_should_run_today`（GET\_LOCK 互斥 → 交易日判断），**锁被占与非交易日两类跳过不落执行记录**。**定时失败有界自动重试 + 快照联动（#715）**：`nav_sync` 定时首跑终态非 `success` 时注册一次性 date job 在 +2h 重试、最多 3 次（`trigger_type="retry"`，仍走 `_should_run_today` 闸门，job 存共享 jobstore 且 `misfire_grace_time=None` 故重启后仍触发）；重试成功则联动补跑一次当日 `snapshot_generate`（`trigger_type="cascade"`，已成功则跳过），手动触发不重试——详见[任务执行规范](../docs/reference/logging.md#logging-tasks)。
 
 * 数据源：Tushare / AkShare，`data_sources` 路由读写 `.env`；安全：登录失败锁定、Token 过期/黑名单、改密后强制重登（参数明细见 `config.py`）。
 

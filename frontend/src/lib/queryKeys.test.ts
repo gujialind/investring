@@ -50,6 +50,7 @@ describe("queryKeys 全域工厂", () => {
     expect(queryKeys.shareChangeEvents.root).toEqual(["share-change-events"]);
     expect(queryKeys.cashTransfers.root).toEqual(["cash-transfers"]);
     expect(queryKeys.tasks.root).toEqual(["tasks"]);
+    expect(queryKeys.logs.root).toEqual(["logs"]);
     expect(queryKeys.tradingCalendar.root).toEqual(["trading-calendar"]);
     // dataSources 域无 root，仅单键查询
     expect(queryKeys.dataSources.config()).toEqual(["data-source-config"]);
@@ -128,10 +129,17 @@ describe("queryKeys 全域工厂", () => {
       {
         root: queryKeys.tasks.root,
         keys: [
-          queryKeys.tasks.list(),
           queryKeys.tasks.executions(),
           queryKeys.tasks.executions({ page: 1 }),
           queryKeys.tasks.execution(7),
+        ],
+      },
+      {
+        root: queryKeys.logs.root,
+        keys: [
+          queryKeys.logs.login({ page: 1 }),
+          queryKeys.logs.audit({ page: 1 }),
+          queryKeys.logs.error({ page: 1 }),
         ],
       },
       { root: queryKeys.tradingCalendar.root, keys: [queryKeys.tradingCalendar.byYear(2026)] },

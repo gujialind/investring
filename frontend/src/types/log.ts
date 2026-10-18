@@ -38,21 +38,6 @@ export interface ErrorLog {
   created_at?: string;
 }
 
-// 对齐后端 TaskResponse（主键是 code，无 id 列；cron 字段名为 cron_expr）
-export interface ScheduledTask {
-  code: string;
-  name: string;
-  description?: string;
-  cron_expr?: string;
-  is_enabled: boolean;
-  last_run_at?: string;
-  last_run_status?: string;
-  next_run_at?: string;
-  timeout_seconds?: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
 // 对齐后端 TaskExecutionLogResponse
 export interface TaskExecution {
   id: number;

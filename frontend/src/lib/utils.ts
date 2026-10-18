@@ -51,6 +51,24 @@ export function formatDate(date: string | Date | number): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * 格式化日期时间为 YYYY-MM-DD HH:mm（visual-spec §12，#715 补回）。
+ * 日志/执行历史等按时间倒序的表需要区分同日先后，纯日期不够用。
+ */
+export function formatDateTime(date: string | Date | number): string {
+  const d =
+    typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? parseDateOnly(date)
+      : new Date(date);
+  if (!d || isNaN(d.getTime())) return "--";
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
 // ==================== 金额格式化 ====================
 
 /**

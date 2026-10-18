@@ -51,7 +51,6 @@ export type {
   LoginLog,
   AuditLog,
   ErrorLog,
-  ScheduledTask,
   TaskExecution,
 } from "@/types/log";
 export type { NotificationItem } from "@/types/notification";
