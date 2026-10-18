@@ -639,7 +639,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               <Table data-testid="cash-flow-table">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>日期 · 平台</TableHead>
+                    <TableHead className="whitespace-nowrap">日期 · 平台</TableHead>
                     <TableHead>流水类型</TableHead>
                     <TableHead>来源 / 去向</TableHead>
                     <TableHead className="number-cell">金额</TableHead>
@@ -657,7 +657,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                       <TableRow key={rowKey(row)} data-testid="cash-flow-row">
                         {!merged && (
                           <TableCell rowSpan={spans[i]} className="align-top" data-testid="group-cell">
-                            <div className="text-sm">{row.cash_date}</div>
+                            <div className="whitespace-nowrap text-sm">{row.cash_date}</div>
                             <div className="whitespace-nowrap text-xs text-muted-foreground">
                               {pname(row.platform_code)}
                             </div>
