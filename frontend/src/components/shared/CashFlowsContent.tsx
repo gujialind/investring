@@ -52,7 +52,7 @@ import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
 
-import { cn, formatNumber, formatSignedCurrency, toDateOnly } from "@/lib/utils";
+import { cn, formatNumber, formatSignedCurrency, getNumberCellClass, toDateOnly } from "@/lib/utils";
 import { getErrorMessage, type CashFlowListParams } from "@/lib/api";
 import type { CashFlowRow, CashFlowStatusFilter, CashFlowType } from "@/types/cash-flow";
 import {
@@ -538,7 +538,9 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-sm text-muted-foreground">{s.label}</span>
                 {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号 */}
-                <span className={cn("number-cell font-semibold", isMobile ? "text-xl" : "text-2xl")}>
+                {/* 统计卡主数值与标签/注记同侧左对齐（visual-spec §5）：helper 供数字形态，
+                    text-left 经 twMerge 覆盖其表格专用右对齐；number-cell utility 自带右置不可直接用 */}
+                <span className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold", isMobile ? "text-xl" : "text-2xl")}>
                   {s.value}
                 </span>
                 <span className={cn("text-xs", s.warn ? "text-warning-foreground" : "text-muted-foreground")}>
