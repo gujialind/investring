@@ -17,9 +17,9 @@
 - 页头四卡：可用现金 / 在途资金 / 本期流入 / 本期流出。默认组合级；平台筛选激活切该平台；筛选态的组合级由「按平台构成」弹窗合计行承担（下钻与上看同一弹窗）。
 - 筛选栏：区间（上界默认开放「至今」，否则预计到账日在未来的在途行会被默认视图藏掉）/ 状态 / 平台 / 流水类型（7 类，见 §3）。
 - 列表 7 列：`日期 · 平台` 组列（按 `(平台, 现金日期)` rowSpan 合并，内含「当日另有 N 笔」入口）/ 流水类型（chip + 日期含义副行）/ 来源 · 去向 / 金额 / 平台日终余额（与组列同段合并）/ 状态 / 操作。排序 = 现金日期降序 → 平台 code 升序 → 来源类型（`trade_leg` → `transfer` → `dividend` → `revalue`）→ 原始记录 id，因此同组行必然连续，合并段不会被分页以外的因素切断。
-- 三弹窗：当日该平台全部流水（仅解除类型筛选、标注命中行、关窗回原筛选）；流水详情（kv + 日终余额对账块 + 未到账行的投影块；对账块按**组级**式渲染，见 §3）；按平台构成（行值 = 筛该平台时四卡值、合计行 = 组合口径、行末「看明细」钻穿 / 「更新」以该平台预选启动更新现金市值、合计行无「更新」）。
+- 三弹窗：当日该平台全部流水（仅解除**类型**筛选——表格仍保留当前状态筛选，「全部」指含被类型筛选隐藏的行，「共 N 笔」计数与对账块用未过滤全组；标注命中行、关窗回原筛选）；流水详情（kv + 日终余额对账块 + 未到账行的投影块；对账块按**组级**式渲染，见 §3）；按平台构成（行值 = 筛该平台时四卡值、合计行 = 组合口径、行末「看明细」钻穿 / 「更新」以该平台预选启动更新现金市值、合计行无「更新」）。
 - 页头入口：现金转移 / 转移记录 / 更新现金市值（三个弹窗均已是 `frontend/src/components/shared/dialogs/` 的共享组件，复用不新建）。
-- **方向口径（账本视角，不可反向）**：申购的 CASH buy 腿是**流入**（投资人注资入账，label「申购 · 注资入账」）、赎回的 CASH sell 腿是**流出**（组合向投资人支付，label「赎回 · 支付」）。mockup v3 按「基金申赎 = 扣款/到账」的直觉标了相反符号，与其自身余额列（= `calculate_available_cash` 单次调用）不可能同时成立——对账块会不闭合。PR-2 落地时按本条修正 mockup 帧。
+- **方向口径（账本视角，不可反向）**：申购的 CASH buy 腿是**流入**（投资人注资入账，label「申购 · 注资入账」）、赎回的 CASH sell 腿是**流出**（组合向投资人支付，label「赎回 · 支付」）。mockup v3 按「基金申赎 = 扣款/到账」的直觉标了相反符号，与其自身余额列（= `calculate_available_cash` 单次调用）不可能同时成立——对账块会不闭合。**PR-2 最终不修正 mockup 帧**（原件不入库，改动即破坏唯一的布局对照基线）：mockup 仅作布局参考，方向以本条与 §6 T1 为准。
 - 显示层口径四条（余额列）：平台级（列名「平台日终余额」，**无组合级余额列**）；时点值 = `calculate_available_cash(as_of=该行现金日期, platform=该行平台)` 单次调用；日终值同 `(平台, 日)` 合并一格；与类型/状态/区间筛选构造上免疫。
 - 状态列文案档位（后端 `status.label` 派生，前端不另算）：未生效行按类型给「待扣款 / 现金待到账 / 待支付 / 在途 / 待到账」；**申购注资腿按 `trade_status` 分档**——pending 是「待确认」、confirmed 但确认日 C 未到是「已确认 · 待入账」（T+1 确认的常态，一律标「待确认」会与已确认的申赎记录矛盾）；**重估行**已烘焙进快照是「已生效」（neutral），未烘焙是「待重算」（warning）+ note「需重算快照后生效」。
 - 显示层口径三条（补充）：「当日另有 N 笔」N = 后端给的 `group_total_count` − 在屏同组行数，N=0 不渲染；投影值（「预计到账后余额」）只出现在详情弹窗、由前端推算并明写「不是 `calculate_available_cash` 的结果」，**后端不出该字段**；平台间转移按平台-日拆两行、配对靠详情弹窗的关联业务块维持。
@@ -46,7 +46,7 @@
 结论：**主路径已执行，回退路径未触发**。#721（分支 `feature/719-cash-leg-pairing`，PR 仍 OPEN）在 rebase 解冲突的窗口内把 H2 整体撤出本 PR，只保留 H1——**H2 从未进入 `main`**，因此 PR-3 无撤除动作，只做残留核对。
 
 - **H1 配对子行（保留，随 #721 交付）**：双向 `build_paired_leg_map` + 嵌套 `paired_leg` 响应字段 + 前端合成对手腿子行，回答「这笔买入花哪个平台的钱 / 卖出的钱去哪」，与本页互补。
-- **H2 产品筛选含现金（退役）**：目的（让平台间转移可筛）被本模块完全承接——转移按平台-日拆两行、带余额与配对详情，口径更全；「调仓页产品筛选不含现金」是方案 C 的既定形态。
+- **H2 产品筛选含现金（退役）**：目的（让平台间转移可筛）被本模块完全承接——转移按平台-日拆两行、带余额与配对详情，口径更全；「调仓页产品筛选不含现金」是方案 C 的既定形态。原「禁止在调仓页产品筛选加现金」条款与 4 步操作清单随主路径执行退役（执行完毕、窗口已过，不是文档整理中静默删除保护禁令）。
 - **残留核对（PR-3 执行）**：`origin/main` 与 `origin/feature/725-cash-flows-ui` 上 H2 三个符号**零残留**。两分支在全部 H2 相关文件上唯一 diff 是 visual-spec 的 #725 登记；现存命中项均为 #721 之前的既有基线、**不是 H2 语义也不是撤除对象**——`include_virtual` 只在 `/api/products` 域（#327 虚拟产品默认排除，产品管理页显式取数），`ProductFilterDialog` 的 `{ value: "CASH", label: "现金" }` 是 #324 起的**产品类型**下拉（调仓页取数不传 `include_virtual`，故现金产品筛不出、CASH 档选不中），`products=CASH|` 是 #155 通用 `code|market` 复合值解析的文档示例。命令与逐项判定在 PR-3 收尾 PR 正文留痕。
 - #719 的验收回填与关闭留待 #721 合入后执行，本模块不代做。
 
@@ -55,7 +55,7 @@
 三个 PR 均已交付、**均未合入 `main`**，stacked 关系：#726（base `main`）← #727（base `feature/725-cash-flows-api`）← PR-3（base `feature/725-cash-flows-ui`）。原步骤清单已删除，产物以下列 commit 指针为准。
 
 - **PR-1 后端聚合查询 —— PR #726**（`feature/725-cash-flows-api`：`02dda7e` 主体、`e448ab5` 评审处置）：`cash_flow_service.py` + `schemas/cash_flow.py` + `routers/cash_flows.py` + openapi 再生成 + 单测与两份集成测试；读侧口径正文补入 [rule-cash](../reference/business-constraints.md#rule-cash)；本文与 `frontend/AGENTS.md` 入口句同批入库、`backend/AGENTS.md` 影响面表补行。ir-cli 命令组未进本 PR（follow-up chore）。
-- **PR-2 前端双端页面 —— PR #727**（`feature/725-cash-flows-ui`：`39610cc` 主体、`05fa6e1` 评审处置，`76a8d98` 同步 PR-1）：双端页面 + 7 列 rowSpan 列表 + 三弹窗 + `ManageLinksCard` 第 6 项；形态登记见 [visual-spec.md](visual-spec.md) §8（多行合并段）、§12（符号三档例外）、§20（两行变更记录）；方向按 §2 账本口径落地（消费后端 `flow_type_label`，前端不重算）；`e2e/cash-flows.spec.ts` 双端。mockup 帧的申赎相反标注未修正——mockup 仅作布局参考，方向以本文为准（原件不入库）。
+- **PR-2 前端双端页面 —— PR #727**（`feature/725-cash-flows-ui`：`39610cc` 主体、`05fa6e1` 评审处置、`76a8d98` 同步 PR-1、tip `043f4cc` 前端 coverage 分母棘轮随 #725 新增 lib 文件上调）：双端页面 + 7 列 rowSpan 列表 + 三弹窗 + `ManageLinksCard` 第 6 项；形态登记见 [visual-spec.md](visual-spec.md) §8（多行合并段）、§12（符号三档例外）、§20（两行变更记录）；方向按 §2 账本口径落地（消费后端 `flow_type_label`，前端不重算）；`e2e/cash-flows.spec.ts` 双端。mockup 帧的申赎相反标注未修正——mockup 仅作布局参考，方向以本文为准（原件不入库）。
 - **PR-3 收尾 —— `feature/725-cash-flows-closeout`**：§4/§5 裁剪、§7 改写为实测结果、新增 §9 断言证据映射、H2 残留核对（§4）、文档门禁。
 
 原「#721 裁剪须先于 PR-2 合入」的顺序依赖随 #721 走主路径消解（§4）；现金流水页不消费 `paired_leg`，与 #721 无字段耦合，合入顺序不再受限。**合入后**须按 §9 逐条回填 #725 的 16 条断言，并处理 §6 列出的未裁决项。
@@ -84,14 +84,14 @@ PR-2 提出、**至今未裁决**的两项（本模块不代裁决，只登记�
 
 ## 7. 已执行的验证入口与结果（PR-1 / PR-2，2026-10-18）
 
-数字摘自 #726 / #727 正文与处置评论的实跑留痕，本节不重跑、不换算。缺口见 §9 表末。
+数字摘自 #726 / #727 正文与处置评论的实跑留痕；「本模块测试」行的 68 / 135 为 PR-3 在 closeout 分支（`9dda5fb` merge `043f4cc` 后）复跑，复跑范围见该行。本节其余不重跑、不换算。缺口见 §9 表末。
 
 | 入口 | 命令要点 | 结果 |
 | --- | --- | --- |
 | 影响面圈定 | `.venv/bin/python scripts/verify.py plan --base origin/main` | PR-1 required jobs = changes / docker-build-smoke / image-smoke / backend-test / backend-test-mysql / cli-contract-check / frontend-check / frontend-e2e |
 | 后端全量（SQLite） | `TEST_DB_URL=sqlite:////tmp/ir725/sqlite.db … pytest tests -q` | 2206 passed / 38 skipped |
 | 后端全量（MySQL 方言） | 本机 `mysql:8.4` 容器映射 3307 的空库 `ir_test`，显式经 `TEST_DB_URL` 指定 | 2242 passed / 2 skipped。**未使用** `backend/.env.test`（指向远程实例，禁用于测试通道；隔离闸门 `backend/tests/db_isolation.py`）。仓库内**没有**预置的 3307 定义，`docker-compose.dev.yml` 是 `mysql:8.0` 映射 3306 / 库 `investring_dev` |
-| 本模块测试 | PR-1 新增 61 条单独跑；`backend/AGENTS.md` 新登记行 `-k "cash_flow or cash_transfers or in_transit"` | 61 passed；MySQL 通道 128 passed / 1211 deselected（同时验证该表行确实能选中测试） |
+| 本模块测试 | PR-1 新增三测试文件单独跑（`pytest tests/unit/test_cash_flow_service.py tests/integration/test_cash_flows_balance.py tests/integration/test_cash_flows_api.py -q`）；`backend/AGENTS.md` 新登记行选择口径 `-k "cash_flow or cash_transfers or in_transit"` | **最终口径：62 个 test 函数、参数化展开后收集 68 条，单独跑 68 passed（SQLite）。**选择口径 PR-3 复跑（head 含 `043f4cc`）：SQLite 135 passed / 2116 deselected；MySQL 通道（本机 `mysql:8.4` 空库 `ir_test`）135 passed / 2116 deselected。旧留痕 61 / 128 是 `02dda7e` 快照（55 函数 + 7 参数化），`e448ab5` 评审处置 +7 后为现值；1211 deselected 对应一个未复现的更窄收集范围（现全量 `tests` 收集 2251），pass 数 135 与 #728 审查者复测一致 |
 | 契约 | `backend/check_openapi.py`、`scripts/verify.py run contract`、`ir-cli/scripts/gen_response_fields.py --check` | openapi 一致、contract pass、`response_fields.py` 一致且无 diff（CLI 命令组未进 PR-1） |
 | 前端门禁 | `scripts/verify-frontend.sh`；PR-2 后 `npm run lint` / `tsc --noEmit` / `npm run test` / `npm run build` | 0 error / 0 / 207 passed / build OK，桌面与移动两条路由均注册；`cashFlows.ts` 分支全覆盖 |
 | 前端 E2E | `verify.py run e2e -- … e2e/cash-flows.spec.ts e2e/regression.spec.ts --workers 2 --retries 0`（隔离栈） | `05fa6e1` 处置后 `status: pass`、47 passed，双 project，运行前后源码指纹一致 |
@@ -100,7 +100,7 @@ PR-2 提出、**至今未裁决**的两项（本模块不代裁决，只登记�
 
 ## 8. 风险与回滚（现状标注）
 
-- **变更全为 additive**（新端点、新页面、新组件；无迁移、无写侧改动）：PR-1 / PR-2 可独立 revert，回滚不需数据恢复。H2 撤除已不再是风险项——#721 走主路径，H2 未进 `main`（§4）；PR-2 回滚仅使 `ManageLinksCard` 第 6 项消失。
+- **变更全为读侧新增**（新端点、新页面、新组件；无迁移、**无后端写入口径改动**——PR-2 同批改了共享的 `useCashTransfer`/`usePosition` 失效逻辑与 `CashTransferDialog` 的 id/htmlFor，但不触碰写入路径）：回滚顺序为 **PR-2 → PR-1**——PR-2 页面调用 PR-1 的 `/cash-flows` 端点，PR-1 不能在 PR-2 仍在时单独回滚，否则页面请求不存在的接口。PR-2 回滚会整体移除现金流水页、组件、hooks 与入口（`ManageLinksCard` 第 6 项随之消失），不是「仅入口消失」。两者回滚均不涉及数据恢复。H2 撤除已不再是风险项——#721 走主路径，H2 未进 `main`（§4）。
 - **余额列性能**（仍有效）：PR-1 已按 `(平台, 日)` 去重批量取价，且只对当页行补齐展示信息与余额。截至 PR-2 交付**未触发**退路判据（无单页 >1s 的实测证据），维持引擎直调。若真实数据量下变慢，改为快照基线批量读（口径不变、只改读取模式），回写本文 §3。
 - **重估生效依赖快照重算**（仍有效）：`calculate_available_cash` 只经快照基线读到覆盖，未重算时日终余额≠重估值。前端以状态档位「待重算」+ note 兜底（§2），不改引擎；运营上依赖「重估 → 重算」流程。
 - **#721 联动**：#721 仍 OPEN，main 上暂无 `paired_leg`；现金流水页不消费该字段，两者可任意顺序合入。若 #721 后续再触碰 `TradesContent.tsx` / `ProductFilterDialog.tsx`，与本模块无文件冲突（本模块不改这两处）。
@@ -118,7 +118,7 @@ PR-2 提出、**至今未裁决**的两项（本模块不代裁决，只登记�
 | 5 | 组合级 in/out 不含转移，平台级含对应腿 | PR-1 `test_cash_flows_api.py`、`test_cash_flow_service.py` | `TestOverviewAndBreakdown::test_portfolio_level_excludes_transfers_platform_level_includes`；unit `test_portfolio_level_excludes_transfer_and_revalue`、`test_platform_level_includes_transfer_legs` | 已实现，待合入后勾选 |
 | 6 | 详情弹窗显示对方腿（平台 · 日期 · 金额 · 状态） | PR-1 `test_cash_flows_api.py`；PR-2 `CashFlowsContent.tsx` + `e2e/cash-flows.spec.ts` | `TestTransferRows::test_cross_day_pair_exposes_settled_split`（`pair_ref` 四要素）；e2e 同一用例的 `#6` 段（详情弹窗「关联业务」可见）。移动端同供详情弹窗，见 §6 未裁决项 2 | 已实现，待合入后勾选 |
 | 7 | 「当日另有 N 笔」N = 同平台-日总笔数 − 在屏行数；N=0 不渲染 | PR-1 unit + api；PR-2 `cashFlows.test.ts` + e2e | unit `TestGroupCount::test_group_count_ignores_type_filter`、`test_group_count_follows_status_filter`；api `TestFlowTypeFilter::test_group_total_count_releases_type_filter`；`cashFlows.test.ts::sameDayOthersCount`（含 clamp 与缺位兜底 4 条）；e2e `#7`（筛「调仓 · 买入扣款」后得「当日另有 1 笔」） | 已实现，待合入后勾选 |
-| 8 | 当日弹窗：仅解除类型筛选、标注命中行、关窗回原筛选 | PR-2 `e2e/cash-flows.spec.ts`（后端同组取数口径由 PR-1 `group_total_count` 支撑） | e2e `#8`：断言「当日该平台共 2 笔（含被当前筛选隐藏的行）」+ 被隐藏的申购行在弹窗内可见 + 关闭后 `same-day-link` 仍在（筛选未丢） | 已实现，待合入后勾选 |
+| 8 | 当日弹窗：仅解除类型筛选、标注命中行、关窗回原筛选（「全部」口径与状态筛选态覆盖见 §2 与表末缺口） | PR-2 `e2e/cash-flows.spec.ts`（后端同组取数口径由 PR-1 `group_total_count` 支撑） | e2e `#8`：断言「当日该平台共 2 笔（含被当前筛选隐藏的行）」+ 被隐藏的申购行在弹窗内可见 + 关闭后 `same-day-link` 仍在（筛选未丢） | 已实现，待合入后勾选 |
 | 9 | 未到账行不入余额与 in/out、只进在途（按到账平台）；余额格照常、金额注「不计入余额」 | PR-1 `test_cash_flows_balance.py`；PR-2 `cashFlows.test.ts` + e2e | `TestInTransitAndOverride::test_unsettled_row_keeps_balance_but_stays_out_of_flows`；`cashFlows.test.ts::amountNote「未生效 → 不计入余额」`；e2e「在途转移腿 …」的 `#9` 段 | 已实现，待合入后勾选 |
 | 10 | 详情弹窗「预计到账后余额」= 当前日终 + 本笔，明写前端推算 | PR-2 `cashFlows.ts` + `cashFlows.test.ts` + e2e；PR-1 保证后端不出该字段 | `cashFlows.test.ts::projectedBalance`（5 条，含 confirmed-未来行不投影）；e2e `#10`（投影块 + 文案含 `calculate_available_cash`）；unit/api 的无投影字段契约断言。**触发面按 §6 未裁决项 1 收窄至 pending 转入腿** | 已实现，待合入后勾选 |
 | 11 | 重估行出现（金额注为绝对值）；同日增量被吸收，日终 = 重估值 | PR-1 `test_cash_flows_balance.py`、api、unit；PR-2 `CashFlowsContent.tsx` | `TestInTransitAndOverride::test_revalue_row_is_absorbed_by_snapshot`；`TestGroupReconciliation::test_revalue_day_replaces_instead_of_summing`；`TestRevalueBaking::test_unbaked_override_is_unsettled_and_leaves_available_alone` + `test_generating_the_snapshot_flips_settled_to_true`；api `TestFlowTypeFilter::test_revalue_row_is_absolute_and_actionable`；对账块「同日现金重估 … 吸收当日增量」注记见 §6 | 已实现，待合入后勾选 |
@@ -132,6 +132,8 @@ PR-2 提出、**至今未裁决**的两项（本模块不代裁决，只登记�
 
 - **断言 15**：`recon` 的**数值**有后端单测与集成测试，注记**文案**只在实现里（`CashFlowsContent.tsx`），e2e 未对该句断言。
 - **断言 8 / 14**：纯前端交互面，无后端对应用例；回归仅由 e2e 承担（弹窗帧不在 `visual-verify.sh` 能力内——`visual-shot.mjs` 只按路径截图、不开弹窗，故 13 帧中 6 张弹窗帧无像素基线，形态由 e2e 断言替代）。
+- **断言 2 / 14 的移动端覆盖**：e2e 移动段对同日合并组只断言「申购 · 注资入账」一张卡的重复余额，「调仓 · 买入扣款」卡仅 `toBeVisible`（`cash-flows.spec.ts:217-224`）；「合计行无 `breakdown-update`」只在桌面段断言（`if (!isMobile)` 内，:270-276），移动端合计行无操作未受守。实现为逐卡渲染余额、合计卡不传 `onUpdate`，故当前成立；若移动端退化，这两条证据不会变红。补第二张卡余额与移动端合计行断言属 **PR-2 后续**（e2e 改动在 PR-2 分支，超出本 PR 只改文档的范围）。
+- **断言 8 的状态筛选态**：实现是「当日弹窗表格保留当前状态筛选、仅计数与对账块用未过滤全组」（§2 口径；`CashFlowsContent.tsx:363-366` 的 `dayRows` 按 `statusFilter` 过滤），e2e `#8` 只构造了类型筛选，状态筛选态（如在途档下开弹窗）**未由 e2e 覆盖**。
 - **断言 10**：结论依赖 §6 未裁决项 1（投影触发面收窄）。裁决若改为「confirmed-未来行也提示预计到账」，需后端补字段并同批改 `projectedBalance` 用例与 e2e。
 - **断言 6 / 10 的移动端**：PR-2 已按 §6 未裁决项 2 提供移动端详情弹窗；若改为豁免，勾选时须注明「移动端由当日/构成弹窗部分承载」。
 - **断言 11 的运营前提**：重估吸收依赖「重估 → 重算快照」流程，测试用例主动生成快照（`TestRevalueBaking`）；真实环境未重算时日终余额不等于重估值，由状态档「待重算」注记兜底（§8）。
