@@ -62,6 +62,7 @@ import {
   cashFlowDotColor,
   CASH_FLOW_STATUS_OPTIONS,
   CASH_FLOW_TYPE_OPTIONS,
+  dayQueryNotice,
   formatBalanceCurrency,
   formatBareSigned,
   normalizeMoneyText,
@@ -220,7 +221,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           key: "available",
           label: "可用现金",
           value: formatBalanceCurrency(overview.available),
-          note: isMobile ? `${stockScope} · 截至 ${today}` : `${stockScope} · 截至今日（不随筛选变）`,
+          note: isMobile ? `${stockScope} · 截至 ${today}` : `${stockScope} · 截至今日（仅随平台筛选变）`,
           warn: false,
         },
         {
@@ -315,7 +316,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   );
 
   // ---- 对账块（详情 / 当日弹窗共用）：前日终 → 当日已生效 → 日终 ----
-  const renderRecon = (origin: CashFlowRow, groupRows: CashFlowRow[]) => {
+  const renderRecon = (origin: CashFlowRow, groupRows: CashFlowRow[], hiddenCount = 0) => {
     const effects = groupRows.filter((r) => r.settled && !r.is_override);
     const hasOverride = groupRows.some((r) => r.settled && r.is_override);
     const prev = origin.prev_day_balance;
@@ -349,6 +350,11 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             同日现金重估（绝对值覆盖）吸收当日增量，日终以重估值为准。
           </div>
         )}
+        {hiddenCount > 0 && (
+          <div className="py-0.5 text-xs text-warning-foreground" data-testid="day-truncated">
+            另有 {hiddenCount} 笔超出单次取数上限（{groupRows.length} 笔）未列入，故上方明细加总不等于当日余额；当日余额仍为后端权威值。
+          </div>
+        )}
         <div className="mt-1 flex items-center justify-between border-t pt-1 font-medium">
           <span>当日余额</span>
           <span className="number-cell">{formatBalanceCurrency(end)}</span>
@@ -366,9 +372,12 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   }, [dayGroupRows, statusFilter]);
 
   // 弹窗内同日查询的加载 / 失败态（#727 S2，visual-spec §14 Dialog 形态：失败走
-  // destructive inline Alert + 重试）。不得在查询未落地时用单行兜底冒充全组对账。
+  // destructive inline Alert + 重试）。不得在查询未落地时用单行兜底冒充全组对账；
+  // 失败**优先于**「有缓存」，否则重取失败会把改动前的日终余额当当前值（#727 L2 S3，
+  // 判序同主列表的 `isError ? QueryErrorState : …`）。
+  const dayNotice = dayQueryNotice(dayIsError, !!dayData);
   const renderDayQueryState = (): ReactNode | null => {
-    if (dayIsError && !dayData) {
+    if (dayNotice === "error") {
       return (
         <div
           className="rounded-md border border-destructive/30 bg-destructive-soft p-3"
@@ -383,7 +392,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
         </div>
       );
     }
-    if (!dayData) {
+    if (dayNotice === "loading") {
       return (
         <div
           className="flex items-center justify-center gap-2 rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground"
@@ -397,6 +406,11 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     }
     return null;
   };
+
+  // 同日取数上界 = 后端 MAX_PAGE_SIZE（100）。单平台单日超出时明细与合计会被静默截断，
+  // 而「当日余额」仍取后端权威值 → 期初 + 明细 ≠ 日终，必须显式说出来（#727 L2 N3）。
+  const dayHiddenCount =
+    dayData && dayData.total > dayGroupRows.length ? dayData.total - dayGroupRows.length : 0;
 
   // ---- 筛选栏控件（visual-spec §9：时间 → 状态 → 实体 → 类型）----
   const rangeWidth = isMobile ? "h-9 w-full" : "h-9 w-[240px]";
@@ -537,10 +551,12 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-sm text-muted-foreground">{s.label}</span>
-                {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号 */}
+                {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号，故降一档；
+                    text-lg 是 §5 四档内的分区标题档（同 PortfolioStatsCards 移动分支），
+                    不属 §6 禁止的「端侧独有字号」——此前的 text-xl 是四档外中间档 */}
                 {/* 统计卡主数值与标签/注记同侧左对齐（visual-spec §5）：helper 供数字形态，
                     text-left 经 twMerge 覆盖其表格专用右对齐；number-cell utility 自带右置不可直接用 */}
-                <span className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold", isMobile ? "text-xl" : "text-2xl")}>
+                <span className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold", isMobile ? "text-lg" : "text-2xl")}>
                   {s.value}
                 </span>
                 <span className={cn("text-xs", s.warn ? "text-warning-foreground" : "text-muted-foreground")}>
@@ -824,7 +840,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                   </span>
                 </DetailRow>
               </div>
-              {renderDayQueryState() ?? renderRecon(detailRow, dayGroupRows)}
+              {renderDayQueryState() ?? renderRecon(detailRow, dayGroupRows, dayHiddenCount)}
               {(() => {
                 const proj = projectedBalance(detailRow);
                 if (proj === null) return null;
@@ -871,9 +887,11 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                   {pname(sameDayRow.platform_code)} · {sameDayRow.cash_date} 现金流水
                 </DialogTitle>
                 <DialogDescription>
-                  {dayData
-                    ? `当日该平台共 ${dayGroupRows.length} 笔（含被当前筛选隐藏的行）。关闭后回到当前筛选视图，筛选条件不变。`
-                    : "同日流水加载中，笔数以全组数据落地为准。"}
+                  {dayNotice === null
+                    ? `当日该平台共 ${dayData?.total ?? 0} 笔（含被当前筛选隐藏的行）。关闭后回到当前筛选视图，筛选条件不变。`
+                    : dayNotice === "loading"
+                      ? "同日流水加载中，笔数以全组数据落地为准。"
+                      : "同日流水取数失败，笔数与对账以下方重试结果为准。"}
                 </DialogDescription>
               </DialogHeader>
               {renderDayQueryState() ?? (
@@ -935,7 +953,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                       </TableBody>
                     </Table>
                   )}
-                  {renderRecon(sameDayRow, dayGroupRows)}
+                  {renderRecon(sameDayRow, dayGroupRows, dayHiddenCount)}
                   <p className="text-xs text-muted-foreground">
                     这就是列表里那一格合并余额的来历；未到账的腿不在其中。
                   </p>

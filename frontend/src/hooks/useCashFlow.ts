@@ -28,7 +28,9 @@ export function useCashFlowList(portfolioCode: string, params?: CashFlowListPara
  *
  * 刻意不带 flow_type / status 筛选：主列表在类型筛选态下看不到同组被隐藏的行，而弹窗
  * 要「含被当前筛选隐藏的行」（断言 8）且对账块要自证日终余额，必须取全组。上界卡到
- * 当日（from=to=cash_date），page_size 拉满 100（单平台单日不可能更多）。仅在弹窗打开
+ * 当日（from=to=cash_date），page_size 拉满后端上限 100——这不是「单平台单日不会更多」
+ * 的保证（批量回填/脚本造数可以超过），故消费方按 `total > items.length` 显式标注截断，
+ * 不把截断结果当完整对账（`CashFlowsContent` 的 `dayHiddenCount`）。仅在弹窗打开
  * 时 enabled，不常驻。
  */
 export function useCashFlowDay(

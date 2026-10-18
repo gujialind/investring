@@ -175,3 +175,15 @@ export function formatBareSigned(value: string | number | null | undefined): str
   const sign = n < 0 ? "-" : n > 0 ? "+" : "";
   return `${sign}${formatNumber(Math.abs(n), 2)}`;
 }
+
+/**
+ * 弹窗内同日查询的三态判序（#727 L2 S3）：**失败优先于「有缓存」**——`error` 时整块
+ * 换成失败态 + 重试，即使 `hasData` 为真也不渲染旧的对账块与「共 N 笔」。理由：写入口
+ * 失效触发的重取若失败，缓存里是**改动前**的日终余额，继续渲染等于把旧对账当成当前
+ * 结果（本页读侧判序同 `CashFlowsContent` 的 #683C「失败不并入空态」与主列表
+ * `isError ? QueryErrorState : …`）。`loading` = 首次取数未落地，同样不得用单行数据兜底。
+ */
+export function dayQueryNotice(isError: boolean, hasData: boolean): "error" | "loading" | null {
+  if (isError) return "error";
+  return hasData ? null : "loading";
+}
