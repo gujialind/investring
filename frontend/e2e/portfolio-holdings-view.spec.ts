@@ -123,7 +123,7 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       'true',
     );
 
-    // 产品聚合卡（跨平台合计，卡内带持有份额/累计收益/最新收益三列）
+    // 产品聚合卡（跨平台合计，卡内 row3 两列：累计收益 / 最新收益(MM/DD)）
     const productCard = page
       .getByTestId('holding-product-card')
       .filter({ hasText: '沪深300ETF' });
@@ -131,7 +131,22 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     // #705 卡片次行出显示码（去 tushare 后缀），机器码不再直吐
     await expect(productCard).toContainText('510300 · ');
     await expect(productCard).not.toContainText('510300.SH');
-    await expect(productCard).toContainText('持有份额');
+    // #724：份额列双端移除（份额改由产品详情页概览卡承载，见 product-detail.spec.ts）
+    await expect(productCard).not.toContainText('持有份额');
+    // 日期标注取自响应级 snapshot_date，未退化为逐卡不同日期或被丢弃
+    await expect(productCard).toContainText(/最新收益\(\d{2}\/\d{2}\)/);
+    // 三列时「最新收益(MM/DD)」是唯一超列宽的标题，只有它折行、只有它的数值下沉一行；
+    // 两列后两标题须同行同高（标题不折行 ⇒ 数值不位移）
+    const totalTitle = productCard.getByText('累计收益', { exact: true });
+    const dailyTitle = productCard.getByText(/^最新收益\(\d{2}\/\d{2}\)$/);
+    await expect(totalTitle).toBeVisible();
+    await expect(dailyTitle).toBeVisible();
+    const totalBox = await totalTitle.boundingBox();
+    const dailyBox = await dailyTitle.boundingBox();
+    expect(totalBox, '「累计收益」标题未渲染出 boundingBox').not.toBeNull();
+    expect(dailyBox, '「最新收益(MM/DD)」标题未渲染出 boundingBox').not.toBeNull();
+    expect(Math.abs(totalBox!.y - dailyBox!.y), '两列标题须同一行').toBeLessThanOrEqual(1);
+    expect(Math.abs(totalBox!.height - dailyBox!.height), '两列标题须同高（无一侧折行）').toBeLessThanOrEqual(1);
     await expect(productCard).toContainText('占比');
 
     // 现金聚合卡（可用现金 · 平台名）
@@ -140,6 +155,32 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       .filter({ hasText: '可用现金' });
     await expect(cashCard).toBeVisible();
     await expect(cashCard).toContainText('华宝证券');
+  });
+
+  test('维度组引导线缩进仅桌面保留，移动端让位横向空间（#724，§6 第 4 类）', async ({
+    page,
+  }, testInfo) => {
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    // 只取带 chip 的维度组：平铺组（组名与大类同名）双端都无缩进，取到它会让桌面断言假红
+    const group = page
+      .getByTestId('asset-group')
+      .filter({ has: page.getByTestId('asset-group-header') })
+      .first();
+    const card = group.getByTestId('holding-product-card').first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+
+    // 缩进量 = 卡片左缘 − 维度组容器左缘；按 testid 取盒子，不按 Tailwind 工具类定位
+    const groupBox = await group.boundingBox();
+    const cardBox = await card.boundingBox();
+    expect(groupBox, '维度组容器未渲染出 boundingBox').not.toBeNull();
+    expect(cardBox, '产品卡未渲染出 boundingBox').not.toBeNull();
+    const indent = cardBox!.x - groupBox!.x;
+    if (testInfo.project.name === 'mobile') {
+      expect(indent, '移动端不套引导线缩进（回收 16px 给卡内两列）').toBeLessThanOrEqual(1);
+    } else {
+      // ml-0.5(2) + border-l-2(2) + pl-3(12) = 16
+      expect(indent, '桌面保留引导线缩进').toBeGreaterThanOrEqual(12);
+    }
   });
 
   test('按产品视图：在途聚合卡渲染，全部卡行级占比加总 = 100.0（§4 最大余数法）', async ({

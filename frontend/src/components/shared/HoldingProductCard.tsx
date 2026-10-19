@@ -7,7 +7,6 @@ import {
   formatMarketName,
   formatNumber,
   formatProductCodeLabel,
-  formatSharesUnit,
   getReturnColorClass,
 } from "@/lib/utils";
 
@@ -30,7 +29,10 @@ function cashSubtitle(product: HoldingProductAggregate): string {
 /**
  * #595 按产品视图的持仓产品卡（跨平台聚合，M1/D1）：
  * row1=产品名 + 市值大数字；row2=代码 · 市场标签 + 占比（行级最大余数法，§4）；
- * row3 三列=持有份额 | 累计收益（D-3：持有收益口径）| 最新收益(MM/DD)。
+ * row3 两列=累计收益（D-3：持有收益口径）| 最新收益(MM/DD)。
+ * 份额列已双端移除（#724，偏离 M1/D1 的三列定义）：三列等分在 390px 下每列仅
+ * ≈93px，带日期的标题折行、份额被 truncate 成 `53,178.1…`（金融数值不可 ellipsis，
+ * #636）；份额改由产品详情页概览卡（ProductDetailContent::overview）承载，整卡可点即达。
  * 现金为聚合卡（无 row3，副标题为可用现金 · 平台）。
  * 点击跳转产品详情页由 #595 步骤③接线，本组件保持纯展示。
  */
@@ -77,12 +79,6 @@ export default function HoldingProductCard({
       </div>
       {!isCash && (
         <div className="mt-2.5 flex border-t border-border pt-2.5">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-muted-foreground">持有份额</div>
-            <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground truncate">
-              {formatSharesUnit(product.shares)}
-            </div>
-          </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs text-muted-foreground">累计收益</div>
             <div

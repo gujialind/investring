@@ -47,8 +47,9 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
 
 /**
  * 产品卡栅格：移动 1 列、桌面 auto-fill minmax（spec「桌面 2 列」，单卡宽
- * 设计区间 ~358-372、允许栅格微调）。min 取 350 而非 360：带引导线的维度组
- * 内容宽比平铺组少 14px（border-l-2 + pl-3 + ml-0.5），auto-fill 按 content-box
+ * 设计区间 ~358-372、允许栅格微调）。min 取 350 而非 360：桌面带引导线的维度组
+ * 内容宽比平铺组少 14px（border-l-2 + pl-3 + ml-0.5；#724 起引导线仅桌面保留，
+ * 移动端两组等宽、不受此约束），auto-fill 按 content-box
  * 算列数，min=360 会在 1440 档使两组列数分叉（实测 722px→1 列 vs 736px→2 列，
  * 同页卡宽不一致）；min ≤ (722-12)/2 时两组同列数，单卡实宽 355-372 仍在区间内。
  */
@@ -58,7 +59,7 @@ function cardGridClass(variant: "desktop" | "mobile"): string {
     : "space-y-2.5";
 }
 
-/** 按产品分区渲染（与 PositionSections 同 V4 语义：分区头 → chip → 引导线卡组） */
+/** 按产品分区渲染（与 PositionSections 同 V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724） */
 function ProductSections({
   sections,
   percentOf,
@@ -133,9 +134,12 @@ function ProductSections({
                         </span>
                       </div>
                     )}
+                    {/* 引导线缩进仅桌面保留（#724）：移动端单列堆叠下 chip 紧贴其卡片、
+                        顺序即归属，缩进承载的信息量≈0，而它吃掉的 16px 直接转化为卡内
+                        列宽不足（§6 第 4 类端侧布局差异） */}
                     <div
                       className={
-                        showChip
+                        showChip && variant === "desktop"
                           ? `ml-0.5 border-l-2 border-border pl-3 ${cardGridClass(variant)}`
                           : cardGridClass(variant)
                       }
