@@ -293,6 +293,12 @@ describe("其他工具", () => {
     expect(cn("text-muted-foreground", getNumberCellClass())).toBe(
       "text-muted-foreground text-right font-mono tabular-nums"
     );
+    // visual-spec §5 统计卡口径的承重组合：`text-left` 必须吃掉 helper 自带的
+    // `text-right`（同属 text-align 组、后者胜出），数字形态三类一个都不能丢。
+    // 没有这条，参数顺序调整或 helper 改回 number-cell 会让主数值静默变回右置。
+    expect(cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold", "text-2xl")).toBe(
+      "font-mono tabular-nums text-left whitespace-nowrap font-semibold text-2xl"
+    );
   });
 
   it("getNumberCellClass 固定类串", () => {

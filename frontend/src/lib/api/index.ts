@@ -33,6 +33,8 @@ export { logApi } from "./log";
 export { taskApi } from "./task";
 export { notificationApi } from "./notification";
 export { cashTransferApi } from "./cash-transfer";
+export { cashFlowApi } from "./cash-flow";
+export type { CashFlowListParams } from "./cash-flow";
 
 // 重新导出此前散落在 api.ts 中的类型，保持既有 import 兼容
 export type {

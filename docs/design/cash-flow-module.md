@@ -1,6 +1,6 @@
 # 现金流水模块（方案 C）设计
 
-> 状态：**PR-1（后端聚合查询）已于 2026-10-18 落地**（issue #725）；PR-2（前端双端页面）与 PR-3（收尾）待实施，见 §5。
+> 状态：**PR-1（后端聚合查询）与 PR-2（前端双端页面，PR #727 含 L2 评审处置）均已于 2026-10-18 落地**（issue #725）；PR-3（收尾）待实施，见 §5。§4/§5 的裁剪按计划留给 PR-3 执行。
 > 本文归属：目标形态、契约、显示层口径与决策记录为**设计正文**，长期持有；§4、§5 为**计划**，PR-2/PR-3 落地后裁剪为短历史注记（见 [documentation.md](../reference/documentation.md) 的[迁移与去重](../reference/documentation.md#doc-migration)节）。临时实施计划不进 `docs/reference/`。
 > 正文不复制：业务规则（平台分账、现金流水读侧口径、快照取价、量化）正文在 [business-constraints.md](../reference/business-constraints.md)，本模块的读侧口径归 [现金账本](../reference/business-constraints.md#rule-cash) 持有；视觉公共规范在 [visual-spec.md](visual-spec.md)。本文只引用、不持有。
 > 屏上形态基线：双端 mockup v3 共 13 帧（原件在 `.cache/cash-flow-mockup/`，gitignore 不入库）。**mockup 的申赎方向标注与后端账本相反，不作基线**（见 §2 的方向口径与 §6 的 T1）；文字契约以 [issue #725](https://github.com/gujialind/investring/issues/725) 的 16 条验收断言 + 本文 + rule-cash 为准。
@@ -74,13 +74,13 @@
 - 本文与 `frontend/AGENTS.md` 入口句随 PR-1 入库；`backend/AGENTS.md` 影响面表补 `cash_flow_service.py` 行。
 - ir-cli 命令组未进本 PR（follow-up chore）。
 
-**PR-2 前端双端页面**
+**PR-2 前端双端页面 —— 已完成（2026-10-18，PR #727 含 L2 评审处置）**
 
-- `src/app/portfolio/[code]/cash-flows/page.tsx` + `/m/` 薄壳 + 共享内容组件；7 列列表 + rowSpan 合并 + 筛选栏 + 四卡 + 三弹窗 + `ManageLinksCard` 第 6 项。
-- 按 §2 的方向口径修正 mockup 帧后再作目检基线。
-- visual-spec 登记新页规格（弹窗复用仓库 dialog 形态，守 §13 组件复用红线；过 §19 新页面自检清单）+ §20 变更记录。
-- e2e：桌面 + 移动影响面（列表合并段、四类筛选、三弹窗、钻穿与回筛）。
-- 双端目检：以修正后的 13 帧为基线逐帧对照。
+- `src/app/portfolio/[code]/cash-flows/page.tsx` + `/m/` 薄壳 + 共享内容组件 `components/shared/CashFlowsContent.tsx`；7 列列表 + rowSpan 合并 + 筛选栏 + 四卡 + 三弹窗 + `ManageLinksCard` 第 6 项。
+- 金额符号三档、rowSpan 合并段形态已登记 visual-spec（§12 三档例外、§8 多行合并段、§20 两行变更记录）；弹窗复用仓库 dialog 形态（§13 红线）。
+- 方向按 §2 账本口径落地（消费后端 `flow_type_label`，前端不重算方向）；mockup 帧的相反标注未修正——mockup 仅作布局参考、方向以本文为准（原件不入库）。
+- e2e `e2e/cash-flows.spec.ts`（双端）：列表合并段、四类筛选、三弹窗、钻穿与回筛；L2 处置补四卡/余额列/投影金额断言、写入口后读侧刷新链路、对账块不被状态筛选污染。
+- 双端目检：以列表帧为基线对照（`.cache/cash-flow-mockup/`，方向标注除外）。**复拍发现的缺陷与修复（#727）**：桌面「日期 · 平台」表头与格内日期在 1280/1024 视口下各折成两行（第一列实得 92px，日期按连字符断行），已给该列表头与日期 div 补 `whitespace-nowrap`。基线看不出挤压的原因：mockup 帧无侧栏、表宽 1148px，桌面真实容器只有 910px——**列表帧只可对照列结构与主次行，不可当宽度基线**。
 
 **PR-3 收尾**
 
@@ -103,9 +103,9 @@
 - **C3 契约补 `prev_day_balance`**：只有当日日终无法支撑详情弹窗的对账块首行（原草案缺口）。
 - **C5 契约补 `group_total_count`**：类型筛选态下前端无从得知同组总笔数。
 - **C6/C7**：两级流入/流出排除规则与「按 `(平台, 现金日)` 去重批量取价」写进契约与 rule-cash 正文。
-- 同日重估与增量排序：引擎口径 = 重估吸收当日增量（mockup 已实现）；显示默认不显式标注。
+- 同日重估与增量排序：引擎口径 = 重估吸收当日增量。**PR-2 实现与原「显示默认不显式标注」的偏离（显式注记）**：详情/当日弹窗的对账块在同日存在已生效重估时渲染一行注记「同日现金重估（绝对值覆盖）吸收当日增量，日终以重估值为准」——对账块逐笔列出的是「当日已生效流量」，重估行不参与求和、日终直接取覆盖值，无注记时该式在重估日不闭合、会被读成后端算错；列表行本身仍不额外标注（状态列 + 金额档已表意）。
 - 现金产品详情页：保留现状（单产品语境 vs 全来源语境不同），本期不退场。
-- 页面命名：「现金流水」为暂名，PR-2 前由维护者拍板。
+- 页面命名：「现金流水」为暂名，PR-2 前由维护者拍板（PR-2 按「现金流水」落地，未另拍板即视为定名）。
 
 ## 7. 验证矩阵（[AGENTS.md](../../AGENTS.md) §2 / §3.5）
 

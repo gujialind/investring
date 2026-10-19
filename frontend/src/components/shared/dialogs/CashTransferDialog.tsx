@@ -132,8 +132,10 @@ export default function CashTransferDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label>转移日期</Label>
+              {/* Dialog 内 DatePicker 必须带 id + Label htmlFor（E2E 定位契约，#640 N-2） */}
+              <Label htmlFor="transfer_date">转移日期</Label>
               <DatePicker
+                id="transfer_date"
                 date={parseDateOnly(transferDate)}
                 onSelect={(date) => setTransferDate(toDateOnly(date))}
               />

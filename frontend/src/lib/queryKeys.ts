@@ -114,6 +114,11 @@ export const queryKeys = {
     list: (portfolioCode: string, params?: unknown) =>
       ["cash-transfers", "list", portfolioCode, params] as const,
   },
+  cashFlows: {
+    root: ["cash-flows"] as const,
+    list: (portfolioCode: string, params?: unknown) =>
+      ["cash-flows", "list", portfolioCode, params] as const,
+  },
   tasks: {
     root: ["tasks"] as const,
     executions: (params?: unknown) => ["tasks", "executions", params] as const,

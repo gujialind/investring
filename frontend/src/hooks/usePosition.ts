@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { positionApi, getErrorMessage } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { PositionCreate, PositionUpdate } from "@/types/position";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -104,6 +105,8 @@ export function useUpdateCashPosition(portfolioCode: string) {
     }) => positionApi.updateCashPosition(portfolioCode, amount, platformCode, updateDate),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [POSITION_QUERY_KEY, portfolioCode] });
+      // 现金流水页读侧（#727 Blocker）：重估行与余额列都来自 cash-flows 聚合
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
     },
   });
 }
@@ -132,6 +135,8 @@ export function useDeleteCashOverride(portfolioCode: string) {
       positionApi.deleteCashOverride(portfolioCode, platformCode, updateDate),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: [POSITION_QUERY_KEY, portfolioCode] });
+      // 现金流水页读侧（#727 Blocker）：撤销覆盖会移除重估行并回退日终余额
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       // R-6/T-5：requires_snapshot_regen 由后端真算（仅当 value_date ≤ 最新快照日才需重算），
       // 仅此时提示重算；未入快照的日期撤销即生效，不作过度告警
       addToast({

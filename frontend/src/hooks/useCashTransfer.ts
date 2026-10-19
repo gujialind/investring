@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cashTransferApi, getErrorMessage } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { CashTransferCreate } from "@/types/cash-transfer";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -27,6 +28,8 @@ export function useCreateCashTransfer(portfolioCode: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [CASH_TRANSFER_QUERY_KEY, "list", portfolioCode] });
       queryClient.invalidateQueries({ queryKey: ["positions", portfolioCode] });
+      // 现金流水页读侧（列表/四卡/构成，#727 Blocker）：转移两腿都是现金流水行
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       addToast({
         type: "success",
         title: "转移成功",
@@ -53,6 +56,7 @@ export function useConfirmCashTransfer(portfolioCode: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [CASH_TRANSFER_QUERY_KEY, "list", portfolioCode] });
       queryClient.invalidateQueries({ queryKey: ["positions", portfolioCode] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       addToast({
         type: "success",
         title: "确认成功",

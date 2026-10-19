@@ -27,7 +27,8 @@ export type PortfolioSub =
   | 'snapshots'
   | 'subscriptions'
   | 'positions'
-  | 'share-change-events';
+  | 'share-change-events'
+  | 'cash-flows';
 
 /** 桌面组合路径；mobile project 靠 middleware 按 UA 重定向到 /m/portfolio/... */
 export function portfolioPath(code: PortfolioCode, sub?: PortfolioSub): string {
@@ -47,6 +48,8 @@ const SUBPAGE_READY: Record<PortfolioSub, (page: Page) => Locator> = {
   subscriptions: (page) => page.getByRole('button', { name: /提交申请|首次申购激活/ }).first(),
   positions: (page) => page.getByRole('button', { name: '更新现金市值' }),
   'share-change-events': (page) => page.getByRole('button', { name: '新建事件' }),
+  // 现金流水页首屏 isLoading 期只渲染 LoadingState，「按平台构成」按钮出现即首帧数据落地（#725）
+  'cash-flows': (page) => page.getByTestId('open-breakdown'),
 };
 
 /** 进入组合详情页，等待页头 h1（组合名，draft/active 与双端均渲染）可见 */
