@@ -148,7 +148,8 @@ function isDefaultTradeRange(range: DateRange | undefined): boolean {
 /**
  * 调仓交易页内容（桌面/移动共用）。
  * 抽离自原 app/portfolio/[code]/trades/page.tsx，用 AlertDialog 替换原生 confirm/alert。
- * 桌面用表格；移动用可横向滚动表格（variant=mobile 时外层加 overflow-x-auto）。
+ * 双端渲染同一张表格：横向滚动来自 components/ui/table.tsx 的无条件 `overflow-auto`
+ * 容器（不分端），variant 只改筛选栏折叠与控件宽度，不改表格形态。
  */
 export default function TradesContent({
   basePath,
@@ -593,7 +594,7 @@ export default function TradesContent({
     <TableRow key={trade.id} className={isPairMain ? "border-b-0" : undefined}>
       <TableCell>
         {/* CASH 孤儿单行：产品列改显示业务来源（§5.8 简化口径）；结对主行/基金单行走 ProductCell 双行 */}
-        {trade.product_code === "CASH" && (!isPairMain || keepCashSourceLabel) ? (
+        {isCashLeg(trade) && (!isPairMain || keepCashSourceLabel) ? (
           <span className="text-sm">{cashOrphanLabel(trade)}</span>
         ) : (
           <ProductCell
@@ -622,13 +623,15 @@ export default function TradesContent({
       <TableCell className="number-cell">
         {formatCurrency(trade.amount)}
       </TableCell>
+      {/* 现金腿无份额/净值语义（shares=NULL、price 恒为记账单位 1）：传 null 交回 formatter
+          出 `--` 占位（§12），不把 1.0000 渲成现金的「净值」（#732） */}
       <TableCell className="number-cell">
-        {formatSharesUnit(trade.shares)}
+        {formatSharesUnit(isCashLeg(trade) ? null : trade.shares)}
       </TableCell>
       <TableCell className="number-cell">
         {formatCurrency(trade.fee)}
       </TableCell>
-      <TableCell className="number-cell">{formatNav(trade.price)}</TableCell>
+      <TableCell className="number-cell">{formatNav(isCashLeg(trade) ? null : trade.price)}</TableCell>
       <TableCell>
         {/* 成对日期合并单列（#355）：上行交易日、下行确认日；pending 的确认日是预计值，下行内联标注 */}
         <DatePairCell
@@ -730,7 +733,9 @@ export default function TradesContent({
 
   // 现金子行（规范 §8，**仅限结果集里的真实现金腿**；派生对手腿走 renderCounterpartSubRow）：
   // 首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
-  // （资金流向非涨跌语义，禁用 gain/loss token）；操作列空、不单独响应 hover
+  // （资金流向非涨跌语义，禁用 gain/loss token）；操作列空、不单独响应 hover。
+  // 首列标签 nowrap（#733）：首列是表内最窄的一档，CJK 默认可逐字断行，会把「华宝证券」
+  // 这类平台名/产品名切成两行读成两个词——与同函数兄弟节点（生效日、份额 @ 净值）同纪律。
   const renderCashSubRow = (main: Trade, sub: SubLeg) => {
     // #493 + 评审加固：现金腿生效日未到、或生效日已到但**仍未 confirmed**（跨天转移的
     // 转入腿到期未确认时是 pending、不计入可用现金）→ 标注「现金待到账」——状态列显示的是
@@ -744,7 +749,7 @@ export default function TradesContent({
         className="bg-muted/50 hover:bg-muted/50"
       >
         <TableCell className="pl-8">
-          <span className="text-xs text-muted-foreground">
+          <span className="whitespace-nowrap text-xs text-muted-foreground">
             {meta.label}
             {platformName ? ` · ${platformName}` : ""}
           </span>
@@ -795,7 +800,7 @@ export default function TradesContent({
         className="bg-muted/50 hover:bg-muted/50"
       >
         <TableCell className="pl-8">
-          <span className="text-xs text-muted-foreground">{label}</span>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">{label}</span>
         </TableCell>
         <TableCell colSpan={2} />
         <TableCell className="number-cell">

@@ -43,12 +43,14 @@ export interface ProductSelection {
 
 const selectionKey = (s: ProductSelection) => `${s.code}|${s.market}`;
 
-// 产品类型过滤选项（label 与产品表单下拉保持一致）；市场选项走 @/lib/market 共享（#324）
+// 产品类型过滤档位：只列**可交易**产品。CASH/IN_TRANSIT 是虚拟产品，`/api/products`
+// 默认排除（#327），本弹窗取数不传 `include_virtual`，故「现金」档选中恒得空结果——
+// 该档已移除（#736）。产品管理页与建产品表单另有一份含 CASH 的清单：它们把虚拟产品
+// 当管理对象，语义不同，三份清单刻意不共享（市场选项才走 @/lib/market 共享，#324）。
 const PRODUCT_TYPE_OPTIONS = [
   { value: "ETF", label: "ETF" },
   { value: "OEF", label: "开放式基金" },
   { value: "LOF", label: "LOF" },
-  { value: "CASH", label: "现金" },
 ] as const;
 
 const productTypeLabel = (type: string) =>
@@ -232,7 +234,7 @@ export default function ProductFilterDialog({
                 value={productType ?? "all"}
                 onValueChange={(v) => setProductType(v === "all" ? undefined : v)}
               >
-                <SelectTrigger className={selectWidth}>
+                <SelectTrigger className={selectWidth} data-testid="product-filter-type-select">
                   <SelectValue placeholder="全部类型" />
                 </SelectTrigger>
                 <SelectContent>

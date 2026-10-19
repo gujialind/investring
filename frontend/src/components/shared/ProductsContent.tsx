@@ -66,7 +66,9 @@ interface ProductsContentProps {
 // lib/api/product.ts 的 include_virtual 注释——系统虚拟产品无数据源同步概念。
 const VIRTUAL_PRODUCT_TYPES = ["CASH", "IN_TRANSIT"];
 
-// 筛选选项（label 与产品筛选弹窗/产品表单下拉保持一致）；市场选项走 @/lib/market 共享（#324）
+// 筛选选项（label 与产品表单下拉保持一致；本页取数传 include_virtual: true，故含「现金」档。
+// 调仓页的产品筛选弹层另有一份不含 CASH 的清单——那里筛的是可交易产品，见 #736）；
+// 市场选项走 @/lib/market 共享（#324）
 const PRODUCT_TYPE_OPTIONS = [
   { value: "ETF", label: "ETF" },
   { value: "OEF", label: "开放式基金" },
@@ -313,7 +315,7 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
           setPage(1);
         }}
       >
-        <SelectTrigger className={selectWidth}>
+        <SelectTrigger className={selectWidth} data-testid="products-type-filter">
           <SelectValue placeholder="全部类型" />
         </SelectTrigger>
         <SelectContent>
