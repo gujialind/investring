@@ -175,11 +175,16 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     expect(groupBox, '维度组容器未渲染出 boundingBox').not.toBeNull();
     expect(cardBox, '产品卡未渲染出 boundingBox').not.toBeNull();
     const indent = cardBox!.x - groupBox!.x;
+    // 引导线载体 = 卡片外两层（card div → Link → 栅格容器 div），按结构取、不绑工具类
+    const grid = card.locator('xpath=../..');
     if (testInfo.project.name === 'mobile') {
       expect(indent, '移动端不套引导线缩进（回收 16px 给卡内两列）').toBeLessThanOrEqual(1);
+      await expect(grid).toHaveCSS('border-left-width', '0px');
     } else {
-      // ml-0.5(2) + border-l-2(2) + pl-3(12) = 16
-      expect(indent, '桌面保留引导线缩进').toBeGreaterThanOrEqual(12);
+      // ml-0.5(2) + border-l-2(2) + pl-3(12) = 16；下限收紧到 15 并钉住引导线本体
+      // （#741 L2 S2：旧下限 12 会放过「删 border-l-2 只剩 pl-3=12 / 14」的退化）
+      await expect(grid).toHaveCSS('border-left-width', '2px');
+      expect(indent, '桌面保留引导线缩进').toBeGreaterThanOrEqual(15);
     }
   });
 
