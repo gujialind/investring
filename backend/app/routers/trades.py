@@ -10,6 +10,7 @@ from app.schemas.trade import (
     TradeCreate,
     TradeUpdate,
     TradeResponse,
+    TradePairedLegResponse,
     PaginatedTradeResponse,
     TradePreviewResult,
     TradePreviewResponse,
@@ -26,6 +27,7 @@ from app.services.trade_service import (
     delete_trade as delete_trade_service,
     list_trades,
     build_paired_cash_leg_map,
+    build_paired_leg_map,
 )
 
 router = APIRouter()
@@ -50,6 +52,34 @@ def _fill_derived_cash_fields(
             "cash_platform_code": paired.platform_code,
             "cash_confirm_date": paired.confirm_date,
         }
+    )
+
+
+def _build_paired_leg(
+    leg: Optional[Trade], name_map: dict, display_map: dict
+) -> Optional[TradePairedLegResponse]:
+    """把对手腿 ORM 行折成只读快照（#719）；无对手时 None。
+
+    只暴露读侧渲染配对子行需要的字段，不回写、不可操作——现金腿的写侧门控
+    （CASH_TRADE_FORBIDDEN）与此路径完全无关。
+    """
+    if leg is None:
+        return None
+    key = (leg.product_code, leg.market)
+    return TradePairedLegResponse(
+        id=leg.id,
+        product_code=leg.product_code,
+        market=leg.market,
+        product_name=name_map.get(key),
+        display_code=display_map.get(key),
+        platform_code=leg.platform_code,
+        trade_type=leg.trade_type,
+        shares=leg.shares,
+        amount=leg.amount,
+        price=leg.price,
+        fee=leg.fee,
+        confirm_date=leg.confirm_date,
+        status=leg.status,
     )
 
 
@@ -87,18 +117,27 @@ def get_trades(
         page=page,
         page_size=page_size,
     )
-    # 读侧派生 product_name（#175）与显示码（#705）：(code, market) 双键天然覆盖 LOF
-    # 与 CASH 虚拟产品；两者同批同键，单次查询内一起取
-    pairs = {(t.product_code, t.market) for t in items}
-    name_map, display_map = build_product_label_maps(db, pairs)
     # #493 派生现金信息：一次批量查询（不受本页 status/platform 筛选截断）
     paired_legs = build_paired_cash_leg_map(db, items)
+    # #719 双向对手腿：同样整页一次批量查询，不随行数产生 N+1
+    paired_map = build_paired_leg_map(db, items)
+    # 读侧派生 product_name（#175）与显示码（#705）：(code, market) 双键天然覆盖 LOF
+    # 与 CASH 虚拟产品；两者同批同键，单次查询内一起取。对手腿的产品并入同一批，
+    # 前端渲染派生子行时不必再发一次产品查询
+    pairs = {(t.product_code, t.market) for t in items}
+    pairs.update(
+        (leg.product_code, leg.market) for leg in paired_map.values()
+    )
+    name_map, display_map = build_product_label_maps(db, pairs)
     enriched = [
         _fill_derived_cash_fields(
             TradeResponse.model_validate(t).model_copy(
                 update={
                     "product_name": name_map.get((t.product_code, t.market)),
                     "display_code": display_map.get((t.product_code, t.market)),
+                    "paired_leg": _build_paired_leg(
+                        paired_map.get(t.id), name_map, display_map
+                    ),
                 }
             ),
             t,

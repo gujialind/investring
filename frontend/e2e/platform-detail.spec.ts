@@ -301,6 +301,10 @@ test.describe("平台详情页", () => {
     await expect(rows.nth(2)).toContainText(/现金 · 申赎确认/);
     // Blocker 1 回归：pending 场外价格不应渲染成 0.0000
     await expect(card).not.toContainText("0.0000");
+    // #719：本卡取数只按平台过滤（不带产品条件）→ 现金腿**今天就在**这张卡里，是三处卡片中
+    // 最早会自己踩到 `-- @ 1.0000` 的那一处。文案虽收敛到 tradeCardDetailLine 单点，但谁在
+    // 本文件把判据改回 `shares !== undefined` 都不会让另两处卡片的断言变红，故在此单独钉住。
+    await expect(card).not.toContainText("-- @");
     await expect(card.getByRole("link", { name: "查看全部" })).toHaveAttribute(
       "href",
       new RegExp(`/trades\\?platform=HBZQ`)
@@ -394,8 +398,19 @@ test.describe("平台-产品详情页", () => {
     expect(page.url()).toContain("product=510300.SH");
     expect(page.url()).toContain("platform=HBZQ");
     expect(page.url()).toContain("trade_type=buy");
-    // S7：产品过滤后只剩 2 条基金腿（不含 CASH 腿）
-    await expect(page.locator("table tbody tr")).toHaveCount(2, { timeout: 10_000 });
+    // S7：产品过滤的结果集仍只有 2 条基金腿（现金腿不入行、`total` 与页数不变）。
+    // #719「只补信息、不补行」把各自的现金腿以**派生子行**补回 → 2 主行 + 2 子行 = 4 个 tr，
+    // 按 testid 数子行而非按 class（定位器契约 #382）
+    await expect(page.locator("table tbody tr")).toHaveCount(4, { timeout: 10_000 });
+    // #721 评审 S1：现金对手腿是**派生**的，按 §8 走对手腿形态（`↳ 转出 平台名`、金额不带 ±），
+    // 不再是 ± 现金子行——± 只属于结果集里的真实现金腿（未筛选态见 trade-cash-pairing.spec.ts）
+    const cashSubRows = page.getByTestId("trade-counterpart-subrow");
+    await expect(cashSubRows).toHaveCount(2);
+    await expect(cashSubRows.first()).toContainText("↳ 转出");
+    await expect(page.getByTestId("trade-cash-subrow")).toHaveCount(0);
+    // 子行是附属说明，不是可操作行：不露任何生命周期入口
+    await expect(cashSubRows.locator('button[title="确认"]')).toHaveCount(0);
+    await expect(cashSubRows.locator('button[title="删除"]')).toHaveCount(0);
   });
 
   test("操作行买入：跳转即开录入 Dialog，平台+产品均已预填（#646）", async ({ page }) => {
@@ -533,14 +548,37 @@ test.describe("平台-产品详情页", () => {
     await refetched;
   });
 
-  test("交易记录卡：该产品在该平台的交易（不含 CASH 腿）", async ({ page }) => {
+  test("交易记录卡：该产品在该平台的交易（不含 CASH 腿；#719 派生只补现金锚点行）", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     const card = page.getByTestId("platform-product-trades-card");
     const rows = card.getByTestId("platform-product-trade-row");
     await expect(rows.first()).toBeVisible();
-    // 产品级过滤不含 CASH 腿，只有 2 条基金腿
+    // 产品 + 平台级过滤下，卡内行集 = 该产品在该平台的真实行（2 条基金腿，现金腿不入行）。
+    // #719 的派生对手腿只在**现金锚点行**下补「↳ 对手腿」，本页两行都是基金腿 → 行集与副行
+    // 文案均不变；现金语义不得渗进基金腿副行（文案收敛到 tradePairs 单点后的回归护栏）
     await expect(rows).toHaveCount(2);
     await expect(rows.first()).toContainText("买入");
+    await expect(rows.first()).toContainText("份 @");
+    await expect(card).not.toContainText("-- @ 1.0000");
+  });
+
+  test("交易记录卡（现金切片）：资金流向标注 + 对手腿，不渲份额@净值", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const card = page.getByTestId("platform-product-trades-card");
+    const rows = card.getByTestId("platform-product-trade-row");
+    // 行集 = HBZQ 的现金腿：2 条调仓扣款腿 + 1 条申购确认腿（与产品页同 3 行，只差平台后缀）
+    await expect(rows).toHaveCount(3);
+    // 本页平台已固定 → cashRowLabel 不带平台名（与 ProductDetailContent 的变量列相反）
+    await expect(rows.filter({ hasText: "现金扣款" })).toHaveCount(2);
+    await expect(rows.filter({ hasText: "现金扣款 · " })).toHaveCount(0);
+    // 扣款腿的去处 = 对手基金腿，含**对手自己的状态**（半确认组里只有这里读得分歧）
+    await expect(rows.filter({ hasText: "↳ 买入 沪深300ETF" })).toHaveCount(2);
+    // sub_ 组只有一条现金腿 → 后端组内行数 ≠ 2 整体跳过，宁可不补也不猜
+    await expect(rows.filter({ hasText: "现金 · 申赎确认" })).toHaveCount(1);
+    await expect(rows.filter({ hasText: "↳" })).toHaveCount(2);
+    // 现金腿 shares=NULL、price=1：渲成「份额 @ 净值」会把 1.0000 说成净值
+    await expect(card).not.toContainText("份 @");
+    await expect(card).not.toContainText("1.0000");
   });
 
   test("「查看该产品全部平台持仓」链接 → 产品详情页", async ({ page }) => {

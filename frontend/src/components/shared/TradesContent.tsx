@@ -59,9 +59,12 @@ import {
   cashLegOrigin,
   cashOrphanLabel,
   cashSubMeta,
+  counterpartDateText,
+  counterpartSubLabel,
   groupTradeRows,
   isCashLeg,
 } from "@/lib/tradePairs";
+import type { SubLeg } from "@/lib/tradePairs";
 import { applyBuyAmountLinkage, netFromActual, sellDerivedAmounts } from "@/lib/tradeAmounts";
 import {
   useTradeList,
@@ -583,11 +586,14 @@ export default function TradesContent({
   );
 
   // 主行（普通单行 / 结对主行共用）；结对主行去下边框使主+子视觉成组（规范 §8 结对行）
-  const renderMainRow = (trade: Trade, isPairMain: boolean) => (
+  // keepCashSourceLabel（#719）：派生 pair 的主行就是那条现金腿本身，产品列**保持来源标注**
+  // （现金 · 调仓）而非换成「现金类资产」——补出对手腿时读的是资金去向，不是产品名，
+  // 且主行列结构按 issue 口径不动。真实转移对（双 CASH，sell 主）不走这里，形态照旧。
+  const renderMainRow = (trade: Trade, isPairMain: boolean, keepCashSourceLabel = false) => (
     <TableRow key={trade.id} className={isPairMain ? "border-b-0" : undefined}>
       <TableCell>
         {/* CASH 孤儿单行：产品列改显示业务来源（§5.8 简化口径）；结对主行/基金单行走 ProductCell 双行 */}
-        {trade.product_code === "CASH" && !isPairMain ? (
+        {trade.product_code === "CASH" && (!isPairMain || keepCashSourceLabel) ? (
           <span className="text-sm">{cashOrphanLabel(trade)}</span>
         ) : (
           <ProductCell
@@ -722,16 +728,21 @@ export default function TradesContent({
     </TableRow>
   );
 
-  // 现金子行（规范 §8）：首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
+  // 现金子行（规范 §8，**仅限结果集里的真实现金腿**；派生对手腿走 renderCounterpartSubRow）：
+  // 首列 pl-8、整行 bg-muted/50、内容 text-xs；金额 text-foreground 手工 +/- 前缀
   // （资金流向非涨跌语义，禁用 gain/loss token）；操作列空、不单独响应 hover
-  const renderCashSubRow = (main: Trade, sub: Trade) => {
+  const renderCashSubRow = (main: Trade, sub: SubLeg) => {
     // #493 + 评审加固：现金腿生效日未到、或生效日已到但**仍未 confirmed**（跨天转移的
     // 转入腿到期未确认时是 pending、不计入可用现金）→ 标注「现金待到账」——状态列显示的是
     // 主行（基金腿）的已确认，故须在子行显式区分，避免把尚未到账的现金标成已经到账
     const meta = cashSubMeta(main, { arrived: cashLegArrived(sub) });
     const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
     return (
-      <TableRow key={`cash-${sub.id}`} className="bg-muted/50 hover:bg-muted/50">
+      <TableRow
+        key={`cash-${sub.id}`}
+        data-testid="trade-cash-subrow"
+        className="bg-muted/50 hover:bg-muted/50"
+      >
         <TableCell className="pl-8">
           <span className="text-xs text-muted-foreground">
             {meta.label}
@@ -753,6 +764,55 @@ export default function TradesContent({
         <TableCell>
           <span className="whitespace-nowrap text-xs text-muted-foreground">
             {sub.confirm_date ? formatDate(sub.confirm_date) : ""}
+          </span>
+        </TableCell>
+        <TableCell colSpan={2} />
+      </TableRow>
+    );
+  };
+
+  /**
+   * 对手腿子行（#719「只补信息、不补行」的渲染端）：同组对手腿被筛选/分页挡在
+   * 结果集外时，用后端只读快照 `paired_leg` 合成这一行。**派生 pair 一律走这里**，
+   * 包括对手腿是另一条现金腿的平台间转移（§8 派生形态：`↳ 转出/转入 平台名`、
+   * 金额不带 +/-）——现金对手腿若走 renderCashSubRow 会渲成「现金到账 · 平台 +¥N」，
+   * 与三处详情卡（同取 counterpartSubLabel 现金分支）两种形态，且规范承诺的列表
+   * 形态不可达（#721 评审 S1）。
+   * 与现金子行同一副列位（1 + 2 + 1 + 3 + 1 + 2 = 10，#355 colSpan 折叠算式），差别只在：
+   * ① 金额取对手腿的 `amount`（基金腿=买入扣费后净投入/卖出成交额，#173 口径）且
+   *   **不加 +/- 前缀**——前缀讲的是资金流向，只属于真实现金子行；实扣/实到在本行主行的现金金额处读；
+   * ② 首列带 `↳` 前缀（#719 视觉稿），标明这是「另一条腿」而非本行的现金子记录；
+   * ③ 无操作入口（派生快照不是可导航的真实行），不响应 hover。
+   */
+  const renderCounterpartSubRow = (sub: SubLeg) => {
+    const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
+    const label = counterpartSubLabel(sub, platformName);
+    if (!label) return null;
+    return (
+      <TableRow
+        key={`counterpart-${sub.id}`}
+        data-testid="trade-counterpart-subrow"
+        className="bg-muted/50 hover:bg-muted/50"
+      >
+        <TableCell className="pl-8">
+          <span className="text-xs text-muted-foreground">{label}</span>
+        </TableCell>
+        <TableCell colSpan={2} />
+        <TableCell className="number-cell">
+          <span className="text-xs text-foreground">{formatCurrency(sub.amount ?? 0)}</span>
+        </TableCell>
+        {/* 份额·价格·手续费合并槽位：现金腿无份额无净值语义，只在对手是基金腿时填 */}
+        <TableCell colSpan={3} className="text-right">
+          {!isCashLeg(sub) && sub.shares != null && (
+            <span className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+              {formatSharesUnit(sub.shares)} @ {formatNav(sub.price)}
+              {sub.fee ? ` · 费 ${formatCurrency(sub.fee)}` : ""}
+            </span>
+          )}
+        </TableCell>
+        <TableCell>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">
+            {counterpartDateText(sub)}
           </span>
         </TableCell>
         <TableCell colSpan={2} />
@@ -1059,8 +1119,13 @@ export default function TradesContent({
                 {tradeRows.map((row) =>
                   row.kind === "pair" ? (
                     <Fragment key={row.main.id}>
-                      {renderMainRow(row.main, true)}
-                      {renderCashSubRow(row.main, row.sub)}
+                      {renderMainRow(row.main, true, row.derived)}
+                      {/* 子行两条渲染路径（#719 + #721 评审 S1）：真实腿配对且配对腿是现金 →
+                          资金流向子行（± 前缀，既有形态）；派生 pair 一律走对手腿子行
+                          （基金对手 `↳ 买入/卖出 产品名（状态）`、现金对手 `↳ 转出/转入 平台名`） */}
+                      {row.derived || !isCashLeg(row.sub)
+                        ? renderCounterpartSubRow(row.sub)
+                        : renderCashSubRow(row.main, row.sub)}
                     </Fragment>
                   ) : (
                     renderMainRow(row.trade, false)
