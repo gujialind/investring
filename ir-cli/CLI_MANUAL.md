@@ -622,6 +622,10 @@ ir trade list [--portfolio-code <组合>] [--status <状态>] [--type <类型>] 
 | `--confirm-date-start` / `--confirm-date-end` | 确认日期区间（闭区间；对 pending 记录命中**预计确认日**） |
 
 > **说明**：基金腿响应带只读派生字段 `cash_platform_code` / `cash_confirm_date`（买入=扣款平台/现金日 T；卖出=CASH 到账腿的到账平台/到账日 A）。无配对现金腿时（如待确认卖出）为 `null`，CASH 腿自身不回填。
+>
+> 列表另带只读派生对象 `paired_leg`（issue #719，非 DB 列）：同一 `transfer_group` 内的**对手腿**快照（`id`/`product_code`/`market`/`product_name`/`display_code`/`platform_code`/`trade_type`/`shares`/`amount`/`price`/`fee`/`confirm_date`/`status`），方向不限（基金腿↔现金腿、平台间转移的两条现金腿互指）。它与 `cash_*` 的分工：`cash_*` 只讲基金腿→现金腿的平台与日期（#493 历史契约），`paired_leg` 给**任意锚点行**补对手腿的完整读侧信息，两者并存不互写。
+>
+> **它是「补信息」不是「补行」**：对手腿被本页筛选条件（`--product-code` / `--market` / `--products` / `--platform-code` / `--status`）挡掉时仍会回填，但**不并入 `items`**，因此 `total`、页数、排序键（`trade_date desc, transfer_group, id desc`）与不加该字段时逐字一致。`paired_leg.id` 就是真实 trade 行 id，同组对手腿恰好也在本页时，消费方应以此识别「真实行优先、派生兜底」，勿重复渲染。以下三种情况恒为 `null`：申赎配对的 `sub_` 组现金腿（对手方是 subscription 记录而非 trade 行）、组号为空的行、组内行数不等于 2 的异常组。
 
 #### `ir trade create`
 
@@ -669,7 +673,7 @@ ir trade create --portfolio-code <组合> --product-code <产品> [--market <市
 ir trade get <ID>
 ```
 
-> 基金腿响应含只读派生 `cash_platform_code`（买入=扣款平台、卖出=到账平台）与 `cash_confirm_date`（买入=扣款日 T、卖出=到账日 A）；无配对现金腿时为 `null`。
+> 基金腿响应含只读派生 `cash_platform_code`（买入=扣款平台、卖出=到账平台）与 `cash_confirm_date`（买入=扣款日 T、卖出=到账日 A）；无配对现金腿时为 `null`。详情端点**不含** `paired_leg`（该字段只在 `ir trade list` 填充，见上）——需要对手腿时用 `ir trade list --product-code <产品>` 取，别在 `get` 上等一个恒 `null` 的字段。
 
 #### `ir trade preview`
 
@@ -683,7 +687,7 @@ ir trade preview <ID> [--confirm-date YYYY-MM-DD] [--price <价格>] \
 > **说明**：
 > - 仅 `pending` 状态可预览，否则返回 `INVALID_STATUS`
 > - 输出 `trade`（当前交易）+ `preview`（将写入的 price/shares/amount/actual_amount/fee/confirm_date/nav_date/is_otc_nav_fund/**cash_platform_code/cash_confirm_date**）+ `paired_cash_amount`（配对 CASH 腿将同步/新建的金额）
-> - `preview.cash_platform_code` / `preview.cash_confirm_date` 是**本次有效**的现金平台/现金日（买 = 扣款平台/T；卖 = 到账平台/A 缺省 C），与 `trade` 内已经存在的现金腿信息区分
+> - `preview.cash_platform_code` / `preview.cash_confirm_date` 是**本次有效**的现金平台/现金日（买 = 扣款平台/T；卖 = 到账平台/A 缺省 C），与 `trade` 内已经存在的现金腿信息区分；`trade.paired_leg` 在预览响应里恒为 `null`（只 list 端点填充）
 > - **零写入**：预览不构腿、不改 ORM、不写审计
 > - 场外基金 T 日净值缺失返回 `MISSING_NAV`；传入 `--price` 与净值不一致返回 `PRICE_NAV_MISMATCH`
 > - 预览为时点快照，核对无误后执行 `ir trade confirm <ID>`

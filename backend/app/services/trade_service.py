@@ -2072,3 +2072,54 @@ def build_paired_cash_leg_map(db: Session, trades: list) -> dict:
         if expected_type.get(key) == leg.trade_type:
             mapping[key] = leg
     return mapping
+
+
+def build_paired_leg_map(db: Session, trades: list) -> dict:
+    """批量读取每行的**对手腿**（#719 读侧双向派生，`build_paired_cash_leg_map` 的推广）。
+
+    Returns:
+        {trade.id: Trade} —— 同一 `(portfolio_code, transfer_group)` 内的另一条腿。
+        方向不限：基金腿→CASH 腿、CASH 腿→基金腿、平台间转移的两条 CASH 腿互指。
+
+    设计要点（与单向版共用同一不变量）：
+    - 一次查询覆盖整页，**不受**列表的 status/platform/分页筛选影响，也不随行数产生
+      N+1；被筛掉的对手腿同样能回填，故前端不必为了"看全一笔调仓"放宽筛选。
+    - 组内最多两条腿（`rebal_` = 1 基金 + 1 CASH；裸 12 位 hex = 转出 + 转入两条 CASH），
+      故"另一条"唯一。行数不等于 2 的组**整体跳过**：宁可不补，也不在分组语义被破坏时
+      猜一个对手腿。
+    - `sub_` 申赎腿的组内只有它自己（对手方是 subscription 记录、不是 trade 行），
+      天然落在上面的跳过分支里 → 返回 null，前端保持「现金 · 申赎确认」标注。
+    - 组号为空的行无对手，直接跳过。
+    """
+    groups = set()
+    portfolios = set()
+    anchor_ids = set()
+    for trade in trades:
+        if trade is None or not trade.transfer_group:
+            continue
+        groups.add(trade.transfer_group)
+        portfolios.add(trade.portfolio_code)
+        anchor_ids.add(trade.id)
+    if not groups:
+        return {}
+
+    rows = db.query(Trade).filter(
+        Trade.transfer_group.in_(groups),
+        Trade.portfolio_code.in_(portfolios),
+    ).all()
+
+    by_group: dict = {}
+    for row in rows:
+        by_group.setdefault((row.portfolio_code, row.transfer_group), []).append(row)
+
+    mapping: dict = {}
+    for (_portfolio, _group), legs in by_group.items():
+        if len(legs) != 2:
+            continue
+        first, second = legs
+        # 只给本页锚点行回填；同组另一条可能只是被一起查出来的对手，不需要反向映射
+        if first.id in anchor_ids:
+            mapping[first.id] = second
+        if second.id in anchor_ids:
+            mapping[second.id] = first
+    return mapping
