@@ -571,21 +571,17 @@ test.describe('现金流水页（#725，双端）', () => {
 
   // #730：宽值（`-¥12,345,678.90` = 15 字符）下移动端概览四卡由双列降单列。修复前双列
   // 栅格卡内容宽 146px 装不下 162px 的数值，与邻卡零间隙相接；桌面栅格与该判据无关。
+  // 只把 outflow 设成宽值、其余三卡保留种子值：判据是 `.some`（任一卡宽即降档），四卡
+  // 同宽会让 `.some`/`.every` 实现不可区分（L2 评审 #739 S1）。
   test('概览四卡：移动端 8 位带符号宽值降单列（#730）', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
-    await mockOverviewValues(page, {
-      available: '-12345678.90',
-      in_transit: '-12345678.90',
-      inflow: '-12345678.90',
-      outflow: '-12345678.90',
-    });
+    await mockOverviewValues(page, { outflow: '-12345678.90' });
 
     await gotoPortfolioSubpage(page, E2E_ACTIVE, 'cash-flows');
 
     const available = page.getByTestId('stat-available');
     const inTransit = page.getByTestId('stat-in_transit');
-    await expect(available).toContainText('-¥12,345,678.90');
-    await expect(inTransit).toContainText('-¥12,345,678.90');
+    await expect(page.getByTestId('stat-outflow')).toContainText('-¥12,345,678.90');
 
     const first = await available.boundingBox();
     const second = await inTransit.boundingBox();
@@ -595,6 +591,10 @@ test.describe('现金流水页（#725，双端）', () => {
       // 单列：第二卡换到下一行且与首卡同列（修复前为同 y、x 更大，两值相接）
       expect(second!.y).toBeGreaterThan(first!.y);
       expect(second!.x).toBe(first!.x);
+      // 栅格降档不带动字号降档（#730 取舍）：移动端主数值保持 text-lg = 18px
+      await expect(
+        page.getByTestId('stat-outflow').getByText('-¥12,345,678.90')
+      ).toHaveCSS('font-size', '18px');
     } else {
       // 1280 视口命中 lg 四列：仍是同一行、第二卡在右
       expect(second!.y).toBe(first!.y);
@@ -604,8 +604,8 @@ test.describe('现金流水页（#725，双端）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  // #730 反向用例：`-¥1,234,567.89` = 14 字符未达阈值，不得过度降档——双端都仍是同一行
-  // 两列（桌面 1280 命中 lg 四列）。钉住「判据取展示串长度」不会把 7 位金额也拖进单列。
+  // #730 反向用例：`-¥1,234,567.89` = 14 字符未达阈值，不得过度降档——移动双列 /
+  // 桌面四列同排（桌面 1280 命中 lg）。钉住「判据取展示串长度」不会把 7 位金额也拖进单列。
   test('概览四卡：移动端 7 位带符号仍双列（#730 不过度降档）', async ({ page }) => {
     const errors = collectPageErrors(page);
     await mockOverviewValues(page, {

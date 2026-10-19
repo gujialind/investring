@@ -251,7 +251,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   // 宽值降单列（#730）：§5 登记的 390px 实测——双列栅格卡内容宽 146px，text-lg 下带符号
   // 8 位金额需 162px，吃满 16px 列间距与邻卡数值相接；单列内容宽约 308px 则充裕。
   // 判据取「格式化后字符串长度」而非数值量级：同为 1e7 量级，正金额 ¥12,345,678.90 是
-  // 14 字符（实测 151px 尚有余量），带负号才是 15 字符。只影响移动端栅格，字号不降档。
+  // 14 字符（实测 151px、溢出 5px 落在 16px 列间距内），带负号才是 15 字符（162px、相接）。
+  // 只影响移动端栅格，字号不降档。
   const wideValue = statCards.some((s) => s.value.length >= 15);
 
   // ---- 行操作 ----

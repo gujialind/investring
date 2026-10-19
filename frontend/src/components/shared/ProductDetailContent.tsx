@@ -208,7 +208,10 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
         </div>
         {/* 统计卡主数值与标签同侧左对齐（visual-spec §5，#729）：helper 供数字形态，
             text-left 经 twMerge 覆盖其表格专用右对齐；不直接挂自带 text-right 的 number-cell utility */}
-        <div className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold text-2xl mt-1")}>
+        <div
+          data-testid="overview-market-value"
+          className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold text-2xl mt-1")}
+        >
           {formatCurrency(product.market_value)}
         </div>
         {latestPrice && (
