@@ -13,7 +13,9 @@
  *
  * 为什么用状态筛选而不是产品筛选现金档：产品筛选弹层**不列 CASH**——`/api/products`
  * 默认排除虚拟产品（#327），弹层取数不传 `include_virtual`，故「现金」类型档选中恒空、
- * 已整档移除（#736）；「按产品筛出现金腿」这条路不存在。本文件钉的是**读侧派生本身**，
+ * 已整档移除（#736）；「按产品筛出现金腿」**当前 UI 无入口**（弹层不列 CASH；深链空
+ * `market` 段被 `TradesContent` 的 `normalizedInitialProduct` 归一丢弃），`tradePairs` 的
+ * 派生逻辑保留。本文件钉的是**读侧派生本身**，
  * 与对手腿被哪一种筛选挡掉无关。平台筛选同理无法造出落单：种子 E2E_ACTIVE 的腿全部落在 HBZQ，
  * 按 `platform_code` 筛等于不筛（CASH↔CASH 的派生形态由 `tradePairs.test.ts` 的
  * 「双 CASH 转移组只剩一条腿」单测钉住，种子侧无跨平台转移）。
@@ -164,10 +166,21 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     const cashMain = page.getByRole("row").filter({ hasText: "现金 · 申赎确认" }).first();
     // 主行列数 = §8 槽位算术的对侧：cell 数一变，子行的 colSpan 折叠就整体错位
     await expect(cashMain.getByRole("cell")).toHaveCount(10);
-    await expect(cashMain.getByRole("cell").nth(4)).toHaveText("--"); // 份额
-    await expect(cashMain.getByRole("cell").nth(6)).toHaveText("--"); // 价格
-    await expect(page.locator("table")).not.toContainText("-- @ 1.0000");
-    await expect(page.locator("table")).not.toContainText("1.0000");
+    // 断言分级（#740 L2 S1）：份额槽与 `-- @ 1.0000` 是**既有行为护栏（修复前即绿）**——
+    // CASH 腿 shares 写入侧本就为 NULL（trade_service / subscription_service 均不设 shares），
+    // `-- @ 1.0000` 是详情卡形态、交易表两个槽位分开渲染，修复前后都不可能出现在表里；
+    // 保留它们是防形态漂移，不是 #732 的承重点。承重点只有价格槽（nth(6)，修复前为红）。
+    await expect(cashMain.getByRole("cell").nth(4)).toHaveText("--"); // 份额（既有行为护栏）
+    await expect(cashMain.getByRole("cell").nth(6)).toHaveText("--"); // 价格（#732 承重）
+    await expect(page.locator("table")).not.toContainText("-- @ 1.0000"); // 既有行为护栏
+    // 原整表 not.toContainText("1.0000") 已收窄为「现金主行价格单元格集合」：整表子串否定
+    // 会在种子未来新增任何净值 1.0000 的基金腿（货基/新基金面值）时误红，而 #732 的
+    // 承重面只在现金主行的价格槽
+    const cashMainRows = page.getByRole("row").filter({ hasText: "现金 · 申赎确认" });
+    await expect(cashMainRows).toHaveCount(cashMainCount);
+    for (const row of await cashMainRows.all()) {
+      await expect(row.getByRole("cell").nth(6)).toHaveText("--");
+    }
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 
