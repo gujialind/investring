@@ -7399,6 +7399,156 @@
         }
       }
     },
+    "/api/portfolios/{portfolio_code}/cash-flows": {
+      "get": {
+        "tags": [
+          "现金流水"
+        ],
+        "summary": "Get Cash Flows",
+        "description": "现金流水列表（含页头概览四卡与按平台构成）。\n\n- `from_date` / `to_date`：现金日期闭区间，均可空（上界缺省开放，否则预计到账日\n  在未来的在途行会被默认视图藏掉）。\n- `status`：`settled`（已生效）/ `in_transit`（在途）——映射派生的 settled 两值，\n  不透出 raw `trade.status`；cancelled 腿不出行。未烘焙进快照的重估行落\n  `in_transit` 档（尚未生效），但对 `overview.in_transit` 金额贡献为 0。\n  `platform_code` 空串等同未传（不做平台筛选）。\n- `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /\n  `transfer` / `revalue`。\n- 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。",
+        "operationId": "get_cash_flows_api_portfolios__portfolio_code__cash_flows_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "portfolio_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
+            }
+          },
+          {
+            "name": "from_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Date"
+            }
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Date"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "platform_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Platform Code"
+            }
+          },
+          {
+            "name": "flow_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow Type"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedCashFlowResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sync-jobs/price": {
       "post": {
         "tags": [
@@ -7959,6 +8109,365 @@
           "resource_type"
         ],
         "title": "AuditLogResponse"
+      },
+      "CashFlowAction": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "kind"
+        ],
+        "title": "CashFlowAction",
+        "description": "行操作提示（前端据此选弹窗/端点）。kind: detail | confirm | revoke"
+      },
+      "CashFlowOriginRef": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "transfer_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer Group"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "CashFlowOriginRef",
+        "description": "行的账本来源标识，供前端详情弹窗回溯原始记录。\n\nkind: trade | share_change_event | manual_market_value。"
+      },
+      "CashFlowOverview": {
+        "properties": {
+          "available": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Available"
+          },
+          "in_transit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "In Transit"
+          },
+          "inflow": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Inflow"
+          },
+          "outflow": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Outflow"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "in_transit",
+          "inflow",
+          "outflow"
+        ],
+        "title": "CashFlowOverview",
+        "description": "页头四卡。\n\n- `available`：`calculate_available_cash(as_of=today)` 单次调用结果（平台筛选\n  切换 scope，不随类型/状态/区间筛选变化）。\n- `in_transit`：Σ 未生效行的带符号金额，按到账/扣款平台归属；口径**不同于**\n  快照的 `IN_TRANSIT_*` 虚拟产品（后者还含「现金已扣、基金腿未生效」的买入在途，\n  其现金腿在本页是已生效行）。\n- `inflow` / `outflow`：对**筛选后全集**（非当页）聚合，仅已生效行；两级均排除\n  重估，组合级另排除平台间转移（内部搬运），平台级含转移。outflow 为负值。"
+      },
+      "CashFlowPairRef": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "platform_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Code"
+          },
+          "platform_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Name"
+          },
+          "ref_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Date"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "settled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
+        "title": "CashFlowPairRef",
+        "description": "关联业务（转移对方腿 / 调仓基金腿 / 申赎记录）。\n\n`amount` 为对方记录自身口径的金额（转移腿带符号、基金腿为正值原额），\n`ref_date` 为该记录的锚点日（转移=对方现金日、基金腿=确认日、申赎=确认日），\n`settled` 按**该锚点日**判定（confirmed 且 `ref_date <= 今天`），与本行自己的\n`settled` 各自独立——两者的锚点可以不同（如赎回行锚申请日、其申赎记录锚确认日）。"
+      },
+      "CashFlowRecon": {
+        "properties": {
+          "inflow": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Inflow"
+          },
+          "outflow": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Outflow"
+          }
+        },
+        "type": "object",
+        "required": [
+          "inflow",
+          "outflow"
+        ],
+        "title": "CashFlowRecon",
+        "description": "行和 − 合计 的差（= 本期已生效的平台间转移腿净额），供弹窗注记命名差异。"
+      },
+      "CashFlowRow": {
+        "properties": {
+          "source_kind": {
+            "type": "string",
+            "title": "Source Kind"
+          },
+          "flow_type": {
+            "type": "string",
+            "title": "Flow Type"
+          },
+          "flow_type_label": {
+            "type": "string",
+            "title": "Flow Type Label"
+          },
+          "cash_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Cash Date"
+          },
+          "cash_date_label": {
+            "type": "string",
+            "title": "Cash Date Label"
+          },
+          "cash_date_sub": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Date Sub"
+          },
+          "platform_code": {
+            "type": "string",
+            "title": "Platform Code"
+          },
+          "platform_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Name"
+          },
+          "source_main": {
+            "type": "string",
+            "title": "Source Main"
+          },
+          "source_sub": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sub"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount"
+          },
+          "is_override": {
+            "type": "boolean",
+            "title": "Is Override",
+            "default": false
+          },
+          "settled": {
+            "type": "boolean",
+            "title": "Settled"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CashFlowStatus"
+          },
+          "action": {
+            "$ref": "#/components/schemas/CashFlowAction"
+          },
+          "origin_ref": {
+            "$ref": "#/components/schemas/CashFlowOriginRef"
+          },
+          "pair_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CashFlowPairRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "group_total_count": {
+            "type": "integer",
+            "title": "Group Total Count",
+            "default": 1
+          },
+          "platform_end_of_day_balance": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform End Of Day Balance"
+          },
+          "prev_day_balance": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Day Balance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_kind",
+          "flow_type",
+          "flow_type_label",
+          "cash_date",
+          "cash_date_label",
+          "platform_code",
+          "source_main",
+          "amount",
+          "settled",
+          "status",
+          "action",
+          "origin_ref"
+        ],
+        "title": "CashFlowRow",
+        "description": "一笔现金变动 = 某平台现金账本上的一行（平台间转移按腿拆两行）。\n\n- `cash_date`：该行参与排序/分组/余额查询的唯一权威日期（锚点见 rule-cash）。\n- `amount`：带符号（流入为正、流出为负）；`is_override=True` 的重估行是**绝对值**\n  而非增量，不得与增量求和。\n- `settled`：该笔现金效果是否已计入 as_of=today 的可用现金。False 的行不进\n  流入/流出、只进 `overview.in_transit`。重估行（`is_override=True`）的判据是\n  **覆盖已烘焙进快照**（`value_date <= 最新快照日`）：未烘焙时覆盖值既不在可用\n  现金里、也不是在途资金，故 `settled=False` 但对 `in_transit` 贡献恒为 0。\n- `platform_end_of_day_balance` / `prev_day_balance`：平台级时点值，同\n  (平台, 现金日期) 组内各行相同（前端据此 rowSpan 合并），与筛选无关。\n- `group_total_count`：同 (平台, 现金日期) 在**解除类型筛选**后的总笔数，\n  前端「当日另有 N 笔」= 该值 − 在屏同组行数。"
+      },
+      "CashFlowStatus": {
+        "properties": {
+          "variant": {
+            "type": "string",
+            "title": "Variant"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variant",
+          "label"
+        ],
+        "title": "CashFlowStatus",
+        "description": "行状态（由 `settled` 派生，不透出 raw `trade.status`）。\n\nvariant: success=已生效 / warning=未生效（在途，或重估覆盖尚未烘焙进快照）/\nneutral=非流量且已生效（重估）。"
       },
       "CashPositionUpdate": {
         "properties": {
@@ -9268,6 +9777,46 @@
         "title": "PaginatedAuditLogResponse",
         "description": "审计日志分页响应（issue #512 同型）。"
       },
+      "PaginatedCashFlowResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CashFlowRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "overview": {
+            "$ref": "#/components/schemas/CashFlowOverview"
+          },
+          "platform_breakdown": {
+            "$ref": "#/components/schemas/PlatformCashFlowBreakdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "overview",
+          "platform_breakdown"
+        ],
+        "title": "PaginatedCashFlowResponse",
+        "description": "现金流水分页响应。total = 筛选后（分页前）的现金变动笔数——\n一笔平台间转移计 2（与各平台账本同构）。"
+      },
       "PaginatedInvestorResponse": {
         "properties": {
           "items": {
@@ -9681,6 +10230,80 @@
         ],
         "title": "PaginatedTradeResponse",
         "description": "交易列表分页响应（issue #183）。items 元素复用 TradeResponse：\nproduct_name 仅 list 端点填充，单对象端点恒为 None（见 TradeResponse 注释）。"
+      },
+      "PlatformCashFlowBreakdown": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformCashFlowSummary"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "total": {
+            "$ref": "#/components/schemas/CashFlowOverview"
+          },
+          "recon": {
+            "$ref": "#/components/schemas/CashFlowRecon"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "total",
+          "recon"
+        ],
+        "title": "PlatformCashFlowBreakdown",
+        "description": "构成弹窗数据：rows=各平台口径、total=组合口径、recon=两者之差。\n\n`total` 不随平台筛选变化（恒为组合口径）；rows 跟随区间/类型/状态筛选，\n与流量卡同源。"
+      },
+      "PlatformCashFlowSummary": {
+        "properties": {
+          "platform_code": {
+            "type": "string",
+            "title": "Platform Code"
+          },
+          "platform_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Name"
+          },
+          "available": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Available"
+          },
+          "in_transit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "In Transit"
+          },
+          "inflow": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Inflow"
+          },
+          "outflow": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Outflow"
+          }
+        },
+        "type": "object",
+        "required": [
+          "platform_code",
+          "available",
+          "in_transit",
+          "inflow",
+          "outflow"
+        ],
+        "title": "PlatformCashFlowSummary",
+        "description": "按平台构成弹窗的一行 = 「筛选该平台时页头四卡会显示的值」。"
       },
       "PlatformCreate": {
         "properties": {

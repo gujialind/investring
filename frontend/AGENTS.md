@@ -1,6 +1,6 @@
 # frontend/AGENTS.md — 前端模块指南
 
-> 前端任务先读本指南；涉及业务语义时按[业务规则](../docs/reference/business-constraints.md)定位对应领域。涉及布局、颜色、数字展示或兜底 UI 时加读[视觉规范](../docs/design/visual-spec.md)；非视觉交互仍遵守本指南的双端、预览与验证约束。文档维护遵循 [AI 文档规范](../docs/reference/documentation.md)。
+> 前端任务先读本指南；涉及业务语义时按[业务规则](../docs/reference/business-constraints.md)定位对应领域。涉及布局、颜色、数字展示或兜底 UI 时加读[视觉规范](../docs/design/visual-spec.md)；非视觉交互仍遵守本指南的双端、预览与验证约束。现金流水模块（issue #725）的设计与实施计划见 [cash-flow-module.md](../docs/design/cash-flow-module.md)，做该页面前先读它。文档维护遵循 [AI 文档规范](../docs/reference/documentation.md)。
 
 ## 1. 架构
 
