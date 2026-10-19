@@ -383,6 +383,27 @@ test.describe("现金产品详情页", () => {
     await expect(page.getByTestId("product-returns-card")).not.toBeVisible();
     await expect(page.getByTestId("product-history-card")).not.toBeVisible();
   });
+
+  // #719：现金行读得出「从哪来、到哪去」，且不再把现金腿渲成「份额 @ 净值」
+  // （旧副行的 `shares !== undefined` 判据对 shares=null 成立 → `-- @ 1.0000`，
+  //  虚假净值 1.0000 把现金说成净值型产品）
+  test("交易记录卡：现金行标注资金流向并补出对手腿", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    const card = page.getByTestId("product-trades-card");
+    const rows = card.getByTestId("product-trade-row");
+    // 行集 = 本组合的现金腿：2 条调仓扣款腿 + 1 条申购确认腿
+    await expect(rows).toHaveCount(3);
+    // 调仓扣款腿：主行说资金流向 + 本平台，副行说去处（对手基金腿 + 对手腿状态）
+    await expect(rows.filter({ hasText: "现金扣款 · 华宝证券" })).toHaveCount(2);
+    await expect(rows.filter({ hasText: "↳ 买入 沪深300ETF" })).toHaveCount(2);
+    // 申赎腿：对手方是 subscription 记录、不是 trade 行 → 保持来源标注，不补 ↳
+    await expect(rows.filter({ hasText: "现金 · 申赎确认" })).toHaveCount(1);
+    await expect(rows.filter({ hasText: "↳" })).toHaveCount(2);
+    // 现金腿无份额无净值语义：整卡不出现「份额 @ 净值」形态（含被渲成 1.0000 的 price）
+    await expect(card).not.toContainText("份 @");
+    await expect(card).not.toContainText("-- @");
+    await expect(card).not.toContainText("1.0000");
+  });
 });
 
 // #683 B/D：本页交易卡与两页共用的 useNavAnalysis 从未接入失败态。

@@ -58,6 +58,29 @@ class TradeUpdate(BaseModel):
     cash_confirm_date: Optional[date] = None
 
 
+class TradePairedLegResponse(BaseModel):
+    """对手腿的只读派生快照（#719，非 DB 列）。
+
+    同一 `transfer_group` 内的另一条腿：基金腿↔CASH 腿、平台间转移的两条 CASH 腿互指。
+    只服务读侧——真实对手腿被列表筛选条件挡掉时，前端据此合成配对子行，
+    因此**不新增行**、不影响 `total` 与分页。`id` 供前端判定「真实腿已在结果集内」
+    从而跳过派生（真实优先、派生兜底）。
+    """
+    id: int
+    product_code: str
+    market: Optional[str] = None
+    product_name: Optional[str] = None
+    display_code: Optional[str] = None
+    platform_code: Optional[str] = None
+    trade_type: str
+    shares: Optional[float] = None
+    amount: Optional[float] = None
+    price: Optional[float] = None
+    fee: Optional[float] = None
+    confirm_date: Optional[date] = None
+    status: str
+
+
 class TradeResponse(TradeBase):
     id: int
     created_at: Optional[datetime] = None
@@ -73,6 +96,12 @@ class TradeResponse(TradeBase):
     # trade_service.build_paired_cash_leg_map
     cash_platform_code: Optional[str] = None
     cash_confirm_date: Optional[date] = None
+    # #719 只读派生（非 DB 列）：**双向**对手腿，填充时机同 product_name（仅 list 端点）。
+    # 与上面两个平铺字段的关系：cash_* 是 #493 的历史契约（CLI 在读），只覆盖
+    # 基金腿→现金腿这一个方向；paired_leg 覆盖三个方向并带金额/份额/状态，
+    # 供前端在对手腿被筛掉时合成子行。两者并存不互写。
+    # 无对手 trade 行时为 null——含 `sub_` 申赎腿（对手方是 subscription 记录）
+    paired_leg: Optional[TradePairedLegResponse] = None
 
     class Config:
         from_attributes = True

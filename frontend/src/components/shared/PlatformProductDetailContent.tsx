@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
@@ -19,6 +19,7 @@ import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/ap
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import { navBasisLabels } from "@/lib/navBasis";
+import { cashRowLabel, isCashLeg, tradeCardDetailLine } from "@/lib/tradePairs";
 import {
   cn,
   formatCurrency,
@@ -37,6 +38,7 @@ import {
 import { useHoldingsByProduct } from "@/hooks/usePosition";
 import { useNavAnalysis } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
+import { usePlatformList } from "@/hooks/usePlatform";
 
 const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
   { key: "1m", label: "近1月" },
@@ -150,6 +152,14 @@ export default function PlatformProductDetailContent({
     page: 1,
     page_size: 5,
   });
+
+  // 对手平台名（#719）：本平台-产品页按 platform_code 取数，平台间转移只有本平台这一腿，
+  // 副行要说清「转到哪个平台」；映射缺失时回退显示平台码
+  const { data: platformsData } = usePlatformList({ page_size: 100 });
+  const platformNameMap = useMemo(
+    () => new Map((platformsData?.items ?? []).map((p) => [p.code, p.name])),
+    [platformsData?.items]
+  );
 
   if (holdingsLoading) return <LoadingState />;
   if (holdingsError) {
@@ -437,12 +447,15 @@ export default function PlatformProductDetailContent({
                     style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
                   />
                   <span className="truncate">
-                    {TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type}
+                    {/* 现金行：本页平台与产品都已固定，`卖出` 读不出任何信息 →
+                        改资金流向标注，去处写在副行（#719） */}
+                    {isCashLeg(trade)
+                      ? cashRowLabel(trade)
+                      : (TRADE_TYPE_LABELS[trade.trade_type] ?? trade.trade_type)}
                   </span>
                 </div>
-                <div className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
-                  {trade.shares !== undefined && `${formatSharesUnit(trade.shares)} @ ${formatNav(trade.price)} · `}
-                  {formatDate(trade.trade_date)}
+                <div className="truncate text-xs text-muted-foreground tabular-nums">
+                  {tradeCardDetailLine(trade, platformNameMap)}
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-0.5">

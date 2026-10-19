@@ -33,6 +33,40 @@ export interface Trade {
    */
   cash_platform_code?: string | null;
   cash_confirm_date?: string | null;
+  /**
+   * 读侧派生**对手腿**（#719）：同一 `transfer_group` 内的另一条腿，方向不限
+   * （基金腿↔现金腿、平台间转移的两条现金腿互指）。只读、不落库、**仅 list 响应
+   * 填充**（时机同 `product_name`/`display_code`），单对象与 preview 端点恒为 null。
+   *
+   * 用途是「只补信息、不补行」：对手腿被产品/状态/平台筛选或分页挡在结果集外时，
+   * 前端据此合成配对子行。`total`、分页与排序口径都不受影响。
+   * 无对手 trade 行时为 null——含 `sub_` 申赎腿（对手方是 subscription 记录，
+   * 主体在申赎页看，是刻意边界）与尚未建出现金腿的待确认卖出。
+   * 渲染前务必核对 `paired_leg.id` 是否已在结果集内：真实腿优先、派生兜底。
+   */
+  paired_leg?: TradePairedLeg | null;
+}
+
+/**
+ * 对手腿的只读快照（#719，后端 `TradePairedLegResponse`）：字段名与 `Trade` 同名同义，
+ * 故 `Trade` 可按 `SubLeg` 直接投影、两种来源共用一个子行渲染器。
+ * 不含 `trade_date`/`notes`/`actual_amount`——子行不消费，缺字段比塞用不上的字段好。
+ */
+export interface TradePairedLeg {
+  id: number;
+  product_code: string;
+  market?: string | null;
+  /** 派生名称/显示码与锚点行同批查询（#175/#705 口径） */
+  product_name?: string | null;
+  display_code?: string | null;
+  platform_code?: string | null;
+  trade_type: string;
+  shares?: number | null;
+  amount?: number | null;
+  price?: number | null;
+  fee?: number | null;
+  confirm_date?: string | null;
+  status: string;
 }
 
 export interface TradeCreate {
