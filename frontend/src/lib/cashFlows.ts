@@ -10,8 +10,8 @@ import { formatCurrency, formatNumber, formatSignedCurrency } from "@/lib/utils"
  * 现金流水展示层纯函数（issue #725）。只吃后端行、吐展示值，无副作用、可单测。
  *
  * 方向口径以**后端 `flow_type_label` 与带符号 `amount`** 为准（申购=注资入账 正、
- * 赎回=支付 负）；本文件不重算方向、不重造标签——mockup 的申赎方向是错的，见
- * docs/design/cash-flow-module.md。dot 色一律从带符号 amount + settled + is_override
+ * 赎回=支付 负），账本口径见业务规则 rule-cash（反向标注会与余额列不闭合）；
+ * 本文件不重算方向、不重造标签。dot 色一律从带符号 amount + settled + is_override
  * 派生，与具体 flow_type 解耦，故修正方向后自动正确。
  */
 

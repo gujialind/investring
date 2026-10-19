@@ -103,9 +103,9 @@ function rowKey(row: CashFlowRow): string {
 /**
  * 现金流水页内容（桌面/移动共用，issue #725）。
  *
- * 数据全部来自 PR-1 端点 `GET /portfolios/{code}/cash-flows`（列表 + overview 四卡 +
- * platform_breakdown 一次到位）；方向标签一律消费后端 `flow_type_label`，前端不重算方向
- * （mockup 的申赎方向是错的，见 docs/design/cash-flow-module.md）。余额列与「日期·平台」
+ * 数据全部来自端点 `GET /portfolios/{code}/cash-flows`（列表 + overview 四卡 +
+ * platform_breakdown 一次到位，读侧口径见业务规则 rule-cash）；方向标签一律消费后端
+ * `flow_type_label`，前端不重算方向（mockup 的申赎方向是错的、不作用基线）。余额列与「日期·平台」
  * 组列按 (平台, 现金日期) rowSpan 合并；「当日另有 N 笔」与详情对账块经 `useCashFlowDay`
  * 取同 (平台, 日) 全组行（解除类型筛选），故在类型筛选态下也能自证日终余额。
  */
