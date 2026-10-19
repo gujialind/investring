@@ -17,19 +17,20 @@
 | [missed.md](missed.md) | 漏报复盘（recall 侧）：各 PR 评审 head → 合入 sha、合入后 72h 内触及同文件的修复、M1–M4 归因 |
 | [baseline-report.md](baseline-report.md) | 首轮基线报告（9 PR / 38 条，chain-only 核验） |
 | [baseline-findings.jsonl](baseline-findings.jsonl) | 基线 38 条明细 |
+| [pr-728-meta.json](pr-728-meta.json) | #728 的 PR 元数据/正文快照，`728-12`（`metadata_verified`）的佐证材料。**注意**：快照 head 为 `df374fb`（处置后），结构化字段 `additions=82 / deletions=61 / changedFiles=1`、正文写 `+82 / −61`，即已是订正后状态；`728-12` 所指评审当时 head `ad9d9f0` 的 `+73/−56` **不在此快照内**，故该条前提仍不可只凭本仓库重放 |
 
 ## 口径
 
 - **纳入对象**：首轮 L2 评审的带级别发现（`[Blocker]`/`[Suggestion]`/`[Nit]`）+ 复审/第二轮**新增**的带级别发现。同一发现多轮引用只算一条，以最早出现的评论为准；行号/措辞更新不算新发现；无级别条目与纯状态评论不纳入，逐项排除理由见 report.md 第 1 节差异列。
 - **分母**：本轮 N = 58，分类分母 = A+B1+B2+C = 58（D 单列、不计入分母，本轮 D = 0）；基线 38 条 / 分母 37（D = 1 单列，与本轮同口径排除）。
 - **指标**：错误率 = C/分母；采纳率 = A/分母；真问题率 = (A+B1+B2)/分母。分类定义 A/B1/B2/C/D 见 report.md 第 2 节，与基线同源。
-- **核验强度**：本轮 57/58 为 `code_verified`（在评审当时的 head sha 用 `git show` 读原文）、`728-12` 为 `metadata_verified`（其前提是 PR 正文声明的行数，正文不在 commit tree 内，只能凭归档时保留的 `pr_meta.json` 快照核验）；基线为 chain-only。二者对同一现象的观测口径不同，report.md 第 4.3 节已按分层计算排除「PR 类型构成」这一候选解释。
+- **核验强度**：本轮 57/58 为 `code_verified`（在评审当时的 head sha 用 `git show` 读原文）、`728-12` 为 `metadata_verified`（其前提是 PR 正文声明的行数，正文不在 commit tree 内；归档的 [pr-728-meta.json](pr-728-meta.json) 是**处置后** head `df374fb` 的快照、正文已订正为 `+82/−61`，可佐证该条被采纳，但评审当时 head `ad9d9f0` 的 `+73/−56` 不在快照内，前提仍不可只凭仓库重放）；基线为 chain-only。二者对同一现象的观测口径不同，report.md 第 4.3 节已按分层计算排除「PR 类型构成」这一候选解释。
 - **计数复算**：全部计数由脚本对 findings.jsonl 复算，非手工加总。
 
 ## 归档边界
 
-- 原会话的输入材料（PR 评论链 `data/`、评审原稿 `drafts/`、只读克隆 `repo/`）与一次性取数脚本**未归档**；正文中出现的 `out/…`、`data/…`、`drafts/…`、`/tmp/rt/…` 路径按原会话目录解读，本目录内文件已平铺（去掉 `out/` 前缀）。
-- 除 `728-12`（前提是 PR 正文数字，标 `metadata_verified`、凭归档保留的 `pr_meta.json` 快照核验）外，其余 `code_anchor` 与 commit sha 仍可在本仓库用 `git show <sha>:<path>` 复现；只读 git 无法复现的运行期数字（pytest 计数、E2E/visual 实跑、px 探针）一律按「评论链自述」处理，见 report.md §3.3。
+- 原会话的输入材料（PR 评论链 `data/`、评审原稿 `drafts/`、只读克隆 `repo/`）与一次性取数脚本**未归档**（唯一例外：`728-12` 的元数据佐证 [pr-728-meta.json](pr-728-meta.json) 已归档）；正文中出现的 `out/…`、`data/…`、`drafts/…`、`/tmp/rt/…` 路径按原会话目录解读，本目录内文件已平铺（去掉 `out/` 前缀）。
+- 除 `728-12`（前提是 PR 正文数字，标 `metadata_verified`；佐证快照 [pr-728-meta.json](pr-728-meta.json) 是**处置后** head `df374fb` 的正文 `+82/−61`，非评审当时 head `ad9d9f0` 的 `+73/−56`，故只能佐证「已订正」、不能重放原始前提）外，其余 `code_anchor` 与 commit sha 仍可在本仓库用 `git show <sha>:<path>` 复现；只读 git 无法复现的运行期数字（pytest 计数、E2E/visual 实跑、px 探针）一律按「评论链自述」处理，见 report.md §3.3。
 
 ## 条款回写情况
 

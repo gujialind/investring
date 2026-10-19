@@ -1,0 +1,144 @@
+{
+ "additions": 82,
+ "baseRefName": "main",
+ "body": "## 改动内容\n\nissue #725「现金流水」模块的 **PR-3 收尾**（stacked：base = `feature/725-cash-flows-ui` / PR #727）。**纯文档，零代码改动**。\n\n唯一改动文件：`docs/design/cash-flow-module.md`（+82 / −61）。\n\n| 节 | 处置 | 保留什么 |\n| --- | --- | --- |\n| 文首状态行 | 改为「PR-1（#726）/ PR-2（#727）均已实现，尚未合入 `main`」，并显式写明**合入前不勾选 #725 任何断言** | 回填与关闭是合入后动作 |\n| §4 PR #721 | 压缩为历史注记 | 结论（走主路径、H2 未进 main、回退路径未触发）+ H1/H2 去留理由 + 残留核对结论；删除 4 步操作清单与「禁止」条款（已执行完毕） |\n| §5 实施切分 | 压缩为历史注记 | 三 PR 的 commit/PR 指针（`02dda7e`/`e448ab5`、`39610cc`/`05fa6e1`/`76a8d98`、本分支）+ 顺序依赖已消解的结论；删除逐条产物清单 |\n| §6 裁决项 | 补登 **PR-2 提出、至今未裁决**的两项 | 投影块触发面与 T7 字面的口径差；移动端详情弹窗是否豁免（PR-2 已按建议提供） |\n| §7 | 「验证矩阵」→「已执行的验证入口与结果」 | 9 行实测表（影响面 / 双通道后端 / 契约 / 前端门禁 / E2E / 目检 / 文档门禁），数字摘自 #726、#727 正文与处置评论，本节不重跑 |\n| §8 | 逐条标注现状 | 删除已不适用的「#721 裁剪误伤 H1」风险；新增「重估生效依赖快照重算」与「#721 联动」两条仍有效项 |\n| §9（新增） | **16 条验收断言 → 证据**映射表 | 断言要点 / 落点（PR + 文件）/ 真实用例名 / 状态；状态一律「已实现，待合入后勾选」。另附**表末缺口** 5 条（勾选取舍时须一并核对） |\n\n§9 的用例名逐个从 `backend/tests/unit/test_cash_flow_service.py`、`tests/integration/test_cash_flows_{api,balance}.py`、`frontend/src/lib/cashFlows.test.ts`、`frontend/e2e/cash-flows.spec.ts` 核对得到，未运行过的不写成已覆盖。\n\n## 关联 issue\n\n不写 `fixes #725`：#726 / #727 尚未合入 main，本 PR 也不是 #725 的最后一步（合入后才回填勾选）。本 PR **不编辑、不关闭任何 issue**（含 #719）。refs #725。\n\n## H2 残留核对（任务项 3）\n\n**结论：`origin/main` 与 `origin/feature/725-cash-flows-ui` 上 H2 零残留——H2 从未进入 main，无需撤除动作。**\n\n依据是 #721 自身走的是主路径：其 PR 正文明写「H2『产品筛选可选现金』整体撤出本 PR……已在本分支删除，由 #725 PR-2 承接」，且 `gh pr view 721` = OPEN / base `main` / 未合入。\n\n复现命令与逐项结果（仓库根执行）：\n\n```bash\nMAIN=origin/main; UI=origin/feature/725-cash-flows-ui\nFILES=\"frontend/src/components/shared/TradesContent.tsx frontend/src/components/shared/ProductFilterDialog.tsx \\\nfrontend/src/lib/api/trade.ts frontend/src/hooks/useProduct.ts backend/app/routers/trades.py \\\nbackend/app/services/trade_service.py backend/app/schemas/trade.py frontend/e2e/trade-in-transit.spec.ts \\\ndocs/design/visual-spec.md ir-cli/CLI_MANUAL.md ir-cli/ir_cli/response_fields.py\"\n\n# [1] PR-2 相对 main 在全部 H2 相关文件上的 diff\ngit diff --stat $MAIN $UI -- $FILES\n#   -> docs/design/visual-spec.md | 4 ++++   （唯一 diff 是 #725 的 §8/§12/§20 登记，不含 H2）\n\n# [2] 快捷现金档 / include_virtual 取数是否落在调仓页链路\ngit grep -n -I 'include_virtual' $MAIN $UI -- frontend/src/components/shared/TradesContent.tsx \\\n  frontend/src/components/shared/ProductFilterDialog.tsx frontend/src/lib/api/trade.ts frontend/src/hooks/useProduct.ts\n#   -> 0 hits（两分支同）：调仓页产品筛选不放开虚拟产品\n\n# [3] include_virtual 在 main 的全域分布\ngit grep -l -I 'include_virtual' $MAIN\n#   -> 仅 products 域：backend/app/routers/products.py、openapi.json、tests/integration/test_product_{display_code,lists_filters}.py、\n#      frontend/src/components/shared/ProductsContent.tsx（产品管理页）、frontend/src/lib/api/product.ts、ir-cli/ir_cli/commands/products.py\n#      ＝ #327「虚拟产品默认排除」既有基线，非 H2\n\n# [4] list_trades 是否有 products=CASH 专属取数分支\ngit grep -n -I -e 'products == \"CASH\"' -e 'products==\"CASH\"' -e 'CASH 分支' $MAIN $UI -- backend/app\n#   -> 0 hits：只有 #155 的通用 `code|market` 复合值解析（trade_service.py:1982-1999）\n\n# [5] ProductFilterDialog 的 CASH 命中项归属\ngit grep -n -I '{ value: \"CASH\", label: \"现金\" }' $MAIN $UI -- frontend/src/components/shared/ProductFilterDialog.tsx\n#   -> 两分支同在第 51 行 = #324 起的**产品类型**下拉，设计文档 §4 原文已注明「不是 H2」\n\n# [6] #721 的现金筛选 e2e 是否在 main\ngit cat-file -e $MAIN:frontend/e2e/trade-cash-pairing.spec.ts || echo ABSENT\n#   -> ABSENT（该文件随 #721 存在，未合入）\n\n# [7] visual-spec §9 是否含现金筛选条款\ngit show $MAIN:docs/design/visual-spec.md | awk '/^## 9\\./,/^## 10\\./' | grep -c '现金\\|CASH'\n#   -> 0（§9 是筛选栏通用规范，无现金档条款）\n\n# [8] 辅证：调仓页即使选中 product_type=CASH 也筛不出（服务端默认排除虚拟产品）\ngit grep -n -I 'product_type=CASH' $MAIN -- backend/tests/integration/test_products_list_filters.py\n#   -> :300 \"AND 语义：product_type=CASH 与默认排除叠加 → 空；include_virtual=true → 命中种子 CASH\"\n\n# [9] 断言 16 的 NAV_ITEMS 零 diff\ngit diff --stat $MAIN $UI -- frontend/src/components/shared/navItems.ts\n#   -> 空（NAV_ITEMS 未动）；ManageLinksCard 仅 +1 项「现金流水」\n```\n\n现存命中项**全部是 #721 之前的既有基线**（#155 / #324 / #327），不是 H2 语义、也不是撤除对象。因此本节记录判定，不改任何代码。\n\n## 自审清单\n\n- [x] 读过完整 diff 原文（唯一文件，82+/61−，无删除的业务条款未经核对）\n- [x] **Q1 行为与不变量**：不改代码、不改契约、不改业务规则。§9 状态列统一「已实现，待合入后勾选」，不声称任何勾选；§7 数字全部来自 #726/#727 实跑留痕，未重跑不换算\n- [x] **Q2 失败与状态安全**：不适用（无运行时代码路径变更）\n- [x] **Q3 影响面同步**：全仓 `grep -rn 'cash-flow-module'` → 命中 `frontend/AGENTS.md`（入口句，仍有效）、`CashFlowsContent.tsx:107`、`cashFlows.ts:14` 两处源码注释（只引用文件、不引用章节号，裁剪不打断）。文档门禁与链接/锚点自检见下节\n- [x] **Q4 验证证据**：`check_context_docs.py` 通过；`pytest scripts/tests/test_context_docs.py scripts/tests/test_ci_path_mapping.py` 116 passed；`pytest scripts/tests -q` **1 failed / 1101 passed** — 失败项是 PR-2 继承的既存红，非本 PR 引入，证据与归属见「未覆盖项」\n- [x] **Q5 上线与恢复**：纯文档，合入 main 触发 CI→CD 但 `ci.yml` 的 push 触发器忽略 `docs/**`，docs-only 合入不重建镜像、不重部署（#456）；回滚 = 撤本 PR\n\n## 测试验证\n\n- [x] 文档门禁：`python scripts/check_context_docs.py` → `Context docs OK (11 documents, 8 source-reference files; no recursive or external checks)`\n- [x] 门禁自测：`python -m pytest scripts/tests/test_context_docs.py scripts/tests/test_ci_path_mapping.py -q` → **116 passed**\n- [x] 链接/锚点自检（本 PR 自建脚本，只跑本文档）：文内 13 处 Markdown 链接（去重 6 个目标）的文件与锚点均可解析（`../reference/documentation.md#doc-migration`、`../reference/business-constraints.md#rule-cash`、`visual-spec.md`）；本文 §1-§9 章节号连续，所有本地 `§N` 引用命中存在的节；跨文件 `§8/§12/§20` 已改为 `[visual-spec.md](visual-spec.md) §8` 写法（三个章节在 visual-spec 中确实存在：184 / 230 / 301 行）\n- [ ] 本地后端影响面测试：**不适用**（无后端改动）\n- [ ] 迁移验证：**不适用**（无迁移）\n- [ ] 前端门禁与 E2E：**不适用**（无前端代码改动）；§7 表中的前端数字摘自 #727\n- [ ] 双端目检：**不适用**（无视觉改动）；§7 已记录 PR-2 的目检结论\n\n未运行/无法验证：`pytest scripts/tests -q` 全量结果含 1 条继承性红，见下节。\n\n## 未覆盖项\n\n1. **（阻塞 #727 合入，本 PR 未修）** `python -m pytest scripts/tests -q` → `test_ci_frontend_coverage.py::TestDenominatorRatchet::test_denominator_derivation_matches_documented_size` **失败**：`coverage.include∖exclude` 现命中 **13** 个文件，`SF_MIN_HIGH_WATER` 钉的是 **12**，实际多出的是 PR-2 新增的 `src/lib/cashFlows.ts`。\n   - **归属证据**：在 PR-2 顶点的独立 worktree（`origin/feature/725-cash-flows-ui`，无本 PR 改动）单跑该文件 → 同样 `1 failed`；`git show origin/main:frontend/vitest.config.ts | grep cashFlows` → 无命中，main 基线为 12。即该红由 #727 引入，不是 PR-3 造成。\n   - **影响**：CI 的 `CLI Contract Check` job 执行 `python -m pytest scripts/tests -q`（`ci.yml:413-414`），因此 **#727 与 #726 合入后本分支的 CI 都会红**（#727 当前 `gh pr checks` = no checks reported，尚未暴露）。\n   - **为什么不顺手改**：`frontend/AGENTS.md` §3 与测试自身都要求「扩张分母须同批改三处：`SF_MIN_HIGH_WATER`、`ci.yml` 的 `LCOV_SF_MIN`、`frontend/AGENTS.md` §3 口径说明」——属代码 + CI 配置 + 模块指南变更，超出本 PR「不改代码」的硬约束。`LCOV_SF_MIN=12` 是运行时门禁阈值，改它改变 CI 语义，需维护者授权。\n   - **建议最小修法**：三处同批 12 → 13（`cashFlows.ts` 已有 35 条 colocated vitest 用例（11 个 describe）、分支全覆盖，分母扩大不放松实际门禁）。\n2. **§9 断言 15 只到「数值 + 实现」**：`recon` 有后端单测与集成测试，但构成弹窗的差值**注记文案**没有 e2e 断言，勾选该条时须注意证据强度低于其余各条。\n3. **§9 状态列不含「已勾选」**：#726 / #727 未合入，本 PR 不代做 issue 回填。\n4. ir-cli 命令组仍缺（PR-1 有意留给 follow-up chore，§3 已注明）。\n\n## 待确认清单（开放问题，不自行裁决）\n\n1. 上节第 1 条的三处同批改动由谁做、在哪个 PR 做（建议在 #727 内补一个 commit，与 `cashFlows.ts` 同源同批）。\n2. §6 新登记的 PR-2 未裁决项 1（投影块触发面收窄至 pending 转入腿 + 新增「详情」入口，偏离 T7 字面）——裁决改变会同时牵动 §9 断言 10 的结论。\n3. §6 未裁决项 2（移动端详情弹窗是否豁免）——影响 §9 断言 6/10 回填时的措辞。\n4. #725 的 16 条勾选与 #719 的回填/关闭时机：建议以「#726 → #727 →（#721 可选）→ PR-3」合入完成为触发点，由维护者发起。\n\n## 部署影响\n\n无。纯文档 PR，不触发镜像重建与重部署（`ci.yml` push 触发器忽略 `docs/**`，#456）。\n\n\n---\n\n## #728 评审处置追加（PR-3 第二轮，2026-10-18）\n\nCodeBuddy L2（0 Blocker / 6 Suggestion / 1 Nit）逐条处置见处置评论。文档改动集中于 `f98da7a`，并 merge PR-2 tip `043f4cc`（merge commit `696b57f`）。\n\n**merge 后复跑（本分支 head `f98da7a`）：**\n\n- `env -u PYTHONPATH -u VIRTUAL_ENV backend/.venv/bin/python -m pytest scripts/tests -q` → **1102 passed，0 failed**（原「未覆盖项 1」的 coverage 棘轮继承性红已由 `043f4cc` 消除，该条不再是阻塞项）。\n- `python scripts/check_context_docs.py` → **Context docs OK（11 documents / 8 source-reference files）**。\n- §7「本模块测试」行改为最终口径并实跑核对：三测试文件 62 个 test 函数、参数化展开收集 68 条，单独跑 68 passed（SQLite）；`-k \"cash_flow or cash_transfers or in_transit\"` 选择口径 SQLite 与 MySQL（本机 `ir720mysql`，`mysql:8.4` 空库 `ir_test`）**均 135 passed / 2116 deselected**（pass 数与审查者复测一致；旧留痕 128/1211 的收集范围更窄、未复现）。\n\n**补断言属 PR-2 后续**：断言 2/14 移动端证据的第二张卡余额断言与移动端合计行无操作断言、断言 8 状态筛选态 e2e，均需改 `frontend/e2e/cash-flows.spec.ts`（PR-2 分支文件），超出本 PR「只改文档」硬约束，本次在 §9 表末缺口注明覆盖范围，不在本 PR 补测。\n\n",
+ "changedFiles": 1,
+ "commits": [
+  {
+   "authoredDate": "2026-10-18T04:06:01Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T04:06:01Z",
+   "messageBody": "PR-3 收尾：§4/§5 裁剪为短历史注记（留结论与 commit/PR 指针，删已执行的\n步骤清单）、§7 改为已执行的验证入口与实测结果、§8 标注仍有效风险与现状、\n新增 §9 把 issue #725 的 16 条验收断言逐条映射到落点与用例名。\n\n状态一律写「已实现，待合入后勾选」——#726/#727 未合入 main，不代做 issue\n回填与勾选。不改代码、不动前后端源码。",
+   "messageHeadline": "docs(cash-flow): 收尾文档终同步与验收证据映射 (#725)",
+   "oid": "9dda5fb60f4c3b47f12db8915916b48775cf6b46"
+  },
+  {
+   "authoredDate": "2026-10-18T05:12:08Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T05:12:08Z",
+   "messageBody": "…feature/725-cash-flows-closeout",
+   "messageHeadline": "Merge remote-tracking branch 'origin/feature/725-cash-flows-ui' into …",
+   "oid": "696b57f240e572e86def224d4b62a181705e9898"
+  },
+  {
+   "authoredDate": "2026-10-18T05:17:48Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T05:17:48Z",
+   "messageBody": "",
+   "messageHeadline": "docs(cash-flow): 处置 #728 评审意见——口径与回滚措辞校正 (#725)",
+   "oid": "f98da7a6fb928b2487dd1abddf5fe7ebf4bdb341"
+  },
+  {
+   "authoredDate": "2026-10-18T15:29:06Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T15:29:06Z",
+   "messageBody": "…feature/725-cash-flows-closeout\n\n# Conflicts:\n#\tdocs/design/cash-flow-module.md",
+   "messageHeadline": "Merge remote-tracking branch 'origin/feature/725-cash-flows-ui' into …",
+   "oid": "5dc2b3419b0257905f5feba5c78e997ffe7d50ad"
+  },
+  {
+   "authoredDate": "2026-10-18T15:30:20Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T15:30:20Z",
+   "messageBody": "",
+   "messageHeadline": "docs(cash-flow): 列名随 #727 改为当日余额 (#725)",
+   "oid": "06d4873f779306fa95f2f3a3262f7e1c7e2c61bb"
+  },
+  {
+   "authoredDate": "2026-10-18T16:13:26Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T16:13:26Z",
+   "messageBody": "…feature/725-cash-flows-closeout",
+   "messageHeadline": "Merge remote-tracking branch 'origin/feature/725-cash-flows-ui' into …",
+   "oid": "ad9d9f01848af88760a57deb86e7c0fbf24a8514"
+  },
+  {
+   "authoredDate": "2026-10-18T17:44:27Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T17:44:27Z",
+   "messageBody": "…feature/725-cash-flows-closeout",
+   "messageHeadline": "Merge remote-tracking branch 'origin/feature/725-cash-flows-ui' into …",
+   "oid": "b079a6ed1e62ee95b769a3d4303b1baa78f6b84a"
+  },
+  {
+   "authoredDate": "2026-10-18T17:50:58Z",
+   "authors": [
+    {
+     "email": "gujialind@163.com",
+     "id": "U_kgDOCC51RA",
+     "login": "gujialind",
+     "name": "Collyn"
+    }
+   ],
+   "committedDate": "2026-10-18T17:50:58Z",
+   "messageBody": "S1 §5 PR-2 指针补齐 `8bdbec5`（四卡左对齐 + visual-spec §5 条款）与 tip\n`84a1139`（第二轮 L2 处置），形态登记补 §5、§20 改为四条 #725 变更记录。\nS2 全量两行标注为 `02dda7e` 快照（相加 2244 即该快照收集数），补 PR-3 第二轮\ncloseout head 复跑：收集 2251、2213 passed / 38 skipped / 219.25s，并解释与\n审查者 2214/37 的 ±1 来自 test_db_isolation.py 在显式 TEST_DB_URL 下的跳过；\nMySQL 全量标注未复核。\nS3 §9 #7/#8 补 `84a1139` 新增的两条 e2e 断言（筛选前 same-day-link 计数 0、\n弹窗「当前筛选命中」计数 1 与 day-truncated 计数 0），表末缺口登记重估/撤销\nUI 链路无 E2E（#727 N4 半条，登记不处理）与失败态 e2e 的触发面边界。\nN1 §9 #6 注明 pair_ref 四要素中金额相等由 #4 行的\ntest_source_main_points_at_the_other_platform 断言、跨天案闭合其余三要素。\nN2 PR 正文行数随本提交更新为实际 numstat（见 PR 正文）。\n另：§7 双端目检行注明复拍覆盖 tip、桌面 text-2xl / 移动 text-lg 与探针实测的\n溢出边界（8 位带符号量级为已知边界）。\n\n验证：check_context_docs.py OK；scripts/tests 的 context/path-mapping 116 passed；\n全量 SQLite 实跑 2213 passed / 38 skipped。MySQL 全量未复核。",
+   "messageHeadline": "docs(cash-flow): 按评审裁决处理 5 项并登记缺口（#728 L2）",
+   "oid": "df374fbfa88f8727661c5abe18cbbde03b6b5b8b"
+  }
+ ],
+ "deletions": 61,
+ "files": [
+  {
+   "path": "docs/design/cash-flow-module.md",
+   "additions": 82,
+   "deletions": 61,
+   "changeType": "MODIFIED"
+  }
+ ],
+ "headRefOid": "df374fbfa88f8727661c5abe18cbbde03b6b5b8b",
+ "mergeCommit": {
+  "oid": "b68063725a235d1035ff490d396a2d7932c36974"
+ },
+ "mergedAt": "2026-10-19T01:16:52Z",
+ "number": 728,
+ "title": "docs(cash-flow): PR-3 收尾文档终同步与验收证据映射 (#725)"
+}
