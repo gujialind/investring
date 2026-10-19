@@ -119,8 +119,7 @@ export function amountNote(row: CashFlowRow): string | null {
  *
  * pending 转入腿是唯一「余额不含本笔」的形态（calculate_available_cash 从不计 pending buy），
  * 其 `action.kind` 恒为 `"confirm"`（后端：trade_status=pending 且 flow_type=transfer），
- * 以此作为「余额不含本笔」的前端判据。这是 PR-1 余额契约与 mockup 简化余额模型的口径差，
- * 见 PR 待确认清单。
+ * 以此作为「余额不含本笔」的前端判据（读侧口径见业务规则 rule-cash）。
  */
 export function projectedBalance(row: CashFlowRow): number | null {
   if (row.settled || row.is_override) return null;
