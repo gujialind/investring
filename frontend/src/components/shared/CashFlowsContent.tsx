@@ -248,6 +248,13 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
       ]
     : [];
 
+  // 宽值降单列（#730）：§5 登记的 390px 实测——双列栅格卡内容宽 146px，text-lg 下带符号
+  // 8 位金额需 162px，吃满 16px 列间距与邻卡数值相接；单列内容宽约 308px 则充裕。
+  // 判据取「格式化后字符串长度」而非数值量级：同为 1e7 量级，正金额 ¥12,345,678.90 是
+  // 14 字符（实测 151px、溢出 5px 落在 16px 列间距内），带负号才是 15 字符（162px、相接）。
+  // 只影响移动端栅格，字号不降档。
+  const wideValue = statCards.some((s) => s.value.length >= 15);
+
   // ---- 行操作 ----
   const openDetail = (row: CashFlowRow) => setDetailRow(row);
   const openSameDay = (row: CashFlowRow) => setSameDayRow(row);
@@ -547,13 +554,15 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               按平台构成
             </Button>
           </div>
-          <div className={cn("grid gap-4", isMobile ? "grid-cols-2" : "grid-cols-2 lg:grid-cols-4")}>
+          <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : "grid-cols-2 lg:grid-cols-4")}>
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-sm text-muted-foreground">{s.label}</span>
                 {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号，故降一档；
                     text-lg 是 §5 四档内的分区标题档（同 PortfolioStatsCards 移动分支），
-                    不属 §6 禁止的「端侧独有字号」——此前的 text-xl 是四档外中间档 */}
+                    不属 §6 禁止的「端侧独有字号」——此前的 text-xl 是四档外中间档。
+                    text-lg 下 8 位带符号仍与邻卡相接，该量级改由 wideValue 降单列兜住（#730），
+                    不再继续压字号（再降 text-sm 会让主数值与正文同档、失去层级） */}
                 {/* 统计卡主数值与标签/注记同侧左对齐（visual-spec §5）：helper 供数字形态，
                     text-left 经 twMerge 覆盖其表格专用右对齐；number-cell utility 自带右置不可直接用 */}
                 <span className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold", isMobile ? "text-lg" : "text-2xl")}>

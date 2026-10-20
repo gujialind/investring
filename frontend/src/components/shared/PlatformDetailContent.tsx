@@ -22,10 +22,12 @@ import {
   tradeCardDetailLine,
 } from "@/lib/tradePairs";
 import {
+  cn,
   formatCurrency,
   formatDate,
   formatProductCodeLabel,
   formatSignedCurrency,
+  getNumberCellClass,
   getReturnColorClass,
   getStatusBadgeVariant,
   getTradeStatusLabel,
@@ -156,7 +158,12 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
           <span>持仓市值</span>
           <span>最新快照 {snapshotDate ? formatDate(snapshotDate) : "--"}</span>
         </div>
-        <div className="mt-1 text-2xl font-semibold number-cell">
+        {/* 统计卡主数值与标签同侧左对齐（visual-spec §5，#729）：helper 供数字形态，
+            text-left 经 twMerge 覆盖其表格专用右对齐；不直接挂自带 text-right 的 number-cell utility */}
+        <div
+          data-testid="overview-market-value"
+          className={cn(getNumberCellClass(), "text-left whitespace-nowrap font-semibold text-2xl mt-1")}
+        >
           {formatCurrency(platform.market_value)}
         </div>
         <div className={`mt-3 grid gap-3 ${isMobile ? "grid-cols-2" : "grid-cols-4"}`}>

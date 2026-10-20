@@ -94,6 +94,9 @@ test.describe("平台详情页", () => {
     await expect(overview).toBeVisible();
     // 持仓市值大数字（含该平台现金与在途）
     await expect(overview).toContainText(/\d{2,},\d{3}\.\d{2}/);
+    // #729 统计卡主数值与标签同侧左对齐（visual-spec §5）：钉住调用点的实际对齐，
+    // 防退回自带 text-right 的 number-cell 模板串
+    await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
     // 4 项指标标签
     await expect(overview).toContainText("持有收益");
     await expect(overview).toContainText("现金余额");
@@ -386,6 +389,8 @@ test.describe("平台-产品详情页", () => {
     await expect(overview).toContainText("63,000.00");
     await expect(overview).toContainText("15,000.00");
     await expect(overview).toContainText("100.0%");
+    // #729 统计卡主数值左对齐（visual-spec §5），同产品详情/平台详情两处断言
+    await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
     // S6：累计收益带 * 口径注记
     await expect(overview).toContainText("累计收益*");
     await expect(overview).toContainText("*累计收益含已卖出实现盈亏");
