@@ -253,7 +253,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   // 移动端（§5 登记的 390px 实测）：双列卡内容宽 146px，text-lg 下 15 字符需 162px，
   // 吃满 16px 列间距与邻卡相接；故 ≥15 降单列（内容宽约 308px），字号不降档。
   // 桌面（#745 的 1280 实测）：四列卡内容宽 216px，text-2xl 下 15 字符 216px 尚余
-  // 15px 间隙，16 字符（-¥123,456,789.01）只剩约 1px、17 字符起与邻卡墨迹叠印；
+  // 15px 间隙，16 字符（-¥123,456,789.01）只剩约 1px，18 字符（-¥1,234,567,890.12，
+  // 10 位）实测 −27.75px 已叠印（16→18 是多一个千分位逗号，不是多一位数字）；
   // 故桌面阈值取 ≥16 降两列（内容宽约 448px）。两端列宽与字号不同，不共用一个长度值。
   const wideValue = statCards.some((s) => s.value.length >= 15);
   const wideValueDesktop = statCards.some((s) => s.value.length >= 16);
