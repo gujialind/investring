@@ -104,7 +104,11 @@ class TestListTradeFilters:
         assert resp.json()["detail"]["error"] == "INVALID_DATE_RANGE"
 
     def test_sort_trade_date_desc(self, client, admin_headers, test_db):
-        """排序 trade_date DESC（不同日期降序）"""
+        """排序主序仍是日期 DESC（不同日期降序）。
+
+        #734 起分档用的是**组锚点**而非行自身日期；本例三条腿各由 factory 分到独占组
+        （`test_*`），锚点 = 自身 trade_date，故主序语义与改动前逐字一致（验收 #3）。
+        """
         create_portfolio(test_db, code="LT_P4", status="active")
         t1 = create_trade(test_db, "LT_P4", "CASH", "", trade_date=date(2025, 9, 1))
         t2 = create_trade(test_db, "LT_P4", "CASH", "", trade_date=date(2025, 9, 10))
@@ -116,26 +120,33 @@ class TestListTradeFilters:
         assert ids == [t2.id, t3.id, t1.id]
 
     def test_sort_groups_adjacent(self, client, admin_headers, test_db):
-        """同 transfer_group 两腿在结果中相邻（排序键含 transfer_group，决策⑪）"""
+        """同 transfer_group 两腿在结果中相邻，即使两腿 trade_date 天然不同（#734）。
+
+        真实卖出组的日期口径（attach_paired_cash_leg，#493）：基金腿 trade_date =
+        下单日 T，配对现金到账腿 trade_date = 基金腿确认日 C，两腿日期必然分叉。
+        旧排序键 trade_date DESC 会把中间日期的干扰腿插进同组两腿之间（#734 缺陷），
+        修复后按组锚点（组内 max(trade_date)）分档，同组两腿恒相邻。
+        """
         create_portfolio(test_db, code="LT_P5", status="active")
-        # 同交易日两个组：trade_date 相同时按 transfer_group 聚集
+        # 模拟卖出组：基金腿下单日 9/1 早、现金到账腿 = 确认日 9/3 晚；
+        # 干扰腿取中间日 9/2，旧排序键下必然插进两腿之间
         fund_leg = create_trade(test_db, "LT_P5", "510300.SH", "CN_EXCHANGE",
-                                trade_type="buy", trade_date=date(2025, 9, 1),
-                                transfer_group="rebal_adj01")
-        cash_leg = create_trade(test_db, "LT_P5", "CASH", "",
                                 trade_type="sell", trade_date=date(2025, 9, 1),
                                 transfer_group="rebal_adj01")
+        cash_leg = create_trade(test_db, "LT_P5", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, 3),
+                                transfer_group="rebal_adj01")
         other = create_trade(test_db, "LT_P5", "CASH", "",
-                             trade_type="buy", trade_date=date(2025, 9, 1),
+                             trade_type="buy", trade_date=date(2025, 9, 2),
                              transfer_group="rebal_adj02")
 
         resp = client.get("/api/trades", headers=admin_headers)
         assert resp.status_code == 200
         ids = [item["id"] for item in resp.json()["items"]]
-        # 同组两腿相邻，且整组排在 adj02 组之前（transfer_group 升序）
-        assert abs(ids.index(fund_leg.id) - ids.index(cash_leg.id)) == 1
-        assert ids.index(fund_leg.id) < ids.index(other.id)
-        assert ids.index(cash_leg.id) < ids.index(other.id)
+        # adj01 组锚点 = max(9/1, 9/3) = 9/3 → 整组排最前；组内同 transfer_group
+        # 按 id DESC，cash_leg 后插入 id 更大 → 先现金腿后基金腿；
+        # adj02 独占组锚点 = 自身日期 9/2 → 排后
+        assert ids == [cash_leg.id, fund_leg.id, other.id]
 
     def test_filter_product_code_only_matches_all_markets(self, client, admin_headers, test_db):
         """仅 product_code 时 LOF 一码多市场全命中"""
@@ -300,3 +311,175 @@ class TestListTradeProductName:
         # 字段完整性（issue #183）：挂 response_model 后字段过滤以 TradeResponse
         # 为准，断言实际响应键与 schema 声明一一对应、无字段丢失
         assert set(data["items"][0].keys()) == set(TradeResponse.model_fields.keys())
+
+
+class TestListGroupAnchorSort:
+    """组锚点排序边界（issue #734）：锚点 = 同组合内同 transfer_group 的 max(trade_date)。
+
+    「无组可锚」在 DB 层不可达（`trade.transfer_group` NOT NULL，见 `models/trade.py`），
+    可达形态是**独占组**（组内只有它自己 → 锚点 = 自身日期），由
+    `test_solo_rows_interleave_with_grouped_legs` 覆盖。实现里的 `coalesce` 分支同样
+    不可达（外层每行都把自己的键贡献进 GROUP BY ⇒ join 恒命中），保留它只为不赌各方言
+    的 NULL 排序位置，不是防御真实存量数据。
+
+    判别力（把 ORDER BY 首键改回旧排序键 `trade_date DESC` 后实跑本文件 +
+    `test_trades_paired_leg.py`：5 failed / 29 passed）。红的是本类前三例、
+    `test_anchor_decoupled_from_date_filter` 和别处的
+    `TestListTradeFilters::test_sort_groups_adjacent`；
+    `test_equal_anchors_fall_back_to_transfer_group` 与
+    `test_group_split_across_page_boundary_keeps_paired_leg` 是绿的——它们钉的是二级键
+    与分页契约，对新旧首键都不敏感，改排序键时不会替你发现问题。
+    """
+
+    def test_solo_rows_interleave_with_grouped_legs(self, client, admin_headers, test_db):
+        """独占组的单腿行按自身日期落档，与多腿组交错而不拆散组"""
+        create_portfolio(test_db, code="LT_GA1", status="active")
+        solo_late = create_trade(test_db, "LT_GA1", "CASH", "",
+                                 trade_date=date(2025, 9, 5))
+        fund_leg = create_trade(test_db, "LT_GA1", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 9, 1),
+                                transfer_group="rebal_ga1")
+        cash_leg = create_trade(test_db, "LT_GA1", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, 4),
+                                transfer_group="rebal_ga1")
+        solo_early = create_trade(test_db, "LT_GA1", "CASH", "",
+                                  trade_date=date(2025, 9, 2))
+
+        resp = client.get("/api/trades?portfolio_code=LT_GA1", headers=admin_headers)
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        # 锚点：solo_late=9/5、rebal_ga1=max(9/1,9/4)=9/4、solo_early=9/2；
+        # solo_early 的自身日期落在组两腿（9/1、9/4）之间，但组恒相邻不被拆开
+        assert ids == [solo_late.id, cash_leg.id, fund_leg.id, solo_early.id]
+
+    def test_group_spanning_months_stays_adjacent(self, client, admin_headers, test_db):
+        """同组两腿跨月（卖出组：下单日 8 月、到账腿 = 确认日 9 月）仍相邻同档"""
+        create_portfolio(test_db, code="LT_GA2", status="active")
+        fund_leg = create_trade(test_db, "LT_GA2", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 8, 28),
+                                transfer_group="rebal_ga2")
+        cash_leg = create_trade(test_db, "LT_GA2", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, 2),
+                                transfer_group="rebal_ga2")
+        solo = create_trade(test_db, "LT_GA2", "CASH", "",
+                            trade_date=date(2025, 9, 1))
+
+        resp = client.get("/api/trades?portfolio_code=LT_GA2", headers=admin_headers)
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        # 组锚点 9/2 > solo 9/1 → 整组（含 8 月的基金腿）排在 solo 之前；组内 id DESC
+        assert ids == [cash_leg.id, fund_leg.id, solo.id]
+
+    def test_multiple_groups_interleaved_dates(self, client, admin_headers, test_db):
+        """多组日期交错时按各组锚点分档，组内两腿恒相邻"""
+        create_portfolio(test_db, code="LT_GA3", status="active")
+        fund_a = create_trade(test_db, "LT_GA3", "510300.SH", "CN_EXCHANGE",
+                              trade_type="sell", trade_date=date(2025, 9, 1),
+                              transfer_group="rebal_ga3a")
+        cash_a = create_trade(test_db, "LT_GA3", "CASH", "",
+                              trade_type="buy", trade_date=date(2025, 9, 5),
+                              transfer_group="rebal_ga3a")
+        fund_b = create_trade(test_db, "LT_GA3", "510300.SH", "CN_EXCHANGE",
+                              trade_type="sell", trade_date=date(2025, 9, 2),
+                              transfer_group="rebal_ga3b")
+        cash_b = create_trade(test_db, "LT_GA3", "CASH", "",
+                              trade_type="buy", trade_date=date(2025, 9, 4),
+                              transfer_group="rebal_ga3b")
+        solo_c = create_trade(test_db, "LT_GA3", "CASH", "",
+                              trade_date=date(2025, 9, 3),
+                              transfer_group="rebal_ga3c")
+
+        resp = client.get("/api/trades?portfolio_code=LT_GA3", headers=admin_headers)
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        # 锚点：a=9/5、b=9/4、c=9/3；b 组两腿（9/2、9/4）跨过 c 的 9/3，仍不被拆散
+        assert ids == [cash_a.id, fund_a.id, cash_b.id, fund_b.id, solo_c.id]
+
+    def test_equal_anchors_fall_back_to_transfer_group(self, client, admin_headers, test_db):
+        """锚点相同时二级键 transfer_group 升序、组内 id DESC"""
+        create_portfolio(test_db, code="LT_GA4", status="active")
+        leg_t2 = create_trade(test_db, "LT_GA4", "CASH", "",
+                              trade_date=date(2025, 9, 6),
+                              transfer_group="rebal_ga4b")
+        leg_t1 = create_trade(test_db, "LT_GA4", "CASH", "",
+                              trade_date=date(2025, 9, 6),
+                              transfer_group="rebal_ga4a")
+
+        resp = client.get("/api/trades?portfolio_code=LT_GA4", headers=admin_headers)
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        # 同锚点 9/6：transfer_group 升序 → rebal_ga4a 在前（与旧排序键的二级键一致）
+        assert ids == [leg_t1.id, leg_t2.id]
+
+    def test_group_split_across_page_boundary_keeps_paired_leg(
+        self, client, admin_headers, test_db
+    ):
+        """(#734) 组锚点只保证结果集内相邻，不保证同页：page_size 把组推到页边界时
+        两腿分居两页，各自仍带 paired_leg（由 #719 派生兜底），total 不随分页变化。
+
+        这是当前分页契约的显式钉住——分组分页/游标（follow-up #752）落地后本用例即
+        变更点：两腿恒同页成立时改写断言，不是删掉。
+        """
+        create_portfolio(test_db, code="LT_GA5", status="active")
+        # 结果集顺序（锚点 DESC）：solo_late(9/8) → 组 rebal_ga5(锚点 max(9/1,9/5)=9/5,
+        # 组内 id DESC → cash_leg 后建 id 更大在前) → solo_early(8/29)
+        solo_late = create_trade(test_db, "LT_GA5", "CASH", "",
+                                 trade_date=date(2025, 9, 8))
+        fund_leg = create_trade(test_db, "LT_GA5", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 9, 1),
+                                transfer_group="rebal_ga5")
+        cash_leg = create_trade(test_db, "LT_GA5", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, 5),
+                                transfer_group="rebal_ga5")
+        solo_early = create_trade(test_db, "LT_GA5", "CASH", "",
+                                  trade_date=date(2025, 8, 29))
+
+        full = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page_size=10", headers=admin_headers
+        ).json()
+        assert [i["id"] for i in full["items"]] == [
+            solo_late.id, cash_leg.id, fund_leg.id, solo_early.id
+        ]
+        assert full["total"] == 4
+
+        # page_size=2 把组的两腿切到第 1、2 页：第 1 页末 = cash_leg，第 2 页首 = fund_leg
+        p1 = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page=1&page_size=2", headers=admin_headers
+        ).json()
+        p2 = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page=2&page_size=2", headers=admin_headers
+        ).json()
+        # total = 分页前总数，两页一致、不因拆组变化
+        assert p1["total"] == p2["total"] == 4
+        assert [i["id"] for i in p1["items"]] == [solo_late.id, cash_leg.id]
+        assert [i["id"] for i in p2["items"]] == [fund_leg.id, solo_early.id]
+        # 两腿分居两页、对手腿不在本页结果集内，各自仍指向对方（#719 派生 pair 兜底）
+        cash_on_p1 = next(i for i in p1["items"] if i["id"] == cash_leg.id)
+        fund_on_p2 = next(i for i in p2["items"] if i["id"] == fund_leg.id)
+        assert cash_on_p1["paired_leg"]["id"] == fund_leg.id
+        assert fund_on_p2["paired_leg"]["id"] == cash_leg.id
+
+    def test_anchor_decoupled_from_date_filter(self, client, admin_headers, test_db):
+        """锚点取全组 max(trade_date)，与日期筛选区间解耦（#734 刻意取舍）。
+
+        组腿 8/1 + 9/9、solo 9/5，请求 `trade_date_end=9/6` 把现金腿挡在区间外：
+        锚点仍是全组 9/9 ⇒ 可见的基金腿排在 solo 之前，筛选下不按自身 trade_date 单调。
+        把 `trade_date_*` 下推进锚点子查询（为性能看起来更"顺"）会让锚点变成 8/1、
+        顺序翻成 [solo, fund_leg]——本例是那条改动的唯一哨兵，其余用例在下推后全绿。
+        """
+        create_portfolio(test_db, code="LT_GA6", status="active")
+        fund_leg = create_trade(test_db, "LT_GA6", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 8, 1),
+                                transfer_group="rebal_ga6")
+        create_trade(test_db, "LT_GA6", "CASH", "", trade_type="buy",
+                     trade_date=date(2025, 9, 9), transfer_group="rebal_ga6")
+        solo = create_trade(test_db, "LT_GA6", "CASH", "",
+                            trade_date=date(2025, 9, 5))
+
+        resp = client.get(
+            "/api/trades?portfolio_code=LT_GA6&trade_date_end=2025-09-06",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        assert ids == [fund_leg.id, solo.id]

@@ -222,7 +222,7 @@ export default function TradesContent({
   const total = data?.total ?? 0;
   const platforms = platformsData?.items || [];
 
-  // 结对视图行（#126 决策⑧）：保持后端排序序，同组相邻时配对腿自然成对
+  // 结对视图行（#126 决策⑧）：保持后端组锚点排序序（#734），同组两腿跨日也恒相邻成对
   const tradeRows = groupTradeRows(trades);
 
   // 平台 name 映射（#124 模式）：平台列主次双行 + 现金子行「现金扣款/到账 · 平台名」复用
