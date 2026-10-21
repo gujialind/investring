@@ -318,8 +318,17 @@ class TestListGroupAnchorSort:
 
     「无组可锚」在 DB 层不可达（`trade.transfer_group` NOT NULL，见 `models/trade.py`），
     可达形态是**独占组**（组内只有它自己 → 锚点 = 自身日期），由
-    `test_solo_rows_interleave_with_grouped_legs` 覆盖；实现里的 `coalesce` 只是对
-    前端可选类型/异常存量行的防御性回落，不另造 NULL 组数据。
+    `test_solo_rows_interleave_with_grouped_legs` 覆盖。实现里的 `coalesce` 分支同样
+    不可达（外层每行都把自己的键贡献进 GROUP BY ⇒ join 恒命中），保留它只为不赌各方言
+    的 NULL 排序位置，不是防御真实存量数据。
+
+    判别力（把 ORDER BY 首键改回旧排序键 `trade_date DESC` 后实跑本文件 +
+    `test_trades_paired_leg.py`：5 failed / 29 passed）。红的是本类前三例、
+    `test_anchor_decoupled_from_date_filter` 和别处的
+    `TestListTradeFilters::test_sort_groups_adjacent`；
+    `test_equal_anchors_fall_back_to_transfer_group` 与
+    `test_group_split_across_page_boundary_keeps_paired_leg` 是绿的——它们钉的是二级键
+    与分页契约，对新旧首键都不敏感，改排序键时不会替你发现问题。
     """
 
     def test_solo_rows_interleave_with_grouped_legs(self, client, admin_headers, test_db):
@@ -408,7 +417,8 @@ class TestListGroupAnchorSort:
         """(#734) 组锚点只保证结果集内相邻，不保证同页：page_size 把组推到页边界时
         两腿分居两页，各自仍带 paired_leg（由 #719 派生兜底），total 不随分页变化。
 
-        这是当前分页契约的显式钉住——将来若改分组分页/游标，本用例即变更点。
+        这是当前分页契约的显式钉住——分组分页/游标（follow-up #752）落地后本用例即
+        变更点：两腿恒同页成立时改写断言，不是删掉。
         """
         create_portfolio(test_db, code="LT_GA5", status="active")
         # 结果集顺序（锚点 DESC）：solo_late(9/8) → 组 rebal_ga5(锚点 max(9/1,9/5)=9/5,
@@ -448,3 +458,28 @@ class TestListGroupAnchorSort:
         fund_on_p2 = next(i for i in p2["items"] if i["id"] == fund_leg.id)
         assert cash_on_p1["paired_leg"]["id"] == fund_leg.id
         assert fund_on_p2["paired_leg"]["id"] == cash_leg.id
+
+    def test_anchor_decoupled_from_date_filter(self, client, admin_headers, test_db):
+        """锚点取全组 max(trade_date)，与日期筛选区间解耦（#734 刻意取舍）。
+
+        组腿 8/1 + 9/9、solo 9/5，请求 `trade_date_end=9/6` 把现金腿挡在区间外：
+        锚点仍是全组 9/9 ⇒ 可见的基金腿排在 solo 之前，筛选下不按自身 trade_date 单调。
+        把 `trade_date_*` 下推进锚点子查询（为性能看起来更"顺"）会让锚点变成 8/1、
+        顺序翻成 [solo, fund_leg]——本例是那条改动的唯一哨兵，其余用例在下推后全绿。
+        """
+        create_portfolio(test_db, code="LT_GA6", status="active")
+        fund_leg = create_trade(test_db, "LT_GA6", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 8, 1),
+                                transfer_group="rebal_ga6")
+        create_trade(test_db, "LT_GA6", "CASH", "", trade_type="buy",
+                     trade_date=date(2025, 9, 9), transfer_group="rebal_ga6")
+        solo = create_trade(test_db, "LT_GA6", "CASH", "",
+                            trade_date=date(2025, 9, 5))
+
+        resp = client.get(
+            "/api/trades?portfolio_code=LT_GA6&trade_date_end=2025-09-06",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        assert ids == [fund_leg.id, solo.id]

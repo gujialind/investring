@@ -1,5 +1,5 @@
 /**
- * 前端 E2E：交易列表分页 —— 跨日同组两腿必须同页相邻（#734）
+ * 前端 E2E：交易列表分页 —— 跨日同组两腿在结果集内恒相邻（#734；相邻 ≠ 同页）
  *
  * 缺陷形状（修复前）：后端列表排序键按**行自身** `trade_date` 分档，而卖出组两腿的
  * `trade_date` 天然分叉（基金腿 = 下单日 O、配对 CASH 腿 = 基金确认日 C，见
@@ -11,8 +11,9 @@
  * 修复后：排序锚点 = 同组合内同 `transfer_group` 的 `max(trade_date)`，同组两腿共用一个
  * 日期档、**结果集内恒相邻**。相邻 ≠ 同页——offset/limit 下页边界仍可能落在组内（约
  * 1/page_size），此时两腿分居两页、各自被 #719 的 `paired_leg` 派生兜底（严格不拆需分组
- * 分页/游标，非本排序键能保证）。本 spec 的数据刻意把被测组铺在第 1 页末尾两格（19、20），
- * 天然避开页边界，故断言的是「本数据集内相邻且同页」，不是「排序键保证同页」。
+ * 分页/游标，非本排序键能保证，见 issue #752）。本 spec 的数据刻意把被测组铺在第 1 页
+ * 末尾两格（19、20），**零余量**：任何 ±1 行漂移都会切开该组并使本用例变红，位次本身
+ * 由 API 段断言钉住，不是只写在这里。断言的是「本数据集内相邻且同页」，不是「排序键保证同页」。
  *
  * ── 数据构造与页边界算术（**手工推导**，不得「跑一遍看输出再填断言」）──
  * `TradesContent` 的 `pageSize` 缺省 20（选择器只有 20/50/100，20 已是最小档），故要让
@@ -31,7 +32,7 @@
  *     只认快照份额，confirmed 买入不并入增量），无快照 ⇒ 基线恒 0 ⇒ 任何卖出都被
  *     `INSUFFICIENT_SHARES` 拒。故必须在卖出前生成快照（D 与 D1 各一次，满足连续性校验）。
  *   - 快照一旦存在，`trade_date`、现金转移的 `transfer_date`、以及卖出确认日都**必须严格晚于**
- *     最新快照日（`DATE_BEFORE_SNAPSHOT` / `SNAPSHOT_EXISTS` 一类闸门）。故快照只能停在 D1
+ *     最新快照日（`DATE_BEFORE_SNAPSHOT`；确认侧另有 `SNAPSHOT_DEPENDENCY`）。故快照只能停在 D1
  *     （= 买入确认日，份额已入账），被测卖出顺延到 D2、其现金腿落 D3，④⑤ 的转移日同样
  *     只能取 D3 / D2。快照不产生 trade 行，故 25 行的算术不受影响。
  *
@@ -39,7 +40,7 @@
  *   D3 档：④ 的 18 条腿占 1..18（hex 组号首字符 ∈ [0-9a-f] 恒 < 'r'，即恒排在 `rebal_`
  *          之前，与 uuid 取值无关），③ 的现金腿 = **19**；
  *   D2 档：⑤ 的 2 条腿（hex < rebal）占 20、21，③ 的**基金腿** = **22** ⇒ 落到第 2 页。
- *   ⇒ 第 1 页 = 8 个完整转移对 + 1 条被拆开的现金腿（19）+ 1 条被拆开的转移腿（20）：
+ *   ⇒ 第 1 页 = 9 个完整转移对（④ 的 18 条腿）+ 1 条被拆开的现金腿（19）+ 1 条被拆开的转移腿（20）：
  *      后两者各派生一行对手腿（`trade-counterpart-subrow` 计数 = 2），且**没有**卖出基金主行；
  *      第 2 页则出现那条卖出基金腿（同样派生）。
  * 新排序（组锚点 max(trade_date) DESC, transfer_group ASC, id DESC）下的位次：
@@ -171,16 +172,12 @@ async function apiPost(
   return resp.json();
 }
 
+// 只声明本 spec 真正读的字段；`/api/trades` 行的真实契约见 `frontend/src/types/trade.ts`
 interface TradeItem {
   id: number;
   product_code: string;
-  market: string;
-  trade_type: string;
-  status: string;
   trade_date: string;
-  confirm_date: string | null;
   transfer_group: string;
-  amount: number | null;
 }
 
 /** 不带日期筛选地取某一页（UI 侧清除「近1年」区间后发的就是这个形状的请求） */
@@ -226,7 +223,7 @@ async function seedCrossDaySellGroup(
   headers: Headers,
   code: string,
   days: { d: string; d1: string; d2: string; d3: string },
-): Promise<{ fundLegId: number; cashLegId: number; transferGroup: string }> {
+): Promise<{ fundLegId: number; cashLegId: number }> {
   const { d, d1, d2, d3 } = days;
 
   await apiPost(
@@ -342,25 +339,23 @@ async function seedCrossDaySellGroup(
   );
 
   const all = await fetchAllTrades(page, headers, code);
+  // 造数缺失即 throw（不是 expect(...).toBeTruthy() 后再写 `!` 非空断言）：失败点更早、
+  // 类型诚实，后续引用不再需要 `!`
   const fundLeg = all.find((t) => t.id === sell.id);
-  expect(fundLeg, '卖出基金腿缺失').toBeTruthy();
+  if (!fundLeg) throw new Error(`卖出基金腿缺失（id=${sell.id}）`);
   const cashLeg = all.find(
-    (t) => t.transfer_group === fundLeg!.transfer_group && t.product_code === 'CASH',
+    (t) => t.transfer_group === fundLeg.transfer_group && t.product_code === 'CASH',
   );
-  expect(cashLeg, '卖出配对 CASH 到账腿缺失').toBeTruthy();
+  if (!cashLeg) throw new Error(`卖出配对 CASH 到账腿缺失（组 ${fundLeg.transfer_group}）`);
 
   // 数据前提（不成立则本用例失去意义、必须响亮失败而不是静默变绿）：
   // 同组、两腿跨日、且现金腿日期 = 组内 max ⇒ 组锚点由现金腿决定
-  expect(fundLeg!.trade_date, '卖出基金腿 trade_date 应为下单日 D2').toBe(d2);
-  expect(cashLeg!.trade_date, 'CASH 到账腿 trade_date 应为基金确认日 D3').toBe(d3);
-  expect(fundLeg!.transfer_group).toMatch(/^rebal_/);
+  expect(fundLeg.trade_date, '卖出基金腿 trade_date 应为下单日 D2').toBe(d2);
+  expect(cashLeg.trade_date, 'CASH 到账腿 trade_date 应为基金确认日 D3').toBe(d3);
+  expect(fundLeg.transfer_group).toMatch(/^rebal_/);
   expect(all, '组合内 trade 行数应与页边界算术的前提一致').toHaveLength(TOTAL_ROWS);
 
-  return {
-    fundLegId: fundLeg!.id,
-    cashLegId: cashLeg!.id,
-    transferGroup: fundLeg!.transfer_group,
-  };
+  return { fundLegId: fundLeg.id, cashLegId: cashLeg.id };
 }
 
 /**
@@ -392,7 +387,7 @@ function sellFundRow(page: Page) {
 }
 
 test.describe('交易列表分页与组锚点排序（#734）', () => {
-  test('跨日同组两腿不被页边界拆开：第 1 页完整结对、第 2 页无重复', async ({
+  test('跨日同组两腿落在第 1 页末尾相邻：完整结对、第 2 页无重复（本数据集零余量）', async ({
     page,
   }, testInfo) => {
     // 造数 ~20 次 REST 往返（含两次快照生成）+ 两页 UI 渲染，mobile webkit 约为 chromium
@@ -414,8 +409,11 @@ test.describe('交易列表分页与组锚点排序（#734）', () => {
     expect(page1.items).toHaveLength(PAGE_SIZE);
     const fundIdx = page1.items.findIndex((t) => t.id === sell.fundLegId);
     const cashIdx = page1.items.findIndex((t) => t.id === sell.cashLegId);
-    expect(fundIdx, '卖出基金腿应在第 1 页').toBeGreaterThanOrEqual(0);
-    expect(cashIdx, '卖出 CASH 腿应在第 1 页').toBeGreaterThanOrEqual(0);
+    // 位次钉死（文件头「零余量」算术的可执行形式）：④ 的 18 条腿占 0..17，被测组占第 1 页
+    // 最后两格 —— 同锚点同组按 id DESC ⇒ 后建的 CASH 到账腿 18、卖出基金腿 19（0-based）。
+    // 任一条腿挪位在这里先红，而不是等相邻断言才暴露页边界已经移动。
+    expect(cashIdx, 'CASH 到账腿应恰在第 1 页倒数第二格').toBe(PAGE_SIZE - 2);
+    expect(fundIdx, '卖出基金腿应恰在第 1 页末格').toBe(PAGE_SIZE - 1);
     expect(
       Math.abs(fundIdx - cashIdx),
       '同组两腿须在结果集中相邻（页边界不得落在它们之间）',
