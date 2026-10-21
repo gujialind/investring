@@ -354,7 +354,7 @@ class TestReceivableDerivation:
         assert list_reinvest_receivables(test_db, port, EX) == []
 
     def test_confirmed_event_uses_stored_entitlement_shares(self, test_db):
-        """确认后基数改取落库的 entitlement_shares：改快照行也不会改应收。"""
+        """确认后基数改取落库的 entitlement_shares：删掉权益登记日快照行也不动应收。"""
         port, plat, fund = _env(test_db, "RC3")
         event = _event(test_db, port, fund, plat, entitlement=BASE)
         confirm_share_change_event(test_db, event)
@@ -364,6 +364,17 @@ class TestReceivableDerivation:
         assert Decimal(str(event.entitlement_shares)) == SHARES
         assert Decimal(str(event.shares_change)) == NEW_SHARES
         assert [r.amount for r in list_reinvest_receivables(test_db, port, EX)] == [RECEIVABLE]
+
+        # 锁「来源」而不只是「值」：本夹具下 confirmed 分支（落库 entitlement_shares
+        # 8797）与 pending 分支（权益登记日快照 8797）同值，删掉快照行后两者才可区分——
+        # confirmed 分支若被误改成读快照 join，基数会变 0、应收消失，下面的断言即红。
+        # （快照行禁止 ORM 直改，见 models/portfolio_position.py 的更新守卫。）
+        test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port, product_code=fund, snapshot_date=BASE
+        ).delete()
+        test_db.commit()
+        assert [r.amount for r in list_reinvest_receivables(test_db, port, EX)] == [RECEIVABLE]
+        assert [r.amount for r in list_reinvest_receivables(test_db, port, MID)] == [RECEIVABLE]
 
     def test_zero_base_yields_no_receivable(self, test_db):
         """基数为 0（权益登记日无持仓行）不落 0 值在途行，与既有口径一致。"""
@@ -430,6 +441,34 @@ class TestSnapshotFlow:
         rows = _rows(test_db, port, MID)
         assert ("IN_TRANSIT_DIVIDEND", plat) not in rows       # 窗口关闭
         assert Decimal(str(rows[(fund, plat)].shares)) == SHARES + NEW_SHARES
+
+    def test_same_day_event_not_hit_by_prior_day_auto_confirm(
+        self, client, admin_headers, test_db
+    ):
+        """验收第 8 条：EX 快照生成前跑 `auto_confirm(BASE)` → 同日事件不被命中。
+
+        BASE 的次一交易日正是 EX，故判键若回落 `ex_date`，此刻就会去确认一个基数快照
+        （= EX 快照）尚不存在的事件——它只能以 MISSING_POSITION_SNAPSHOT 失败并留在
+        pending，现网表象与正确实现完全一致，所以必须直接钉住「结果里没有这条事件」。
+        """
+        port, plat, fund = _env(test_db, "SN8")
+        event = _event(test_db, port, fund, plat)          # 同日登记/除息，S = APPLY
+
+        results = _auto_confirm(test_db, port, BASE)
+        assert [r for r in results if r.get("type") == "event"] == []
+        test_db.expire_all()
+        assert test_db.get(ShareChangeEvent, event.id).status == "pending"
+
+        # 基数快照落地后才可确认（验收同条的后半句：生成 EX 快照后手动确认）
+        _generate(client, admin_headers, port, EX)
+        assert [r.amount for r in list_reinvest_receivables(test_db, port, EX)] == [RECEIVABLE]
+        confirm_share_change_event(test_db, test_db.get(ShareChangeEvent, event.id))
+        test_db.commit()
+        test_db.expire_all()
+        confirmed = test_db.get(ShareChangeEvent, event.id)
+        assert confirmed.status == "confirmed"
+        assert Decimal(str(confirmed.entitlement_shares)) == SHARES
+        assert Decimal(str(confirmed.shares_change)) == NEW_SHARES
 
     def test_pending_event_blocks_snapshot_on_share_effective_date(
         self, client, admin_headers, test_db
@@ -539,6 +578,51 @@ class TestSnapshotFlow:
         assert Decimal(str(rows[(fund, plat)].shares)) == SHARES + NEW_SHARES
         assert abs(Decimal(str(_value(test_db, port, MID).total_value)) - BASE_MV) <= CENT
 
+    def test_same_day_plus_ex_date_sell_full_chain(
+        self, client, admin_headers, test_db
+    ):
+        """issue #743 合成回归：同日登记 + 当日卖出 87 份 → 33.97 元 / 33.64 份。
+
+        基数必须取 EX 当日的 8710 份（同日形态下走 `live_positions`／当日快照），而非
+        BASE 的 8797 份——后者算出 34.31 / 33.97，正是 RC1 钉住的反面取值。preview 与
+        确认落库同值，份额在 S 日到账、应收窗口关闭。
+        """
+        port, plat, fund = _env(test_db, "SN9", sell_on_ex=87)
+        event = _event(test_db, port, fund, plat, entitlement=EX, ex_date=EX,
+                       div_cash=Decimal("0.0039"))
+
+        _generate(client, admin_headers, port, EX)
+        rows = _rows(test_db, port, EX)
+        assert Decimal(str(rows[(fund, plat)].shares)) == Decimal("8710")
+        assert Decimal(str(rows[("IN_TRANSIT_DIVIDEND", plat)].cash_amount)) == Decimal("33.97")
+
+        preview = client.get(
+            f"/api/share-change-events/{event.id}/preview", headers=admin_headers
+        )
+        assert preview.status_code == 200, preview.text
+        body = preview.json()["preview"]
+        assert Decimal(str(body["entitlement_shares"])) == Decimal("8710")
+        assert Decimal(str(body["dividend_amount"])) == Decimal("33.97")
+        assert Decimal(str(body["shares_change"])) == Decimal("33.64")
+
+        confirm_share_change_event(test_db, test_db.get(ShareChangeEvent, event.id))
+        test_db.commit()
+        test_db.expire_all()
+        confirmed = test_db.get(ShareChangeEvent, event.id)
+        assert Decimal(str(confirmed.entitlement_shares)) == Decimal("8710")
+        assert Decimal(str(confirmed.shares_change)) == Decimal("33.64")
+        assert Decimal(str(confirmed.shares_after)) == Decimal("8743.64")
+
+        for day in (MID, APPLY):
+            _generate(client, admin_headers, port, day)
+        rows = _rows(test_db, port, APPLY)
+        assert ("IN_TRANSIT_DIVIDEND", plat) not in rows
+        assert Decimal(str(rows[(fund, plat)].shares)) == Decimal("8743.64")
+        assert [r.amount for r in list_reinvest_receivables(test_db, port, MID)] == [
+            Decimal("33.97")
+        ]
+        assert list_reinvest_receivables(test_db, port, APPLY) == []
+
 
 # ---------------------------------------------------------------------------
 # 读侧收益连续
@@ -635,6 +719,41 @@ class TestPendingGuards:
             json={"notes": "只改备注不影响口径"},
         )
         assert resp.status_code == 200, resp.json()
+
+    def test_edit_dialog_shaped_notes_update_still_allowed(
+        self, client, admin_headers, test_db
+    ):
+        """编辑弹窗形态：恒带日期/金额字段但值未变 + 改备注 → 200。
+
+        弹窗刻意恒发 `ex_date` / `entitlement_date` / `share_confirm_date`（后者要支持
+        清空），故豁免必须按**实际变更的字段**判、不能按请求键集合判，否则「仅改 notes
+        豁免」在任何 UI 上都不可达（只有 CLI 单发 `--notes` 走得到）。同一 payload 只把
+        `div_cash` 改成新值即须重新冻结——证明放行的确是「值未变」而非「守卫失效」。
+        """
+        port, plat, fund, event_id = self._generate_ex(client, admin_headers, test_db, "GD5")
+        row = test_db.get(ShareChangeEvent, event_id)
+        payload = {
+            "ex_date": row.ex_date.isoformat(),
+            "entitlement_date": row.entitlement_date.isoformat(),
+            "share_confirm_date": row.share_confirm_date.isoformat(),
+            "div_cash": float(row.div_cash),
+            "notes": "补一句备注",
+        }
+
+        resp = client.put(
+            f"/api/share-change-events/{event_id}", headers=admin_headers, json=payload
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["notes"] == "补一句备注"
+        test_db.expire_all()
+        assert Decimal(str(test_db.get(ShareChangeEvent, event_id).div_cash)) == DIV_CASH
+
+        detail = _error(client.put(
+            f"/api/share-change-events/{event_id}", headers=admin_headers,
+            json={**payload, "div_cash": 0.005},
+        ))
+        assert detail["error"] == "SNAPSHOT_DEPENDENCY"
+        assert detail["details"]["from_date"] == EX.isoformat()
 
     def test_update_allowed_before_ex_date_snapshot(self, client, admin_headers, test_db):
         """最新快照日仍早于除息日 → 应收未进任何快照，改期/改额照常放行。"""

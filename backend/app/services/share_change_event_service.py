@@ -648,7 +648,8 @@ def _require_receivable_not_snapshotted(db: Session, event: ShareChangeEvent) ->
 
     只约束 pending——confirmed 事件已由 unconfirm 的快照保护把关；未设
     `share_confirm_date` 的事件不产生应收，pending 闸门仍按 `ex_date` 阻断快照
-    生成，故不存在「已进快照」的形态。仅改 notes 的更新由调用方豁免（不影响口径）。
+    生成，故不存在「已进快照」的形态。调用方按**实际变更的字段**豁免：仅改 notes、
+    或整对象重提交而值未变（编辑弹窗常态）都不影响口径，不触发本守卫。
     """
     if event.status != "pending" or event.share_confirm_date is None:
         return
@@ -853,16 +854,23 @@ def update_share_change_event(
         },
     )
 
-    # #743：pending 事件的应收可能已被快照消费，改口径前先冻结（仅改 notes 豁免——
-    # 备注不参与任何计算，冻结它只会挡住无害的补记）
-    if set(updates) - {"notes"}:
+    # #743：pending 事件的应收可能已被快照消费，改口径前先冻结。判据是**实际变更的
+    # 字段**（`_diff_fields`，与下方「无实际变更不留痕」同一口径）而非请求的键集合：
+    # 编辑弹窗恒发 ex_date / entitlement_date / share_confirm_date（后者要支持清空），
+    # 按键集合判会让「仅改 notes 豁免」在 UI 上永远不可达，只有 CLI 单发 --notes 走得到。
+    old_values, new_values = _diff_fields(event, updates)
+    if set(new_values) - {"notes"}:
         _require_receivable_not_snapshotted(db, event)
 
     effective_ex_date = updates.get("ex_date", event.ex_date)
     effective_share_confirm_date = updates.get(
         "share_confirm_date", event.share_confirm_date
     )
-    if updates.keys() & {"ex_date", "entitlement_date", "share_confirm_date"}:
+    # 日期**实际变更**时才重跑创建期的双日期校验（与上方守卫同一判据）。按键集合判会
+    # 让编辑弹窗恒发的原值撞上 DATE_BEFORE_SNAPSHOT——#743 的应收窗口使「pending 且
+    # `ex_date <=` 最新快照日」成为合法常驻状态，该状态下的漂移由上方守卫负责，不该由
+    # 「除息日必须晚于最新快照日」这条创建期规则重复拦截。
+    if set(new_values) & {"ex_date", "entitlement_date", "share_confirm_date"}:
         effective_entitlement_date = updates.get(
             "entitlement_date", event.entitlement_date
         )
@@ -890,8 +898,6 @@ def update_share_change_event(
     _validate_reinvest_input(
         event.event_type, event.market, updates.get("reinvest_nav", event.reinvest_nav)
     )
-
-    old_values, new_values = _diff_fields(event, updates)
 
     for field, value in updates.items():
         setattr(event, field, value)
