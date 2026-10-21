@@ -60,7 +60,7 @@
  *   **单日 `POST /api/snapshots/generate`**（D 与 D1 各一次，卖出份额校验的必需前提，见上），
  *   既不触发 #354 红线里那三个批量端点，也不影响任何其它 spec 的数据。
  *   重跑幂等前提与 #493 那个 spec 相同（每轮重启后端重灌种子；不加 per-run nonce 是
- *   #551 §4 的定案，理由见 `trade-in-transit.spec.ts` 的 `isolatedPortfolioCode` doc 块）。
+ *   #551 §4 的定案，理由见 `helpers.ts::isolatedPortfolioCode` 的 doc 块）。
  * - 净值走后端种子夹具：`seed_e2e_active` 以 ORM 写入 `000300.OF`/`CN_OTC` 的 D..D+4
  *   （1.5000/1.5500/1.6000/1.6000/1.6000），是**全局** PriceRecord，隔离组合可直接用：
  *   D/D1 快照取价、买入确认日 D1 取 1.5500 ⇒ 6451.61 份、卖出确认日 D3 取 1.6000 ⇒ 3200 元，
@@ -71,15 +71,19 @@
  * - 下单日 D2/D3 均晚于真实 today，列表默认「近1年」区间（trade_date_end = today）会把
  *   被测两腿全部滤掉，故 UI 侧先清除日期区间（移动端先展开折叠筛选面板）。
  */
-import { test, expect, type Page, type TestInfo } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
-  authHeaders,
+  clearTradeDateRange,
   collectPageErrors,
   gotoPortfolioSubpage,
-  openFilterPanelIfMobile,
+  isolatedPortfolioCode,
+  nearestTradingDay,
+  nextTradingDays,
+  openAppAndAuth,
   toISODate,
   type PortfolioCode,
 } from './helpers';
+import type { Trade } from '../src/types/trade';
 
 type Headers = { Authorization: string };
 
@@ -102,60 +106,6 @@ const PAGE_SIZE = 20;
 /** 组合内 trade 行总数（推导见文件头 ①..⑤）：1 + 2 + 2 + 18 + 2 */
 const TOTAL_ROWS = 25;
 
-/** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
-async function nearestTradingDay(page: Page, headers: Headers): Promise<string> {
-  const today = toISODate(new Date());
-  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    const open = rows
-      .filter((r) => r.is_open && r.calendar_date <= today)
-      .map((r) => r.calendar_date)
-      .sort();
-    if (open.length > 0) return open[open.length - 1];
-  }
-  throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
-}
-
-/** from 之后的第 n 个交易日（后端 /trading-calendar/next 为唯一事实来源） */
-async function nextTradingDays(
-  page: Page,
-  headers: Headers,
-  from: string,
-  n: number,
-): Promise<string[]> {
-  const out: string[] = [];
-  let cursor = from;
-  for (let i = 0; i < n; i++) {
-    const resp = await page.request.get(
-      `/api/trading-calendar/next?from_date=${cursor}&days=1`,
-      { headers },
-    );
-    expect(resp.ok(), `取 ${cursor} 的下一交易日失败 ${resp.status()}`).toBeTruthy();
-    cursor = ((await resp.json()) as { trading_day: string }).trading_day;
-    out.push(cursor);
-  }
-  return out;
-}
-
-/**
- * 本 worker 独占的隔离组合 code（≤20 字符，`portfolio.code` 是 String(20)）。
- * 长度：`E2E734`(6) + 日期(8) + project(1) + worker(1) + retry(1) = 17。
- * project / worker / retry 三段缺一不可（两个 project 内 workerIndex 各自从 0 计数、
- * CI 主 e2e job 带 retries），理由与 #493 的 `isolatedPortfolioCode` 完全相同。
- * 本文件只有一条用例，故不再追加用例后缀。
- */
-function isolatedPortfolioCode(testInfo: {
-  project: { name: string };
-  workerIndex: number;
-  retry: number;
-}): string {
-  const day = toISODate(new Date()).replace(/-/g, '');
-  const proj = testInfo.project.name === 'mobile' ? 'M' : 'D';
-  return `E2E734${day}${proj}${testInfo.workerIndex}${testInfo.retry}`;
-}
-
 /** 统一 POST：非 2xx 即响亮失败并带上响应体（造数失败必须指名道姓，不留给下游断言猜） */
 async function apiPost(
   page: Page,
@@ -172,21 +122,13 @@ async function apiPost(
   return resp.json();
 }
 
-// 只声明本 spec 真正读的字段；`/api/trades` 行的真实契约见 `frontend/src/types/trade.ts`
-interface TradeItem {
-  id: number;
-  product_code: string;
-  trade_date: string;
-  transfer_group: string;
-}
-
 /** 不带日期筛选地取某一页（UI 侧清除「近1年」区间后发的就是这个形状的请求） */
 async function fetchTradesPage(
   page: Page,
   headers: Headers,
   code: string,
   pageNumber: number,
-): Promise<{ items: TradeItem[]; total: number }> {
+): Promise<{ items: Trade[]; total: number }> {
   const resp = await page.request.get(
     `/api/trades?portfolio_code=${code}&page=${pageNumber}&page_size=${PAGE_SIZE}`,
     { headers },
@@ -195,7 +137,7 @@ async function fetchTradesPage(
     resp.ok(),
     `查询交易列表第 ${pageNumber} 页失败 ${resp.status()} ${await resp.text()}`,
   ).toBeTruthy();
-  return (await resp.json()) as { items: TradeItem[]; total: number };
+  return (await resp.json()) as { items: Trade[]; total: number };
 }
 
 /** 组合全部 trade 行（造数后核对数据前提用，一页取全） */
@@ -203,13 +145,13 @@ async function fetchAllTrades(
   page: Page,
   headers: Headers,
   code: string,
-): Promise<TradeItem[]> {
+): Promise<Trade[]> {
   const resp = await page.request.get(
     `/api/trades?portfolio_code=${code}&page_size=100`,
     { headers },
   );
   expect(resp.ok(), `查询交易列表失败 ${resp.status()}`).toBeTruthy();
-  return ((await resp.json()) as { items: TradeItem[] }).items;
+  return ((await resp.json()) as { items: Trade[] }).items;
 }
 
 /**
@@ -358,26 +300,6 @@ async function seedCrossDaySellGroup(
   return { fundLegId: fundLeg.id, cashLegId: cashLeg.id };
 }
 
-/**
- * 取认证头前**必须先落到应用同源页面**：`authHeaders` 经 `page.evaluate` 读
- * `window.localStorage`，而新开的 page 停在 `about:blank`（不透明源）会抛 SecurityError。
- * 与 `trade-in-transit.spec.ts` 的 `openAppAndAuth` 同口径。
- */
-async function openAppAndAuth(page: Page): Promise<Headers> {
-  await page.goto('/');
-  await expect(page.locator('body')).toBeVisible();
-  return authHeaders(page);
-}
-
-/**
- * 清除交易列表默认「近1年」区间（trade_date_end = today）：被测两腿下单日均晚于 today，
- * 不清除则整组被滤出列表。筛选状态只存组件 state，每次重新挂载即复位（移动端先展开面板）。
- */
-async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promise<void> {
-  await openFilterPanelIfMobile(page, testInfo);
-  await page.getByRole('button', { name: '清除日期区间' }).click();
-}
-
 /** 卖出基金主行（按产品名 + 方向收窄：现金子行首列是「现金…」标签，不含产品名） */
 function sellFundRow(page: Page) {
   return page
@@ -397,7 +319,7 @@ test.describe('交易列表分页与组锚点排序（#734）', () => {
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1, d2, d3] = await nextTradingDays(page, headers, d, 3);
-    const code = isolatedPortfolioCode(testInfo);
+    const code = isolatedPortfolioCode('E2E734', testInfo);
     const sell = await seedCrossDaySellGroup(page, headers, code, { d, d1, d2, d3 });
 
     // ---- 1. API 层：total 未被 outerjoin 放大，两腿同在首页且相邻 ----

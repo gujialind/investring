@@ -16,7 +16,7 @@
  *
  * 数据说明（与 helpers.ts 的种子契约互补）：
  * - 本 spec **自建隔离组合**（`E2E493<yyyyMMdd><D|M><workerIndex><retry>`，见
- *   `isolatedPortfolioCode`，经 POST /api/portfolios）而不用
+ *   `helpers.isolatedPortfolioCode`，经 POST /api/portfolios）而不用
  *   种子契约组合：完整买卖链需要「零快照 → 逐日生成 → 连续快照」且不得与其它 spec 共享
  *   在途/现金状态；`E2E_PORT` 是零交易契约组合（被其它 spec 依赖）、`E2E_ACTIVE` 禁止
  *   recalculate/catch-up/generate-next（#354 红线）。每 worker 独立组合亦使本 spec 天然
@@ -24,7 +24,7 @@
  *   per-run nonce，同一后端上不重启直接二次 `playwright test` 会复用同名槽位、`POST
  *   /api/portfolios` 确定性撞 `ALREADY_EXISTS`（CI 每轮新建栈，故不受影响）。
  *   「跑 E2E 前重启后端」由此是**契约前提**而非可选项；「不加 nonce」是 #551 §4 评估后的
- *   定案而非欠账，理由见 `isolatedPortfolioCode` 的 doc 块。
+ *   定案而非欠账，理由见 `helpers.ts::isolatedPortfolioCode` 的 doc 块。
  * - 现金注入经 API「申购 + 确认」（首窗净值 1.0000 无需行情）；确认日为申请日下一交易日，
  *   故申请日取 D 的前一工作日，使 CASH 腿 confirm_date 恰落 D 当天。
  * - 日期锚定经 `/api/trading-calendar` 取「today 起最近一个交易日」D 及其后 3 个交易日
@@ -37,12 +37,16 @@
  *   `backend/tests/integration/test_seed_contract.py::TestE2EActiveContract` 锁定，
  *   改净值口径须两侧同步。
  */
-import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
-  authHeaders,
+  clearTradeDateRange,
   collectPageErrors,
   dialogByTitle,
   gotoPortfolioSubpage,
+  isolatedPortfolioCode,
+  nearestTradingDay,
+  nextTradingDays,
+  openAppAndAuth,
   openFilterPanelIfMobile,
   openPopover,
   openSubmitTradeDialog,
@@ -79,80 +83,6 @@ const TRANSFER_AMOUNT = 5000;
  */
 const NAV: Record<'D' | 'D1' | 'D2', string> = { D: '1.5000', D1: '1.5500', D2: '1.6000' };
 
-/** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
-async function nearestTradingDay(page: Page, headers: { Authorization: string }): Promise<string> {
-  const today = toISODate(new Date());
-  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    const open = rows
-      .filter((r) => r.is_open && r.calendar_date <= today)
-      .map((r) => r.calendar_date)
-      .sort();
-    if (open.length > 0) return open[open.length - 1];
-  }
-  throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
-}
-
-/** D 之后的第 n 个交易日（后端 /trading-calendar/next 为唯一事实来源） */
-async function nextTradingDays(
-  page: Page,
-  headers: { Authorization: string },
-  from: string,
-  n: number,
-): Promise<string[]> {
-  const out: string[] = [];
-  let cursor = from;
-  for (let i = 0; i < n; i++) {
-    const resp = await page.request.get(
-      `/api/trading-calendar/next?from_date=${cursor}&days=1`,
-      { headers },
-    );
-    expect(resp.ok(), `取 ${cursor} 的下一交易日失败 ${resp.status()}`).toBeTruthy();
-    cursor = ((await resp.json()) as { trading_day: string }).trading_day;
-    out.push(cursor);
-  }
-  return out;
-}
-
-/**
- * 本 worker 独占的隔离组合 code（≤20 字符，`portfolio.code` 是 String(20)）。
- *
- * 必须同时区分 **project / worker / retry**，否则必然撞车：
- * - `chromium` 与 `mobile` 两个 project 都会跑本文件，而 `workerIndex`（与
- *   `parallelIndex`）都是**每个 project 内**从 0 重新计数 → 只用 worker 槽位会让
- *   mobile 复用 chromium 已建的同名组合，`POST /api/portfolios` 撞主键直接失败。
- * - CI 主 e2e job 带 `retries: 2`：失败重试若沿用同一 code，也会撞上上次残留的组合。
- *
- * 长度：`E2E493`(6) + 日期(8) + project(1) + worker(1) + retry(1) = 17，加用例后缀 1 位 = 18。
- * ⚠️ 这个 18 只在 workerIndex/retry **均为个位数**时成立：两者按十进制原样插值，而本地
- * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19（16 核本地即如此）、两位齐全
- * 就到 20 上限。**但腾位不是 §4 的决定性理由**——见下。
- *
- * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。三条理由按严重度排：
- * ① 组合**没有 DELETE 端点**（`regression.spec.ts` 的「组合详情页不应出现删除组合入口」
- *   正是在守这条前后端契约，防 P0-5：前端曾提供后端不存在的 `DELETE /portfolios/{code}`）。
- *   加了 nonce，同一后端上连跑 N 次就累积 8N 条无法删除的 draft 组合（4 用例 × 2 project，
- *   `--retries=0` 口径；带 retry 更多），只在下次 `run_e2e_backend.py` 重启重灌时才清掉。
- * ② 现在这个 `ALREADY_EXISTS` 400 是**响亮失败**：数据前提一破，第一次 `POST` 就红并指名
- *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
- * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
- *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
- *   `frontend/AGENTS.md` §4「E2E（Playwright）」的「净值夹具」条）。
- *
- * 若日后推翻本定案，腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project
- * 标记或 retry 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
- */
-function isolatedPortfolioCode(testInfo: {
-  project: { name: string };
-  workerIndex: number;
-  retry: number;
-}): string {
-  const day = toISODate(new Date()).replace(/-/g, '');
-  const proj = testInfo.project.name === 'mobile' ? 'M' : 'D';
-  return `E2E493${day}${proj}${testInfo.workerIndex}${testInfo.retry}`;
-}
 
 /**
  * 建隔离组合 + 注入现金：POST /api/portfolios（draft）→ 申购（申请日 = D 前一工作日，
@@ -358,19 +288,6 @@ function fundRow(page: Page, tradeType: '买入' | '卖出'): Locator {
 }
 
 /**
- * 清除交易列表的默认「近1年」日期区间（trade_date_end = today）。
- *
- * 本 spec 的卖出链路在**未来**交易日下单（D 是 ≤ today 的最近交易日 ⇒ D+1 起
- * 均晚于 today），默认区间会把这些行滤出列表；筛选状态只存于组件 state，
- * 每次 `gotoPortfolioSubpage` 重新挂载即复位，故每个 trades 页生命周期都要
- * 重新清一次（移动端先展开折叠筛选面板）。
- */
-async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promise<void> {
-  await openFilterPanelIfMobile(page, testInfo);
-  await page.getByRole('button', { name: '清除日期区间' }).click();
-}
-
-/**
  * 在「提交交易」弹窗内**显式**选择交易日期。
  *
  * 必须显式选：表单的日期默认值是 `toDateOnly(new Date())`（今天，见
@@ -429,23 +346,6 @@ async function pickArrivalPlatform(
   await settlePopovers(page);
 }
 
-/**
- * 取认证头前**必须先落到应用同源页面**。
- *
- * `authHeaders` 经 `page.evaluate` 读 `window.localStorage`，而 Playwright 新开的
- * page 停在 `about:blank`（不透明源），直接读会抛
- * `SecurityError: Failed to read the 'localStorage' property from 'Window':
- * Access is denied for this document`。本 spec 的三个用例都要先经 REST 造隔离组合、
- * 建好之前没有组合页可导航，故统一先 `goto('/')`（mobile 端由 `src/proxy.ts` 按 UA
- * 重定向到 `/m/dashboard`，两端同为应用源）。仓库其余 spec 同样遵循
- * 「先导航 → 取头」的顺序（如 `gotoPortfolioDetail` + 可见性等待之后再 `authHeaders`）。
- */
-async function openAppAndAuth(page: Page): Promise<{ Authorization: string }> {
-  await page.goto('/');
-  await expect(page.locator('body')).toBeVisible();
-  return authHeaders(page);
-}
-
 test.describe('调仓在途资金生命周期（#493）', () => {
   // 两条链路分别自建隔离组合（workerIndex 区分），故两条可并行、也可单独重跑
   test('买入：创建即扣款 → T 快照在途 → 确认后份额入账', async ({ page }, testInfo) => {
@@ -453,7 +353,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1] = await nextTradingDays(page, headers, d, 1);
-    const code = isolatedPortfolioCode(testInfo) + 'B';
+    const code = isolatedPortfolioCode('E2E493', testInfo) + 'B';
     await setupIsolatedPortfolio(page, headers, code, [d, d1, '']);
 
     // ---- 1. 创建买入（真实表单）：买入侧有扣款平台、无到账信息，并明示「提交即记扣款」----
@@ -539,7 +439,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1, d2, d3, d4] = await nextTradingDays(page, headers, d, 4);
-    const code = isolatedPortfolioCode(testInfo) + 'S';
+    const code = isolatedPortfolioCode('E2E493', testInfo) + 'S';
     await setupIsolatedPortfolio(page, headers, code, [d, d1, d2]);
 
     // ---- 1. 先在 UI 建一笔买入并在 D+1 确认，取得可卖份额 ----
@@ -788,7 +688,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1] = await nextTradingDays(page, headers, d, 1);
-    const code = isolatedPortfolioCode(testInfo) + 'C';
+    const code = isolatedPortfolioCode('E2E493', testInfo) + 'C';
     await setupIsolatedPortfolio(page, headers, code, [d, d1, '']);
 
     // 经 API 造一笔买入（创建即生成 confirmed 扣款腿），再过滤出「现金」产品行
@@ -843,7 +743,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const [d1, d2] = await nextTradingDays(page, headers, d, 2);
-    const code = isolatedPortfolioCode(testInfo) + 'X';
+    const code = isolatedPortfolioCode('E2E493', testInfo) + 'X';
     await setupIsolatedPortfolio(page, headers, code, [d, d1, d2]);
 
     // ---- 1. 赎回：D 快照（定价基准）→ 申请日 D1 → D1 快照 → 确认 ⇒ sub_ 组 CASH sell ----
