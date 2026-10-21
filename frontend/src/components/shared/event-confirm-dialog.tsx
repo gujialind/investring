@@ -31,6 +31,8 @@ export const EVENT_TYPE_LABELS: Record<EventType, string> = {
  * shares_change/cash_change **不是**录入时落库的，而在 confirm 时才计算，
  * 故 pending 行这两列为 NULL——直接渲染会兜底成误导性的 `0.00`。
  * 记录字段取自列表行（含读侧派生的 product_name），计算值取自预览响应。
+ * #743 的「再投资份额确认日」同属记录字段：后端 preview 响应（#424 契约）不含它，
+ * 故该行取事件记录的 `share_confirm_date`，为空时不显示。
  */
 interface EventConfirmDialogProps {
   open: boolean;
@@ -121,6 +123,16 @@ export function EventConfirmDialog({
           <InfoRow label="现金变化" value={formatCurrency(preview.cash_change)} />
           <InfoRow label="权益登记日" value={formatDate(event.entitlement_date)} />
           <InfoRow label="除息日" value={formatDate(event.ex_date)} />
+          {/* #743：份额确认日（份额到账日）是事件的记录字段、preview 响应不含，
+              故与上一致取事件记录而非预览；未填（份额按除息日生效）不显示本行 */}
+          {event.event_type === "reinvest_dividend" && event.share_confirm_date && (
+            <InfoRow
+              label="再投资份额确认日"
+              value={
+                <span className="whitespace-nowrap">{formatDate(event.share_confirm_date)}</span>
+              }
+            />
+          )}
           {event.event_type === "cash_dividend" && (
             <InfoRow
               label="现金到账日"

@@ -546,8 +546,9 @@ def test_queries_are_fixed_read_only_and_independent_of_list_pagination(
     assert set(test_db.dirty) == dirty_before
     assert set(test_db.new) == new_before
     assert trade.notes == "caller-owned unsaved change"
-    # 固定六次批量 SELECT（#694 起含 investor_holding 与 subscription 两条）
-    assert len(statements) == 6
+    # 固定七次批量 SELECT（#694 起含 investor_holding 与 subscription 两条；
+    # #743 起含再投资应收一条——事件左连权益登记日持仓，恒一次、不随分页放大）
+    assert len(statements) == 7
     assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
     assert all("LIMIT" not in statement.upper() and "OFFSET" not in statement.upper()
                for statement in statements[1:])

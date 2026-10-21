@@ -1,8 +1,9 @@
 /**
- * #522：双端现金分红到账日录入、编辑与回显；#744：红利再投资净值留空与确认预览明细。
+ * #522：双端现金分红到账日录入、编辑与回显；#744：红利再投资净值留空与确认预览明细；
+ * #743：红利再投资份额确认日（仅再投资可见、晚于除息日、同日登记）与编辑清空。
  * 自建组合按 project/retry/场景区分；每轮使用新种子库，不推进共享 E2E_ACTIVE。
  * 预览夹具复用种子 000300.OF 的 D/D+1 净值，仅在自有组合生成两日快照；
- * #744 场景的除息日 = D+2，取种子净值 1.6000（与 seed_e2e_active 的窗口一一对应）。
+ * #744/#743 场景的除息日 = D+2，取种子净值 1.6000（与 seed_e2e_active 的窗口一一对应）。
  */
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { addDays, format, nextSaturday, parseISO } from 'date-fns';
@@ -47,13 +48,15 @@ async function setupPortfolio(page: Page, testInfo: TestInfo, scenario: string) 
   expect(day, '种子日历须覆盖今天之前的最近交易日').toBeTruthy();
   const index = days.indexOf(day!);
   expect(index).toBeGreaterThan(0);
-  expect(days.length).toBeGreaterThan(index + 2);
+  expect(days.length).toBeGreaterThan(index + 3);
   const [entitlement, ex] = [days[index + 1], days[index + 2]];
+  // #743：份额确认日须为晚于除息日的交易日
+  const confirmDay = days[index + 3];
   const weekend = format(nextSaturday(parseISO(ex)), 'yyyy-MM-dd');
   const code = `E522_${testInfo.project.name}_${testInfo.retry}_${scenario}`;
   expect(code.length).toBeLessThanOrEqual(20);
   await post(page, headers, '/api/portfolios', { code, name: `分红到账日 ${code}` });
-  return { code, headers, day: day!, apply: days[index - 1], entitlement, ex, weekend };
+  return { code, headers, day: day!, apply: days[index - 1], entitlement, ex, confirmDay, weekend };
 }
 
 type Scenario = Awaited<ReturnType<typeof setupPortfolio>>;
@@ -136,10 +139,36 @@ async function submitEvent(page: Page, dlg: Locator, id?: number) {
   };
 }
 
+/** 选择事件类型（Select 弹层，同一 Dialog 内多次切换用） */
+async function pickEventType(page: Page, dlg: Locator, label: string) {
+  await openPopover(page, dlg.getByLabel('事件类型', { exact: true }), page.getByRole('listbox'));
+  await page.getByRole('option', { name: label, exact: true }).click();
+  await settlePopovers(page);
+}
+
+/** 断言请求确实没发出去（客户端拦截）：监听 PUT/POST 命中事件端点即记为已发 */
+function trackEventWrites(page: Page, id?: number) {
+  const sent: string[] = [];
+  const listener = (r: { method(): string; url(): string }) => {
+    const path = new URL(r.url()).pathname;
+    if ((r.method() === 'POST' && path === '/api/share-change-events')
+      || (r.method() === 'PUT' && path === `/api/share-change-events/${id}`)) sent.push(path);
+  };
+  page.on('request', listener);
+  return { sent, stop: () => page.off('request', listener) };
+}
+
 async function expectStoredDate(page: Page, s: Scenario, id: number, date: string | null) {
   const response = await page.request.get(`/api/share-change-events/${id}`, { headers: s.headers });
   await expect(response).toBeOK();
   expect((await response.json()).cash_pay_date).toBe(date);
+}
+
+/** 直取单对象端点回读落库值（#743 断言 share_confirm_date，列表行的派生列不可信） */
+async function getStored(page: Page, headers: Headers, id: number) {
+  const response = await page.request.get(`/api/share-change-events/${id}`, { headers });
+  await expect(response).toBeOK();
+  return await response.json() as ShareChangeEvent;
 }
 
 async function expectPreview(page: Page, row: Locator, id: number, date: string, isDefault = false) {
@@ -346,6 +375,144 @@ test.describe('红利再投资净值留空与确认预览（#744，双端）', (
     } finally {
       const response = await page.request.delete(`/api/share-change-events/${event.id}`, { headers: s.headers });
       await expect(response).toBeOK();
+    }
+  });
+});
+
+test.describe('红利再投资份额确认日（#743，双端）', () => {
+  test('字段仅再投资显示、不晚于除息日时客户端拦截、切类型不带出该字段', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const s = await setupPortfolio(page, testInfo, 'D');
+    await seedHolding(page, s);
+    const create = await openCreate(page, s);
+    const createdIds: number[] = [];
+    const confirmTrigger = () => create.getByLabel('再投资份额确认日（可选）', { exact: true });
+    try {
+      // 默认类型（现金分红）与其他类型均不显示该字段
+      await expect(create.getByTestId('share-confirm-date-field')).toHaveCount(0);
+      for (const label of ['份额拆分', '份额合并', '红股送股', '强制调整']) {
+        await pickEventType(page, create, label);
+        await expect(create.getByTestId('share-confirm-date-field')).toHaveCount(0);
+      }
+      await pickEventType(page, create, '分红再投资');
+      await expect(create.getByTestId('share-confirm-date-field')).toHaveCount(1);
+      await expect(confirmTrigger()).toHaveText('默认除息日到账');
+
+      // 确认日 = 除息日：客户端拦截（后端同口径 422），不发 POST
+      await pickDay(page, confirmTrigger(), s.ex);
+      const writes = trackEventWrites(page);
+      await create.getByRole('button', { name: '创建', exact: true }).click();
+      await expect(
+        page.getByTestId('toast-card').filter({ hasText: '再投资份额确认日必须晚于除息日' })
+      ).toBeVisible();
+      writes.stop();
+      expect(writes.sent).toEqual([]);
+
+      // 改成晚于除息日的交易日：可提交并落库
+      await pickDay(page, confirmTrigger(), s.confirmDay);
+      const withConfirm = await submitEvent(page, create);
+      createdIds.push(withConfirm.event.id);
+      expect(withConfirm.payload.share_confirm_date).toBe(s.confirmDay);
+      expect((await getStored(page, s.headers, withConfirm.event.id)).share_confirm_date).toBe(s.confirmDay);
+
+      // 切走类型即清空：非再投资类型不把确认日带进 payload（后端 422 INVALID_PARAM）
+      const nextCreate = await openCreate(page, s);
+      await pickEventType(page, nextCreate, '分红再投资');
+      await pickDay(page, nextCreate.getByLabel('再投资份额确认日（可选）', { exact: true }), s.confirmDay);
+      await pickEventType(page, nextCreate, '现金分红');
+      await expect(nextCreate.getByTestId('share-confirm-date-field')).toHaveCount(0);
+      const cashEvent = await submitEvent(page, nextCreate);
+      createdIds.push(cashEvent.event.id);
+      expect(cashEvent.payload).not.toHaveProperty('share_confirm_date');
+      expect((await getStored(page, s.headers, cashEvent.event.id)).share_confirm_date).toBeNull();
+      expect(errors).toEqual([]);
+    } finally {
+      for (const id of createdIds) {
+        const response = await page.request.delete(`/api/share-change-events/${id}`, { headers: s.headers });
+        await expect(response).toBeOK();
+      }
+    }
+  });
+
+  test('同日登记可创建、确认弹窗回显确认日、编辑清空发 null', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const s = await setupPortfolio(page, testInfo, 'E');
+    await seedHolding(page, s);
+    const createdIds: number[] = [];
+    try {
+      // 同日登记（issue 核心诉求）：权益登记日 = 除息日，须已设确认日
+      const sameDayDlg = await openCreate(page, s);
+      await pickEventType(page, sameDayDlg, '分红再投资');
+      await pickDay(page, sameDayDlg.getByLabel('再投资份额确认日（可选）', { exact: true }), s.confirmDay);
+      await pickDay(page, sameDayDlg.getByLabel('权益登记日', { exact: true }), s.ex);
+      const sameDay = await submitEvent(page, sameDayDlg);
+      createdIds.push(sameDay.event.id);
+      const sameDayStored = await getStored(page, s.headers, sameDay.event.id);
+      expect(sameDayStored.entitlement_date).toBe(s.ex);
+      expect(sameDayStored.share_confirm_date).toBe(s.confirmDay);
+
+      // 标准日期（权益登记日有持仓快照）：供确认弹窗取预览
+      const standardDlg = await openCreate(page, s);
+      await pickEventType(page, standardDlg, '分红再投资');
+      await pickDay(page, standardDlg.getByLabel('再投资份额确认日（可选）', { exact: true }), s.confirmDay);
+      const standard = await submitEvent(page, standardDlg);
+      createdIds.push(standard.event.id);
+
+      const reinvestRows = () => page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+      const standardRow = reinvestRows().filter({ hasText: s.entitlement });
+      const sameDayRow = reinvestRows().filter({ hasText: s.ex }).filter({ hasNotText: s.entitlement });
+      await expect(standardRow).toHaveCount(1);
+      await expect(sameDayRow).toHaveCount(1);
+
+      // 确认弹窗：记录字段行（preview 响应不含该字段）
+      const [preview] = await Promise.all([
+        page.waitForResponse((r) => new URL(r.url()).pathname === `/api/share-change-events/${standard.event.id}/preview`),
+        standardRow.getByTitle('确认', { exact: true }).click(),
+      ]);
+      expect(preview.ok(), await preview.text()).toBeTruthy();
+      const confirmDlg = dialogByTitle(page, '确认份额变动事件');
+      await expect(confirmDlg.getByText('再投资份额确认日', { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText(s.confirmDay, { exact: true })).toHaveCount(1);
+      await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(confirmDlg).toBeHidden();
+
+      // 编辑清空 = 显式 null：标准日期事件清空后落库为 null
+      await standardRow.getByTitle('编辑', { exact: true }).click();
+      const edit = dialogByTitle(page, '编辑份额变动事件');
+      const editTrigger = () => edit.getByLabel('再投资份额确认日（可选）', { exact: true });
+      await expect(editTrigger()).toHaveText(s.confirmDay);
+      await edit.getByTestId('share-confirm-date-field').getByRole('button', { name: '清除日期' }).click();
+      await expect(editTrigger()).toHaveText('默认除息日到账');
+      const cleared = await submitEvent(page, edit, standard.event.id);
+      expect(cleared.payload).toHaveProperty('share_confirm_date', null);
+      expect((await getStored(page, s.headers, standard.event.id)).share_confirm_date).toBeNull();
+
+      // 同日事件清空会被后端拒（无确认日时仍要求 ex > entitlement）：请求确实发出去了
+      await sameDayRow.getByTitle('编辑', { exact: true }).click();
+      await expect(editTrigger()).toHaveText(s.confirmDay);
+      await edit.getByTestId('share-confirm-date-field').getByRole('button', { name: '清除日期' }).click();
+      const writes = trackEventWrites(page, sameDay.event.id);
+      const [rejected] = await Promise.all([
+        page.waitForResponse((r) => r.request().method() === 'PUT'
+          && new URL(r.url()).pathname === `/api/share-change-events/${sameDay.event.id}`),
+        edit.getByRole('button', { name: '保存', exact: true }).click(),
+      ]);
+      writes.stop();
+      expect(rejected.status()).toBe(422);
+      expect(writes.sent).toEqual([`/api/share-change-events/${sameDay.event.id}`]);
+      await expect(
+        page.getByTestId('toast-card').filter({ hasText: '更新失败' })
+      ).toBeVisible();
+      await edit.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(edit).toBeHidden();
+      expect(errors).toEqual([]);
+    } finally {
+      for (const id of createdIds) {
+        const response = await page.request.delete(`/api/share-change-events/${id}`, { headers: s.headers });
+        await expect(response).toBeOK();
+      }
     }
   });
 });

@@ -302,6 +302,21 @@ export default function ShareChangeEventsContent({
       return;
     }
 
+    // #743：份额确认日（份额到账日）须严格晚于除息日，与后端 INVALID_DATE_ORDER 同口径；
+    // 交易日校验（INVALID_SHARE_CONFIRM_DATE）交后端，前端无逐日日历可判
+    if (
+      isReinvest &&
+      formData.share_confirm_date &&
+      formData.share_confirm_date <= formData.ex_date
+    ) {
+      addToast({
+        type: "error",
+        title: "表单校验失败",
+        message: "再投资份额确认日必须晚于除息日",
+      });
+      return;
+    }
+
     // #343 双保险：基金级事件不渲染平台选择器，空串归一为 undefined 再提交
     //（后端 service 同口径归一，此处仅避免无效载荷）
     submitCreate({
@@ -309,6 +324,8 @@ export default function ShareChangeEventsContent({
       platform_code: formData.platform_code || undefined,
       cash_pay_date: formData.event_type === "cash_dividend" ? formData.cash_pay_date : undefined,
       reinvest_nav: isReinvest ? formData.reinvest_nav : undefined,
+      // #743：确认日仅红利再投资可设，其他类型后端 422（INVALID_PARAM），不发无效载荷
+      share_confirm_date: isReinvest ? formData.share_confirm_date || undefined : undefined,
     });
   };
 
@@ -436,6 +453,8 @@ export default function ShareChangeEventsContent({
                         ...formData,
                         event_type: value as EventType,
                         cash_pay_date: undefined,
+                        // #743：类型切换清空专属日期，避免切到非再投资类型仍带确认日提交
+                        share_confirm_date: undefined,
                       })}
                     >
                       <SelectTrigger id="event_type">
@@ -484,8 +503,9 @@ export default function ShareChangeEventsContent({
                   </div>
                 )}
 
-                {/* 日期字段顺序 = 业务时序（#355）：权益登记日先于除息日（后端强制 ex_date > entitlement_date），
-                    与确认弹窗既有顺序一致 */}
+                {/* 日期字段顺序 = 业务时序（#355）：权益登记日先于除息日，与确认弹窗既有顺序一致。
+                    后端默认强制 ex_date > entitlement_date；仅当红利再投资填了「份额确认日」
+                    （#743，份额改在确认日到账）时才允许两者同日，同日未填确认日仍返回 422 */}
                 <div className={formGrid}>
                   <div className="space-y-2">
                     <Label htmlFor="entitlement_date">权益登记日</Label>
@@ -560,6 +580,23 @@ export default function ShareChangeEventsContent({
                       )}
                     </div>
                   </>
+                )}
+
+                {/* 份额确认日：仅红利再投资显示（#743，其他类型后端 422 INVALID_PARAM） */}
+                {formData.event_type === "reinvest_dividend" && (
+                  <div className="space-y-2" data-testid="share-confirm-date-field">
+                    <Label htmlFor="share_confirm_date">再投资份额确认日（可选）</Label>
+                    <DatePicker
+                      id="share_confirm_date"
+                      date={parseDateOnly(formData.share_confirm_date ?? "")}
+                      onSelect={(date) => setFormData({ ...formData, share_confirm_date: date ? toDateOnly(date) : undefined })}
+                      placeholder="默认除息日到账"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      份额到账日：须为交易日且晚于除息日；留空则份额按除息日到账。填写后除息日到确认日之间
+                      红利记应收股利（计市值、不计份额），权益登记日也可与除息日同日。
+                    </p>
+                  </div>
                 )}
 
                 {(formData.event_type === "share_split" || formData.event_type === "share_merge" || formData.event_type === "bonus_share") && (

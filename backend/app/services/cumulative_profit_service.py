@@ -15,6 +15,7 @@ from app.models.subscription import Subscription
 from app.models.trade import Trade
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import IN_TRANSIT_PRODUCT_CODES
+from app.services.reinvest_receivable import list_reinvest_receivables
 from app.utils.quantize import quantize_nav
 
 
@@ -34,7 +35,8 @@ def compute_cumulative_profits(
     """按显式快照日返回平台产品、产品市场、平台、投资人四粒度累计收益。
 
     基金 = D 日市值 + confirmed 卖出实际净额 - confirmed 买入含费支出
-           + confirmed 平台/子事件现金腿（仅现金分红/强制调整，ex_date <= D）。
+           + confirmed 平台/子事件现金腿（仅现金分红/强制调整，ex_date <= D）
+           + 再投资应收（#743，ex_date <= D < share_confirm_date）。
     CASH = D 日现金 - confirmed CASH 腿净流入 - 基金事件已到账现金。
     CASH 自身调整、手动重估留在现金损益；在途不产生独立收益。
 
@@ -45,7 +47,7 @@ def compute_cumulative_profits(
     列），手动重估差额留在现金损益；故 Σinvestors 与 Σproducts 一般不闭合，
     差额显式命名为「未归属到投资人的产品级收益」，属口径设计而非缺陷。
 
-    固定六次批量 SELECT，不依赖列表分页，不写 ORM 或提交事务。历史流水键
+    固定七次批量 SELECT，不依赖列表分页，不写 ORM 或提交事务。历史流水键
     与当日持仓键取并集，清仓缺行市值为零，绝不回查旧快照复活持仓。
     逐行取 Decimal 后在内存累加（避免 SQLite SUM 的浮点累计误差），仅在
     基础键返回时用 quantize_nav 量化，汇总粒度直接加总这些四位数值。
@@ -120,6 +122,10 @@ def compute_cumulative_profits(
             Subscription.status == "confirmed",
             Subscription.confirm_date <= snapshot_date,
         ).all()
+        # #743：再投资应收（ex_date <= D < share_confirm_date）。基金市值在除息日
+        # 因净值除权下跌 R、在份额确认日因份额到账回升 R，故窗口内把 R 加回基金侧，
+        # 让单产品累计收益连续、总市值只随净值波动。不动 CASH 侧——再投资无现金腿。
+        receivables = list_reinvest_receivables(db, portfolio_code, snapshot_date)
 
     market_values = defaultdict(lambda: _ZERO)
     profit_flows = defaultdict(lambda: _ZERO)
@@ -142,6 +148,11 @@ def compute_cumulative_profits(
         profit_flows[(product, market, platform)] += cash_change
         if cash_date <= snapshot_date:
             profit_flows[("CASH", "", platform)] -= cash_change
+
+    for receivable in receivables:
+        profit_flows[
+            (receivable.product_code, receivable.market, receivable.platform_code)
+        ] += receivable.amount
 
     for investor_code, market_value in investor_holdings:
         investor_values[investor_code] += market_value or _ZERO

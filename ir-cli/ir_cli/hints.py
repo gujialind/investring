@@ -13,7 +13,7 @@ from typing import Optional
 
 ERROR_HINTS: dict = {
     "DATE_BEFORE_SNAPSHOT": "日期须晚于最新快照日，用 ir snapshot status <portfolio_code> 查询最新快照日",
-    "SNAPSHOT_DEPENDENCY": "记录已被快照纳入，先删除确认日及之后快照: ir snapshot delete-bulk <portfolio_code> <date> --yes，操作完成后需重新生成/重算快照",
+    "SNAPSHOT_DEPENDENCY": "记录（或其派生的在途/应收金额）已被快照纳入，先删除错误信息点名日期及之后的快照: ir snapshot delete-bulk <portfolio_code> <date> --yes，操作完成后需重新生成/重算快照；份额事件未确认但已设 share_confirm_date 时，pending 状态的改/取消/删除同样受此守卫（应收已进快照）",
     "SNAPSHOT_NOT_CONTINUOUS": "目标日须为最新快照日或其下一交易日，用 ir snapshot status <portfolio_code> 查询最新快照日后，执行 ir snapshot catch-up --portfolio-code <code> --to-date <date> 逐交易日追平",
     "NAV_NOT_AVAILABLE": "申请日组合净值快照缺失: ir snapshot status <portfolio_code> 查询最新快照日后，用 ir snapshot catch-up --portfolio-code <code> --to-date <申请日> 追平至申请日",
     "NO_SNAPSHOT_BASELINE": "组合尚无任何快照基线，先生成首日快照: ir snapshot generate --portfolio-code <code> --target-date <首个交易日>",
@@ -48,6 +48,7 @@ ERROR_HINTS: dict = {
     "MARKET_AMBIGUOUS": "产品存在多个市场，请指定 --market；用 ir product list 查询产品可用市场",
     "INVALID_NAV_LAG_DAYS": "nav_lag_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；修正后重试: ir product update <code> <market> --nav-lag-days <N>",
     "INVALID_CONFIRM_DAYS": "confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；修正后重试: ir product update <code> <market> --confirm-days <N>",
+    "INVALID_SHARE_CONFIRM_DATE": "再投资份额确认日非法：仅 reinvest_dividend 可设、须为交易日（ir system trading-day is-open <date> 查询）且晚于除息日；改正后重试，或清空改按除息日应用份额: ir share-event update <id> --json '{\"share_confirm_date\": null}'",
     "CONFIRM_REQUIRED": "破坏性操作未确认已被拒绝：先用命令给出的 get/status 目标核实影响面，确认无误后追加 --yes 重跑",
     # CLI 侧错误码（后端不产出）：#520 用法错误改由入口统一收敛为 JSON + exit 64
     "USAGE_ERROR": "选项/参数不存在或必填缺失，命令未执行：先 ir schema --index 定位命令，再 ir <组> <子命令> --help 看该命令全部选项",

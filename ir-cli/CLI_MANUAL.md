@@ -774,7 +774,7 @@ ir trade update <ID> --cash-confirm-date YYYY-MM-DD [--notes <备注>]
 
 #### `ir share-event list`
 
-获取事件列表。默认原样输出响应字段，含可空 `cash_pay_date`；可用 `--fields id,ex_date,cash_pay_date` 筛选输出。
+获取事件列表。默认原样输出响应字段，含可空 `cash_pay_date` 与 `share_confirm_date`；可用 `--fields id,ex_date,cash_pay_date,share_confirm_date` 筛选输出。
 
 ```bash
 ir share-event list [--portfolio-code <组合>] [--page N] [--page-size N] [--all]
@@ -789,7 +789,7 @@ ir share-event create \
   --portfolio-code <组合> --product-code <产品> --market <市场> \
   --event-type <事件类型> \
   --ex-date YYYY-MM-DD --entitlement-date YYYY-MM-DD \
-  [--platform-code <平台>] [--cash-pay-date YYYY-MM-DD] \
+  [--platform-code <平台>] [--cash-pay-date YYYY-MM-DD] [--share-confirm-date YYYY-MM-DD] \
   [--entitlement-shares N] [--shares-before N] [--shares-change N] [--shares-after N] \
   [--ratio N] [--div-cash N] [--reinvest-nav N] [--cash-change N] \
   [--event-source <来源>] [--notes <备注>] [--force-cover]
@@ -801,9 +801,10 @@ ir share-event create \
 | `--product-code` | 是 | 产品代码 |
 | `--market` | 是 | 市场类型 |
 | `--event-type` | 是 | 事件类型（见下表） |
-| `--ex-date` | 是 | 除息日/应用日（**必须是交易日**，且 > 权益登记日） |
+| `--ex-date` | 是 | 除息日（**必须是交易日**，默认须 > 权益登记日；`reinvest_dividend` 设了 `--share-confirm-date` 时允许等于权益登记日）。不再兼任再投资份额应用日：份额按 `share_effective_date`（设了确认日取确认日，否则取除息日）应用 |
 | `--entitlement-date` | 是 | 权益登记日（基数日，**必须是交易日**） |
 | `--cash-pay-date` | 否 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend` 可设；须不早于除息日，允许非交易日；省略或 JSON `null` 时按除息日到账 |
+| `--share-confirm-date` | 否 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend` 可设（其他类型传入报 `INVALID_PARAM`）；**必须是交易日**（否则 `INVALID_SHARE_CONFIRM_DATE`）且**晚于除息日**（否则 `INVALID_DATE_ORDER`）；设置后才允许权益登记日 = 除息日（同日登记/除息），ex_date 起至确认日前一交易日的快照计该笔再投资应收（IN_TRANSIT_DIVIDEND 在途，不计可用现金）；未设时份额仍在除息日应用 |
 | `--platform-code` | 视类型 | 平台级事件（cash_dividend/reinvest_dividend/forced_adjustment）必填 |
 | `--entitlement-shares` | 否 | 权益登记日份额 |
 | `--shares-before` | 否 | 变动前份额 |
@@ -830,7 +831,7 @@ ir share-event create \
 
 #### `ir share-event get`
 
-查看事件详情，原样输出 `cash_pay_date`；未设置时保留 `null`，不将默认除息日填回响应字段。
+查看事件详情，原样输出 `cash_pay_date` 与 `share_confirm_date`；未设置时保留 `null`，不将默认除息日填回响应字段。
 
 ```bash
 ir share-event get <ID>
@@ -842,16 +843,20 @@ ir share-event get <ID>
 
 ```bash
 ir share-event update <ID> [--ex-date YYYY-MM-DD] [--entitlement-shares N] [--ratio N] \
-  [--div-cash N] [--reinvest-nav N] [--cash-change N] [--cash-pay-date YYYY-MM-DD] [--notes <备注>]
+  [--div-cash N] [--reinvest-nav N] [--cash-change N] [--cash-pay-date YYYY-MM-DD] \
+  [--share-confirm-date YYYY-MM-DD] [--notes <备注>]
 
 # 清空到账日，恢复按除息日到账
 ir share-event update <ID> --json '{"cash_pay_date":null}'
+
+# 清空再投资份额确认日，份额改按除息日应用（同日登记/除息的事件清空后须先把权益登记日改到除息日之前）
+ir share-event update <ID> --json '{"share_confirm_date":null}'
 
 # 清空再投资净值，确认时改取除息日数据源净值（存量 0 值须先清空才能确认）
 ir share-event update <ID> --json '{"reinvest_nav":null}'
 ```
 
-> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。清空沿用 `--json` 显式 `null`，没有专用清空选项。已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
+> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。`--share-confirm-date` 仅用于红利再投资，**必须为交易日**且晚于除息日，设置后才允许权益登记日 = 除息日；省略不修改原值，清空同样走 `--json` 显式 `null`，没有专用清空选项。pending 事件的再投资应收若已计入 ex_date 及之后的快照，修改（仅改备注除外）、取消、删除会被拒绝（`SNAPSHOT_DEPENDENCY`，须先删除该日及之后快照）。两者均无逐命令清空参数；已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
 
 #### `ir share-event delete`
 
@@ -879,7 +884,7 @@ ir share-event confirm <ID> [--sync-nav]
 |------|:------:|------|
 | `--sync-nav` | false | 红利再投资的除息日净值缺失（`MISSING_NAV`）时自动同步该产品自除息日起的净值并重试一次（会访问外部数据源）；同步失败或仍缺失照常报 `MISSING_NAV` |
 
-> **约束**：仅 `pending` 状态可确认，且权益登记日必须有持仓快照。`reinvest_dividend` 按除息日数据源净值折算份额并回写 `reinvest_nav`：净值未同步报 `MISSING_NAV`，手填净值与数据源不一致报 `PRICE_NAV_MISMATCH`（#744）。
+> **约束**：仅 `pending` 状态可确认，且权益登记日必须有持仓快照。`reinvest_dividend` 按除息日数据源净值折算份额并回写 `reinvest_nav`：净值未同步报 `MISSING_NAV`，手填净值与数据源不一致报 `PRICE_NAV_MISMATCH`（#744）。折算份额与摊薄成本在**份额生效日**（`share_effective_date`：设了 `share_confirm_date` 取该确认日，否则取除息日）的快照入账；设了确认日时 ex_date 起至确认日前一交易日的快照按应收计入 IN_TRANSIT_DIVIDEND 在途（派生值、不落库）。
 
 #### `ir share-event cancel`
 

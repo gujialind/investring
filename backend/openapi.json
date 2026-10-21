@@ -12557,6 +12557,18 @@
             ],
             "title": "Cash Pay Date"
           },
+          "share_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Confirm Date"
+          },
           "platform_code": {
             "anyOf": [
               {
@@ -12883,6 +12895,18 @@
             ],
             "title": "Cash Pay Date"
           },
+          "share_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Confirm Date"
+          },
           "platform_code": {
             "anyOf": [
               {
@@ -13156,6 +13180,18 @@
               }
             ],
             "title": "Cash Pay Date"
+          },
+          "share_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Confirm Date"
           },
           "shares_before": {
             "anyOf": [

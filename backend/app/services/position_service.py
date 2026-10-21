@@ -24,6 +24,7 @@ from app.services.trading_utils import (
 )
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.audit_service import record_audit
+from app.services.reinvest_receivable import aggregate_receivable_flows
 from app.constants.audit_actions import (
     ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
     RESOURCE_MANUAL_MARKET_VALUE,
@@ -206,6 +207,13 @@ def _aggregate_position_flows(db: Session, items: Sequence[PortfolioPosition]) -
         amount = float(cash_change)
         event_rows.setdefault((pc, prod, market, plat), []).append((ex_date, amount))
         event_cash_flows.setdefault((pc, plat), []).append((cash_date, amount))
+
+    # #743：再投资应收成对进 event_rows（+R@除息日、−R@份额确认日），让基金市值
+    # 在除权下跌与份额到账回升两端各被加回一次，单产品的日收益/持有收益/累计收益
+    # 在 [ex_date, share_confirm_date) 区间连续。刻意不进 event_cash_flows——
+    # 再投资不产生现金，计入现金腿会凭空抬高 CASH 累计收益。
+    for key, entries in aggregate_receivable_flows(db, portfolio_codes, max_date).items():
+        event_rows.setdefault(key, []).extend(entries)
 
     return {
         "trade_daily": trade_daily,
@@ -622,7 +630,8 @@ def calculate_available_shares(
                 - SUM(confirmed卖出份额 WHERE 快照未生成)
                 + SUM(confirmed事件负向shares_change WHERE ex_date > 最新快照日 [≤ as_of])
 
-    事件份额增量按 ex_date 生效（现金分红到账另按 cash_effective_date）。
+    事件份额增量此处按 ex_date 生效（现金分红到账另按 cash_effective_date）；#743 起
+    份额生效日的单点是 `share_effective_date`，本函数**刻意不切**，理由见下方查询处注释。
     只计平台级行（platform_code IS NOT NULL，基金级父记录持汇总值、防父子双计）；
     只计负向（正向变动入快照前保守低估，防事件被撤销后已放行的卖出成事实超卖）。
 
@@ -689,7 +698,10 @@ def calculate_available_shares(
         ):
             shares -= Decimal(t.shares) if t.shares else Decimal("0")
 
-    # 份额变动按除息日生效，不随分红到账日延后。
+    # 按 ex_date 选窗，**刻意不切** `share_effective_date`（#743）：本查询只计负向
+    # shares_change，而可设 share_confirm_date 的仅 reinvest、其红利正常为正，落不进
+    # 该过滤；即便负 div_cash 造出负向 reinvest（div_cash 无正负校验），按更早的
+    # ex_date 扣减与「正向保守低估」同向，只会更紧、不会放行超卖。
     event_query = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.product_code == product_code,
