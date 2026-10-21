@@ -167,7 +167,8 @@ async function pickStatus(page: Page, testInfo: TestInfo, label: string): Promis
 
 /**
  * #730：改写主列表响应的 `overview` 四值，造宽值 / 窄值概览卡。概览四卡的降档判据是
- * 「格式化后字符串长度 ≥ 15」，只有千万级带符号金额才触发，E2E 种子金额远达不到该量级，
+ * 「格式化后字符串长度」（移动端 ≥15、桌面 ≥16，见 #745），只有千万级乃至亿级带符号金额
+ * 才触发，E2E 种子金额远达不到该量级，
  * 故在浏览器侧 mock——不落库、不碰共享 E2E_ACTIVE 的快照契约（红线见文件头）。
  *
  * URL 判据必须带 `/api/` 前缀：页面自身的导航请求 `/portfolio/<code>/cash-flows`（移动
@@ -187,6 +188,31 @@ async function mockOverviewValues(page: Page, values: Record<string, string>): P
       await route.fulfill({ response: resp, body: JSON.stringify(json) });
     },
   );
+}
+
+/**
+ * #745：量概览四卡主数值的**文本墨迹**——对文本节点取 `Range.getBoundingClientRect()`。
+ * 不能用 `locator.boundingBox()`：主数值 span 是 flex 子项、被 `align-items: stretch`
+ * 拉满卡内容宽，盒宽恒定，量不出与邻卡的真实间隙（#730 验收项①的失真来源）。
+ * `top` 取卡片盒的上缘，用于判「是否同排」。
+ */
+async function statValueInks(page: Page, keys: string[]) {
+  return page.evaluate((ks: string[]) => {
+    return ks.map((k) => {
+      const card = document.querySelector(`[data-testid="stat-${k}"]`);
+      const span =
+        card &&
+        Array.from(card.querySelectorAll('span')).find((s) =>
+          /^[-+]?¥/.test((s.textContent ?? '').trim()),
+        );
+      const node = span?.firstChild;
+      if (!card || !node) throw new Error(`stat-${k} 主数值文本节点缺失`);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const ink = range.getBoundingClientRect();
+      return { key: k, left: ink.left, right: ink.right, top: card.getBoundingClientRect().top };
+    });
+  }, keys);
 }
 
 test.describe('现金流水页（#725，双端）', () => {
@@ -631,4 +657,58 @@ test.describe('现金流水页（#725，双端）', () => {
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
+
+  // #745：桌面 1280 四列 + text-2xl + nowrap 下，四值同注 9 位带符号时邻卡墨迹只剩约
+  // 1px、10 位起叠印（实测 −27.75px）、11 位第 4 卡墨迹右缘 1281.16px 越过 1280 视口。
+  // 修复把桌面阈值（≥16 字符）接进栅格：降两列后卡内容宽约 448px，三档均充裕。
+  // 无修复时本用例必红——既有的 #730 桌面 `else` 分支只断卡片位置关系（同排、第二卡在右），
+  // 叠印下依然成立，量不到横向间隙。
+  const WIDE_DESKTOP_CASES = [
+    { digits: 9, raw: '-123456789.01', rendered: '-¥123,456,789.01' },
+    { digits: 10, raw: '-1234567890.12', rendered: '-¥1,234,567,890.12' },
+    { digits: 11, raw: '-12345678901.23', rendered: '-¥12,345,678,901.23' },
+  ] as const;
+
+  for (const c of WIDE_DESKTOP_CASES) {
+    test(`概览四卡：${c.digits} 位带符号不与邻卡墨迹相碰（#745）`, async ({ page }, testInfo) => {
+      const errors = collectPageErrors(page);
+      await mockOverviewValues(page, {
+        available: c.raw,
+        in_transit: c.raw,
+        inflow: c.raw,
+        outflow: c.raw,
+      });
+
+      await gotoPortfolioSubpage(page, E2E_ACTIVE, 'cash-flows');
+      await expect(page.getByTestId('stat-available')).toContainText(c.rendered);
+
+      const inks = await statValueInks(page, ['available', 'in_transit', 'inflow', 'outflow']);
+      const viewport = page.viewportSize();
+      expect(viewport, '视口尺寸应已设置').not.toBeNull();
+
+      // 同排邻卡：卡片上缘相差 < 2px 视为同一行，只取「b 在 a 右侧」的有序对
+      const gaps = inks.flatMap((a) =>
+        inks
+          .filter((b) => b.key !== a.key && Math.abs(b.top - a.top) < 2 && b.left > a.left)
+          .map((b) => b.left - a.right),
+      );
+
+      if (testInfo.project.name === 'mobile') {
+        // ≥15 字符降单列（#730）：四卡各占一行，不存在同排邻卡
+        expect(gaps, `移动端应降单列，实测同排间隙 ${gaps.join(' / ')}`).toHaveLength(0);
+      } else {
+        // 桌面 ≥16 字符降两列（#745）：两排各一对邻卡
+        gaps.forEach((g) =>
+          expect(g, `邻卡主数值墨迹间隙应 ≥8px，实测 [${gaps.map((v) => v.toFixed(2)).join(', ')}]`).toBeGreaterThanOrEqual(8),
+        );
+        expect(gaps, '桌面应降两列、量到 2 对同排邻卡').toHaveLength(2);
+        expect(
+          Math.max(...inks.map((i) => i.right)),
+          '末卡墨迹右缘不应越过视口宽',
+        ).toBeLessThanOrEqual(viewport!.width);
+      }
+
+      expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+    });
+  }
 });

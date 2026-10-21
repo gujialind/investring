@@ -248,12 +248,15 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
       ]
     : [];
 
-  // 宽值降单列（#730）：§5 登记的 390px 实测——双列栅格卡内容宽 146px，text-lg 下带符号
-  // 8 位金额需 162px，吃满 16px 列间距与邻卡数值相接；单列内容宽约 308px 则充裕。
-  // 判据取「格式化后字符串长度」而非数值量级：同为 1e7 量级，正金额 ¥12,345,678.90 是
-  // 14 字符（实测 151px、溢出 5px 落在 16px 列间距内），带负号才是 15 字符（162px、相接）。
-  // 只影响移动端栅格，字号不降档。
+  // 宽值降列（#730 移动端 / #745 桌面）：判据取「格式化后字符串长度」而非数值量级——
+  // 同为 1e7 量级，正金额 ¥12,345,678.90 是 14 字符，带负号才是 15 字符。
+  // 移动端（§5 登记的 390px 实测）：双列卡内容宽 146px，text-lg 下 15 字符需 162px，
+  // 吃满 16px 列间距与邻卡相接；故 ≥15 降单列（内容宽约 308px），字号不降档。
+  // 桌面（#745 的 1280 实测）：四列卡内容宽 216px，text-2xl 下 15 字符 216px 尚余
+  // 15px 间隙，16 字符（-¥123,456,789.01）只剩约 1px、17 字符起与邻卡墨迹叠印；
+  // 故桌面阈值取 ≥16 降两列（内容宽约 448px）。两端列宽与字号不同，不共用一个长度值。
   const wideValue = statCards.some((s) => s.value.length >= 15);
+  const wideValueDesktop = statCards.some((s) => s.value.length >= 16);
 
   // ---- 行操作 ----
   const openDetail = (row: CashFlowRow) => setDetailRow(row);
@@ -554,7 +557,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               按平台构成
             </Button>
           </div>
-          <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : "grid-cols-2 lg:grid-cols-4")}>
+          <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : (wideValueDesktop ? "grid-cols-2" : "grid-cols-2 lg:grid-cols-4"))}>
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-sm text-muted-foreground">{s.label}</span>
