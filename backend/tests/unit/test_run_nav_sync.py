@@ -24,6 +24,7 @@ from app.services.task_runner import (
     run_nav_sync, run_snapshot_generate, _generate_snapshots_for_date,
 )
 from app.services.market_data_service import resolve_incremental_start_date
+from tests.unit.business_clock_helpers import TUE_0700_CST, freeze_business_clock
 
 
 def _task_log_id(db) -> int:
@@ -43,21 +44,23 @@ def _task_log_id(db) -> int:
 
 
 class TestTargetDateYesterday:
-    """target_date = yesterday(T)（D3）"""
+    """target_date = 业务昨天（D3；#746 起业务日经 business_time，与进程时区无关）"""
 
     @patch("app.services.market_data_service.sync_product_prices")
-    def test_end_date_is_yesterday(self, mock_sync, test_db):
-        """sync_product_prices 传入的 end_date 应为昨天"""
+    def test_end_date_is_business_yesterday_at_0700_cst(self, mock_sync, test_db, monkeypatch):
+        """冻结 2026-10-20 07:00 CST（= 10-19 23:00 UTC，事故瞬间形态）：target 必须 10-19
+        （#746 验收第 1 条），而非 UTC 钟算出的 10-18。
+
+        断言用字面量而非「重算同一表达式」——后者与被测代码同源，换回 UTC 钟
+        也照样绿，等于没测。
+        """
+        freeze_business_clock(monkeypatch, TUE_0700_CST)
         mock_sync.return_value = {"success": True, "synced_count": 0, "source": "tushare"}
 
         result = run_nav_sync(test_db, _task_log_id(test_db))
 
-        yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
-        assert result["target_date"] == yesterday
-
-        call_args = mock_sync.call_args_list[0]
-        passed_end_date = call_args.kwargs.get("end_date")
-        assert passed_end_date == datetime.now().date() - timedelta(days=1)
+        assert result["target_date"] == "2026-10-19"
+        assert mock_sync.call_args_list[0].kwargs.get("end_date") == date(2026, 10, 19)
 
 
 class TestIncrementalStart:
@@ -383,8 +386,10 @@ class TestRunSnapshotGenerate:
         assert portfolio_codes == ["SNAP_ON"]
 
     @patch("app.services.task_runner._generate_snapshots_for_date")
-    def test_target_date_is_yesterday(self, mock_snap, test_db):
-        """run_snapshot_generate 以昨天为 target_date 调回补，返回结构含两者"""
+    def test_target_date_is_business_yesterday(self, mock_snap, test_db, monkeypatch):
+        """#746 验收第 2 条：冻结 07:30 CST（UTC 仍是前一日）run_snapshot_generate
+        的 target_date 为业务昨天 10-19，回补调用同值。"""
+        freeze_business_clock(monkeypatch, TUE_0700_CST)
         mock_snap.return_value = {
             "generated": 0, "portfolios_processed": 0,
             "warnings": [], "auto_confirm_failed": [],
@@ -393,12 +398,11 @@ class TestRunSnapshotGenerate:
         # #406：log_id 死参数已从签名移除（快照链路无逐日明细表可关联）
         result = run_snapshot_generate(test_db)
 
-        yesterday = datetime.now().date() - timedelta(days=1)
-        assert result["target_date"] == yesterday.isoformat()
+        assert result["target_date"] == "2026-10-19"
         assert result["snapshots_generated"] == 0
         assert result["portfolios_processed"] == 0
         mock_snap.assert_called_once()
-        assert mock_snap.call_args.args[1] == yesterday
+        assert mock_snap.call_args.args[1] == date(2026, 10, 19)
 
     @patch("app.services.task_runner._generate_snapshots_for_date")
     def test_failed_portfolios_surfaced_in_return(self, mock_snap, test_db):

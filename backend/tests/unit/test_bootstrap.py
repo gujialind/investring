@@ -115,17 +115,35 @@ def test_prepare_sqlite_creates_models_jobs_and_seeds_without_alembic(sqlite_db)
     assert set(row[0] for row in _sql(sqlite_db, "SELECT code FROM scheduled_task")) == TASK_CODES
 
 
-def test_prepare_is_idempotent_and_preserves_task_cron_and_runtime_state(prepared_db):
+def test_prepare_is_idempotent_and_syncs_display_cron_preserving_runtime_state(prepared_db):
+    """#746 后契约：nav_sync / snapshot_generate 的展示 cron 随 prepare 同步为
+    settings 生效值（同步一次后即幂等）；其余任务 cron 仅登记、不重置；
+    运行时状态（is_enabled / last_run_* / timeout / created_at）跨 prepare 保持。"""
+    from app.config import get_settings
+
     _sql(prepared_db, """UPDATE scheduled_task SET name='old name', description='old description',
         cron_expr='13 2 * * 2', is_enabled=0, last_run_status='failed', timeout_seconds=123,
-        last_run_at='2026-01-02 03:04:05', next_run_at='2026-02-03 04:05:06' WHERE code='nav_sync'""")
+        last_run_at='2026-01-02 03:04:05', next_run_at='2026-02-03 04:05:06'""")
+    snapshot = bootstrap.status(prepared_db.settings)
+    assert bootstrap.prepare(
+        expected_fingerprint=snapshot["fingerprint"], settings=prepared_db.settings
+    )["state"] == "ready"
+
     fields = "code, cron_expr, is_enabled, last_run_status, timeout_seconds, last_run_at, next_run_at, created_at"
-    before = _sql(prepared_db, f"SELECT {fields} FROM scheduled_task ORDER BY code")
+    settings = get_settings()
+    expected_cron = {
+        "nav_sync": settings.scheduler_cron_daily,
+        "snapshot_generate": settings.scheduler_cron_snapshot,
+    }
+    after_sync = _sql(prepared_db, f"SELECT {fields} FROM scheduled_task ORDER BY code")
+    for code, cron, *_rest in after_sync:
+        assert cron == expected_cron.get(code, "13 2 * * 2"), code
+
     for _ in range(2):
         snapshot = bootstrap.status(prepared_db.settings)
         result = bootstrap.prepare(expected_fingerprint=snapshot["fingerprint"], settings=prepared_db.settings)
         assert result["state"] == "ready"
-        assert _sql(prepared_db, f"SELECT {fields} FROM scheduled_task ORDER BY code") == before
+        assert _sql(prepared_db, f"SELECT {fields} FROM scheduled_task ORDER BY code") == after_sync
     assert _sql(prepared_db, "SELECT code, name, description FROM scheduled_task ORDER BY code") == sorted(
         (task["code"], task["name"], task["description"]) for task in scheduled_task_definitions()
     )
@@ -397,7 +415,8 @@ def test_scheduler_initialization_selects_prepared_store_without_database_ddl(sq
     from app.services import market_data_service, scheduler_service
 
     settings = SimpleNamespace(**vars(sqlite_db.settings), scheduler_enabled=enabled,
-                               scheduler_cron_daily="0 7 * * *", scheduler_cron_snapshot="30 7 * * *")
+                               scheduler_cron_daily="0 7 * * *", scheduler_cron_snapshot="30 7 * * *",
+                               timezone="Asia/Shanghai")
     scheduler = Mock()
     factory = Mock(return_value=scheduler)
     monkeypatch.setattr(scheduler_service, "get_settings", lambda: settings)
@@ -506,6 +525,7 @@ from sqlalchemy.engine import Engine
 from apscheduler.schedulers.background import BackgroundScheduler
 from app import main, bootstrap
 from app.database import SessionLocal, engine
+from app.config import get_settings
 from app.models.base import Base
 from app.init_tasks import scheduled_task_definitions
 from app.services import scheduler_service, market_data_service
@@ -534,7 +554,9 @@ async def exercise():
         with SessionLocal() as session:
             row = session.execute(text("SELECT name, cron_expr, is_enabled FROM scheduled_task WHERE code='nav_sync'")).one()
             expected = next(task["name"] for task in scheduled_task_definitions() if task["code"] == "nav_sync")
-            assert tuple(row) == (expected, "13 2 * * 2", 0)
+            # #746：lifespan 的 init_scheduled_tasks 把 nav_sync 的展示 cron 同步为
+            # settings 生效值；is_enabled 不在同步范围（保持环境自定义 0）
+            assert tuple(row) == (expected, get_settings().scheduler_cron_daily, 0)
             assert session.execute(text("SELECT status FROM sync_job")).scalar_one() == "interrupted"
             assert session.execute(text("SELECT count(*) FROM bootstrap_test_jobs")).scalar_one() == 2
     assert scheduler_service._scheduler is None

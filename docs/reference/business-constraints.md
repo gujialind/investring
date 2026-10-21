@@ -362,6 +362,8 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 交易操作（申购、赎回、调仓、现金进出、事件权益登记日与除息日）原则上仅允许交易日，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。**唯一新增例外为现金分红 `cash_pay_date`（#522）**：允许非交易日，按实际到账日生效，由下一交易日快照窗口消费；不扩展到事件 `ex_date` / `entitlement_date`、调仓到账日或其他业务日期，快照本身仍只在交易日生成。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`；[test_trading_day.py](../../backend/tests/integration/test_trading_day.py) 的 `TestClosedWeekCalendar` / `TestClosedWeekWrites` 显式构造工作日闭市、连续长假和缺失记录，并验证写入口拒绝时无业务字段残留。
 
+**「今天」的业务日定义（#746）**：调度与取数窗口语境下的「今天」是 `settings.timezone`（默认 Asia/Shanghai）的当日，经 [business_time.py](../../backend/app/utils/business_time.py) 的 `business_today()` 取得——与进程/容器时区解耦（生产容器为 UTC 时，07:00 CST 触发瞬间的进程日期仍是前一日）。交易日闸门的判断日、`nav_sync` / 快照任务的目标日（业务昨天）、取数上界缺省值均属此类业务日期；进程瞬时戳（`started_at`、JWT exp 等）不在此列。口径正文见[任务执行规范的业务时钟段](logging.md#logging-tasks)。
+
 **日历不足一律抛错，禁止回退（#591）**：需要第 N 个前/后交易日而日历覆盖不够（**含部分耗尽**——`days=3` 只剩 1 个可解析也抛）时，抛错版 `get_next_trading_day` / `get_prev_trading_day` 抛 `CALENDAR_NOT_SYNCED`（422，`details` 带 `requested_days` / `resolved_days`），**绝不**回退返回入参本身、也**绝不**用自然日加减伪造日期。快照取价日 `_prev_trading_day` 同口径：前序开市日不足即抛 `CALENDAR_NOT_SYNCED`，**不**改成 `target_date - lag 自然日`——那会把编造的取价日写进估值（静默错价），与「取不到即由调用方报 `MISSING_NAV`」的既定意图冲突。两码边界不得互串：**日历解析不出取价日 → `CALENDAR_NOT_SYNCED`；解析得出但该日无 `PriceRecord` → `MISSING_NAV`**。
 
 `days=0` 是场内 / 虚拟产品 T+0 的合法路径：零次日历查询、直接返回入参、永不抛错。

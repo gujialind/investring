@@ -24,9 +24,9 @@ job id + replace_existing，与重试 job 同手法），复查时重查当日�
 最终成功则跳过、否则补跑，避免「nav 重试成功时快照锁恰被占」导致当日联动被永久
 丢弃。复查链由 SNAPSHOT_GENERATE_LOCK（跨进程互斥）+ 当日成功记录判据收敛为同日
 最多补跑一次。复查窗口总长 45 分钟（15min × 3）；复查触发体不再过交易日闸门、判据用
-当时的 `date.today()`，故若窗口跨过午夜，最后一次复查按**次日**判据执行（本质是又一次
-catch-up，最坏只多一条 trigger_type=cascade 记录，不破坏账本）——与 job id 取主机本地日
-属同一套既有假设，单独改复查会与 `_should_run_today` 产生新的口径不一致，故不改代码。
+当时的业务日（#746 起经 `business_time` 单点，与闸门/ job id 同钟），故若窗口跨过
+**业务日**午夜，最后一次复查按次日判据执行（本质是又一次 catch-up，最坏只多一条
+trigger_type=cascade 记录，不破坏账本）。
 默认 cron（07:00 / 07:30）下重试落在 09:00–13:00、复查落在其后 45 分钟内，不跨午夜。
 
 **重试是全量 nav_sync 的取舍**（#715 复核 Suggestion）：每次重试都遍历全部产品并
@@ -36,13 +36,14 @@ catch-up，最坏只多一条 trigger_type=cascade 记录，不破坏账本）�
 当前接受该放大——它不破坏账本，且 nav_sync 增量窗口使重复同步的写放大有限。
 """
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import timedelta
 
 from apscheduler.jobstores.base import BaseJobStore
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from sqlalchemy import inspect
 
 from app.config import get_settings
+from app.utils.business_time import business_day_start, business_now, business_today
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ def init_scheduler():
         executors={
             "default": APSThreadPool(max_workers=2),
         },
-        timezone="Asia/Shanghai",
+        timezone=settings.timezone,
     )
     scheduler.start()
     _scheduler = scheduler
@@ -140,7 +141,7 @@ def _should_run_today(db, lock_name: str) -> bool:
         logger.info(f"另一个进程已持有 {lock_name}，跳过")
         return False
 
-    today = date.today()
+    today = business_today()
     cal = db.query(TradingCalendar).filter(TradingCalendar.calendar_date == today).first()
     if not cal or not cal.is_open:
         logger.info(f"{today} 非交易日，跳过 {lock_name}")
@@ -254,8 +255,8 @@ def _maybe_schedule_nav_retry(status: str, attempt: int) -> bool:
             f"最后终态={status}"
         )
         return False
-    run_date = datetime.now(_scheduler.timezone) + NAV_RETRY_INTERVAL
-    job_id = f"nav_sync_retry_{date.today().isoformat()}_{attempt}"
+    run_date = business_now() + NAV_RETRY_INTERVAL
+    job_id = f"nav_sync_retry_{business_today().isoformat()}_{attempt}"
     _scheduler.add_job(
         _trigger_nav_sync_retry,
         trigger="date",
@@ -291,7 +292,7 @@ def _maybe_cascade_snapshot(db, recheck_attempt: int = 0) -> None:
     from app.models.task_execution_log import TaskExecutionLog
     from app.services.task_runner import TRIGGER_CASCADE, run_task
 
-    day_start = datetime.combine(date.today(), time.min)
+    day_start = business_day_start()
     succeeded = (
         db.query(TaskExecutionLog)
         .filter(
@@ -341,8 +342,8 @@ def _maybe_schedule_snapshot_cascade_recheck(attempt: int) -> bool:
             f"停手交次日自愈"
         )
         return False
-    run_date = datetime.now(_scheduler.timezone) + SNAPSHOT_CASCADE_RECHECK_INTERVAL
-    job_id = f"snapshot_cascade_recheck_{date.today().isoformat()}_{attempt}"
+    run_date = business_now() + SNAPSHOT_CASCADE_RECHECK_INTERVAL
+    job_id = f"snapshot_cascade_recheck_{business_today().isoformat()}_{attempt}"
     _scheduler.add_job(
         _trigger_snapshot_cascade_recheck,
         trigger="date",

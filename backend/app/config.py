@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     scheduler_cron_snapshot: str = "30 7 * * *"
     scheduler_jobstore_table: str = "apscheduler_jobs"
 
+    # 业务时区（#746）：调度触发与 business_today()/business_now() 共用的单一来源，
+    # 与进程/容器时区解耦
+    timezone: str = "Asia/Shanghai"
+
     # Application
     app_name: str = "InvestRing"
     debug: bool = True

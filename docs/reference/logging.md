@@ -185,6 +185,19 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 **跳过不是执行**：GET_LOCK 被别的进程持有、当日非交易日这两类跳过**不建记录**——
 否则每个非交易日为每条 job 各积一行无信息量的「未执行」噪音。
 
+**业务时钟（#746）**：调度触发时区与业务日期计算的单一来源是 `settings.timezone`
+（默认 Asia/Shanghai，APScheduler 与 `app/utils/business_time.py` 共用）。闸门判断日、
+`nav_sync`/`snapshot_generate` 的「业务昨天」目标日、上表 job id 中的 `<日期>`、
+「当日成功记录」窗口全部按**业务日**（`business_today()`）计，与进程/容器时区解耦——
+生产容器为 UTC 时，07:00 CST 触发瞬间的进程日期仍是前一日，用 `date.today()` 算目标日
+会落 T-2、交易日闸门会方向反转（周一被当周日跳过、周六被当周五误跑）。「当日成功记录」
+窗口起点 `business_day_start()` 是业务午夜换算到**进程墙钟**的 naive 值：
+`TaskExecutionLog.started_at` 由进程 naive 钟写入，跨钟比较会把 07:00 CST 落库的当日
+记录判出窗外。测试冻结经唯一取数点 `business_time._utcnow`（不引 freezegun；
+既有用例中「断言时重算 `date.today()`」的写法与被测代码同源、换钟不会翻红，须改冻结
++ 字面量）。`cron_expr` 列同理：生效源是 `scheduler_cron_*` 设置，DB 行仅展示、
+启动时由 `init_scheduled_tasks` 同步为生效值（无 settings 映射的任务不重置）。
+
 **字段口径**：
 
 | 字段 | 口径 |
