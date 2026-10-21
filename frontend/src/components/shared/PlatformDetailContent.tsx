@@ -11,6 +11,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import HoldingProductCard from "./HoldingProductCard";
+import { cardGridClass } from "./PortfolioHoldings";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
@@ -219,7 +220,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
         <p className="mt-3 text-sm text-muted-foreground">暂无持仓</p>
       ) : (
         <>
-          <div className={`mt-2 ${isMobile ? "space-y-2.5" : "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(350px,1fr))]"}`}>
+          <div className={`mt-2 ${cardGridClass(isMobile ? "mobile" : "desktop")}`}>
             {platformProducts.map((p, i) => {
               const slice = p.platforms.find((s) => s.platform_code === platformCode)!;
               // N1：slice 由 filter 保证存在，直接取切片字段（null 交给格式化函数 → "--"）

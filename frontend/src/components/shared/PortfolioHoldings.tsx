@@ -53,8 +53,13 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
  * 算列数，min=360 会在 1440 档使两组列数分叉（隔离栈探针实测引导组 720px→1 列 vs
  * 平铺组 736px→2 列，同页卡宽不一致）；min ≤ (720-12)/2 = 354 时两组同列数，
  * 单卡实宽 354（引导组）-362（平铺组）——引导组下界比设计区间少 4px，是换两组同列数的代价。
+ *
+ * **消费点不止本文件**（#750 收敛后该串仅此一处持有）：按产品视图的引导组 / 平铺组与
+ * 在途卡、按平台视图的平台卡组，以及 `PlatformDetailContent.tsx` 的平台详情「持仓明细」。
+ * 该页没有引导线结构、不参与上面的分叉推导，但列数与卡宽同样由这个 350 决定——按引导线
+ * 理由调 350 会连带改动它，两处需一起目检。
  */
-function cardGridClass(variant: "desktop" | "mobile"): string {
+export function cardGridClass(variant: "desktop" | "mobile"): string {
   return variant === "desktop"
     ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(350px,1fr))]"
     : "space-y-2.5";
