@@ -36,6 +36,8 @@ interface EditFormState {
   ex_date: string;
   entitlement_date: string;
   cash_pay_date: string;
+  /** 再投资份额确认日（#743）：空串 = 未填/清空 */
+  share_confirm_date: string;
   shares_before: string;
   shares_change: string;
   shares_after: string;
@@ -53,6 +55,7 @@ function toForm(event: ShareChangeEvent): EditFormState {
     ex_date: event.ex_date,
     entitlement_date: event.entitlement_date,
     cash_pay_date: event.cash_pay_date ?? "",
+    share_confirm_date: event.share_confirm_date ?? "",
     shares_before: numToStr(event.shares_before),
     shares_change: numToStr(event.shares_change),
     shares_after: numToStr(event.shares_after),
@@ -84,11 +87,13 @@ export function EventEditDialog({
 }: EventEditDialogProps) {
   const [form, setForm] = useState<EditFormState | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
+  const [shareConfirmDateError, setShareConfirmDateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && event) setForm(toForm(event));
     if (!open) setForm(null);
     setNavError(null);
+    setShareConfirmDateError(null);
   }, [open, event]);
 
   if (!event || !form) return null;
@@ -120,6 +125,14 @@ export function EventEditDialog({
         setNavError("再投资净值必须大于 0；净值未发布可留空");
         return;
       }
+      // #743：份额确认日（份额到账日）留空 = 按除息日生效，清空同样要显式发 null；
+      // 非空时须晚于除息日（与后端 INVALID_DATE_ORDER 同口径，交易日判据交后端）
+      const confirmRaw = form.share_confirm_date.trim();
+      if (confirmRaw !== "" && !(confirmRaw > form.ex_date)) {
+        setShareConfirmDateError("再投资份额确认日必须晚于除息日");
+        return;
+      }
+      payload.share_confirm_date = confirmRaw || null;
     }
     onSubmit(payload);
   };
@@ -229,6 +242,29 @@ export function EventEditDialog({
                     {navError && <p className="text-xs text-destructive">{navError}</p>}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* 份额确认日：仅红利再投资可编辑（#743，其他类型后端 422 INVALID_PARAM） */}
+            {event.event_type === "reinvest_dividend" && (
+              <div className="space-y-2" data-testid="share-confirm-date-field">
+                <Label htmlFor="edit_share_confirm_date">再投资份额确认日（可选）</Label>
+                <DatePicker
+                  id="edit_share_confirm_date"
+                  date={parseDateOnly(form.share_confirm_date)}
+                  onSelect={(date) => {
+                    setShareConfirmDateError(null);
+                    setField({ share_confirm_date: date ? toDateOnly(date) : "" });
+                  }}
+                  placeholder="默认除息日到账"
+                />
+                {shareConfirmDateError && (
+                  <p className="text-xs text-destructive">{shareConfirmDateError}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  份额到账日：须为交易日且晚于除息日；清空则份额按除息日到账。填写后除息日到确认日之间
+                  红利记应收股利（计市值、不计份额），权益登记日也可与除息日同日。
+                </p>
               </div>
             )}
 

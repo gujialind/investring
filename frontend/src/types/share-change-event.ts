@@ -8,6 +8,8 @@ export interface ShareChangeEvent {
   ex_date: string;
   entitlement_date: string;
   cash_pay_date?: string | null;
+  /** 再投资份额确认日/份额到账日（#743）：仅 reinvest_dividend 可设，须为交易日且晚于除息日 */
+  share_confirm_date?: string | null;
   platform_code?: string;
   parent_event_id?: number;
   product_code?: string;
@@ -39,6 +41,8 @@ export interface ShareChangeEventCreate {
   ex_date: string;
   entitlement_date: string;
   cash_pay_date?: string | null;
+  /** 再投资份额确认日/份额到账日（#743）：仅 reinvest_dividend 可设，其他类型不得提交 */
+  share_confirm_date?: string | null;
   platform_code?: string;
   parent_event_id?: number;
   product_code?: string;
@@ -61,6 +65,8 @@ export interface ShareChangeEventUpdate {
   ex_date?: string;
   entitlement_date?: string;
   cash_pay_date?: string | null;
+  /** 再投资份额确认日（#743）：null = 清空（仅 reinvest_dividend 可设） */
+  share_confirm_date?: string | null;
   shares_before?: number;
   shares_change?: number;
   shares_after?: number;
