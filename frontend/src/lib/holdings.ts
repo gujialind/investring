@@ -1,7 +1,7 @@
 /**
  * #595 组合详情页「按产品」视图的分组聚合（纯函数）。
  *
- * 语义与 PositionSections 的持仓行分组一致（防 #109/#114 的 V4 契约）：
+ * 语义与 `PortfolioHoldings.tsx::ProductSections` 的持仓行分组一致（V4 契约见 #595/#109/#114）：
  * - 分区顺序由 asset_class 维度字典 sort_order 驱动（色板序位）；
  * - 二级分组维度经 resolveSubDim（组合级 display_config 覆盖优先，缺键回退内置默认）；
  * - 组间按合计市值降序、未分类恒垫底；组内产品按市值降序；
