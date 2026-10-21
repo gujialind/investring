@@ -401,3 +401,50 @@ class TestListGroupAnchorSort:
         ids = [item["id"] for item in resp.json()["items"]]
         # 同锚点 9/6：transfer_group 升序 → rebal_ga4a 在前（与旧排序键的二级键一致）
         assert ids == [leg_t1.id, leg_t2.id]
+
+    def test_group_split_across_page_boundary_keeps_paired_leg(
+        self, client, admin_headers, test_db
+    ):
+        """(#734) 组锚点只保证结果集内相邻，不保证同页：page_size 把组推到页边界时
+        两腿分居两页，各自仍带 paired_leg（由 #719 派生兜底），total 不随分页变化。
+
+        这是当前分页契约的显式钉住——将来若改分组分页/游标，本用例即变更点。
+        """
+        create_portfolio(test_db, code="LT_GA5", status="active")
+        # 结果集顺序（锚点 DESC）：solo_late(9/8) → 组 rebal_ga5(锚点 max(9/1,9/5)=9/5,
+        # 组内 id DESC → cash_leg 后建 id 更大在前) → solo_early(8/29)
+        solo_late = create_trade(test_db, "LT_GA5", "CASH", "",
+                                 trade_date=date(2025, 9, 8))
+        fund_leg = create_trade(test_db, "LT_GA5", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 9, 1),
+                                transfer_group="rebal_ga5")
+        cash_leg = create_trade(test_db, "LT_GA5", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, 5),
+                                transfer_group="rebal_ga5")
+        solo_early = create_trade(test_db, "LT_GA5", "CASH", "",
+                                  trade_date=date(2025, 8, 29))
+
+        full = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page_size=10", headers=admin_headers
+        ).json()
+        assert [i["id"] for i in full["items"]] == [
+            solo_late.id, cash_leg.id, fund_leg.id, solo_early.id
+        ]
+        assert full["total"] == 4
+
+        # page_size=2 把组的两腿切到第 1、2 页：第 1 页末 = cash_leg，第 2 页首 = fund_leg
+        p1 = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page=1&page_size=2", headers=admin_headers
+        ).json()
+        p2 = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page=2&page_size=2", headers=admin_headers
+        ).json()
+        # total = 分页前总数，两页一致、不因拆组变化
+        assert p1["total"] == p2["total"] == 4
+        assert [i["id"] for i in p1["items"]] == [solo_late.id, cash_leg.id]
+        assert [i["id"] for i in p2["items"]] == [fund_leg.id, solo_early.id]
+        # 两腿分居两页、对手腿不在本页结果集内，各自仍指向对方（#719 派生 pair 兜底）
+        cash_on_p1 = next(i for i in p1["items"] if i["id"] == cash_leg.id)
+        fund_on_p2 = next(i for i in p2["items"] if i["id"] == fund_leg.id)
+        assert cash_on_p1["paired_leg"]["id"] == fund_leg.id
+        assert fund_on_p2["paired_leg"]["id"] == cash_leg.id

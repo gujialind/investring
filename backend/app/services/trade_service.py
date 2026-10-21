@@ -1960,9 +1960,12 @@ def list_trades(
       与单值参数互斥：products 与 product_code 或 market 同传抛
       PRODUCTS_PARAM_CONFLICT（422），避免两套过滤语义叠加产生歧义。
     - 排序（#734）：组锚点日期 DESC, transfer_group, id DESC——锚点 = 同组合内同
-      transfer_group 的 max(trade_date)，同组两腿共用同一日期档、恒相邻同页
+      transfer_group 的 max(trade_date)，同组两腿共用同一日期档、结果集内恒相邻
       （卖出组两腿 trade_date 天然分叉，按自身日期分档会拆页）；无组可锚的行
-      回落自身 trade_date。
+      回落自身 trade_date。相邻 ≠ 同页：offset/limit 下页边界仍可能落在组内
+      （约 1/page_size），此时两腿分居两页、各自被 #719 的 paired_leg 派生兜底；
+      严格不拆需分组分页/游标，非本排序键能保证（建议单独 issue）。锚点取全组
+      max(trade_date)、与日期筛选区间解耦，故筛选下可见行可能不按自身 trade_date 单调。
     - trades 无 viewer 过滤（组合级操作，保持现状语义，不在本 PR 引入权限变化）。
 
     Returns:
@@ -2031,15 +2034,25 @@ def list_trades(
     # 按 (portfolio_code, transfer_group) 分组收窄——组号语义是组合内的（uq_trade_transfer_group
     # 不含组合列，读侧 build_paired_leg_map 同口径）。count 在 join 前执行，total 行数语义不变；
     # 独占组的行锚点 = 自身日期，coalesce 只是 NULL 组的防御性回落。
-    group_anchor = (
-        db.query(
-            Trade.portfolio_code.label("grp_portfolio"),
-            Trade.transfer_group.label("grp"),
-            func.max(Trade.trade_date).label("anchor"),
-        )
-        .group_by(Trade.portfolio_code, Trade.transfer_group)
-        .subquery()
+    # transfer_group 由 uuid / sub_{id} 生成（new_transfer_group、subscription_service），真实
+    # 写入路径全局唯一、跨组合撞号不可达；分组与 join 仍带 portfolio_code 以与 build_paired_leg_map
+    # 同口径，撞号时相邻性只在组合内保证（不依赖组号全局唯一）。
+    # 子查询按 portfolio_code 收窄（传了才过滤）：join 本就按组合等值，过滤不改变结果，只把
+    # 「每次列表请求全表 GROUP BY」缩到当前组合，避免延迟随全表线性增长。刻意不下推日期谓词——
+    # 锚点语义是「组内 max(trade_date)、与筛选区间解耦」，代价见 list_trades docstring 与
+    # business-constraints #rule-trade。
+    group_anchor_query = db.query(
+        Trade.portfolio_code.label("grp_portfolio"),
+        Trade.transfer_group.label("grp"),
+        func.max(Trade.trade_date).label("anchor"),
     )
+    if portfolio_code:
+        group_anchor_query = group_anchor_query.filter(
+            Trade.portfolio_code == portfolio_code
+        )
+    group_anchor = group_anchor_query.group_by(
+        Trade.portfolio_code, Trade.transfer_group
+    ).subquery()
     items = (
         query.outerjoin(
             group_anchor,
