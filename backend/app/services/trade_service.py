@@ -1959,8 +1959,10 @@ def list_trades(
       空段/空串忽略，解析后全空视为未传。
       与单值参数互斥：products 与 product_code 或 market 同传抛
       PRODUCTS_PARAM_CONFLICT（422），避免两套过滤语义叠加产生歧义。
-    - 排序：trade_date DESC, transfer_group, id DESC——transfer_group 入排序键
-      使同组两腿大概率同页相邻（同组两腿同事务插入 id 连续，此为双保险）。
+    - 排序（#734）：组锚点日期 DESC, transfer_group, id DESC——锚点 = 同组合内同
+      transfer_group 的 max(trade_date)，同组两腿共用同一日期档、恒相邻同页
+      （卖出组两腿 trade_date 天然分叉，按自身日期分档会拆页）；无组可锚的行
+      回落自身 trade_date。
     - trades 无 viewer 过滤（组合级操作，保持现状语义，不在本 PR 引入权限变化）。
 
     Returns:
@@ -2024,8 +2026,33 @@ def list_trades(
         query = query.filter(Trade.confirm_date <= confirm_date_end)
 
     total = query.count()
+    # 组锚点排序（#734）：同组两腿 trade_date 天然分叉（卖出组现金腿 = 基金腿确认日，
+    # attach_paired_cash_leg），按自身日期分档会把同组拆页。锚点取组内 max(trade_date)，
+    # 按 (portfolio_code, transfer_group) 分组收窄——组号语义是组合内的（uq_trade_transfer_group
+    # 不含组合列，读侧 build_paired_leg_map 同口径）。count 在 join 前执行，total 行数语义不变；
+    # 独占组的行锚点 = 自身日期，coalesce 只是 NULL 组的防御性回落。
+    group_anchor = (
+        db.query(
+            Trade.portfolio_code.label("grp_portfolio"),
+            Trade.transfer_group.label("grp"),
+            func.max(Trade.trade_date).label("anchor"),
+        )
+        .group_by(Trade.portfolio_code, Trade.transfer_group)
+        .subquery()
+    )
     items = (
-        query.order_by(Trade.trade_date.desc(), Trade.transfer_group, Trade.id.desc())
+        query.outerjoin(
+            group_anchor,
+            and_(
+                Trade.portfolio_code == group_anchor.c.grp_portfolio,
+                Trade.transfer_group == group_anchor.c.grp,
+            ),
+        )
+        .order_by(
+            func.coalesce(group_anchor.c.anchor, Trade.trade_date).desc(),
+            Trade.transfer_group,
+            Trade.id.desc(),
+        )
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()

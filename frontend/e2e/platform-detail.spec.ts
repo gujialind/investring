@@ -286,6 +286,16 @@ test.describe("平台详情页", () => {
   });
 
   test("交易记录卡：该平台交易结对展示与查看全部链接", async ({ page }) => {
+    // #734 手工重推期望序（后端排序键改为组锚点 max(trade_date) DESC, transfer_group,
+    // id DESC，不得「跑一遍看输出再填」）。E2E_ACTIVE 落在 HBZQ 上、本卡 page_size=5
+    // 恰好取全的 5 条腿分三组：
+    //   ① pending 场内买入组（rebal_）：基金腿 D4 + 配对 CASH 腿 D4（买入腿同日落账）
+    //      → 锚点 D4；② 已确认场内买入组：基金腿 D2 + CASH 腿 D2 → 锚点 D2；
+    //   ③ 首次申购组（sub_，恒单腿）：CASH 腿 trade_date = apply_date = D1 → 锚点 D1。
+    // 三组锚点互不相同且 D4 > D2 > D1，组内两腿日期本就相同（无跨日分叉），故改前
+    // （按自身 trade_date 分档）与改后（按锚点分档）的**渲染序完全一致**：①②③。
+    // 本用例因此只增此推导、断言原样保留——它是「排序改动未回归既有结对展示」的护栏，
+    // 真正钉住跨日同组不被拆页的是 e2e/trade-list-paging.spec.ts。
     await page.goto(PLATFORM_PATH);
     const card = page.getByTestId("platform-trades-card");
     const rows = card.getByTestId("platform-trade-row");

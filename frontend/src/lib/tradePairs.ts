@@ -51,8 +51,8 @@ export function canEditArrivalDate(trade: Trade): boolean {
 }
 
 /**
- * trades → 结对行。顺序敏感：分组与输出均保持传入顺序（= 后端
- * trade_date DESC, transfer_group, id DESC 排序序，决策⑪保证同组相邻）。
+ * trades → 结对行。顺序敏感：分组与输出均保持传入顺序（= 后端组锚点排序序：
+ * 组内 max(trade_date) DESC, transfer_group, id DESC，#734 起同组两腿跨日也恒相邻）。
  *
  * 规则（边界即契约，异常形态显式回落 single、不静默错渲成现金子行，#507）：
  * 1. 按 transfer_group 分组；

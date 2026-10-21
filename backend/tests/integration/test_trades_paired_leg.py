@@ -1,7 +1,7 @@
 # ============ 集成测试：#719 读侧双向对手腿派生（paired_leg） ============
 # 覆盖 issue #719 验收断言的后端部分：
 # - 双向：基金腿↔现金腿互指、平台间转移的两条现金腿互指（原 #493 只有基金腿→现金腿单向）
-# - 不受列表 status/platform/products 筛选与分页截断影响：对手腿被筛掉时仍回填
+# - 不受列表 status/platform/products/日期筛选影响：对手腿被筛掉时仍回填
 # - 不补行：total 与分页口径恒按真实行数，派生只挂在既有行上
 # - 边界：`sub_` 申赎单腿无对手 trade 行 → null；组内行数 ≠ 2 时整体跳过（宁可不补也不猜）
 # - 契约时机：仅 list 端点填充，单对象端点恒 null；#493 的两个平铺字段行为不变
@@ -132,7 +132,7 @@ class TestPairedLegBidirectional:
 
 
 class TestPairedLegCrossesFilters:
-    """派生通道不受列表筛选与分页截断影响（与 #493 单向版同一不变量）"""
+    """派生通道不受列表筛选影响（与 #493 单向版同一不变量）"""
 
     def test_survives_product_filter(self, client, admin_headers, test_db):
         """核心场景：筛基金产品 → 现金腿不在结果集，但基金行的 paired_leg 指向它"""
@@ -175,23 +175,24 @@ class TestPairedLegCrossesFilters:
         assert list(by_platform) == [fund.id]
         assert by_platform[fund.id]["paired_leg"]["id"] == cash.id
 
-    def test_counterpart_on_another_page_still_filled(self, client, admin_headers, test_db):
-        """分页截断不吞对手腿：两腿被拆到不同页时，本页行仍指向另一页的那条"""
+    def test_counterpart_excluded_by_date_filter_still_filled(self, client, admin_headers, test_db):
+        """日期筛选不吞对手腿：对手腿不在结果集时，本页行仍指向它。
+
+        （#734）原构造用「跨日 + page_size 分页把两腿切到两页」——该前提建在旧排序
+        键把同组拆页的缺陷之上；组锚点排序修复后同组两腿恒相邻，改用日期筛选构造
+        「对手腿不在结果集」的同一语义，与排序解耦。
+        """
         _seed(test_db, "PL719_H")
         fund, cash = _rebal_pair(test_db, "PL719_H", "rebal_719h0001",
                                  fund_date=T, cash_date=T1)
-        # 第三条排在中间，把两腿挤到不同页
-        create_trade(test_db, "PL719_H", FUND, FUND_MKT, trade_date=T1,
-                     transfer_group="rebal_719h0002")
 
-        page1, total = _items(client, admin_headers,
-                              "?portfolio_code=PL719_H&page=1&page_size=2")
-        assert total == 3
-        assert len(page1) == 2
-        filled = [i for i, item in page1.items() if item.get("paired_leg")]
-        assert filled, "整页都拿不到对手腿说明派生被分页截断了"
-        for trade_id in filled:
-            assert page1[trade_id]["paired_leg"]["id"] not in page1
+        # trade_date_end=T 把 T1 的现金腿筛出结果集
+        items, total = _items(client, admin_headers,
+                              f"?portfolio_code=PL719_H&trade_date_end={T.isoformat()}")
+        assert total == 1
+        assert list(items) == [fund.id]
+        assert items[fund.id]["paired_leg"]["id"] == cash.id
+        assert items[fund.id]["paired_leg"]["id"] not in items
 
 
 class TestPairedLegBoundaries:
