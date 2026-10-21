@@ -521,3 +521,109 @@ export async function openSubmitTradeDialog(
   await dlg.waitFor({ timeout: 10_000 });
   return { dlg, portfolioCode: code };
 }
+
+/**
+ * 取认证头前**必须先落到应用同源页面**：`authHeaders` 经 `page.evaluate` 读
+ * `window.localStorage`，而新开的 page 停在 `about:blank`（不透明源）会抛 SecurityError。
+ * 仓库其余 spec 同样遵循「先导航 → 取头」的顺序（如 `gotoPortfolioDetail` + 可见性等待
+ * 之后再 `authHeaders`）。
+ */
+export async function openAppAndAuth(page: Page): Promise<{ Authorization: string }> {
+  await page.goto('/');
+  await expect(page.locator('body')).toBeVisible();
+  return authHeaders(page);
+}
+
+/** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
+export async function nearestTradingDay(
+  page: Page,
+  headers: { Authorization: string },
+): Promise<string> {
+  const today = toISODate(new Date());
+  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
+    const rows = (await (
+      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
+    ).json()) as { calendar_date: string; is_open: boolean }[];
+    const open = rows
+      .filter((r) => r.is_open && r.calendar_date <= today)
+      .map((r) => r.calendar_date)
+      .sort();
+    if (open.length > 0) return open[open.length - 1];
+  }
+  throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
+}
+
+/** from 之后的第 n 个交易日（后端 /trading-calendar/next 为唯一事实来源） */
+export async function nextTradingDays(
+  page: Page,
+  headers: { Authorization: string },
+  from: string,
+  n: number,
+): Promise<string[]> {
+  const out: string[] = [];
+  let cursor = from;
+  for (let i = 0; i < n; i++) {
+    const resp = await page.request.get(
+      `/api/trading-calendar/next?from_date=${cursor}&days=1`,
+      { headers },
+    );
+    expect(resp.ok(), `取 ${cursor} 的下一交易日失败 ${resp.status()}`).toBeTruthy();
+    cursor = ((await resp.json()) as { trading_day: string }).trading_day;
+    out.push(cursor);
+  }
+  return out;
+}
+
+/**
+ * 本 worker 独占的隔离组合 code（≤20 字符，`portfolio.code` 是 String(20)）。
+ * `prefix` 是各 spec 的隔离契约（`E2E493` / `E2E725` / `E2E734`），必填、不给默认值；
+ * 用例后缀两种用法都保留：经 `suffix` 入参，或调用点字符串追加。
+ *
+ * 必须同时区分 **project / worker / retry**，否则必然撞车：
+ * - `chromium` 与 `mobile` 两个 project 都会跑同一 spec，而 `workerIndex`（与
+ *   `parallelIndex`）都是**每个 project 内**从 0 重新计数 → 只用 worker 槽位会让
+ *   mobile 复用 chromium 已建的同名组合，`POST /api/portfolios` 撞主键直接失败。
+ * - CI 主 e2e job 带 `retries: 2`：失败重试若沿用同一 code，也会撞上上次残留的组合。
+ *
+ * 长度：prefix(6) + 日期(8) + project(1) + worker(1) + retry(1) = 17，加用例后缀 1 位 = 18。
+ * ⚠️ 这个 18 只在 workerIndex/retry **均为个位数**时成立：两者按十进制原样插值，而本地
+ * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19（16 核本地即如此）、两位齐全
+ * 就到 20 上限。**但腾位不是 §4 的决定性理由**——见下。
+ *
+ * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。三条理由按严重度排：
+ * ① 组合**没有 DELETE 端点**（`regression.spec.ts` 的「组合详情页不应出现删除组合入口」
+ *   正是在守这条前后端契约，防 P0-5：前端曾提供后端不存在的 `DELETE /portfolios/{code}`）。
+ *   加了 nonce，同一后端上连跑 N 次就累积无法删除的 draft 组合——量级不小：
+ *   `trade-in-transit` 一轮即 8 条（4 个调用点 × 2 project，`--retries=0` 口径；带 retry
+ *   更多），只在下次 `run_e2e_backend.py` 重启重灌时才清掉。
+ * ② 现在这个 `ALREADY_EXISTS` 400 是**响亮失败**：数据前提一破，第一次 `POST` 就红并指名
+ *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
+ * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
+ *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
+ *   `frontend/AGENTS.md` §4「E2E（Playwright）」的「净值夹具」条）。
+ *
+ * 若日后推翻本定案，腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project
+ * 标记或 retry 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
+ */
+export function isolatedPortfolioCode(
+  prefix: string,
+  testInfo: { project: { name: string }; workerIndex: number; retry: number },
+  suffix = '',
+): string {
+  const day = toISODate(new Date()).replace(/-/g, '');
+  const proj = testInfo.project.name === 'mobile' ? 'M' : 'D';
+  return `${prefix}${day}${proj}${testInfo.workerIndex}${testInfo.retry}${suffix}`;
+}
+
+/**
+ * 清除交易列表的默认「近1年」日期区间（trade_date_end = today）。
+ *
+ * 在途 / 分页类 spec 的被测腿在**未来**交易日下单（D 是 ≤ today 的最近交易日 ⇒ D+1 起
+ * 均晚于 today），默认区间会把这些行滤出列表；筛选状态只存于组件 state，
+ * 每次 `gotoPortfolioSubpage` 重新挂载即复位，故每个 trades 页生命周期都要
+ * 重新清一次（移动端先展开折叠筛选面板）。
+ */
+export async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promise<void> {
+  await openFilterPanelIfMobile(page, testInfo);
+  await page.getByRole('button', { name: '清除日期区间' }).click();
+}

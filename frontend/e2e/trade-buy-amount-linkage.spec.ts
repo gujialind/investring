@@ -33,6 +33,7 @@ import {
   authHeaders,
   collectPageErrors,
   dialogByTitle,
+  nearestTradingDay,
   openPopover,
   openSubmitTradeDialog,
   pickCalendarDay,
@@ -54,28 +55,6 @@ async function pickFirstPlatform(page: Page, dlg: Locator): Promise<string> {
 const actualInput = (dlg: Locator) => dlg.getByLabel('实际支付金额（含费，元）');
 const netInput = (dlg: Locator) => dlg.getByLabel('净投入金额（扣费后，元）');
 const feeInput = (dlg: Locator) => dlg.getByLabel('手续费（元）');
-
-/**
- * 取「today 起最近一个交易日」（含 today）：查当年日历，当年尚无开市日则回看
- * 上一年末。只依赖交易日历 API 事实、不假设周末规则（#468）。
- */
-async function nearestTradingDay(
-  page: Page,
-  headers: { Authorization: string },
-): Promise<string> {
-  const today = toISODate(new Date());
-  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    const open = rows
-      .filter((r) => r.is_open && r.calendar_date <= today)
-      .map((r) => r.calendar_date)
-      .sort();
-    if (open.length > 0) return open[open.length - 1];
-  }
-  throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
-}
 
 /**
  * 清除同自然键的残留 pending 买入（组合/产品/市场/平台/方向/交易日）。

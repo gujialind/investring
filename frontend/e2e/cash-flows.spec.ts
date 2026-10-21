@@ -18,11 +18,13 @@
  */
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import {
-  authHeaders,
   collectPageErrors,
   dialogByTitle,
   gotoPortfolioDetail,
   gotoPortfolioSubpage,
+  isolatedPortfolioCode,
+  nearestTradingDay,
+  openAppAndAuth,
   openFilterPanelIfMobile,
   openPopover,
   pickCalendarDay,
@@ -54,29 +56,6 @@ async function post<T>(
   return (await resp.json()) as T;
 }
 
-/** 取认证头前先落到应用同源页（about:blank 读 localStorage 会抛 SecurityError，见 trade-in-transit） */
-async function openAppAndAuth(page: Page): Promise<{ Authorization: string }> {
-  await page.goto('/');
-  await expect(page.locator('body')).toBeVisible();
-  return authHeaders(page);
-}
-
-/** today 起最近一个交易日（含 today）；当年无开市日则回看上一年末（#468） */
-async function nearestTradingDay(page: Page, headers: { Authorization: string }): Promise<string> {
-  const today = toISODate(new Date());
-  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    const open = rows
-      .filter((r) => r.is_open && r.calendar_date <= today)
-      .map((r) => r.calendar_date)
-      .sort();
-    if (open.length > 0) return open[open.length - 1];
-  }
-  throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
-}
-
 /** d 的前一工作日（使首购确认日恰落 d：申请日下一交易日 = d） */
 function prevWorkday(d: string): string {
   const apply = new Date(`${d}T00:00:00`);
@@ -103,13 +82,6 @@ async function prevTradingDay(
     if (open.length > 0) return open[open.length - 1];
   }
   throw new Error(`交易日历中找不到 ${d} 之前最近一个交易日`);
-}
-
-/** 本 worker 独占隔离组合 code（≤20 字符）：E2E725(6)+日期(8)+proj(1)+worker(1)+retry(1)+后缀(1)=18 */
-function isolatedCode(testInfo: TestInfo, suffix: string): string {
-  const day = toISODate(new Date()).replace(/-/g, '');
-  const proj = testInfo.project.name === 'mobile' ? 'M' : 'D';
-  return `E2E725${day}${proj}${testInfo.workerIndex}${testInfo.retry}${suffix}`;
 }
 
 /** 首购注资：申购（申请日=d 前一工作日 → 确认日=d）+ 确认 → sub_buy 已生效现金流入 @ (PLATFORM, d) */
@@ -233,7 +205,7 @@ test.describe('现金流水页（#725，双端）', () => {
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
-    const code = isolatedCode(testInfo, 'R');
+    const code = isolatedPortfolioCode('E2E725', testInfo, 'R');
 
     await post(page, headers, '/api/portfolios', { code, name: `现金流水渲染 ${code}` });
     await seedSubscription(page, headers, code, d);
@@ -366,7 +338,7 @@ test.describe('现金流水页（#725，双端）', () => {
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
-    const code = isolatedCode(testInfo, 'T');
+    const code = isolatedPortfolioCode('E2E725', testInfo, 'T');
 
     await post(page, headers, '/api/portfolios', { code, name: `现金流水在途 ${code}` });
     await seedSubscription(page, headers, code, d);
@@ -434,7 +406,7 @@ test.describe('现金流水页（#725，双端）', () => {
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
-    const code = isolatedCode(testInfo, 'F');
+    const code = isolatedPortfolioCode('E2E725', testInfo, 'F');
 
     await post(page, headers, '/api/portfolios', { code, name: `现金流水刷新 ${code}` });
     await seedSubscription(page, headers, code, d);
@@ -486,7 +458,7 @@ test.describe('现金流水页（#725，双端）', () => {
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const p = await prevTradingDay(page, headers, d);
-    const code = isolatedCode(testInfo, 'S');
+    const code = isolatedPortfolioCode('E2E725', testInfo, 'S');
 
     await post(page, headers, '/api/portfolios', { code, name: `现金流水对账 ${code}` });
     await seedSubscription(page, headers, code, p); // (HBZQ, p) 首购 +40,000 已生效
@@ -554,7 +526,7 @@ test.describe('现金流水页（#725，双端）', () => {
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
-    const code = isolatedCode(testInfo, 'E');
+    const code = isolatedPortfolioCode('E2E725', testInfo, 'E');
 
     await post(page, headers, '/api/portfolios', { code, name: `现金流水失败态 ${code}` });
     await seedSubscription(page, headers, code, d);
