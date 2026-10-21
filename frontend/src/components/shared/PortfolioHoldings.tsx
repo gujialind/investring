@@ -54,7 +54,7 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
  * 平铺组 736px→2 列，同页卡宽不一致）；min ≤ (720-12)/2 = 354 时两组同列数，
  * 单卡实宽 354（引导组）-362（平铺组）——引导组下界比设计区间少 4px，是换两组同列数的代价。
  */
-function cardGridClass(variant: "desktop" | "mobile"): string {
+export function cardGridClass(variant: "desktop" | "mobile"): string {
   return variant === "desktop"
     ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(350px,1fr))]"
     : "space-y-2.5";
