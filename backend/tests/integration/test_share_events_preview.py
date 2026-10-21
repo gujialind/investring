@@ -12,7 +12,7 @@ from decimal import Decimal
 from tests.factories import (
     create_portfolio, create_product, create_platform,
     create_share_change_event, create_position_snapshot,
-    create_value_snapshot, ensure_trading_day,
+    create_price_record, create_value_snapshot, ensure_trading_day,
 )
 from app.models.share_change_event import ShareChangeEvent
 from app.models.audit_log import AuditLog
@@ -80,6 +80,8 @@ class TestShareChangeEventPreview:
     ):
         """预览四字段 == 确认落库值；预览本身不改 status、不写 shares_change"""
         self._setup(test_db, "SPV_P1", shares=5377.61)
+        # #744：再投资净值取除息日数据源净值，与事件上的 reinvest_nav 一致
+        create_price_record(test_db, self.FUND, "CN_OTC", self.EX, 1.0899)
         event = self._create(
             test_db, "SPV_P1", event_type="reinvest_dividend",
             platform_code="MYCF", div_cash=Decimal("0.0119"),
@@ -114,12 +116,19 @@ class TestShareChangeEventPreview:
             "shares_change": float(confirmed.shares_change),
             "shares_after": float(confirmed.shares_after),
             "cash_change": float(confirmed.cash_change),
+            # #744 分红明细：红利金额 quantize_amount(5377.61 × 0.0119) = 63.99，
+            # 再投资净值 / 取价日 == 确认回写值
+            "div_cash": float(confirmed.div_cash),
+            "dividend_amount": 63.99,
+            "reinvest_nav": float(confirmed.reinvest_nav),
+            "nav_date": confirmed.ex_date.isoformat(),
         }
         assert Decimal(str(confirmed.shares_change)) == Decimal("58.71")
 
     def test_preview_not_written_to_db(self, client, admin_headers, test_db):
         """纯只读：连发两次预览，库里字段恒为 NULL"""
         self._setup(test_db, "SPV_P2")
+        create_price_record(test_db, self.FUND, "CN_OTC", self.EX, 1.0899)
         event = self._create(
             test_db, "SPV_P2", event_type="reinvest_dividend",
             platform_code="MYCF", div_cash=Decimal("0.0119"),

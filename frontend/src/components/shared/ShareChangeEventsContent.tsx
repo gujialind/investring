@@ -130,7 +130,7 @@ export default function ShareChangeEventsContent({
     product_code: createIntent ? normalizedInitialProduct?.code ?? "" : "",
     market: createIntent ? normalizedInitialProduct?.market ?? "" : "",
     div_cash: 0,
-    reinvest_nav: 0,
+    reinvest_nav: undefined,
     ratio: 0,
     shares_change: 0,
     cash_change: 0,
@@ -242,7 +242,7 @@ export default function ShareChangeEventsContent({
       product_code: "",
       market: "",
       div_cash: 0,
-      reinvest_nav: 0,
+      reinvest_nav: undefined,
       ratio: 0,
       shares_change: 0,
       cash_change: 0,
@@ -291,12 +291,24 @@ export default function ShareChangeEventsContent({
       return;
     }
 
+    const isReinvest = formData.event_type === "reinvest_dividend";
+    // #744：再投资净值可留空（确认时取除息日净值），填写则必须为正
+    if (isReinvest && formData.reinvest_nav !== undefined && !(formData.reinvest_nav > 0)) {
+      addToast({
+        type: "error",
+        title: "表单校验失败",
+        message: "再投资净值必须大于 0；净值未发布可留空",
+      });
+      return;
+    }
+
     // #343 双保险：基金级事件不渲染平台选择器，空串归一为 undefined 再提交
     //（后端 service 同口径归一，此处仅避免无效载荷）
     submitCreate({
       ...formData,
       platform_code: formData.platform_code || undefined,
       cash_pay_date: formData.event_type === "cash_dividend" ? formData.cash_pay_date : undefined,
+      reinvest_nav: isReinvest ? formData.reinvest_nav : undefined,
     });
   };
 
@@ -534,8 +546,15 @@ export default function ShareChangeEventsContent({
                             id="reinvest_nav"
                             type="number"
                             step="0.0001"
-                            value={formData.reinvest_nav}
-                            onChange={(e) => setFormData({ ...formData, reinvest_nav: parseFloat(e.target.value) || 0 })}
+                            min="0"
+                            placeholder="留空则确认时取除息日净值（需先同步）"
+                            value={formData.reinvest_nav ?? ""}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                reinvest_nav: e.target.value === "" ? undefined : Number(e.target.value),
+                              })
+                            }
                           />
                         </div>
                       )}

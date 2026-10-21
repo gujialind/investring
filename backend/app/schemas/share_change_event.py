@@ -68,12 +68,20 @@ class ShareChangeEventPreviewResult(BaseModel):
     shares_change/cash_change 是用户直填值的回显；shares_after 恒为 null——
     确认路径刻意保留用户直填的「调整后余额」、不计算写回（见 apply_event_fields），
     预览照实回 null，不编造确认不会产生的值。
+
+    分红明细（#744）：div_cash（每份分红）与 dividend_amount（到分的红利金额）仅
+    cash_dividend / reinvest_dividend 有值；reinvest_nav 为确认将回写的解析净值、
+    nav_date 为其取价日（= 除息日），仅 reinvest_dividend 有值。
     """
 
     entitlement_shares: Optional[float] = None
     shares_change: Optional[float] = None
     shares_after: Optional[float] = None
     cash_change: Optional[float] = None
+    div_cash: Optional[float] = None
+    dividend_amount: Optional[float] = None
+    reinvest_nav: Optional[float] = None
+    nav_date: Optional[date] = None
 
 
 class ShareChangeEventPreviewResponse(BaseModel):

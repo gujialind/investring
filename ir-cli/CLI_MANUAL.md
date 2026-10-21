@@ -811,7 +811,7 @@ ir share-event create \
 | `--shares-after` | 否 | 变动后份额 |
 | `--ratio` | 否 | 比例（拆合股用） |
 | `--div-cash` | 否 | 现金分红金额 |
-| `--reinvest-nav` | 否 | 再投资净值 |
+| `--reinvest-nav` | 否 | 再投资净值（> 0，仅 `reinvest_dividend`）；省略则确认时取除息日数据源净值，填写仅作一致性校验（不一致 `PRICE_NAV_MISMATCH`）；0/负数 `INVALID_PARAM` |
 | `--cash-change` | 否 | 现金变动 |
 | `--event-source` | 否 | 事件来源 |
 | `--notes` | 否 | 备注 |
@@ -822,7 +822,7 @@ ir share-event create \
 | 类型 | 说明 |
 |------|------|
 | `cash_dividend` | 现金分红 |
-| `reinvest_dividend` | 红利再投资 |
+| `reinvest_dividend` | 红利再投资（仅场外份额：`market` 为 `CN_OTC` / `HK_MUTUAL`；场内份额只能现金分红，录入报 `INVALID_PARAM`） |
 | `share_split` | 份额拆分 |
 | `share_merge` | 份额合并 |
 | `bonus_share` | 送股 |
@@ -846,6 +846,9 @@ ir share-event update <ID> [--ex-date YYYY-MM-DD] [--entitlement-shares N] [--ra
 
 # 清空到账日，恢复按除息日到账
 ir share-event update <ID> --json '{"cash_pay_date":null}'
+
+# 清空再投资净值，确认时改取除息日数据源净值（存量 0 值须先清空才能确认）
+ir share-event update <ID> --json '{"reinvest_nav":null}'
 ```
 
 > `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。清空沿用 `--json` 显式 `null`，没有专用清空选项。已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
@@ -869,10 +872,14 @@ ir share-event delete <ID> --yes
 确认事件（校验权益登记日持仓快照存在）。
 
 ```bash
-ir share-event confirm <ID>
+ir share-event confirm <ID> [--sync-nav]
 ```
 
-> **约束**：仅 `pending` 状态可确认，且权益登记日必须有持仓快照。
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--sync-nav` | false | 红利再投资的除息日净值缺失（`MISSING_NAV`）时自动同步该产品自除息日起的净值并重试一次（会访问外部数据源）；同步失败或仍缺失照常报 `MISSING_NAV` |
+
+> **约束**：仅 `pending` 状态可确认，且权益登记日必须有持仓快照。`reinvest_dividend` 按除息日数据源净值折算份额并回写 `reinvest_nav`：净值未同步报 `MISSING_NAV`，手填净值与数据源不一致报 `PRICE_NAV_MISMATCH`（#744）。
 
 #### `ir share-event cancel`
 

@@ -73,4 +73,19 @@ def get_hint(code: str, details: Optional[dict] = None) -> Optional[str]:
                 f"当前可用份额为 {shares}，请调低份额后重试；"
                 "实时查询: ir position available-shares --portfolio-code <code> --product-code <product_code>"
             )
+    # 份额变动事件（红利再投资）的净值错误带 event_id，与调仓同码但补救命令不同（#744）
+    event_id = details.get("event_id")
+    if code == "MISSING_NAV" and event_id is not None:
+        product = details.get("product_code") or "<product_code>"
+        market = details.get("market") or "<market>"
+        nav_date = details.get("nav_date") or "<除息日>"
+        return (
+            f"除息日净值未同步: ir share-event confirm {event_id} --sync-nav 自动同步并确认，"
+            f"或 ir market sync {product} {market} --start-date {nav_date} --end-date {nav_date} 回补后重试"
+        )
+    if code == "PRICE_NAV_MISMATCH" and event_id is not None:
+        return (
+            f"手填再投资净值与除息日净值不一致: 核对后修改，或清空改由确认时取数据源净值 "
+            f"ir share-event update {event_id} --json '{{\"reinvest_nav\": null}}'"
+        )
     return ERROR_HINTS.get(code)

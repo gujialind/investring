@@ -66,7 +66,8 @@ export interface ShareChangeEventUpdate {
   shares_after?: number;
   cash_change?: number;
   div_cash?: number;
-  reinvest_nav?: number;
+  /** 再投资净值：null = 未填，确认时取除息日数据源净值（#744） */
+  reinvest_nav?: number | null;
   ratio?: number;
   notes?: string;
 }
@@ -74,12 +75,18 @@ export interface ShareChangeEventUpdate {
 /**
  * 事件确认前预览的计算结果（#424，与后端 ShareChangeEventPreviewResult 对齐）。
  * 与确认后落库值逐一相等；强制调整的 shares_after 恒为 null（确认不写回该字段）。
+ * 分红明细（#744）：div_cash / dividend_amount 仅分红类有值；reinvest_nav（确认将回写的
+ * 解析净值）与 nav_date（取价日 = 除息日）仅分红再投资有值。
  */
 export interface ShareChangeEventPreview {
   entitlement_shares?: number;
   shares_change?: number;
   shares_after?: number;
   cash_change?: number;
+  div_cash?: number | null;
+  dividend_amount?: number | null;
+  reinvest_nav?: number | null;
+  nav_date?: string | null;
 }
 
 export interface ShareChangeEventPreviewResponse {

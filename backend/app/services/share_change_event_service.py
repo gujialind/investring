@@ -21,6 +21,7 @@ from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.services.trading_utils import is_trading_day, get_latest_snapshot_date
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.nav_lookup import get_exact_unit_price
 from app.services.null_guard import reject_explicit_nulls
 from app.services.product_service import resolve_product_market
 from app.services.audit_service import record_audit, _diff_fields
@@ -29,16 +30,21 @@ from app.constants.audit_actions import (
     ACTION_CANCEL, ACTION_DELETE,
     RESOURCE_SHARE_CHANGE_EVENT,
 )
-from app.utils.quantize import quantize_amount, quantize_shares
+from app.utils.business_time import business_today
+from app.utils.quantize import quantize_amount, quantize_nav, quantize_shares
 
 logger = logging.getLogger(__name__)
 
 FUND_LEVEL_TYPES = {"share_split", "share_merge", "bonus_share"}
 PLATFORM_LEVEL_TYPES = {"cash_dividend", "reinvest_dividend", "forced_adjustment"}
+# 场内（证券登记结算系统）份额只能现金分红，红利再投资只发生在场外登记份额（#744）
+REINVEST_ALLOWED_MARKETS = {"CN_OTC", "HK_MUTUAL"}
 
 # 确认与预览共用的拒绝文案（#460 评审：单点定义，杜绝「同码不同消息」两侧漂移）
 MSG_POSITION_SNAPSHOT_MISSING = "权益登记日持仓快照不存在"
 MSG_FUND_LEVEL_NO_HOLDINGS = "权益登记日无持仓，无需确认"
+MSG_REINVEST_ON_EXCHANGE = "场内份额只能现金分红，不支持红利再投资，请改录 cash_dividend"
+MSG_REINVEST_NAV_NOT_POSITIVE = "再投资净值必须大于 0；净值未发布可留空，确认时自动取除息日净值"
 
 
 class EventFieldResult(NamedTuple):
@@ -47,11 +53,13 @@ class EventFieldResult(NamedTuple):
     「份额类字段统一量化到 2 位、shares_after 与 shares_change 严格自洽」
     这组不变量由 compute_event_fields 单点定义——它只算不写，确认路径负责
     把结果写回事件（含审计 diff 语义），预览路径直接原样返回（issue #424）。
+    `dividend_amount` 仅分红类有值（到分的红利金额），只供预览展示、不写回。
     """
 
     shares_change: Optional[Decimal]
     shares_after: Decimal
     cash_change: Optional[Decimal]
+    dividend_amount: Optional[Decimal] = None
 
 
 def compute_event_fields(
@@ -85,21 +93,28 @@ def compute_event_fields(
     """
     es = entitlement_shares or Decimal("0")
     if event_type == "cash_dividend":
+        cash = quantize_amount(es * Decimal(str(div_cash or 0)))
         return EventFieldResult(
             shares_change=Decimal("0"),
             shares_after=es,
-            cash_change=quantize_amount(es * Decimal(str(div_cash or 0))),
+            cash_change=cash,
+            dividend_amount=cash,
         )
     if event_type == "reinvest_dividend":
+        # #744：调用方须先经 resolve_reinvest_nav 解析出正数净值；这里不再有任何回退
+        # （原 `or 1` 把 0/NULL 静默当 1.0，按 1.0 折算出偏大的份额）
+        if reinvest_nav is None or Decimal(str(reinvest_nav)) <= 0:
+            raise BusinessError("INVALID_PARAM", MSG_REINVEST_NAV_NOT_POSITIVE)
         # issue #425：红利金额先量化到分（与 cash_dividend 同口径，亦与基金公司算法一致：
         # 先按「分」确定应得红利，再按再投资净值折算份额）。跳过这一步会把
         # 「金额量化损失（< 0.005 元）」带进份额，跨四舍五入边界时差 0.01 份。
         dividend_amount = quantize_amount(es * Decimal(str(div_cash or 0)))
-        new_shares = quantize_shares(dividend_amount / Decimal(str(reinvest_nav or 1)))
+        new_shares = quantize_shares(dividend_amount / Decimal(str(reinvest_nav)))
         return EventFieldResult(
             shares_change=new_shares,
             shares_after=es + new_shares,
             cash_change=Decimal("0"),
+            dividend_amount=dividend_amount,
         )
     if event_type == "share_split":
         shares_after = quantize_shares(es * Decimal(str(ratio or 1)))
@@ -220,6 +235,50 @@ def resolve_entitlement_shares(db: Session, event: ShareChangeEvent) -> Decimal:
     return Decimal(str(entitlement_position.shares or 0))
 
 
+def resolve_reinvest_nav(db: Session, event: ShareChangeEvent) -> Optional[Decimal]:
+    """解析红利再投资净值（确认与预览共用单点，#744）。
+
+    数据源净值优先：恒取 `price_record` 中 `ex_date` 当日净值（与场外调仓确认的
+    严格取价同口径，不向前回退）；事件上的 `reinvest_nav` 非空时只作一致性校验，
+    两侧经 `quantize_nav` 归一后精确比较，不覆盖数据源值。非 reinvest 返回 None。
+    0/负数的存量脏值已由 `_validate_confirm_preconditions` 先行拒绝。
+
+    Raises:
+        BusinessError: MISSING_NAV——除息日净值未同步；
+            PRICE_NAV_MISMATCH——手填净值与除息日净值不一致
+    """
+    if event.event_type != "reinvest_dividend":
+        return None
+    source_nav = get_exact_unit_price(db, event.product_code, event.market, event.ex_date)
+    if source_nav is None:
+        raise BusinessError(
+            "MISSING_NAV",
+            f"产品{event.product_code}在除息日{event.ex_date}的净值尚未同步，无法计算红利再投资份额",
+            details={
+                "event_id": event.id,
+                "product_code": event.product_code,
+                "market": event.market,
+                "nav_date": event.ex_date.isoformat(),
+            },
+        )
+    source_nav = quantize_nav(source_nav)
+    if event.reinvest_nav is not None:
+        input_nav = quantize_nav(event.reinvest_nav)
+        if input_nav != source_nav:
+            raise BusinessError(
+                "PRICE_NAV_MISMATCH",
+                f"再投资净值({input_nav})与除息日{event.ex_date}净值({source_nav})不一致，"
+                f"请核对后修改，或清空再投资净值直接取数据源净值",
+                details={
+                    "event_id": event.id,
+                    "nav_date": event.ex_date.isoformat(),
+                    "input_nav": float(input_nav),
+                    "source_nav": float(source_nav),
+                },
+            )
+    return source_nav
+
+
 def apply_event_fields(event: ShareChangeEvent) -> None:
     """把 compute_event_fields 的结果写回事件对象（唯一写回点，issue #424）。
 
@@ -265,15 +324,20 @@ def compute_share_change_event_preview(db: Session, event: ShareChangeEvent) -> 
 
     Returns:
         {"entitlement_shares": Decimal, "shares_change": Decimal|None,
-         "shares_after": Decimal|None, "cash_change": Decimal|None}
+         "shares_after": Decimal|None, "cash_change": Decimal|None,
+         "div_cash": Decimal|None, "dividend_amount": Decimal|None,
+         "reinvest_nav": Decimal|None, "nav_date": date|None}
         —— forced_adjustment 双空时三个变动字段为 None（与确认同一拒绝口径）；
         forced_adjustment 的 shares_after 恒为 None——确认路径不把该字段纳入计算写回
-        （见 apply_event_fields），预览照实回 None，不编造确认不会产生的值
+        （见 apply_event_fields），预览照实回 None，不编造确认不会产生的值；
+        div_cash / dividend_amount 仅分红类有值，reinvest_nav / nav_date 仅 reinvest
+        有值（#744：取 resolve_reinvest_nav 的解析值，即确认将回写的值）
 
     Raises:
         BusinessError: INVALID_STATUS——非 pending（与确认同一条消息）；
-            EMPTY_ADJUSTMENT / SHARES_CHANGE_ON_CASH_PRODUCT / MISSING_POSITION_SNAPSHOT /
-            POSITION_NOT_FOUND——全部与确认路径同源同码同消息
+            EMPTY_ADJUSTMENT / SHARES_CHANGE_ON_CASH_PRODUCT / INVALID_PARAM /
+            MISSING_POSITION_SNAPSHOT / POSITION_NOT_FOUND / MISSING_NAV /
+            PRICE_NAV_MISMATCH——全部与确认路径同源同码同消息
     """
     # 与确认路径同一组前置校验（公共 preamble，同序同码同消息，杜绝预览与确认分叉）
     _validate_confirm_preconditions(db, event)
@@ -285,16 +349,18 @@ def compute_share_change_event_preview(db: Session, event: ShareChangeEvent) -> 
         # 预览若照常返回 0/0.00 就是「假预览」：看着能确认、点下去才炸。
         # 文案与确认路径共用同一常量（#460 评审：原两侧同码不同消息）
         raise BusinessError("MISSING_POSITION_SNAPSHOT", MSG_FUND_LEVEL_NO_HOLDINGS)
+    reinvest_nav = resolve_reinvest_nav(db, event)
     result = compute_event_fields(
         event.event_type,
         entitlement_shares,
         ratio=event.ratio,
         div_cash=event.div_cash,
-        reinvest_nav=event.reinvest_nav,
+        reinvest_nav=reinvest_nav,
         shares_change=event.shares_change,
         cash_change=event.cash_change,
     )
     is_forced_adjustment = event.event_type == "forced_adjustment"
+    is_dividend = event.event_type in ("cash_dividend", "reinvest_dividend")
 
     # 刻意不复刻创建期的平台覆盖校验（check_platform_coverage）：那是「录入完整性」
     # 规则而非状态门，塞进只读预览会与确认路径行为分叉（#424）
@@ -305,6 +371,10 @@ def compute_share_change_event_preview(db: Session, event: ShareChangeEvent) -> 
             None if (result is None or is_forced_adjustment) else result.shares_after
         ),
         "cash_change": result.cash_change if result else None,
+        "div_cash": event.div_cash if is_dividend else None,
+        "dividend_amount": result.dividend_amount if result else None,
+        "reinvest_nav": reinvest_nav,
+        "nav_date": event.ex_date if reinvest_nav is not None else None,
     }
 
 
@@ -357,6 +427,28 @@ def _validate_product_allows_shares_change(
         )
 
 
+def _validate_reinvest_input(
+    event_type: str, market: Optional[str], reinvest_nav: Optional[Decimal]
+) -> None:
+    """#744：红利再投资仅限场外登记份额；再投资净值可留空，显式值必须为正。
+
+    创建、更新（合并后值）、确认三处同口径；其他类型不校验——前端历史上对所有
+    类型都提交 `reinvest_nav: 0`，对非 reinvest 拒绝会误伤正常录入。
+    """
+    if event_type != "reinvest_dividend":
+        return
+    if market not in REINVEST_ALLOWED_MARKETS:
+        raise BusinessError(
+            "INVALID_PARAM", MSG_REINVEST_ON_EXCHANGE,
+            details={"field": "market", "value": market},
+        )
+    if reinvest_nav is not None and Decimal(str(reinvest_nav)) <= 0:
+        raise BusinessError(
+            "INVALID_PARAM", MSG_REINVEST_NAV_NOT_POSITIVE,
+            details={"field": "reinvest_nav", "value": float(reinvest_nav)},
+        )
+
+
 def _validate_confirm_preconditions(db: Session, event: ShareChangeEvent) -> None:
     """确认与确认预览共用的前置校验序列（#424；#460 评审抽公共 preamble）。
 
@@ -375,6 +467,7 @@ def _validate_confirm_preconditions(db: Session, event: ShareChangeEvent) -> Non
     _validate_product_allows_shares_change(
         db, event.product_code, event.market, event.event_type, event.shares_change
     )
+    _validate_reinvest_input(event.event_type, event.market, event.reinvest_nav)
 
 
 def check_platform_coverage(
@@ -581,6 +674,7 @@ def create_share_change_event(
     # issue #279：双空强制调整与现金型产品份额变动在创建期拦截（REST/CLI 共用）
     _validate_adjustment_not_empty(event_type, shares_change, cash_change)
     _validate_product_allows_shares_change(db, product_code, market, event_type, shares_change)
+    _validate_reinvest_input(event_type, market, reinvest_nav)
 
     # 分级校验：平台级必填 platform_code，基金级禁止指定
     if event_type in PLATFORM_LEVEL_TYPES:
@@ -713,6 +807,9 @@ def update_share_change_event(
     _validate_product_allows_shares_change(
         db, event.product_code, event.market, event.event_type, merged_shares_change
     )
+    _validate_reinvest_input(
+        event.event_type, event.market, updates.get("reinvest_nav", event.reinvest_nav)
+    )
 
     old_values, new_values = _diff_fields(event, updates)
 
@@ -735,11 +832,45 @@ def update_share_change_event(
     return event
 
 
-def confirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareChangeEvent:
-    """确认份额变动事件（回写 entitlement_shares、计算、基金级自动拆分）。不 commit。"""
+def _resolve_reinvest_nav_for_confirm(
+    db: Session, event: ShareChangeEvent, sync_nav: bool
+) -> Optional[Decimal]:
+    """确认侧净值解析：sync_nav=True 时命中 MISSING_NAV 自动回填除息日起的净值并重试一次（#744，同 #90）。"""
+    try:
+        return resolve_reinvest_nav(db, event)
+    except BusinessError as e:
+        if not (sync_nav and e.code == "MISSING_NAV"):
+            raise
+        missing = e
+    from app.services.market_data_service import sync_price_data
+
+    try:
+        result = sync_price_data(
+            db, event.product_code, event.market, event.ex_date, business_today()
+        )
+        failure = None if result.get("success") else result.get("message")
+    except Exception as sync_err:
+        failure = str(sync_err)
+    if failure is not None:
+        raise BusinessError(
+            "MISSING_NAV", f"{missing.message}；自动同步净值失败: {failure}",
+            details=missing.details,
+        )
+    return resolve_reinvest_nav(db, event)
+
+
+def confirm_share_change_event(
+    db: Session, event: ShareChangeEvent, *, sync_nav: bool = False
+) -> ShareChangeEvent:
+    """确认份额变动事件（回写 entitlement_shares、计算、基金级自动拆分）。不 commit。
+
+    reinvest_dividend 的净值经 resolve_reinvest_nav 解析后回写 `reinvest_nav`（#744），
+    sync_nav 仅在命中 MISSING_NAV 时生效（显式选择，会访问外部数据源）。
+    """
     # 前置校验与预览共用同一 preamble（同序同码同消息）：状态门 + #279 双校验；
     # 快照存在性探针内聚在 resolve_entitlement_shares / _confirm_fund_level_event
     _validate_confirm_preconditions(db, event)
+    old_reinvest_nav = event.reinvest_nav
 
     if event.platform_code is None:
         # 基金级事件：自动拆分为各平台子记录
@@ -752,27 +883,35 @@ def confirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareCha
         # forced_adjustment 的 (产品, market, 平台) 精查在此（POSITION_NOT_FOUND，#278），
         # 其余平台级按 platform_code 过滤（无命中 → 0）
         entitlement_shares = resolve_entitlement_shares(db, event)
+        reinvest_nav = _resolve_reinvest_nav_for_confirm(db, event, sync_nav)
         event.entitlement_shares = entitlement_shares
         event.shares_before = entitlement_shares
+        if reinvest_nav is not None:
+            event.reinvest_nav = reinvest_nav
         apply_event_fields(event)
         event.status = "confirmed"
         event.confirmed_at = datetime.now()
 
+    old_value = {"status": "pending"}
+    new_value = {
+        "status": "confirmed",
+        "entitlement_shares": event.entitlement_shares,
+        "shares_before": event.shares_before,
+        "shares_change": event.shares_change,
+        "shares_after": event.shares_after,
+        "cash_change": event.cash_change,
+    }
+    if event.event_type == "reinvest_dividend":
+        old_value["reinvest_nav"] = old_reinvest_nav
+        new_value["reinvest_nav"] = event.reinvest_nav
     record_audit(
         db,
         action=ACTION_CONFIRM,
         resource_type=RESOURCE_SHARE_CHANGE_EVENT,
         resource_id=str(event.id),
         resource_name=f"{event.portfolio_code}/{event.product_code}/{event.event_type}",
-        old_value={"status": "pending"},
-        new_value={
-            "status": "confirmed",
-            "entitlement_shares": event.entitlement_shares,
-            "shares_before": event.shares_before,
-            "shares_change": event.shares_change,
-            "shares_after": event.shares_after,
-            "cash_change": event.cash_change,
-        },
+        old_value=old_value,
+        new_value=new_value,
     )
 
     return event

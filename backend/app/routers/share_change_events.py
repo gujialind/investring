@@ -177,13 +177,20 @@ def get_share_change_event(
 @router.post("/{id}/confirm")
 def confirm_share_change_event(
     id: int,
+    sync_nav: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
+    """确认份额变动事件。
+
+    - reinvest_dividend 取除息日数据源净值折算份额并回写 reinvest_nav（#744）；
+      净值未同步 → 422 MISSING_NAV，手填净值与数据源不一致 → 422 PRICE_NAV_MISMATCH
+    - sync_nav=true：命中 MISSING_NAV 时自动回填净值并重试一次（会访问外部数据源）
+    """
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).with_for_update().first()
     if not event:
         raise HTTPException(status_code=404, detail="份额变动事件不存在")
-    confirm_event_service(db, event)
+    confirm_event_service(db, event, sync_nav=sync_nav)
     db.commit()
     db.refresh(event)
     return {"message": "份额变动事件确认成功", "event": ShareChangeEventResponse.from_orm(event)}

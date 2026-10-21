@@ -1,7 +1,8 @@
 /**
- * #522：双端现金分红到账日录入、编辑与回显。
+ * #522：双端现金分红到账日录入、编辑与回显；#744：红利再投资净值留空与确认预览明细。
  * 自建组合按 project/retry/场景区分；每轮使用新种子库，不推进共享 E2E_ACTIVE。
- * 预览夹具复用种子 000300.OF 的 D/D+1 净值，仅在自有组合生成两日快照。
+ * 预览夹具复用种子 000300.OF 的 D/D+1 净值，仅在自有组合生成两日快照；
+ * #744 场景的除息日 = D+2，取种子净值 1.6000（与 seed_e2e_active 的窗口一一对应）。
  */
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { addDays, format, nextSaturday, parseISO } from 'date-fns';
@@ -150,7 +151,8 @@ async function expectPreview(page: Page, row: Locator, id: number, date: string,
   const { preview } = await response.json();
   expect(Number(preview.cash_change)).toBe(500);
   const dlg = dialogByTitle(page, '确认份额变动事件');
-  await expect(dlg.getByText('¥500.00', { exact: true })).toBeVisible();
+  // 现金分红的红利金额（#744）与现金变化同值
+  await expect(dlg.getByText('¥500.00', { exact: true })).toHaveCount(2);
   await expect(dlg.getByText('现金到账日', { exact: true })).toBeVisible();
   await expect(dlg.getByText(date, { exact: true })).toHaveCount(isDefault ? 2 : 1);
   await expect(dlg.getByText('（默认除息日）', { exact: true })).toHaveCount(isDefault ? 1 : 0);
@@ -260,6 +262,90 @@ test.describe('现金分红到账日（#522，双端）', () => {
         const response = await page.request.delete(`/api/share-change-events/${id}`, { headers: s.headers });
         await expect(response).toBeOK();
       }
+    }
+  });
+});
+
+test.describe('红利再投资净值留空与确认预览（#744，双端）', () => {
+  test('净值留空创建、预览取除息日净值、缺净值禁用确认、编辑清空与非正数拦截', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const s = await setupPortfolio(page, testInfo, 'C');
+    await seedHolding(page, s);
+    const create = await openCreate(page, s);
+    await openPopover(page, create.getByLabel('事件类型', { exact: true }), page.getByRole('listbox'));
+    await page.getByRole('option', { name: '分红再投资', exact: true }).click();
+    await settlePopovers(page);
+    const navInput = create.getByLabel('再投资净值', { exact: true });
+    await expect(navInput).toHaveValue('');
+    await expect(navInput).toHaveAttribute('placeholder', /留空则确认时取除息日净值/);
+    const { event, payload } = await submitEvent(page, create);
+    expect(payload).not.toHaveProperty('reinvest_nav');
+
+    try {
+      const stored = await page.request.get(`/api/share-change-events/${event.id}`, { headers: s.headers });
+      expect((await stored.json()).reinvest_nav).toBeNull();
+      const row = page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+
+      // 真实预览：种子 000300.OF 在 D+2（= 除息日）净值 1.6000；持仓 1500/1.5 = 1000 份
+      const [response] = await Promise.all([
+        page.waitForResponse((r) => new URL(r.url()).pathname === `/api/share-change-events/${event.id}/preview`),
+        row.getByTitle('确认', { exact: true }).click(),
+      ]);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const { preview } = await response.json();
+      expect(preview).toMatchObject({
+        entitlement_shares: 1000, div_cash: 0.5, dividend_amount: 500,
+        reinvest_nav: 1.6, nav_date: s.ex, shares_change: 312.5,
+      });
+      const confirmDlg = dialogByTitle(page, '确认份额变动事件');
+      await expect(confirmDlg.getByText('参与分红份额', { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText('1,000.00 份', { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText('¥0.5000', { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText('¥500.00', { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText('1.6000', { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText(`（${s.ex} 净值）`, { exact: true })).toBeVisible();
+      await expect(confirmDlg.getByText('312.50 份', { exact: true })).toBeVisible();
+      await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(confirmDlg).toBeHidden();
+
+      // 缺净值：预览 422 经 error 通道展示后端文案 + 就近补救指引，确认按钮禁用
+      const missing = `产品${PRODUCT.code}在除息日${s.ex}的净值尚未同步，无法计算红利再投资份额`;
+      await page.route(`**/api/share-change-events/${event.id}/preview`, (route) =>
+        route.fulfill({
+          status: 422,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: { error: 'MISSING_NAV', message: missing } }),
+        }),
+      );
+      await row.getByTitle('确认', { exact: true }).click();
+      await expect(confirmDlg.getByText(missing)).toBeVisible();
+      await expect(confirmDlg.getByText('请在「产品」页同步该产品净值后重试')).toBeVisible();
+      await expect(confirmDlg.getByRole('button', { name: '确认', exact: true })).toBeDisabled();
+      await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
+      await page.unroute(`**/api/share-change-events/${event.id}/preview`);
+
+      // 编辑：非正数就地拦截不发请求；留空提交显式 null
+      await row.getByTitle('编辑', { exact: true }).click();
+      const edit = dialogByTitle(page, '编辑份额变动事件');
+      const editNav = edit.getByLabel('再投资净值', { exact: true });
+      await editNav.fill('0');
+      let putSent = false;
+      const onRequest = (r: { method(): string; url(): string }) => {
+        if (r.method() === 'PUT' && r.url().includes(`/api/share-change-events/${event.id}`)) putSent = true;
+      };
+      page.on('request', onRequest);
+      await edit.getByRole('button', { name: '保存', exact: true }).click();
+      await expect(edit.getByText('再投资净值必须大于 0；净值未发布可留空', { exact: true })).toBeVisible();
+      page.off('request', onRequest);
+      expect(putSent).toBe(false);
+      await editNav.fill('');
+      const updated = await submitEvent(page, edit, event.id);
+      expect(updated.payload).toHaveProperty('reinvest_nav', null);
+      expect(errors).toEqual([]);
+    } finally {
+      const response = await page.request.delete(`/api/share-change-events/${event.id}`, { headers: s.headers });
+      await expect(response).toBeOK();
     }
   });
 });

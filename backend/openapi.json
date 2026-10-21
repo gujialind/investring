@@ -4829,6 +4829,7 @@
           "份额变动事件"
         ],
         "summary": "Confirm Share Change Event",
+        "description": "确认份额变动事件。\n\n- reinvest_dividend 取除息日数据源净值折算份额并回写 reinvest_nav（#744）；\n  净值未同步 → 422 MISSING_NAV，手填净值与数据源不一致 → 422 PRICE_NAV_MISMATCH\n- sync_nav=true：命中 MISSING_NAV 时自动回填净值并重试一次（会访问外部数据源）",
         "operationId": "confirm_share_change_event_api_share_change_events__id__confirm_post",
         "security": [
           {
@@ -4843,6 +4844,16 @@
             "schema": {
               "type": "integer",
               "title": "Id"
+            }
+          },
+          {
+            "name": "sync_nav",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Sync Nav"
             }
           }
         ],
@@ -12789,11 +12800,56 @@
               }
             ],
             "title": "Cash Change"
+          },
+          "div_cash": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Div Cash"
+          },
+          "dividend_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dividend Amount"
+          },
+          "reinvest_nav": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reinvest Nav"
+          },
+          "nav_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Date"
           }
         },
         "type": "object",
         "title": "ShareChangeEventPreviewResult",
-        "description": "事件确认前预览的计算结果（与真实确认共用同一计算实现，#424）。\n\n四个字段与确认后落库值逐一相等，例外都在 forced_adjustment：\nshares_change/cash_change 是用户直填值的回显；shares_after 恒为 null——\n确认路径刻意保留用户直填的「调整后余额」、不计算写回（见 apply_event_fields），\n预览照实回 null，不编造确认不会产生的值。"
+        "description": "事件确认前预览的计算结果（与真实确认共用同一计算实现，#424）。\n\n四个字段与确认后落库值逐一相等，例外都在 forced_adjustment：\nshares_change/cash_change 是用户直填值的回显；shares_after 恒为 null——\n确认路径刻意保留用户直填的「调整后余额」、不计算写回（见 apply_event_fields），\n预览照实回 null，不编造确认不会产生的值。\n\n分红明细（#744）：div_cash（每份分红）与 dividend_amount（到分的红利金额）仅\ncash_dividend / reinvest_dividend 有值；reinvest_nav 为确认将回写的解析净值、\nnav_date 为其取价日（= 除息日），仅 reinvest_dividend 有值。"
       },
       "ShareChangeEventResponse": {
         "properties": {
