@@ -2,7 +2,7 @@
 
 import { ConfirmInfoDialog, InfoRow } from "@/components/shared/ConfirmInfoDialog";
 import { useShareChangeEventPreview } from "@/hooks/useShareChangeEvent";
-import { getErrorMessage } from "@/lib/api";
+import { ApiException, getErrorMessage } from "@/lib/api";
 import type { ShareChangeEvent } from "@/types/share-change-event";
 import type { EventType } from "@/types/common";
 import {
@@ -58,6 +58,14 @@ export function EventConfirmDialog({
   const preview = data?.preview;
   const isDividend =
     event?.event_type === "cash_dividend" || event?.event_type === "reinvest_dividend";
+  // MISSING_NAV 的补救入口不在本弹窗（确认路径不隐式访问外部数据源，同步只在 CLI 侧有显式
+  // `--sync-nav`），故在后端文案后就近补一句 UI 侧路径，与 CLI hints 对等（#744）
+  const previewError = error
+    ? getErrorMessage(error, "预览请求失败") +
+      (error instanceof ApiException && error.code === "MISSING_NAV"
+        ? "，请在「产品」页同步该产品净值后重试"
+        : "")
+    : null;
   // 产品名直接取列表行自带的 product_name（#342 后端读侧派生）：
   // 替代原按单条事件懒加载 useProduct 的权宜（#257）；缺失时回退裸代码
   const getProductName = () =>
@@ -70,7 +78,7 @@ export function EventConfirmDialog({
       title="确认份额变动事件"
       description="请核对以下信息与预览值，确认后按对应日期生效"
       isLoading={isLoading || isFetching}
-      error={error ? getErrorMessage(error, "预览请求失败") : null}
+      error={previewError}
       onConfirm={onConfirm}
       isConfirming={isConfirming}
     >

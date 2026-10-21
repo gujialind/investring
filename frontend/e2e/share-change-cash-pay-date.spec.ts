@@ -309,7 +309,7 @@ test.describe('红利再投资净值留空与确认预览（#744，双端）', (
       await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
       await expect(confirmDlg).toBeHidden();
 
-      // 缺净值：预览 422 经 error 通道展示后端文案，确认按钮禁用
+      // 缺净值：预览 422 经 error 通道展示后端文案 + 就近补救指引，确认按钮禁用
       const missing = `产品${PRODUCT.code}在除息日${s.ex}的净值尚未同步，无法计算红利再投资份额`;
       await page.route(`**/api/share-change-events/${event.id}/preview`, (route) =>
         route.fulfill({
@@ -320,6 +320,7 @@ test.describe('红利再投资净值留空与确认预览（#744，双端）', (
       );
       await row.getByTitle('确认', { exact: true }).click();
       await expect(confirmDlg.getByText(missing)).toBeVisible();
+      await expect(confirmDlg.getByText('请在「产品」页同步该产品净值后重试')).toBeVisible();
       await expect(confirmDlg.getByRole('button', { name: '确认', exact: true })).toBeDisabled();
       await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
       await page.unroute(`**/api/share-change-events/${event.id}/preview`);
