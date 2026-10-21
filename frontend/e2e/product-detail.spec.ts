@@ -35,6 +35,8 @@ test.describe("产品详情页", () => {
     // #729 统计卡主数值与标签同侧左对齐（visual-spec §5）：修复前挂 number-cell utility
     // 自带 text-right，大字被推到卡片右侧；本断言钉住调用点的实际对齐，防退回模板串
     await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
+    // #724：持仓产品卡 row3 已双端移除「持有份额」列，本条目是份额信息未丢的正面证据
+    await expect(overview).toContainText("持有份额");
     // 持有收益（含 %）、累计收益、最新收益三处收益（+¥3,000.00 至少出现一次）
     await expect(overview.getByText(/\+¥3,000\.00/).first()).toBeVisible();
     await expect(overview).toContainText("(+5.00%)");

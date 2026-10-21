@@ -17,7 +17,7 @@ import {
   sumGroupPercent,
   type HoldingProductSection,
 } from "@/lib/holdings";
-import { formatNumber, largestRemainderPercents } from "@/lib/utils";
+import { cn, formatNumber, largestRemainderPercents } from "@/lib/utils";
 import HoldingInTransitCard from "./HoldingInTransitCard";
 import HoldingProductCard from "./HoldingProductCard";
 import HoldingPlatformCard from "./HoldingPlatformCard";
@@ -47,10 +47,12 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
 
 /**
  * 产品卡栅格：移动 1 列、桌面 auto-fill minmax（spec「桌面 2 列」，单卡宽
- * 设计区间 ~358-372、允许栅格微调）。min 取 350 而非 360：带引导线的维度组
- * 内容宽比平铺组少 14px（border-l-2 + pl-3 + ml-0.5），auto-fill 按 content-box
- * 算列数，min=360 会在 1440 档使两组列数分叉（实测 722px→1 列 vs 736px→2 列，
- * 同页卡宽不一致）；min ≤ (722-12)/2 时两组同列数，单卡实宽 355-372 仍在区间内。
+ * 设计区间 ~358-372、允许栅格微调）。min 取 350 而非 360：桌面带引导线的维度组
+ * 内容宽比平铺组少 16px（ml-0.5(2) + border-l-2(2) + pl-3(12)；#724 起引导线仅桌面保留，
+ * 移动端两组等宽、不受此约束），auto-fill 按 content-box
+ * 算列数，min=360 会在 1440 档使两组列数分叉（隔离栈探针实测引导组 720px→1 列 vs
+ * 平铺组 736px→2 列，同页卡宽不一致）；min ≤ (720-12)/2 = 354 时两组同列数，
+ * 单卡实宽 354（引导组）-362（平铺组）——引导组下界比设计区间少 4px，是换两组同列数的代价。
  */
 function cardGridClass(variant: "desktop" | "mobile"): string {
   return variant === "desktop"
@@ -58,7 +60,7 @@ function cardGridClass(variant: "desktop" | "mobile"): string {
     : "space-y-2.5";
 }
 
-/** 按产品分区渲染（与 PositionSections 同 V4 语义：分区头 → chip → 引导线卡组） */
+/** 按产品分区渲染（V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724） */
 function ProductSections({
   sections,
   percentOf,
@@ -133,12 +135,15 @@ function ProductSections({
                         </span>
                       </div>
                     )}
+                    {/* 引导线缩进仅桌面保留（§6 第 4 类；量级与理由由该条持有）。
+                        testid 是 E2E 定位缩进载体的锚点——#382 口径：需锚点补 testid，不按 DOM 深度跳 */}
                     <div
-                      className={
-                        showChip
-                          ? `ml-0.5 border-l-2 border-border pl-3 ${cardGridClass(variant)}`
-                          : cardGridClass(variant)
-                      }
+                      data-testid="asset-group-cards"
+                      className={cn(
+                        showChip && variant === "desktop" &&
+                          "ml-0.5 border-l-2 border-border pl-3",
+                        cardGridClass(variant)
+                      )}
                     >
                       {g.products.map((p) => {
                         const card = (
