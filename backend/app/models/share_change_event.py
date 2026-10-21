@@ -14,6 +14,7 @@ class ShareChangeEvent(Base):
     ex_date = Column(Date, nullable=False)
     entitlement_date = Column(Date, nullable=False)
     cash_pay_date = Column(Date, nullable=True)
+    share_confirm_date = Column(Date, nullable=True)
     platform_code = Column(String(20), ForeignKey("platform.code"), nullable=True)
     parent_event_id = Column(Integer, ForeignKey("share_change_event.id"), nullable=True)
     event_source = Column(String(20), nullable=False)
@@ -42,6 +43,28 @@ class ShareChangeEvent(Base):
     def cash_effective_date(cls):
         return case(
             (cls.event_type == "cash_dividend", func.coalesce(cls.cash_pay_date, cls.ex_date)),
+            else_=cls.ex_date,
+        )
+
+    @hybrid_property
+    def share_effective_date(self):
+        """份额生效日（#743）：再投资设了确认日则份额在确认日到账，否则回落除息日。
+
+        与 `cash_effective_date` 对仗，是快照份额窗口、pending 闸门与
+        auto_confirm 判键的单一口径。同日登记/除息（`entitlement_date == ex_date`）
+        只有设了 `share_confirm_date` 才合法，故同日事件的份额必然落在确认日。
+        """
+        if self.event_type == "reinvest_dividend" and self.share_confirm_date:
+            return self.share_confirm_date
+        return self.ex_date
+
+    @share_effective_date.expression
+    def share_effective_date(cls):
+        return case(
+            (
+                cls.event_type == "reinvest_dividend",
+                func.coalesce(cls.share_confirm_date, cls.ex_date),
+            ),
             else_=cls.ex_date,
         )
 

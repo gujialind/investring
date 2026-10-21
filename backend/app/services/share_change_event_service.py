@@ -24,6 +24,7 @@ from app.services.exceptions import BusinessError, NotFoundError
 from app.services.nav_lookup import get_exact_unit_price
 from app.services.null_guard import reject_explicit_nulls
 from app.services.product_service import resolve_product_market
+from app.services.reinvest_receivable import reinvest_dividend_amount
 from app.services.audit_service import record_audit, _diff_fields
 from app.constants.audit_actions import (
     ACTION_CREATE, ACTION_UPDATE, ACTION_CONFIRM, ACTION_UNCONFIRM,
@@ -108,7 +109,9 @@ def compute_event_fields(
         # issue #425：红利金额先量化到分（与 cash_dividend 同口径，亦与基金公司算法一致：
         # 先按「分」确定应得红利，再按再投资净值折算份额）。跳过这一步会把
         # 「金额量化损失（< 0.005 元）」带进份额，跨四舍五入边界时差 0.01 份。
-        dividend_amount = quantize_amount(es * Decimal(str(div_cash or 0)))
+        # #743：口径单点在 reinvest_receivable——除息日记的应收金额必须与这里
+        # 折算份额所用的金额逐分相等，否则市值在应收转份额那天出现缺口。
+        dividend_amount = reinvest_dividend_amount(es, div_cash)
         new_shares = quantize_shares(dividend_amount / Decimal(str(reinvest_nav)))
         return EventFieldResult(
             shares_change=new_shares,
@@ -575,11 +578,20 @@ def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
 
 
 def _validate_event_dates(
-    db: Session, portfolio_code: str, ex_date: date, entitlement_date: date
+    db: Session,
+    portfolio_code: str,
+    ex_date: date,
+    entitlement_date: date,
+    share_confirm_date: Optional[date] = None,
 ) -> None:
-    """校验事件双日期：均为交易日、ex_date > entitlement_date、晚于最新快照日。
+    """校验事件日期：均为交易日、除息日不早于权益登记日、晚于最新快照日。
 
     创建与更新（pending 改日期）共用，保证两条路径校验一致。
+
+    #743：设了 `share_confirm_date`（再投资份额确认日）时允许
+    `entitlement_date == ex_date`——场外分红普遍「权益登记日 = 除息日」，份额在
+    确认日才到账，除息日只记应收。未设时保持严格 `>` 与原文案（拆分/合并/送股/
+    现金分红的份额与现金都按 `ex_date` 生效，同日会造成基数与生效互相打架）。
     """
     # 权益登记日必须是交易日
     if not is_trading_day(db, entitlement_date):
@@ -587,8 +599,13 @@ def _validate_event_dates(
     # 除息日必须是交易日
     if not is_trading_day(db, ex_date):
         raise BusinessError("INVALID_EX_DATE", "除息日不是交易日")
-    # 除息日必须严格大于权益登记日
-    if ex_date <= entitlement_date:
+    if share_confirm_date is not None:
+        if ex_date < entitlement_date:
+            raise BusinessError(
+                "INVALID_DATE_ORDER",
+                "除息日不能早于权益登记日（ex_date >= entitlement_date）",
+            )
+    elif ex_date <= entitlement_date:
         raise BusinessError(
             "INVALID_DATE_ORDER",
             "除息日必须严格大于权益登记日（ex_date > entitlement_date）",
@@ -600,6 +617,50 @@ def _validate_event_dates(
             "DATE_BEFORE_SNAPSHOT",
             f"除息日必须晚于最新快照日（{latest_snapshot}）",
         )
+
+
+def _validate_share_confirm_date(
+    db: Session, event_type: str, ex_date: date, share_confirm_date: Optional[date]
+) -> None:
+    """#743：再投资份额确认日只允许 reinvest_dividend，须为交易日且晚于除息日。
+
+    与 `_validate_cash_pay_date` 同族（一个是现金到账日、一个是份额到账日）；
+    区别在于确认日**必须是交易日**——份额到账日同时是快照的份额应用日与
+    auto_confirm 的判键，落在非交易日会让份额永远等不到那张快照。
+    """
+    if share_confirm_date is None:
+        return
+    if event_type != "reinvest_dividend":
+        raise BusinessError("INVALID_PARAM", "仅红利再投资可设置 share_confirm_date")
+    if not is_trading_day(db, share_confirm_date):
+        raise BusinessError("INVALID_SHARE_CONFIRM_DATE", "再投资份额确认日不是交易日")
+    if share_confirm_date <= ex_date:
+        raise BusinessError("INVALID_DATE_ORDER", "再投资份额确认日必须晚于除息日")
+
+
+def _require_receivable_not_snapshotted(db: Session, event: ShareChangeEvent) -> None:
+    """#743：pending 的再投资应收一旦进入快照即冻结事件的改/取消/删除。
+
+    应收是**派生值**（生成快照时由基数 × `div_cash` 现算，不落库），所以事件在
+    `ex_date <= 最新快照日` 之后被改动会让已生成的快照与事件口径漂移，而系统
+    无从察觉。与 confirmed 事件的 `SNAPSHOT_DEPENDENCY` 同一处置：先删 `ex_date`
+    及之后的快照（级联会把事件退回 pending），再改。
+
+    只约束 pending——confirmed 事件已由 unconfirm 的快照保护把关；未设
+    `share_confirm_date` 的事件不产生应收，pending 闸门仍按 `ex_date` 阻断快照
+    生成，故不存在「已进快照」的形态。仅改 notes 的更新由调用方豁免（不影响口径）。
+    """
+    if event.status != "pending" or event.share_confirm_date is None:
+        return
+    latest_snapshot = get_latest_snapshot_date(db, event.portfolio_code)
+    if not latest_snapshot or event.ex_date > latest_snapshot:
+        return
+    raise BusinessError(
+        "SNAPSHOT_DEPENDENCY",
+        f"该事件的再投资应收已计入 {event.ex_date} 及之后的快照，"
+        f"请先删除 {event.ex_date} 及之后的快照",
+        details={"from_date": event.ex_date.isoformat()},
+    )
 
 
 def _validate_cash_pay_date(
@@ -621,6 +682,7 @@ def create_share_change_event(
     ex_date: date,
     entitlement_date: date,
     cash_pay_date: Optional[date] = None,
+    share_confirm_date: Optional[date] = None,
     product_code: Optional[str] = None,
     market: Optional[str] = None,
     platform_code: Optional[str] = None,
@@ -644,8 +706,11 @@ def create_share_change_event(
     platform_code = platform_code or None
     if not product_code:
         raise BusinessError("PRODUCT_REQUIRED", "份额变动事件必须指定 product_code")
-    _validate_event_dates(db, portfolio_code, ex_date, entitlement_date)
+    _validate_event_dates(
+        db, portfolio_code, ex_date, entitlement_date, share_confirm_date
+    )
     _validate_cash_pay_date(event_type, ex_date, cash_pay_date)
+    _validate_share_confirm_date(db, event_type, ex_date, share_confirm_date)
 
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
@@ -714,6 +779,7 @@ def create_share_change_event(
         ex_date=ex_date,
         entitlement_date=entitlement_date,
         cash_pay_date=cash_pay_date,
+        share_confirm_date=share_confirm_date,
         platform_code=platform_code,
         # 用户直填的份额类字段统一量化到 2 位（cash_change 是金额不量化）
         entitlement_shares=quantize_shares(entitlement_shares),
@@ -747,6 +813,7 @@ def create_share_change_event(
             "ex_date": ex_date,
             "entitlement_date": entitlement_date,
             "cash_pay_date": cash_pay_date,
+            "share_confirm_date": share_confirm_date,
             "platform_code": platform_code,
             "shares_change": new_event.shares_change,
             "cash_change": new_event.cash_change,
@@ -782,19 +849,32 @@ def update_share_change_event(
         allow={
             "shares_before", "shares_change", "shares_after", "cash_change",
             "div_cash", "reinvest_nav", "ratio", "notes", "cash_pay_date",
+            "share_confirm_date",
         },
     )
 
+    # #743：pending 事件的应收可能已被快照消费，改口径前先冻结（仅改 notes 豁免——
+    # 备注不参与任何计算，冻结它只会挡住无害的补记）
+    if set(updates) - {"notes"}:
+        _require_receivable_not_snapshotted(db, event)
+
     effective_ex_date = updates.get("ex_date", event.ex_date)
-    if updates.keys() & {"ex_date", "entitlement_date"}:
+    effective_share_confirm_date = updates.get(
+        "share_confirm_date", event.share_confirm_date
+    )
+    if updates.keys() & {"ex_date", "entitlement_date", "share_confirm_date"}:
         effective_entitlement_date = updates.get(
             "entitlement_date", event.entitlement_date
         )
         _validate_event_dates(
-            db, event.portfolio_code, effective_ex_date, effective_entitlement_date
+            db, event.portfolio_code, effective_ex_date, effective_entitlement_date,
+            effective_share_confirm_date,
         )
     _validate_cash_pay_date(
         event.event_type, effective_ex_date, updates.get("cash_pay_date", event.cash_pay_date)
+    )
+    _validate_share_confirm_date(
+        db, event.event_type, effective_ex_date, effective_share_confirm_date
     )
 
     # issue #279：按合并后值校验（event_type/product_code 不可改，恒取事件现值），
@@ -921,6 +1001,7 @@ def cancel_share_change_event(db: Session, event: ShareChangeEvent) -> ShareChan
     """取消份额变动事件（仅 pending）。不 commit。"""
     if event.status != "pending":
         raise BusinessError("INVALID_STATUS", "仅 pending 状态可取消")
+    _require_receivable_not_snapshotted(db, event)
     event.status = "cancelled"
 
     record_audit(
@@ -1000,6 +1081,7 @@ def unconfirm_share_change_event(db: Session, event: ShareChangeEvent) -> ShareC
 
 def delete_share_change_event(db: Session, event: ShareChangeEvent) -> None:
     """删除份额变动事件（级联删除子记录）。不 commit。"""
+    _require_receivable_not_snapshotted(db, event)
     record_audit(
         db,
         action=ACTION_DELETE,
@@ -1011,6 +1093,7 @@ def delete_share_change_event(db: Session, event: ShareChangeEvent) -> None:
             "event_type": event.event_type,
             "ex_date": event.ex_date,
             "entitlement_date": event.entitlement_date,
+            "share_confirm_date": event.share_confirm_date,
             "shares_change": event.shares_change,
             "cash_change": event.cash_change,
         },

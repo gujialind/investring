@@ -24,6 +24,7 @@ from app.services.trading_utils import (
 )
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.audit_service import record_audit
+from app.services.reinvest_receivable import aggregate_receivable_flows
 from app.constants.audit_actions import (
     ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
     RESOURCE_MANUAL_MARKET_VALUE,
@@ -206,6 +207,13 @@ def _aggregate_position_flows(db: Session, items: Sequence[PortfolioPosition]) -
         amount = float(cash_change)
         event_rows.setdefault((pc, prod, market, plat), []).append((ex_date, amount))
         event_cash_flows.setdefault((pc, plat), []).append((cash_date, amount))
+
+    # #743：再投资应收成对进 event_rows（+R@除息日、−R@份额确认日），让基金市值
+    # 在除权下跌与份额到账回升两端各被加回一次，单产品的日收益/持有收益/累计收益
+    # 在 [ex_date, share_confirm_date) 区间连续。刻意不进 event_cash_flows——
+    # 再投资不产生现金，计入现金腿会凭空抬高 CASH 累计收益。
+    for key, entries in aggregate_receivable_flows(db, portfolio_codes, max_date).items():
+        event_rows.setdefault(key, []).extend(entries)
 
     return {
         "trade_daily": trade_daily,

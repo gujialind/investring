@@ -118,6 +118,7 @@ def create_share_change_event(
         ex_date=event.ex_date,
         entitlement_date=event.entitlement_date,
         cash_pay_date=event.cash_pay_date,
+        share_confirm_date=event.share_confirm_date,
         product_code=event.product_code,
         market=event.market,
         platform_code=event.platform_code,

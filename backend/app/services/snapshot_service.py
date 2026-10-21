@@ -29,6 +29,7 @@ from app.services.trading_utils import (
     get_latest_snapshot_date,
 )
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.reinvest_receivable import list_reinvest_receivables
 from app.services.subscription_service import unconfirm_single_subscription
 from app.services.audit_service import record_audit
 from app.constants.audit_actions import (
@@ -63,7 +64,10 @@ def _error_info(e: Exception) -> Dict[str, Any]:
 
 
 def _compute_in_transit_amounts(
-    db: Session, portfolio_code: str, snapshot_date: date
+    db: Session,
+    portfolio_code: str,
+    snapshot_date: date,
+    live_positions: Optional[Dict[tuple, dict]] = None,
 ) -> Dict[Tuple[str, str], Decimal]:
     """绝对计算各平台各方向的在途资金金额。
 
@@ -82,6 +86,12 @@ def _compute_in_transit_amounts(
        （#493 收紧：cancelled 不算在途，避免组内一腿 cancelled 被挂在途）。
     买入和卖出在途均为正数，金额按**现金腿平台**归属。
     ③ 现金分红按 ex_date <= D < cash_pay_date 计在途，归属事件平台。
+    ④ 红利再投资应收（#743）按 `ex_date <= D < share_confirm_date` 计入同一
+       `dividend` 方向：语义由「分红在途」统一承载，不新增虚拟产品。金额是
+       **派生值**（基数 × div_cash 现算），pending 与 confirmed 都计——同日
+       登记/除息的事件在 D 快照生成时往往仍 pending，落库口径会让这笔应收
+       永远缺席 D 快照。基数取法与 `live_positions` 的必要性见
+       `reinvest_receivable.list_reinvest_receivables`。
     """
     result: Dict[Tuple[str, str], Decimal] = {}
     CashLeg = aliased(Trade)
@@ -196,6 +206,13 @@ def _compute_in_transit_amounts(
     for platform_code, amount in dividend_transit:
         if amount and amount > 0:
             result[(platform_code, "dividend")] = Decimal(str(amount))
+
+    # --- ④ 红利再投资应收（#743，与现金分红在途同列 dividend 方向）---
+    for receivable in list_reinvest_receivables(
+        db, portfolio_code, snapshot_date, live_positions=live_positions
+    ):
+        key = (receivable.platform_code, "dividend")
+        result[key] = result.get(key, Decimal("0")) + receivable.amount
 
     return result
 
@@ -1263,12 +1280,15 @@ def _generate_portfolio_position(
     # 应用份额变动事件（窗口内 confirmed）
     # 只读取 platform_code IS NOT NULL 的子记录/平台级记录，跳过基金级父记录
     # 按 entitlement_date 升序处理
-    # 窗口约束：ex_date >= start_apply_date 避免重复累加已经在前一日快照中反映的事件
+    # 窗口约束：share_effective_date >= start_apply_date 避免重复累加已经在前一日
+    # 快照中反映的事件。#743：判键由 ex_date 改为 share_effective_date（再投资设了
+    # share_confirm_date 时取之，否则回落 ex_date），份额与 #673 成本摊薄随之移到
+    # 份额到账日——同日登记/除息的事件在除息日只产生应收、不改份额。
     confirmed_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "confirmed",
-        ShareChangeEvent.ex_date >= start_apply_date,
-        ShareChangeEvent.ex_date <= target_date,
+        ShareChangeEvent.share_effective_date >= start_apply_date,
+        ShareChangeEvent.share_effective_date <= target_date,
         ShareChangeEvent.platform_code.isnot(None),  # 跳过基金级父记录
     ).order_by(ShareChangeEvent.entitlement_date.asc()).all()
 
@@ -1406,7 +1426,11 @@ def _generate_portfolio_position(
             if manual:
                 pos_data["cash_amount"] = Decimal(str(manual.market_value))
 
-    in_transit = _compute_in_transit_amounts(db, portfolio_code, target_date)
+    # #743：把生成中的内存持仓交给在途计算——同日登记/除息的再投资事件，其基数
+    # 正是本日尚未落库的持仓份额（pending 时 entitlement_shares 为空，读库必落空）
+    in_transit = _compute_in_transit_amounts(
+        db, portfolio_code, target_date, live_positions=positions
+    )
     for (platform_code, direction), amount in in_transit.items():
         product_code = IN_TRANSIT_PRODUCTS[direction]
         key = (product_code, "", platform_code)
@@ -2101,12 +2125,16 @@ def auto_confirm_after_snapshot(
                 f"code={entry.get('code')}, error={entry.get('error')}"
             )
 
-    # Event 自动确认（ex_date == next_trading_day(D) 的 pending events）
+    # Event 自动确认（share_effective_date == next_trading_day(D) 的 pending events）
     # 只处理父/独立记录（跳过子记录，子记录由父记录确认时自动生成）
+    # #743：判键由 ex_date 改为 share_effective_date——同日登记/除息的再投资事件
+    # 因此在 D（= ex_date）快照生成**之后**才被尝试确认，此时它的基数快照已存在
+    # （resolve_entitlement_shares 不再报 MISSING_POSITION_SNAPSHOT），无需显式排除；
+    # share_confirm_date 为 NULL 的存量事件判键回落 ex_date，行为不变。
     pending_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "pending",
-        ShareChangeEvent.ex_date == next_confirm_date,
+        ShareChangeEvent.share_effective_date == next_confirm_date,
         ShareChangeEvent.parent_event_id.is_(None),  # 只处理父/独立记录
     ).all()
 
@@ -2268,10 +2296,17 @@ def _check_share_change_events(
     portfolio_code: str,
     target_date: date
 ) -> Dict[str, Any]:
-    """检查分红事件状态"""
+    """检查分红事件状态
+
+    #743：判键由 `ex_date` 改为 `share_effective_date`（= `share_confirm_date or
+    ex_date`）。同日登记/除息的再投资事件在除息日只产生派生应收、份额要到确认日
+    才应用，故 `share_effective_date > target` 时放行——应收已由
+    `_compute_in_transit_amounts` 计入本日快照；到确认日仍未确认则照旧阻断。
+    `share_confirm_date` 为 NULL 的存量事件判键回落 `ex_date`，行为不变。
+    """
     pending_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
-        ShareChangeEvent.ex_date <= target_date,
+        ShareChangeEvent.share_effective_date <= target_date,
         ShareChangeEvent.status == "pending"
     ).count()
     
@@ -2279,7 +2314,7 @@ def _check_share_change_events(
         return {
             "check_type": "share_change_events",
             "status": "failed",
-            "message": f"存在{pending_events}笔未确认的份额变动事件（ex_date <= {target_date}），请先确认或取消后再生成快照"
+            "message": f"存在{pending_events}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
         }
     return {"check_type": "share_change_events", "status": "passed", "message": "无未确认的份额变动事件"}
 
