@@ -593,8 +593,9 @@ export async function nextTradingDays(
  * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。三条理由按严重度排：
  * ① 组合**没有 DELETE 端点**（`regression.spec.ts` 的「组合详情页不应出现删除组合入口」
  *   正是在守这条前后端契约，防 P0-5：前端曾提供后端不存在的 `DELETE /portfolios/{code}`）。
- *   加了 nonce，同一后端上连跑 N 次就累积无法删除的 draft 组合，只在下次
- *   `run_e2e_backend.py` 重启重灌时才清掉。
+ *   加了 nonce，同一后端上连跑 N 次就累积无法删除的 draft 组合——量级不小：
+ *   `trade-in-transit` 一轮即 8 条（4 个调用点 × 2 project，`--retries=0` 口径；带 retry
+ *   更多），只在下次 `run_e2e_backend.py` 重启重灌时才清掉。
  * ② 现在这个 `ALREADY_EXISTS` 400 是**响亮失败**：数据前提一破，第一次 `POST` 就红并指名
  *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
  * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
