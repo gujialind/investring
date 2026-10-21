@@ -63,25 +63,22 @@ def scheduled_task_definitions() -> list[dict]:
 
 def init_scheduled_tasks(db: Session) -> None:
     for task_data in scheduled_task_definitions():
+        code = task_data["code"]
         existing = db.query(ScheduledTask).filter(
-            ScheduledTask.code == task_data["code"]
+            ScheduledTask.code == code
         ).first()
+        cron = _effective_cron(code, task_data["cron_expr"])
 
         if not existing:
-            task_data = {
-                **task_data,
-                "cron_expr": _effective_cron(task_data["code"], task_data["cron_expr"]),
-            }
-            task = ScheduledTask(**task_data)
+            task = ScheduledTask(**{**task_data, "cron_expr": cron})
             db.add(task)
         else:
             existing.name = task_data["name"]
             existing.description = task_data["description"]
             # 有 settings 映射的任务（nav_sync / snapshot_generate）cron_expr 随启动
-            # 同步为实际生效值（#746）；其余任务 cron 列仅登记、无生效源，不重置
-            if task_data["code"] in _SETTINGS_CRON_ATTRS:
-                existing.cron_expr = _effective_cron(
-                    task_data["code"], task_data["cron_expr"]
-                )
+            # 同步为实际生效值（#746）；其余任务 cron 列仅登记、无生效源，
+            # 不得用种子值覆盖环境自定义
+            if code in _SETTINGS_CRON_ATTRS:
+                existing.cron_expr = cron
 
     db.commit()

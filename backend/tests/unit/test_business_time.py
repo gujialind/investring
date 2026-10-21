@@ -8,18 +8,17 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import get_settings
-from app.utils import business_time
 from app.utils.business_time import (
     business_day_start,
     business_now,
     business_today,
 )
+from tests.unit.business_clock_helpers import (
+    TUE_0700_CST,
+    freeze_business_clock as _freeze,
+)
 
 SH = ZoneInfo("Asia/Shanghai")
-
-
-def _freeze(monkeypatch, instant: datetime) -> None:
-    monkeypatch.setattr(business_time, "_utcnow", lambda: instant)
 
 
 class TestBusinessClock:
@@ -28,12 +27,12 @@ class TestBusinessClock:
 
         business_today 必须取业务侧——这正是 nav_sync target_date 落 T-2 的根因点。
         """
-        _freeze(monkeypatch, datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc))
+        _freeze(monkeypatch, TUE_0700_CST)
         assert business_today() == date(2026, 10, 20)
-        assert business_today() != datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc).date()
+        assert business_today() != TUE_0700_CST.date()
 
     def test_business_now_is_shanghai_wall_clock(self, monkeypatch):
-        _freeze(monkeypatch, datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc))
+        _freeze(monkeypatch, TUE_0700_CST)
         assert business_now().strftime("%Y-%m-%d %H:%M") == "2026-10-20 07:00"
 
     def test_boundary_just_before_business_midnight(self, monkeypatch):
@@ -47,7 +46,7 @@ class TestBusinessClock:
         """helper 与调度器共用 settings.timezone 单一来源：改配置即换钟"""
         s = get_settings()
         monkeypatch.setattr(s, "timezone", "UTC", raising=False)
-        _freeze(monkeypatch, datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc))
+        _freeze(monkeypatch, TUE_0700_CST)
         assert business_today() == date(2026, 10, 19)  # UTC 视角回到旧行为
         monkeypatch.setattr(s, "timezone", "Asia/Shanghai", raising=False)
         assert business_today() == date(2026, 10, 20)
@@ -57,7 +56,7 @@ class TestBusinessDayStart:
     """day_start 是「业务午夜在进程墙钟上的 naive 表示」——与 started_at 同钟可比。"""
 
     def test_naive_value_and_instant_identity(self, monkeypatch):
-        _freeze(monkeypatch, datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc))
+        _freeze(monkeypatch, TUE_0700_CST)
         ds = business_day_start()
         assert ds.tzinfo is None
         # 进程 naive 值挂回进程本地时区后，指向的瞬时 == 业务日午夜瞬时。
@@ -72,7 +71,7 @@ class TestBusinessDayStart:
         若 day_start 误取 CST 午夜的 naive 字面值（10-20 00:00），它与 UTC naive 的
         started_at 比较会把当日记录判到窗外（#746 陷阱②）。
         """
-        instant = datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc)
+        instant = TUE_0700_CST
         _freeze(monkeypatch, instant)
         ds = business_day_start()
         # started_at 的形态：run_task 用进程 naive 钟写「冻结瞬间」
