@@ -36,7 +36,8 @@ function cashSubtitle(product: HoldingProductAggregate): string {
  * 视图卡 → 产品详情（ProductDetailContent::overview，跨平台聚合份额）；平台详情页
  * 产品卡（PlatformDetailContent）→ 平台-产品详情（PlatformProductDetailContent::overview，
  * 本平台切片份额）。row3 两列收益值 `whitespace-nowrap` 不截断（L2 评审收敛，同 #636 纪律：
- * 半列实测 ≈146px 可容纳 9–11 字符，极端值整形溢出、不出省略号）。
+ * 半列实测移动 390px 档 146px、桌面 1440 档 160px；超宽不出省略号，代价是与邻列叠印或溢出卡外，
+ * 形态登记见 visual-spec §12）。
  * 现金为聚合卡（无 row3，副标题为可用现金 · 平台）。
  * 点击跳转产品详情页由 #595 步骤③接线，本组件保持纯展示。
  */
@@ -86,6 +87,7 @@ export default function HoldingProductCard({
           <div className="flex-1 min-w-0">
             <div className="text-xs text-muted-foreground">累计收益</div>
             <div
+              data-testid="total-profit-value"
               className={`mt-0.5 text-sm font-bold tabular-nums whitespace-nowrap ${getReturnColorClass(
                 product.holding_profit
               )}`}
@@ -98,6 +100,7 @@ export default function HoldingProductCard({
               最新收益{mmdd ? `(${mmdd})` : ""}
             </div>
             <div
+              data-testid="daily-profit-value"
               className={`mt-0.5 text-sm font-bold tabular-nums whitespace-nowrap ${getReturnColorClass(
                 product.daily_profit
               )}`}

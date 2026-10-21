@@ -147,6 +147,9 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     expect(dailyBox, '「最新收益(MM/DD)」标题未渲染出 boundingBox').not.toBeNull();
     expect(Math.abs(totalBox!.y - dailyBox!.y), '两列标题须同一行').toBeLessThanOrEqual(1);
     expect(Math.abs(totalBox!.height - dailyBox!.height), '两列标题须同高（无一侧折行）').toBeLessThanOrEqual(1);
+    // CSS 省略号不改 DOM 文本，文本级断言看不见 truncate 回归；按计算值钉住「不出省略号」本体（#636）
+    await expect(productCard.getByTestId('total-profit-value')).toHaveCSS('text-overflow', 'clip');
+    await expect(productCard.getByTestId('daily-profit-value')).toHaveCSS('text-overflow', 'clip');
     await expect(productCard).toContainText('占比');
 
     // 现金聚合卡（可用现金 · 平台名）
