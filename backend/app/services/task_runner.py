@@ -28,6 +28,7 @@ from app.models.nav_sync_detail import NavSyncDetail
 from app.models.product import Product
 from app.models.portfolio import Portfolio
 from app.services.exceptions import NotFoundError
+from app.utils.business_time import business_today
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         sync_product_prices, resolve_incremental_start_date, ACCUM_DEGRADED_NOTE,
     )
 
-    target_date = (datetime.now().date() - timedelta(days=1))
+    target_date = business_today() - timedelta(days=1)
 
     products = db.query(Product).filter(
         Product.market.in_(["CN_EXCHANGE", "CN_OTC", "HK_MUTUAL"]),
@@ -228,7 +229,7 @@ def run_snapshot_generate(db: Session) -> dict:
     （此前只落运行日志、终态仍 success），调度侧的快照联动补跑据此判断
     「当日快照未成功」。
     """
-    target_date = datetime.now().date() - timedelta(days=1)
+    target_date = business_today() - timedelta(days=1)
     gen = _generate_snapshots_for_date(db, target_date)
     return {
         "snapshots_generated": gen["generated"],
@@ -450,7 +451,9 @@ def run_calendar_sync(db: Session, year: Optional[int] = None) -> dict:
     from app.services.trading_calendar_service import sync_trading_calendar
 
     if year is None:
-        year = datetime.now().year
+        # 元旦 00:00–07:59 CST 在 UTC 进程钟上仍属旧年（#746）：取年份必须用业务日，
+        # 否则 1 月 1 日 02:00 的年度日历同步会同步到旧年度
+        year = business_today().year
 
     result = sync_trading_calendar(db=db, year=year)
     return {

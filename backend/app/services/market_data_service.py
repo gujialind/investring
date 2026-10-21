@@ -12,6 +12,7 @@ from app.models.product import Product
 from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.tushare_client import get_fund_daily, get_fund_nav, TushareAPIError
+from app.utils.business_time import business_today
 from app.utils.quantize import quantize_nav
 
 logger = logging.getLogger(__name__)
@@ -460,7 +461,8 @@ def sync_product_prices(
         raise ValueError(f"产品 {product_code} ({market}) 不存在")
 
     if not end_date:
-        end_date = date.today()
+        # 取数上界的缺省值属业务日（#746）：调用方显式传值时不受影响
+        end_date = business_today()
     start_str = start_date.strftime("%Y%m%d") if start_date else None
     end_str = end_date.strftime("%Y%m%d")
 
@@ -954,6 +956,10 @@ def _run_price_sync_job_impl(job_id: int):
         db.commit()
 
         for product in products:
+            # 异常明细的 nav_date 与成功分支同取窗口上界（#746 审计）：end_date 在
+            # try 内定妥、except 兜底业务日，不再各取一次进程钟把失败行记到另一天；
+            # 上界缺省是业务日概念，UTC 进程钟在 07:00 CST 触发时会算出 T-2
+            end_date = None
             try:
                 start_date = None
                 if params.get("job_type") == "price_incremental_sync":
@@ -965,11 +971,10 @@ def _run_price_sync_job_impl(job_id: int):
                 elif params.get("start_date"):
                     start_date = datetime.strptime(params["start_date"], "%Y-%m-%d").date()
 
-                end_date = None
                 if params.get("end_date"):
                     end_date = datetime.strptime(params["end_date"], "%Y-%m-%d").date()
                 else:
-                    end_date = date.today() - timedelta(days=1)
+                    end_date = business_today() - timedelta(days=1)
 
                 result = sync_product_prices(
                     db=db,
@@ -1004,7 +1009,7 @@ def _run_price_sync_job_impl(job_id: int):
                     job_id=job_id,
                     product_code=product.code,
                     market=product.market,
-                    nav_date=date.today().strftime("%Y-%m-%d"),
+                    nav_date=(end_date or business_today()).strftime("%Y-%m-%d"),
                     status="failed",
                     error_message=str(e)[:500],
                 ))

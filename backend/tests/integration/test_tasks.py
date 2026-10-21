@@ -356,11 +356,14 @@ class TestInitTaskDescriptions:
         assert refreshed.description != "旧文案"
         # #156：快照生成已剥离为独立任务，nav_sync 文案不再含「快照」
         assert "快照" not in refreshed.description
-        assert refreshed.cron_expr == "0 7 * * 1-5"
+        # #746 cron 双源收敛：nav_sync 的 cron_expr 随启动同步为 settings 实际生效值
+        from app.config import get_settings
+        assert refreshed.cron_expr == get_settings().scheduler_cron_daily
 
     def test_init_seeds_snapshot_generate_task(self, test_db):
         """#156：snapshot_generate 任务记录被种子，文案说明开关语义"""
         from app.init_tasks import init_scheduled_tasks
+        from app.config import get_settings
 
         init_scheduled_tasks(test_db)
 
@@ -370,11 +373,13 @@ class TestInitTaskDescriptions:
         assert task is not None
         assert task.name == "组合快照生成"
         assert "开启自动快照" in task.description
-        assert task.cron_expr == "30 7 * * 1-5"
+        assert task.cron_expr == get_settings().scheduler_cron_snapshot
 
-    def test_init_preserves_custom_cron_expr(self, test_db):
-        """已有记录的自定义 cron_expr 在 init 后保持不变"""
+    def test_init_syncs_display_cron_from_settings(self, test_db):
+        """#746：nav_sync 行残留的旧「工作日」cron 在 init 后被 settings 生效值覆盖；
+        无 settings 映射的任务（log_cleanup）cron 仅登记、不被重置"""
         from app.init_tasks import init_scheduled_tasks
+        from app.config import get_settings
 
         existing = test_db.query(ScheduledTask).filter(ScheduledTask.code == "nav_sync").first()
         if not existing:
@@ -384,6 +389,12 @@ class TestInitTaskDescriptions:
             test_db.add(existing)
         else:
             existing.cron_expr = "30 6 * * 1-5"
+        cleanup = test_db.query(ScheduledTask).filter(ScheduledTask.code == "log_cleanup").first()
+        if not cleanup:
+            cleanup = ScheduledTask(
+                code="log_cleanup", name="日志清理", description="d", cron_expr="0 5 * * 0"
+            )
+            test_db.add(cleanup)
         test_db.commit()
 
         init_scheduled_tasks(test_db)
@@ -391,4 +402,8 @@ class TestInitTaskDescriptions:
         refreshed = test_db.query(ScheduledTask).filter(
             ScheduledTask.code == "nav_sync"
         ).first()
-        assert refreshed.cron_expr == "30 6 * * 1-5"
+        assert refreshed.cron_expr == get_settings().scheduler_cron_daily
+        cleanup_after = test_db.query(ScheduledTask).filter(
+            ScheduledTask.code == "log_cleanup"
+        ).first()
+        assert cleanup_after.cron_expr == "0 5 * * 0"

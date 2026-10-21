@@ -33,6 +33,13 @@ from app.services.task_runner import (
     _TASK_DISPATCH,
     run_task,
 )
+from app.utils.business_time import business_day_start, business_now, business_today
+from tests.unit.business_clock_helpers import (
+    MON_0700_CST,
+    SAT_0700_CST,
+    TUE_0700_CST,
+    freeze_business_clock as _freeze_business_clock,
+)
 
 
 def _acquired(value: int) -> MagicMock:
@@ -43,12 +50,23 @@ def _acquired(value: int) -> MagicMock:
 
 
 class _FakeCalendarQuery:
-    """替身 query 链：filter().first() 返回预设日历行（None = 查不到该日）"""
+    """替身 query 链：filter().first() 返回预设日历行（None = 查不到该日）。
 
-    def __init__(self, row):
+    #746：记录 filter 实际查询的 calendar_date 值。旧替身对查询条件完全失明——
+    闸门换任何钟都恒返预设行、永远全绿；有了 date_log，用例才能断言
+    「查的是业务今天」而不只是「查到了一行」。
+    """
+
+    def __init__(self, row, date_log=None):
         self._row = row
+        self._date_log = date_log
 
     def filter(self, *args, **kwargs):
+        if self._date_log is not None:
+            for criterion in args:
+                value = getattr(getattr(criterion, "right", None), "value", None)
+                if isinstance(value, date):
+                    self._date_log.append(value)
         return self
 
     def first(self):
@@ -78,13 +96,14 @@ def _lock_handler(decisions, counter):
 _real_session_execute = Session.execute
 
 
-def _run_trigger(test_db, trigger, *, calendar, decisions):
+def _run_trigger(test_db, trigger, *, calendar, decisions, date_log=None):
     """在替身环境里跑一条**真实**触发体，返回锁调用计数 `{"get": n, "release": n}`。
 
     - SessionLocal 指向替身会话（与 test_db 绑同一连接，故落库可见）
     - execute 替身：GET_LOCK 按 decisions 作答、RELEASE_LOCK 恒成功，
       其余 SQL 原样委托真实 `Session.execute`（ORM 落库照常走真实现）
-    - query 替身：交易日历按 calendar 作答（None = 查不到当日）
+    - query 替身：交易日历按 calendar 作答（None = 查不到当日）；传入 date_log
+      列表时记录闸门实际查询的 calendar_date（#746）
 
     两处替身都走「子类覆写」，不改 `Session` 本身的属性——`Session.query` 是
     SQLAlchemy 的 `_query_cls` 描述符，patch 掉会破坏描述符协议并影响同进程后续用例。
@@ -97,7 +116,7 @@ def _run_trigger(test_db, trigger, *, calendar, decisions):
 
     class _FakeSession(type(test_db)):
         def query(self, *args, **kwargs):
-            return _FakeCalendarQuery(calendar)
+            return _FakeCalendarQuery(calendar, date_log=date_log)
 
         def execute(self, *args, **kwargs):
             return handler(self, *args, **kwargs)
@@ -120,7 +139,7 @@ def _run_trigger(test_db, trigger, *, calendar, decisions):
 
 
 class TestShouldRunTodayGate:
-    """闸门四态：锁被占 / 非交易日 / 日历缺当日 / 放行"""
+    """闸门四态：锁被占 / 非交易日 / 日历缺当日 / 放行（#746 起附查询日期口径断言）"""
 
     def test_lock_denied_short_circuits_before_calendar(self, test_db):
         with patch.object(type(test_db), "execute", return_value=_acquired(0)), \
@@ -131,27 +150,81 @@ class TestShouldRunTodayGate:
 
     def test_non_trading_day_skips(self, test_db):
         cal = MagicMock(is_open=False)
+        queried = []
         with patch.object(type(test_db), "execute", return_value=_acquired(1)), \
-             patch.object(type(test_db), "query", return_value=_FakeCalendarQuery(cal)):
+             patch.object(type(test_db), "query",
+                          return_value=_FakeCalendarQuery(cal, date_log=queried)):
             assert scheduler_service._should_run_today(
                 test_db, scheduler_service.NAV_SYNC_LOCK
             ) is False
+        # 闸门查的是**业务今天**，不是进程本地日（#746）
+        assert queried == [business_today()]
 
     def test_calendar_missing_skips(self, test_db):
         """日历未同步（查不到当日记录）同样按非交易日跳过"""
+        queried = []
         with patch.object(type(test_db), "execute", return_value=_acquired(1)), \
-             patch.object(type(test_db), "query", return_value=_FakeCalendarQuery(None)):
+             patch.object(type(test_db), "query",
+                          return_value=_FakeCalendarQuery(None, date_log=queried)):
             assert scheduler_service._should_run_today(
                 test_db, scheduler_service.NAV_SYNC_LOCK
             ) is False
+        assert queried == [business_today()]
 
     def test_lock_and_trading_day_pass(self, test_db):
         cal = MagicMock(is_open=True)
+        queried = []
         with patch.object(type(test_db), "execute", return_value=_acquired(1)), \
-             patch.object(type(test_db), "query", return_value=_FakeCalendarQuery(cal)):
+             patch.object(type(test_db), "query",
+                          return_value=_FakeCalendarQuery(cal, date_log=queried)):
             assert scheduler_service._should_run_today(
                 test_db, scheduler_service.NAV_SYNC_LOCK
             ) is True
+        assert queried == [business_today()]
+
+
+class TestBusinessClockGate:
+    """#746 验收：冻结 07:00 CST（UTC 仍是前一日 23:00）时闸门按业务日判定。
+
+    事故形态：周一 07:00 CST 被当周日（UTC）跳过、周六 07:00 CST 被当周五（UTC）
+    误跑。两个瞬间的 UTC 日期都指向日判定的另一端，进程钟一漏换即翻红。
+    """
+
+    def test_monday_0700_cst_queries_business_monday(self, test_db, monkeypatch):
+        _freeze_business_clock(monkeypatch, MON_0700_CST)
+        cal = MagicMock(is_open=True)
+        queried = []
+        with patch.object(type(test_db), "execute", return_value=_acquired(1)), \
+             patch.object(type(test_db), "query",
+                          return_value=_FakeCalendarQuery(cal, date_log=queried)):
+            assert scheduler_service._should_run_today(
+                test_db, scheduler_service.NAV_SYNC_LOCK
+            ) is True
+        assert queried == [date(2026, 10, 19)]  # 业务周一；UTC 进程钟上还是 10-18 周日
+
+    def test_saturday_0700_cst_queries_business_saturday(self, test_db, monkeypatch):
+        _freeze_business_clock(monkeypatch, SAT_0700_CST)
+        cal = MagicMock(is_open=False)  # 业务周六闭市 → 跳过（旧 UTC 钟会查到周五行误跑）
+        queried = []
+        with patch.object(type(test_db), "execute", return_value=_acquired(1)), \
+             patch.object(type(test_db), "query",
+                          return_value=_FakeCalendarQuery(cal, date_log=queried)):
+            assert scheduler_service._should_run_today(
+                test_db, scheduler_service.NAV_SYNC_LOCK
+            ) is False
+        assert queried == [date(2026, 10, 17)]
+
+    def test_trigger_body_gate_uses_business_day(self, test_db, monkeypatch):
+        """经真实触发体走一遍：冻结周二 07:00 CST，闸门查询日必须是业务周二"""
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 0, "products_count": 0, "failed_products": [],
+        })
+        queried = []
+        _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
+                     decisions=[1], calendar=MagicMock(is_open=True),
+                     date_log=queried)
+        assert queried == [date(2026, 10, 20)]  # 不是 UTC 的 10-19
 
 
 class TestLockNames:
@@ -343,7 +416,7 @@ class TestMaybeScheduleNavRetry:
     def test_partial_success_registers_bounded_date_job(self, monkeypatch):
         fake = _FakeScheduler()
         monkeypatch.setattr(scheduler_service, "_scheduler", fake)
-        before = datetime.now(fake.timezone)
+        before = business_now()
         assert scheduler_service._maybe_schedule_nav_retry("partial_success", attempt=1) is True
 
         func, kwargs = fake.jobs[0]
@@ -353,9 +426,27 @@ class TestMaybeScheduleNavRetry:
         assert kwargs["replace_existing"] is True        # 确定性 id 去重
         assert kwargs["misfire_grace_time"] is None      # 停机跨过触发时刻仍补跑
         assert kwargs["args"] == [1]
-        assert kwargs["id"] == f"nav_sync_retry_{date.today().isoformat()}_1"
+        assert kwargs["id"] == f"nav_sync_retry_{business_today().isoformat()}_1"
         # run_date ≈ now + 2h（放宽下界，避免时钟抖动误判）
         assert kwargs["run_date"] >= before + scheduler_service.NAV_RETRY_INTERVAL - timedelta(seconds=5)
+
+    def test_job_id_uses_business_day_across_utc_boundary(self, monkeypatch):
+        """#746 验收：冻结 07:00 CST（UTC 仍是前一日），job id 与 run_date 取业务日。
+
+        UTC 日期（10-19）与业务日期（10-20）在此瞬间分叉——job id 若退回
+        `date.today()` 会拿到 10-19 而翻红（确定性、与时钟时刻无关）。
+        """
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        assert scheduler_service._maybe_schedule_nav_retry("failed", attempt=1) is True
+        _func, kwargs = fake.jobs[0]
+        assert kwargs["id"] == "nav_sync_retry_2026-10-20_1"
+        # 冻结瞬间 UTC 日期是 10-19、业务日期是 10-20：id 取的是业务侧
+        assert TUE_0700_CST.date() == date(2026, 10, 19)
+        assert kwargs["run_date"].astimezone(
+            ZoneInfo("Asia/Shanghai")
+        ).strftime("%Y-%m-%d %H:%M") == "2026-10-20 09:00"
 
     def test_failed_status_also_schedules(self, monkeypatch):
         fake = _FakeScheduler()
@@ -540,6 +631,67 @@ class TestSnapshotCascade:
         assert counter["get"] == 0                # 连快照锁都没取
         assert test_db.query(TaskExecutionLog).count() == 1  # 只有种子行
 
+    def test_day_start_window_is_business_day_not_process_midnight(self, test_db, monkeypatch):
+        """#746 陷阱②：「当日成功记录」窗锚在**业务午夜换算到进程墙钟**的时点。
+
+        冻结周二 07:00 CST（UTC 仍是周一 23:00）。种子记录 started_at 写成
+        2026-10-19 02:00（进程 naive，业务上属**前一**业务日）。若窗口起点误取
+        进程日界（无论 UTC 午夜还是 CST 进程 10-19 00:00），它都落在窗内、被误判
+        「当日已成功」而跳过联动；正确实现（业务午夜换算进程墙钟）下它落在窗外，
+        联动照常补跑。
+        """
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        log = TaskExecutionLog(
+            task_code="snapshot_generate", trigger_type=TRIGGER_SCHEDULED,
+            status="success", started_at=datetime(2026, 10, 19, 2, 0),
+        )
+        test_db.add(log)
+        test_db.commit()
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", lambda db, log_id: {
+            "snapshots_generated": 1, "portfolios_processed": 1,
+            "warnings": [], "auto_confirm_failed": [],
+        })
+
+        db, _counter, patches = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        cascade_logs = [l for l in test_db.query(TaskExecutionLog).all()
+                        if l.trigger_type == TRIGGER_CASCADE]
+        assert len(cascade_logs) == 1  # 前一业务日的成功不算当日 → 补跑
+
+    def test_business_morning_record_counts_as_today(self, test_db, monkeypatch):
+        """边界另一侧：07:00 CST 落库的记录（UTC 进程钟上是前一日 23:00 naive）
+        属业务当日 → 联动跳过。与上一条合起来把窗口两侧都钉死。"""
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        # started_at 由进程 naive 钟写入，取「冻结瞬间换算到进程墙钟」的 naive 形态，
+        # 与生产 run_task 写 started_at 的时钟完全同源（datetime.now() 不带 tz）
+        process_naive_morning = TUE_0700_CST.astimezone().replace(tzinfo=None)
+        log = TaskExecutionLog(
+            task_code="snapshot_generate", trigger_type=TRIGGER_SCHEDULED,
+            status="success", started_at=process_naive_morning,
+        )
+        test_db.add(log)
+        test_db.commit()
+        called = []
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
+                            lambda db, log_id: called.append(1) or {
+                                "portfolios_processed": 0, "warnings": [], "auto_confirm_failed": []})
+
+        db, counter, patches = _session_with_locks(test_db, [1])
+        try:
+            scheduler_service._maybe_cascade_snapshot(db)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert called == []
+        assert counter["get"] == 0
+        assert process_naive_morning >= business_day_start()
+
     def test_not_succeeded_today_cascades_once(self, test_db, monkeypatch):
         self._seed_snapshot_log(test_db, "partial_success")  # 当日定时快照非成功
         monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", lambda db, log_id: {
@@ -629,7 +781,7 @@ class TestSnapshotCascade:
         func, kwargs = fake.jobs[0]
         assert func is scheduler_service._trigger_snapshot_cascade_recheck
         assert kwargs["args"] == [1]
-        assert kwargs["id"] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert kwargs["id"] == f"snapshot_cascade_recheck_{business_today().isoformat()}_1"
 
     def test_lock_held_recheck_runs_once_after_holder_fails(self, test_db, monkeypatch):
         """时序①：锁持有者最终失败/部分成功 → 延迟复查（锁已释放）后恰好补跑一次 cascade。"""
@@ -707,7 +859,7 @@ class TestMaybeScheduleSnapshotCascadeRecheck:
     def test_registers_bounded_date_job(self, monkeypatch):
         fake = _FakeScheduler()
         monkeypatch.setattr(scheduler_service, "_scheduler", fake)
-        before = datetime.now(fake.timezone)
+        before = business_now()
         assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(1) is True
 
         func, kwargs = fake.jobs[0]
@@ -717,8 +869,16 @@ class TestMaybeScheduleSnapshotCascadeRecheck:
         assert kwargs["replace_existing"] is True        # 确定性 id 去重
         assert kwargs["misfire_grace_time"] is None
         assert kwargs["args"] == [1]
-        assert kwargs["id"] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert kwargs["id"] == f"snapshot_cascade_recheck_{business_today().isoformat()}_1"
         assert kwargs["run_date"] >= before + scheduler_service.SNAPSHOT_CASCADE_RECHECK_INTERVAL - timedelta(seconds=5)
+
+    def test_recheck_job_id_uses_business_day_across_utc_boundary(self, monkeypatch):
+        """#746 验收：冻结 07:00 CST（UTC 仍为前一日）复查 job id 取业务日"""
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        fake = _FakeScheduler()
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        assert scheduler_service._maybe_schedule_snapshot_cascade_recheck(1) is True
+        assert fake.jobs[0][1]["id"] == "snapshot_cascade_recheck_2026-10-20_1"
 
     def test_attempts_bounded_at_max(self, monkeypatch):
         """序号超上限即停手，交次日自愈（有界，不无限复查）"""
@@ -739,7 +899,7 @@ class TestMaybeScheduleSnapshotCascadeRecheck:
         scheduler_service._maybe_schedule_snapshot_cascade_recheck(1)
         scheduler_service._maybe_schedule_snapshot_cascade_recheck(1)
         ids = [kwargs["id"] for _func, kwargs in fake.jobs]
-        assert ids[0] == ids[1] == f"snapshot_cascade_recheck_{date.today().isoformat()}_1"
+        assert ids[0] == ids[1] == f"snapshot_cascade_recheck_{business_today().isoformat()}_1"
         assert all(kwargs["replace_existing"] for _f, kwargs in fake.jobs)
 
 
@@ -772,7 +932,7 @@ class TestRetryJobPersistence:
         from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
         url = f"sqlite:///{tmp_path / 'jobs.db'}"
-        job_id = f"nav_sync_retry_{date.today().isoformat()}_1"
+        job_id = f"nav_sync_retry_{business_today().isoformat()}_1"
 
         def make_scheduler():
             return BackgroundScheduler(
