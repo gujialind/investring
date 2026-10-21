@@ -625,7 +625,7 @@ ir trade list [--portfolio-code <组合>] [--status <状态>] [--type <类型>] 
 >
 > 列表另带只读派生对象 `paired_leg`（issue #719，非 DB 列）：同一 `transfer_group` 内的**对手腿**快照（`id`/`product_code`/`market`/`product_name`/`display_code`/`platform_code`/`trade_type`/`shares`/`amount`/`price`/`fee`/`confirm_date`/`status`），方向不限（基金腿↔现金腿、平台间转移的两条现金腿互指）。它与 `cash_*` 的分工：`cash_*` 只讲基金腿→现金腿的平台与日期（#493 历史契约），`paired_leg` 给**任意锚点行**补对手腿的完整读侧信息，两者并存不互写。
 >
-> **它是「补信息」不是「补行」**：对手腿被本页筛选条件（`--product-code` / `--market` / `--products` / `--platform-code` / `--status`）挡掉时仍会回填，但**不并入 `items`**，因此 `total`、页数、排序键与不加该字段时逐字一致（排序键 = `组锚点日期 desc, transfer_group, id desc`，2026-10-20 起 #734；锚点定义、相邻 ≠ 同页的页边界残余、与筛选区间解耦的代价等完整口径由[业务规则·调仓交易](../docs/reference/business-constraints.md#rule-trade)单点持有，此处不复述)。`paired_leg.id` 就是真实 trade 行 id，同组对手腿恰好也在本页时，消费方应以此识别「真实行优先、派生兜底」，勿重复渲染。以下三种情况恒为 `null`：申赎配对的 `sub_` 组现金腿（对手方是 subscription 记录而非 trade 行）、`transfer_group` 为空串的行（列 NOT NULL、历史 NULL 已由迁移回填为 `legacy_{id}`，正常写入路径不产生，读侧仍作防御）、组内行数不等于 2 的异常组。
+> **它是「补信息」不是「补行」**：对手腿被本页筛选条件（`--product-code` / `--market` / `--products` / `--platform-code` / `--status`）挡掉时仍会回填，但**不并入 `items`**，因此 `total`、页数、排序键与不加该字段时逐字一致（排序键 = `组锚点日期 desc, transfer_group, id desc`，2026-10-20 起 #734；锚点定义、相邻 ≠ 同页的页边界残余、与筛选区间解耦的代价等完整口径由[业务规则·调仓交易](../docs/reference/business-constraints.md#rule-trade)单点持有，此处不复述）。`paired_leg.id` 就是真实 trade 行 id，同组对手腿恰好也在本页时，消费方应以此识别「真实行优先、派生兜底」，勿重复渲染。以下三种情况恒为 `null`：申赎配对的 `sub_` 组现金腿（对手方是 subscription 记录而非 trade 行）、`transfer_group` 为空串的行（列 NOT NULL、历史 NULL 已由迁移回填为 `legacy_{id}`，正常写入路径不产生，读侧仍作防御）、组内行数不等于 2 的异常组。
 
 #### `ir trade create`
 
