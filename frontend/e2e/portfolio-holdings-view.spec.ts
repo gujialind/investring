@@ -178,14 +178,15 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     expect(groupBox, '维度组容器未渲染出 boundingBox').not.toBeNull();
     expect(cardBox, '产品卡未渲染出 boundingBox').not.toBeNull();
     const indent = cardBox!.x - groupBox!.x;
-    // 引导线载体 = 卡片外两层（card div → Link → 栅格容器 div），按结构取、不绑工具类
-    const grid = card.locator('xpath=../..');
+    // 引导线载体按 testid 取，不按 ../.. 深度跳：插入包装层后深度跳会落到无 border 的
+    // Link 上，移动端的 0px 断言便对错节点成立（#382：需锚点就在组件侧补 testid）
+    const grid = group.getByTestId('asset-group-cards');
     if (testInfo.project.name === 'mobile') {
       expect(indent, '移动端不套引导线缩进（回收 16px 给卡内两列）').toBeLessThanOrEqual(1);
       await expect(grid).toHaveCSS('border-left-width', '0px');
     } else {
-      // ml-0.5(2) + border-l-2(2) + pl-3(12) = 16；下限收紧到 15 并钉住引导线本体
-      // （#741 L2 S2：旧下限 12 会放过「删 border-l-2 只剩 pl-3=12 / 14」的退化）
+      // 15 = 桌面 16px 缩进（推导见 PortfolioHoldings.tsx::cardGridClass）留 1px 抖动；
+      // 另钉引导线本体（#741 L2 S2：只断下限 12 会放过「删 border-l-2 只剩 pl-3」的退化）
       await expect(grid).toHaveCSS('border-left-width', '2px');
       expect(indent, '桌面保留引导线缩进').toBeGreaterThanOrEqual(15);
     }

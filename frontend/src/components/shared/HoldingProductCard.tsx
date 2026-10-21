@@ -30,14 +30,11 @@ function cashSubtitle(product: HoldingProductAggregate): string {
  * #595 按产品视图的持仓产品卡（跨平台聚合，M1/D1）：
  * row1=产品名 + 市值大数字；row2=代码 · 市场标签 + 占比（行级最大余数法，§4）；
  * row3 两列=累计收益（D-3：持有收益口径）| 最新收益(MM/DD)。
- * 份额列已双端移除（#724，偏离 M1/D1 的三列定义）：三列等分在 390px 下每列仅
- * ≈93px，带日期的标题折行、份额被 truncate 成 `53,178.1…`（金融数值不可 ellipsis，
- * #636）；份额改由详情页概览卡承载、整卡可点即达——本组件有两个消费者：组合「按产品」
- * 视图卡 → 产品详情（ProductDetailContent::overview，跨平台聚合份额）；平台详情页
- * 产品卡（PlatformDetailContent）→ 平台-产品详情（PlatformProductDetailContent::overview，
- * 本平台切片份额）。row3 两列收益值 `whitespace-nowrap` 不截断（L2 评审收敛，同 #636 纪律：
- * 半列实测移动 390px 档 146px、桌面 1440 档 160px；超宽不出省略号，代价是与邻列叠印或溢出卡外，
- * 形态登记见 visual-spec §12）。
+ * 偏离 M1/D1 的两项（#724；理由、实测列宽与溢出代价形态由 visual-spec §12 持有）：
+ * 「持有份额」列双端移除，份额改由两个消费者各自的详情页概览卡承载——组合「按产品」卡
+ * → `ProductDetailContent::overview`（跨平台聚合份额），平台详情页卡（PlatformDetailContent）
+ * → `PlatformProductDetailContent::overview`（本平台切片份额），整卡可点即达；row3 收益值
+ * `whitespace-nowrap` 不截断（#636 金融数值不可 ellipsis）。
  * 现金为聚合卡（无 row3，副标题为可用现金 · 平台）。
  * 点击跳转产品详情页由 #595 步骤③接线，本组件保持纯展示。
  */

@@ -17,7 +17,7 @@ import {
   sumGroupPercent,
   type HoldingProductSection,
 } from "@/lib/holdings";
-import { formatNumber, largestRemainderPercents } from "@/lib/utils";
+import { cn, formatNumber, largestRemainderPercents } from "@/lib/utils";
 import HoldingInTransitCard from "./HoldingInTransitCard";
 import HoldingProductCard from "./HoldingProductCard";
 import HoldingPlatformCard from "./HoldingPlatformCard";
@@ -60,7 +60,7 @@ function cardGridClass(variant: "desktop" | "mobile"): string {
     : "space-y-2.5";
 }
 
-/** 按产品分区渲染（与 PositionSections 同 V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724） */
+/** 按产品分区渲染（V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724） */
 function ProductSections({
   sections,
   percentOf,
@@ -135,15 +135,15 @@ function ProductSections({
                         </span>
                       </div>
                     )}
-                    {/* 引导线缩进仅桌面保留（#724）：移动端单列堆叠下 chip 紧贴其卡片、
-                        顺序即归属，缩进承载的信息量≈0，而它吃掉的 16px 直接转化为卡内
-                        列宽不足（§6 第 4 类端侧布局差异） */}
+                    {/* 引导线缩进仅桌面保留（§6 第 4 类；量级与理由由该条持有）。
+                        testid 是 E2E 定位缩进载体的锚点——#382 口径：需锚点补 testid，不按 DOM 深度跳 */}
                     <div
-                      className={
-                        showChip && variant === "desktop"
-                          ? `ml-0.5 border-l-2 border-border pl-3 ${cardGridClass(variant)}`
-                          : cardGridClass(variant)
-                      }
+                      data-testid="asset-group-cards"
+                      className={cn(
+                        showChip && variant === "desktop" &&
+                          "ml-0.5 border-l-2 border-border pl-3",
+                        cardGridClass(variant)
+                      )}
                     >
                       {g.products.map((p) => {
                         const card = (
