@@ -38,6 +38,7 @@ from tests.factories import (
     create_platform,
     create_portfolio,
     create_position_snapshot,
+    create_price_record,
     create_product,
     create_share_change_event,
     create_trade,
@@ -203,6 +204,8 @@ class TestShareEventReceiptMessages:
         )
         create_value_snapshot(test_db, portfolio_code, self.ENT,
                               total_value=shares, total_shares=shares, unit_price=1.0)
+        # #744：再投资净值取除息日数据源净值，与事件上的 reinvest_nav 一致
+        create_price_record(test_db, self.FUND, "CN_OTC", self.EX, 1.0899)
 
     def _create(self, test_db, portfolio_code):
         return create_share_change_event(

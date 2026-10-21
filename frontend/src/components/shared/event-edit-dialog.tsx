@@ -83,10 +83,12 @@ export function EventEditDialog({
   onSubmit,
 }: EventEditDialogProps) {
   const [form, setForm] = useState<EditFormState | null>(null);
+  const [navError, setNavError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && event) setForm(toForm(event));
     if (!open) setForm(null);
+    setNavError(null);
   }, [open, event]);
 
   if (!event || !form) return null;
@@ -108,6 +110,16 @@ export function EventEditDialog({
     for (const field of NUM_FIELDS) {
       const raw = form[field].trim();
       if (raw !== "") payload[field] = parseFloat(raw);
+    }
+    if (event.event_type === "reinvest_dividend") {
+      // #744：再投资净值留空 = 确认时取除息日净值，需显式发 null 才能清掉存量值（如历史 0）
+      const raw = form.reinvest_nav.trim();
+      if (raw === "") {
+        payload.reinvest_nav = null;
+      } else if (!(parseFloat(raw) > 0)) {
+        setNavError("再投资净值必须大于 0；净值未发布可留空");
+        return;
+      }
     }
     onSubmit(payload);
   };
@@ -206,9 +218,15 @@ export function EventEditDialog({
                       id="edit_reinvest_nav"
                       type="number"
                       step="0.0001"
+                      min="0"
+                      placeholder="留空则确认时取除息日净值（需先同步）"
                       value={form.reinvest_nav}
-                      onChange={(e) => setField({ reinvest_nav: e.target.value })}
+                      onChange={(e) => {
+                        setNavError(null);
+                        setField({ reinvest_nav: e.target.value });
+                      }}
                     />
+                    {navError && <p className="text-xs text-destructive">{navError}</p>}
                   </div>
                 )}
               </div>

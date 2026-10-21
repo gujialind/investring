@@ -112,7 +112,7 @@ WORKFLOWS = {
             "ir snapshot generate --portfolio-code <code> --target-date <ex_date>",
             "延期到账时继续逐交易日生成快照；非交易日到账由下一交易日快照消费",
         ],
-        "notes": "ex_date > entitlement_date 且均为交易日；基金级事件（拆分/合并/送股）不传 platform_code，平台级（分红等）必传。cash_pay_date 为可选 YYYY-MM-DD，仅 cash_dividend 可设，须 >= ex_date，允许非交易日；创建省略/null 默认除息日，update 省略不改，清空用 ir share-event update <id> --json '{\"cash_pay_date\":null}'，不新增清空选项。confirmed 仍须先 unconfirm 才能修改；除息日起未到账计 IN_TRANSIT_DIVIDEND，不计可用现金；到账不重复确认分红收益",
+        "notes": "ex_date > entitlement_date 且均为交易日；基金级事件（拆分/合并/送股）不传 platform_code，平台级（分红等）必传。cash_pay_date 为可选 YYYY-MM-DD，仅 cash_dividend 可设，须 >= ex_date，允许非交易日；创建省略/null 默认除息日，update 省略不改，清空用 ir share-event update <id> --json '{\"cash_pay_date\":null}'，不新增清空选项。confirmed 仍须先 unconfirm 才能修改；除息日起未到账计 IN_TRANSIT_DIVIDEND，不计可用现金；到账不重复确认分红收益。reinvest_dividend 仅限场外份额（CN_OTC/HK_MUTUAL），--reinvest-nav 可省略：确认时取除息日数据源净值折算并回写，手填仅作校验；除息日净值未同步报 MISSING_NAV，可 ir share-event confirm <id> --sync-nav",
     },
     "快照追平": {
         "steps": [

@@ -46,6 +46,8 @@ BASE = date(2025, 6, 5)
 EX = date(2025, 6, 6)
 MONDAY = date(2025, 6, 9)
 MARKET = "CN_EXCHANGE"
+# #744：红利再投资仅限场外登记份额，reinvest 用例改用场外产品
+OTC_MARKET = "CN_OTC"
 
 # cost_price 列标度 4 位 → 反推成本基数的误差上界 = 份额 × 半个标度单位
 SCALE_BOUND_PER_SHARE = Decimal("0.00005")
@@ -54,7 +56,10 @@ SCALE_BOUND_PER_SHARE = Decimal("0.00005")
 _SAME = object()
 
 
-def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_price=_SAME):
+def _env(
+    db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_price=_SAME,
+    market=MARKET, nav_on_ex=None,
+):
     """建一个 BASE 日已就绪的组合：一笔基金买入（含配对 CASH 腿）+ 等额申购入金。
 
     现金净流为 0（申购入金 == 买入出金），避免快照生成的负现金阻断（#203）；
@@ -63,6 +68,9 @@ def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_pric
     `position_cost_price` 只改 BASE 快照行的成本价、不改买入价，用于构造
     「成本价维护上线前落库的历史行」（cost_price 为 NULL）；快照行不可 ORM 更新
     （`models/portfolio_position.py` 的 before_update 守卫），只能建时就指定。
+
+    `nav_on_ex` 只覆盖 EX 当日净值（MONDAY 仍取 nav_ex）：红利再投资按除息日净值
+    折算份额（#744），用它让「再投资净值」与「后续估值净值」分属不同交易日。
     """
     nav_ex = nav if nav_ex is None else nav_ex
     snapshot_cost = cost_price if position_cost_price is _SAME else position_cost_price
@@ -73,9 +81,12 @@ def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_pric
 
     create_portfolio(db, code=port, status="active")
     create_platform(db, code=plat)
-    create_product(db, code=fund, market=MARKET, product_type="ETF", confirm_days=0)
+    create_product(
+        db, code=fund, market=market,
+        product_type="ETF" if market == MARKET else "OEF", confirm_days=0,
+    )
     create_position_snapshot(
-        db, port, fund, MARKET, snapshot_date=BASE, platform_code=plat,
+        db, port, fund, market, snapshot_date=BASE, platform_code=plat,
         shares=float(shares), market_value=float(Decimal(str(shares)) * Decimal(str(nav))),
         unit_price=float(nav),
         cost_price=None if snapshot_cost is None else float(snapshot_cost),
@@ -92,9 +103,9 @@ def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_pric
         db, port, "VIEWER", amount=float(capital), shares=float(capital), unit_price=1,
         platform_code=plat, apply_date=date(2025, 6, 4), confirm_date=BASE, status="confirmed",
     )
-    create_price_record(db, fund, MARKET, BASE, float(nav))
-    for day in (EX, MONDAY):
-        create_price_record(db, fund, MARKET, day, float(nav_ex))
+    create_price_record(db, fund, market, BASE, float(nav))
+    create_price_record(db, fund, market, EX, float(nav_ex if nav_on_ex is None else nav_on_ex))
+    create_price_record(db, fund, market, MONDAY, float(nav_ex))
 
     group = f"rebal_cd_{suffix}"
     create_trade(
@@ -110,7 +121,7 @@ def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_pric
         transfer_group=group,
     )
     create_trade(
-        db, port, fund, MARKET, trade_type="buy", platform_code=plat,
+        db, port, fund, market, trade_type="buy", platform_code=plat,
         trade_date=BASE, confirm_date=BASE, status="confirmed",
         amount=float(capital), actual_amount=float(capital),
         price=float(cost_price), shares=float(shares), transfer_group=group,
@@ -118,10 +129,10 @@ def _env(db, suffix, *, shares, cost_price, nav, nav_ex=None, position_cost_pric
     return port, plat, fund
 
 
-def _event(db, port, fund, *, event_type, platform=None, **kwargs):
+def _event(db, port, fund, *, event_type, platform=None, market=MARKET, **kwargs):
     """建并确认一条事件（平台级传 platform，基金级不传，确认时自动拆子记录）。"""
     event = create_share_change_event(
-        db, portfolio_code=port, product_code=fund, market=MARKET,
+        db, portfolio_code=port, product_code=fund, market=market,
         event_type=event_type, ex_date=kwargs.pop("ex_date", EX),
         entitlement_date=BASE, platform_code=platform, force_cover=True, **kwargs,
     )
@@ -139,9 +150,9 @@ def _generate(client, headers, port, day):
     assert response.json()["success"] is True, response.text
 
 
-def _fund_row(db, port, fund, day):
+def _fund_row(db, port, fund, day, market=MARKET):
     return db.query(PortfolioPosition).filter_by(
-        portfolio_code=port, product_code=fund, market=MARKET, snapshot_date=day,
+        portfolio_code=port, product_code=fund, market=market, snapshot_date=day,
     ).one()
 
 
@@ -182,19 +193,19 @@ def test_reinvest_dividend_dilutes_cost_price_preserving_basis(
     """
     port, plat, fund = _env(
         test_db, "REINV", shares="5377.61", cost_price="1.0943",
-        nav="1.0943", nav_ex="1.0796",
+        nav="1.0943", nav_ex="1.0796", nav_on_ex="1.0899", market=OTC_MARKET,
     )
     basis_before = Decimal("5377.61") * Decimal("1.0943")
 
     event = _event(
         test_db, port, fund, event_type="reinvest_dividend", platform=plat,
-        div_cash=Decimal("0.0119"), reinvest_nav=Decimal("1.0899"),
+        market=OTC_MARKET, div_cash=Decimal("0.0119"), reinvest_nav=Decimal("1.0899"),
     )
     # 两步量化（#425）：quantize_amount(5377.61 × 0.0119) = 63.99，63.99 / 1.0899 = 58.71
     assert Decimal(str(event.shares_change)) == Decimal("58.71")
 
     _generate(client, admin_headers, port, EX)
-    row = _fund_row(test_db, port, fund, EX)
+    row = _fund_row(test_db, port, fund, EX, OTC_MARKET)
 
     assert Decimal(str(row.shares)) == Decimal("5436.32")
     assert Decimal(str(row.cost_price)) == Decimal("1.0825")
@@ -422,19 +433,22 @@ def test_holding_profit_aligns_with_cumulative_within_column_scale(
     凡从成本价反推基数都带 份额×5e-5 的固有误差（本例上界 ¥0.27、实测 ¥0.096），
     故按列标度上界断言。修复前差值为 ¥64.25，比上界大两个数量级。
     """
+    # #744：再投资按除息日（EX）净值 1.0899 折算，估值取 MONDAY 净值 1.0796，
+    # 两净值分属不同交易日，比较口径落在 MONDAY（EX→MONDAY 无资金流，数值不变）
     port, plat, fund = _env(
         test_db, "ALIGN", shares="5377.61", cost_price="1.0943",
-        nav="1.0943", nav_ex="1.0796",
+        nav="1.0943", nav_ex="1.0796", nav_on_ex="1.0899", market=OTC_MARKET,
     )
     _event(
         test_db, port, fund, event_type="reinvest_dividend", platform=plat,
-        div_cash=Decimal("0.0119"), reinvest_nav=Decimal("1.0899"),
+        market=OTC_MARKET, div_cash=Decimal("0.0119"), reinvest_nav=Decimal("1.0899"),
     )
     _generate(client, admin_headers, port, EX)
+    _generate(client, admin_headers, port, MONDAY)
 
-    holding = _derived(client, admin_headers, port, EX)[fund]["profit_loss"]
-    cumulative = _by_product(client, admin_headers, port, EX)[fund]["cumulative_profit"]
-    row = _fund_row(test_db, port, fund, EX)
+    holding = _derived(client, admin_headers, port, MONDAY)[fund]["profit_loss"]
+    cumulative = _by_product(client, admin_headers, port, MONDAY)[fund]["cumulative_profit"]
+    row = _fund_row(test_db, port, fund, MONDAY, OTC_MARKET)
     bound = float(Decimal(str(row.shares)) * SCALE_BOUND_PER_SHARE)
 
     # cumulative_profit 走全历史净流量、完全不读 cost_price：5869.0511 − 5884.72
@@ -607,12 +621,12 @@ def test_whitelisted_event_zeroing_position_skips_dilution(
 def test_events_still_reject_missing_position(client, admin_headers, test_db):
     """摊薄逻辑不得削弱 #278 的持仓存在性硬拒绝。"""
     port, plat, fund = _env(
-        test_db, "MISS", shares=1000, cost_price=1.0, nav=1.0,
+        test_db, "MISS", shares=1000, cost_price=1.0, nav=1.0, market=OTC_MARKET,
     )
     other_platform = "CDP_MISS_OTHER"
     create_platform(test_db, code=other_platform)
     event = create_share_change_event(
-        test_db, portfolio_code=port, product_code=fund, market=MARKET,
+        test_db, portfolio_code=port, product_code=fund, market=OTC_MARKET,
         event_type="reinvest_dividend", ex_date=EX, entitlement_date=BASE,
         platform_code=other_platform, div_cash=Decimal("0.1"),
         reinvest_nav=Decimal("1.0"), force_cover=True,

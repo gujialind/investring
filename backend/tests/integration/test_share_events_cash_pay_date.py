@@ -110,6 +110,9 @@ def test_create_dates_round_trip_and_audit(writer, payload, fields, test_db, cli
 @pytest.mark.parametrize("event_type", NON_CASH_TYPES)
 def test_non_cash_date_rejected_but_null_allowed(writer, payload, event_type, test_db):
     payload.update(event_type=event_type, shares_change=1, cash_change=2)
+    if event_type == "reinvest_dividend":
+        # #744：红利再投资仅限场外/港互认，换用场外产品；本用例只测 cash_pay_date 规则
+        payload.update(product_code="000300.OF", market="CN_OTC")
     if event_type in {"share_split", "share_merge", "bonus_share"}:
         payload.pop("platform_code")
     before = _state(test_db)

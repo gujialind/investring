@@ -146,8 +146,8 @@ export function formatNav(
 /**
  * 格式化 4 位小数金额（对齐后端 Numeric(15,4)，用于需与后端/CLI 精确对账的场景）
  *
- * 当前无调用点——保留是刻意的：visual-spec §3「数字格式」表「精确对账金额」行点名本
- * 函数，删除会让规范表指向不存在的 helper。预期调用方 = 按 §3 落地的对账场景展示点。
+ * visual-spec §3「数字格式」表「精确对账金额」行点名本函数；调用点如份额变动事件
+ * 确认弹窗的「每份分红」（与基金分红公告逐位对账）。
  */
 export function formatAmount4(
   num: number | string | undefined | null,

@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from tests.factories import (
     create_portfolio, create_product, create_platform,
-    create_share_change_event, ensure_trading_day,
+    create_price_record, create_share_change_event, ensure_trading_day,
 )
 from app.models.share_change_event import ShareChangeEvent
 from app.schemas.share_change_event import ShareChangeEventResponse
@@ -113,6 +113,11 @@ class TestShareChangeEventMarketScoping:
             "shares_change": float(confirmed.shares_change),
             "shares_after": float(confirmed.shares_after),
             "cash_change": float(confirmed.cash_change),
+            # #744 分红明细字段：基金级拆分无分红/再投资净值
+            "div_cash": None,
+            "dividend_amount": None,
+            "reinvest_nav": None,
+            "nav_date": None,
         }
 
     @pytest.mark.parametrize(
@@ -127,6 +132,9 @@ class TestShareChangeEventMarketScoping:
     ):
         """平台级分红按 (market, platform) 读行：同平台双市场取 OTC 50，不是 EX 100"""
         _setup_lof_baseline(test_db, "SPV_M4")
+        if event_type == "reinvest_dividend":
+            # #744：再投资净值取除息日数据源净值，与事件上的 reinvest_nav 一致
+            create_price_record(test_db, LOF461_CODE, "CN_OTC", LOF461_EX, 1.0)
         event = self._create(
             test_db, "SPV_M4", event_type=event_type, platform_code="MYCF",
             div_cash=Decimal("0.5"), reinvest_nav=Decimal("1"),

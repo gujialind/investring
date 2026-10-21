@@ -34,7 +34,7 @@ def create(
     platform_code: Optional[str] = typer.Option(None, "--platform-code", help="平台代码(平台级事件必填: cash_dividend/reinvest_dividend/forced_adjustment)"),
     entitlement_shares: Optional[float] = typer.Option(None, "--entitlement-shares", help="权益份额"),
     div_cash: Optional[float] = typer.Option(None, "--div-cash", help="每股分红金额"),
-    reinvest_nav: Optional[float] = typer.Option(None, "--reinvest-nav", help="再投资净值"),
+    reinvest_nav: Optional[float] = typer.Option(None, "--reinvest-nav", help="再投资净值(>0)，仅 reinvest_dividend；省略则确认时取除息日数据源净值，填写则仅作一致性校验"),
     ratio: Optional[float] = typer.Option(None, "--ratio", help="拆分/合并比例"),
     shares_change: Optional[float] = typer.Option(None, "--shares-change", help="份额变化量"),
     cash_change: Optional[float] = typer.Option(None, "--cash-change", help="现金变化量"),
@@ -91,7 +91,7 @@ def update(
     entitlement_date: Optional[str] = typer.Option(None, "--entitlement-date", help="权益登记日"),
     cash_pay_date: Optional[str] = typer.Option(None, "--cash-pay-date", help="现金分红到账日(YYYY-MM-DD)，仅 cash_dividend；不早于除息日，允许非交易日；省略不改，--json 显式 null 清空后按除息日到账"),
     div_cash: Optional[float] = typer.Option(None, "--div-cash", help="每股分红金额"),
-    reinvest_nav: Optional[float] = typer.Option(None, "--reinvest-nav", help="再投资净值"),
+    reinvest_nav: Optional[float] = typer.Option(None, "--reinvest-nav", help="再投资净值(>0)；--json 显式 null 清空后改由确认时取除息日数据源净值"),
     ratio: Optional[float] = typer.Option(None, "--ratio", help="比例"),
     shares_change: Optional[float] = typer.Option(None, "--shares-change", help="份额变化量"),
     cash_change: Optional[float] = typer.Option(None, "--cash-change", help="现金变化量"),
@@ -133,10 +133,14 @@ def delete(
 
 
 @app.command("confirm")
-def confirm(id: int = typer.Argument(..., help="事件ID")):
+def confirm(
+    id: int = typer.Argument(..., help="事件ID"),
+    sync_nav: bool = typer.Option(False, "--sync-nav", help="红利再投资除息日净值缺失(MISSING_NAV)时自动同步净值并重试一次（会访问外部数据源）"),
+):
     """确认事件"""
     client = APIClient.from_config()
-    result = client.post(f"/api/share-change-events/{id}/confirm")
+    params = {"sync_nav": True} if sync_nav else None
+    result = client.post(f"/api/share-change-events/{id}/confirm", params=params)
     success(
         data=result["data"],
         hints=["确认后需生成 ex_date 日快照: ir snapshot generate --portfolio-code <code> --target-date <ex_date>；现金分红按 cash_pay_date（未设则 ex_date）到账，此前计分红在途、不计可用现金；非交易日到账由下一交易日快照消费"],

@@ -114,6 +114,7 @@ class _StubClient:
     def __init__(self):
         self.calls = []
         self.writes = []
+        self.post_params = []
         self.response_data = {"available_cash": 100.0}
 
     def get(self, path, params=None):
@@ -122,6 +123,7 @@ class _StubClient:
 
     def post(self, path, json_data=None, params=None):
         self.writes.append(("POST", path, json_data))
+        self.post_params.append(params)
         return {"data": json_data or {}}
 
     def put(self, path, json_data=None):
@@ -438,3 +440,34 @@ class TestShareEventCashPayDate:
         assert doc["error"]["code"] == "VALIDATION_ERROR"
         assert field in doc["error"]["message"]
         assert stub_client.writes == []
+
+
+class TestShareEventReinvestNav:
+    """#744：红利再投资净值缺失/不一致的就近提示与 confirm --sync-nav 透传"""
+
+    def test_missing_nav_with_event_id_points_to_share_event(self):
+        hint = get_hint("MISSING_NAV", {
+            "event_id": 22, "product_code": "007169.OF", "market": "CN_OTC", "nav_date": "2026-10-19",
+        })
+        assert "ir share-event confirm 22 --sync-nav" in hint
+        assert "ir market sync 007169.OF CN_OTC --start-date 2026-10-19 --end-date 2026-10-19" in hint
+        assert "ir trade" not in hint
+
+    def test_missing_nav_without_event_id_keeps_trade_hint(self):
+        assert get_hint("MISSING_NAV") == ERROR_HINTS["MISSING_NAV"]
+
+    def test_price_nav_mismatch_with_event_id_suggests_clearing(self):
+        hint = get_hint("PRICE_NAV_MISMATCH", {"event_id": 22, "nav_date": "2026-10-19"})
+        assert 'ir share-event update 22 --json \'{"reinvest_nav": null}\'' in hint
+        assert get_hint("PRICE_NAV_MISMATCH") == ERROR_HINTS["PRICE_NAV_MISMATCH"]
+
+    def test_confirm_sync_nav_sent_as_query_param(self, stub_client):
+        result = _runner().invoke(app, ["share-event", "confirm", "42", "--sync-nav"])
+        assert result.exit_code == 0, result.stdout
+        assert stub_client.writes == [("POST", "/api/share-change-events/42/confirm", None)]
+        assert stub_client.post_params == [{"sync_nav": True}]
+
+    def test_confirm_without_sync_nav_sends_no_param(self, stub_client):
+        result = _runner().invoke(app, ["share-event", "confirm", "42"])
+        assert result.exit_code == 0, result.stdout
+        assert stub_client.post_params == [None]

@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.models.trade import Trade
 from app.models.product import Product
-from app.models.price_record import PriceRecord
 from app.models.portfolio import Portfolio
 from app.models.platform import Platform
+from app.services.nav_lookup import get_exact_unit_price
 from app.services.trading_utils import get_next_trading_day, is_trading_day, get_latest_snapshot_date
 from app.services.position_service import calculate_available_cash, calculate_available_shares
 from app.services.product_service import resolve_product_market
@@ -305,16 +305,7 @@ def get_nav_for_trade_confirmation(
     Returns:
         净值（Decimal），如果不存在则返回 None（由调用方决定是否拒绝）
     """
-    price_record = db.query(PriceRecord).filter(
-        PriceRecord.product_code == product_code,
-        PriceRecord.market == market,
-        PriceRecord.price_date == trade_date
-    ).first()
-
-    if price_record and price_record.unit_price:
-        return Decimal(str(price_record.unit_price))
-
-    return None
+    return get_exact_unit_price(db, product_code, market, trade_date)
 
 
 def new_transfer_group() -> str:
