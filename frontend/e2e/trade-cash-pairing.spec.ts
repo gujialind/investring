@@ -1,18 +1,22 @@
 /**
  * 前端 E2E 测试：交易列表的配对现金信息（#719「只补信息、不补行」）
  *
- * 覆盖三件事，全部走**种子契约组合** E2E_ACTIVE（只读展示，不做生命周期写入）：
+ * 覆盖四件事，全部走**种子契约组合** E2E_ACTIVE（只读展示，不做生命周期写入）：
  *   1. 未筛选形态逐行不变（真实腿结对、派生子行 0 条）——「零回归」与「真实行优先」两条验收断言；
  *   2. 状态筛选把对手腿挡在结果集外时，落单行各自补出「↳ 对手腿」派生子行，
  *      申赎腿（`sub_` 组）保持「现金 · 申赎确认」不补对手；派生行无任何操作入口；
  *   3. **两个派生方向各钉一条**（#721 评审 S2）：`status=confirmed` 留下现金锚点、补基金对手腿；
  *      `status=pending` 留下基金锚点、补现金对手腿——后者同时钉住 §8 的派生形态
  *      （`↳ 转出 平台名`、金额不带 ±，#721 评审 S1）。
+ *   4. 现金腿在**主行**的份额/价格两槽都是 `--`（#732，与 #719 卡片侧同口径），
+ *      且两类子行的首列标签不折行（#733）。
  *
- * 为什么用状态筛选而不是产品筛选现金档：产品筛选里的「现金」档（快捷下拉现金项 +
- * `include_virtual=true` 取数 + `?product=CASH&market=` 空段放行）不属本 PR 范围，
- * 由 #725 PR-2 承接（届时深链形态另补用例）。本文件钉的是**读侧派生本身**，与对手腿
- * 被哪一种筛选挡掉无关。平台筛选同理无法造出落单：种子 E2E_ACTIVE 的腿全部落在 HBZQ，
+ * 为什么用状态筛选而不是产品筛选现金档：产品筛选弹层**不列 CASH**——`/api/products`
+ * 默认排除虚拟产品（#327），弹层取数不传 `include_virtual`，故「现金」类型档选中恒空、
+ * 已整档移除（#736）；「按产品筛出现金腿」**当前 UI 无入口**（弹层不列 CASH；深链空
+ * `market` 段被 `TradesContent` 的 `normalizedInitialProduct` 归一丢弃），`tradePairs` 的
+ * 派生逻辑保留。本文件钉的是**读侧派生本身**，
+ * 与对手腿被哪一种筛选挡掉无关。平台筛选同理无法造出落单：种子 E2E_ACTIVE 的腿全部落在 HBZQ，
  * 按 `platform_code` 筛等于不筛（CASH↔CASH 的派生形态由 `tradePairs.test.ts` 的
  * 「双 CASH 转移组只剩一条腿」单测钉住，种子侧无跨平台转移）。
  *
@@ -28,7 +32,7 @@
  * - D1 申购 ¥100,000 → D2 确认，配对 CASH buy 腿（`sub_` 组）。
  * 未筛选 = 5 条真实行 → 2 对（主行 + 现金子行）+ 1 落单现金行；条数按预测式推导，不写死。
  */
-import { test, expect, type Page, type TestInfo } from "@playwright/test";
+import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import {
   E2E_ACTIVE,
   collectPageErrors,
@@ -82,6 +86,23 @@ function realCashSubRows(rows: RespTrade[]) {
   ).length;
 }
 
+/**
+ * 子行首列标签「只占一行」（#733）。
+ * 判据取**盒高 vs 行高**而不是 `getClientRects().length`：行盒数随引擎与文本节点数变化
+ * （同一行里 `{label}{platformName}` 两个文本节点在 chromium 下就回 2 个 rect），
+ * 只有高度是两端一致的事实。折行时高度是行高的整数倍（实测 2 行 35px、3 行 55px）。
+ */
+async function expectSingleLineLabel(label: Locator, what: string) {
+  await expect(label).toHaveCSS("white-space", "nowrap");
+  const box = await label.boundingBox();
+  expect(box, `${what}：标签应有可见盒`).not.toBeNull();
+  const lineHeight = await label.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+  expect(
+    box!.height,
+    `${what}：首列标签应只占一行（实测高 ${box!.height}px、行高 ${lineHeight}px）`,
+  ).toBeLessThanOrEqual(lineHeight * 1.5);
+}
+
 /** 按状态下筛并返回该次响应行集（waiter 先于点击挂上：换键请求可能早于下一行完成） */
 async function filterByStatus(
   page: Page,
@@ -130,6 +151,36 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     const cashSubRows = page.getByTestId("trade-cash-subrow");
     await expect(cashSubRows).toHaveCount(realCashSubRows(rows));
     await expect(cashSubRows.first()).toContainText("现金扣款");
+    // 子行首列标签不折行（#733）：首列是表内最窄的一档，CJK 逐字断行会把「华宝证券」切成两半
+    await expectSingleLineLabel(
+      cashSubRows.first().locator("td").first().locator("span"),
+      "现金子行",
+    );
+
+    // 现金腿作**主行**（落单 `sub_` 组）：份额与价格两槽都必须是 `--`。#732 前价格槽渲
+    // `1.0000`（后端 price 恒为记账单位 1），与卡片侧（#719 已修）两种口径，把现金读成净值型产品
+    const cashMainCount = rows.filter(
+      (r) => r.product_code === CASH_CODE && r.transfer_group?.startsWith("sub_"),
+    ).length;
+    expect(cashMainCount, "种子应含一条落单现金主行").toBeGreaterThan(0);
+    const cashMain = page.getByRole("row").filter({ hasText: "现金 · 申赎确认" }).first();
+    // 主行列数 = §8 槽位算术的对侧：cell 数一变，子行的 colSpan 折叠就整体错位
+    await expect(cashMain.getByRole("cell")).toHaveCount(10);
+    // 断言分级（#740 L2 S1）：份额槽与 `-- @ 1.0000` 是**既有行为护栏（修复前即绿）**——
+    // CASH 腿 shares 写入侧本就为 NULL（trade_service / subscription_service 均不设 shares），
+    // `-- @ 1.0000` 是详情卡形态、交易表两个槽位分开渲染，修复前后都不可能出现在表里；
+    // 保留它们是防形态漂移，不是 #732 的承重点。承重点只有价格槽（nth(6)，修复前为红）。
+    await expect(cashMain.getByRole("cell").nth(4)).toHaveText("--"); // 份额（既有行为护栏）
+    await expect(cashMain.getByRole("cell").nth(6)).toHaveText("--"); // 价格（#732 承重）
+    await expect(page.locator("table")).not.toContainText("-- @ 1.0000"); // 既有行为护栏
+    // 原整表 not.toContainText("1.0000") 已收窄为「现金主行价格单元格集合」：整表子串否定
+    // 会在种子未来新增任何净值 1.0000 的基金腿（货基/新基金面值）时误红，而 #732 的
+    // 承重面只在现金主行的价格槽
+    const cashMainRows = page.getByRole("row").filter({ hasText: "现金 · 申赎确认" });
+    await expect(cashMainRows).toHaveCount(cashMainCount);
+    for (const row of await cashMainRows.all()) {
+      await expect(row.getByRole("cell").nth(6)).toHaveText("--");
+    }
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 
@@ -149,6 +200,11 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     await expect(counterparts).toHaveCount(expect_.derived);
     // 派生子行的份额 @ 净值取自对手基金腿（现金腿自身无份额无净值语义，不该出现在子行槽位外）
     await expect(counterparts.filter({ hasText: "份 @" })).toHaveCount(expect_.derived);
+    // 派生子行首列同样不折行（#733）：`↳ 买入 沪深300ETF（待确认）` 是种子里最长的一档
+    await expectSingleLineLabel(
+      counterparts.first().locator("td").first().locator("span"),
+      "对手腿子行",
+    );
     // 申赎腿（sub_ 组）刻意不补对手：对手方是 subscription 记录、不是 trade 行
     const subCash = items.filter(
       (r) => r.product_code === CASH_CODE && r.transfer_group?.startsWith("sub_"),

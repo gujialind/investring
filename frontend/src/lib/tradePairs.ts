@@ -67,7 +67,9 @@ export function canEditArrivalDate(trade: Trade): boolean {
  *
  * 规则 6（#719，只作用于落到规则 5 的行）：single 行若带后端派生对手腿
  * `paired_leg`、且该对手腿**不在**本页结果集里 → 升级为派生 pair（derived=true）。
- * 这就是「筛产品后仍看得到配对现金腿 / 筛现金后看得到对手基金腿」的实现路径：
+ * 这就是「筛产品后仍看得到配对现金腿」的实现路径；「筛现金后看到对手基金腿」走同一条
+ * 派生逻辑，但当前 UI 无现金档入口（筛选弹层不列 CASH、深链空 `market` 被归一丢弃，
+ * #736），逻辑保留备 API 侧表达（`products=CASH|`）。
  * 补的是信息，不是行——`total`、分页与排序都不受影响。
  */
 export function groupTradeRows(trades: Trade[]): TradeRow[] {
