@@ -1936,6 +1936,8 @@ def _walk_group_pages(
     走完整条组序列得出，与请求的是第几页无关。`page` 越界 → `limit=0`（空页）。
 
     `page_size <= 0` 时无法推进（装满 0 行的页永不结束），按既有退化形态返回空页。
+    `group_sizes` 为空（筛选后无匹配行）时循环不执行，`total_pages` 同样是 **0** 而不是
+    行口径 `ceil` 的「至少 1 页」；两端分页条都在 `pages <= 1` 时不渲染，故无用户可见差异。
     """
     if page_size <= 0:
         return 0, 0, 0
@@ -2097,6 +2099,9 @@ def list_trades(
     # 它在组内恒定、不改变分组，但 MySQL 的 ONLY_FULL_GROUP_BY 无法从 join 子查询推出
     # 函数依赖，不进 GROUP BY 就在 SELECT/ORDER BY 里引用不了。
     # 只走组大小、不在 Python 里拉全表行；sum(sizes) == total（同一批筛选）。
+    # 代价据实说明：**每次列表请求都要把筛选后的全部行按组统计一遍**——这是一次无 limit 的
+    # GROUP BY 聚合扫描，扫的行数与 total 等量（只是不回传行对象），`ir trade list --all`
+    # 逐页调用就逐页重算。判断是否要缓存/下推时以这句为准，不要以 PR 正文的措辞为准。
     # 组次序与行次序一致的前提是「同 (锚点, transfer_group) 的不同组不会在行级 id DESC
     # 下交错」——跨组合撞同组号时才可能，而组号生成路径（uuid / sub_{id}）全局唯一，
     # 且传了 portfolio_code 时结构上不可能。真撞上时退化回「页可能拆组」，不会重复或漏行。
