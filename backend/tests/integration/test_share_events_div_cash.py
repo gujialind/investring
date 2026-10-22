@@ -224,3 +224,37 @@ class TestConfirmRejectsNonPositiveDivCash:
         assert row.status == "confirmed"
         # 8709.19 × 0.0039 = 33.97（先到分）→ 33.97 / 1.0099 = 33.64 份
         assert row.shares_change == Decimal("33.64")
+
+
+# ---------------- NULL 放行的后果边界 ----------------
+
+class TestNullDivCashYieldsEmptyEvent:
+    """#764 的门禁挡的是**字面非正值**，不是「0 现金 / 0 份额的空事件」这个后果。
+
+    `div_cash` 省略（NULL）刻意放行（tushare 直造事件待人工补录，见
+    `_validate_dividend_div_cash` docstring 与 business-constraints #rule-event），
+    而两条折算路径都是 `div_cash or 0` ⇒ 折出的正是本 issue 想避免的空事件，且确认能成功。
+    钉住这条边界，防后来者把正文读成「不会再出现 0 值分红事件」，或反过来照它去加结果侧门禁。
+    """
+
+    @pytest.mark.parametrize("event_type", DIVIDEND_TYPES)
+    def test_null_div_cash_confirms_as_empty_event(self, client, admin_headers, base, event_type):
+        body = _create_body(event_type=event_type)
+        body.pop("div_cash")
+        resp = client.post("/api/share-change-events", json=body, headers=admin_headers)
+        assert resp.status_code in (200, 201), resp.json()
+        event = base.query(ShareChangeEvent).one()
+        assert event.div_cash is None
+
+        confirmed = client.post(
+            f"/api/share-change-events/{event.id}/confirm", headers=admin_headers
+        )
+        assert confirmed.status_code == 200, confirmed.json()
+        base.expire_all()
+        row = base.get(ShareChangeEvent, event.id)
+        assert row.status == "confirmed"
+        assert row.div_cash is None
+        # cash_dividend 折 0.00 现金、reinvest_dividend 折 0.00 份（红利金额先到分 ⇒ 0）
+        assert row.cash_change == Decimal("0.00")
+        assert row.shares_change == Decimal("0.00")
+
