@@ -514,11 +514,15 @@ class TestListGroupPagination:
     def test_empty_transfer_group_rows_are_singletons(
         self, client, admin_headers, test_db
     ):
-        """(#752) `transfer_group` 为空串的行各自独立成组，不聚成一个共享锚点的退化组。
+        """(#752) `transfer_group` 为空串的行在**分页**上各自独立成组（singleton），不被当成
+        一整块不可拆的行；但排序锚点仍是共享的——两者是不同层面的口径，别混为一谈。
 
-        三行空组号（日期 9/5、9/4、9/3）若被当成一组，`page_size=2` 会把三行整块塞进
-        第 1 页（limit 3、total_pages 1、total_groups 1）；按 singleton 则是 [1,1,1]，
-        第 1 页恰好 2 行、共 2 页 3 组 —— 三个断言各自都能区分这两种形态。
+        三行空组号（日期 9/5、9/4、9/3）若在分页上被当成一组，`page_size=2` 会把三行整块塞进
+        第 1 页（limit 3、total_pages 1、total_groups 1）；按 singleton 则是 [1,1,1]，第 1 页
+        恰好 2 行、共 2 页 3 组 —— total_groups / total_pages 两个断言即可区分这两种形态。
+        注意「独立成组」只作用于**分页分组**、不改锚点：组锚点按 (组合, transfer_group) 取
+        max(trade_date)（#734），"" 也是一个 transfer_group 值，故三行共享锚点 9/5、同锚点内
+        落到 id DESC ⇒ 全序是 [id3, id2, id1]（= rows[2], rows[1], rows[0]）而非按各自日期。
         """
         create_portfolio(test_db, code="LT_GS1", status="active")
         # uq_trade_transfer_group = (transfer_group, product_code, trade_type)，故空组号的
@@ -545,8 +549,14 @@ class TestListGroupPagination:
         assert p1["total"] == 3
         assert p1["total_groups"] == 3
         assert p1["total_pages"] == 2
-        assert [i["id"] for i in p1["items"]] == [rows[0].id, rows[1].id]
-        assert [i["id"] for i in p2["items"]] == [rows[2].id]
+        # 共享退化锚点 9/5 ⇒ 同锚点内 id DESC：全序 [rows2, rows1, rows0]，故 p1=[3,2]、p2=[1]
+        assert [i["id"] for i in p1["items"]] == [rows[2].id, rows[1].id]
+        assert [i["id"] for i in p2["items"]] == [rows[0].id]
+        # singleton 分页的核心不变量（与具体行序无关）：页间不重叠、合起来正好全集
+        p1_ids = {i["id"] for i in p1["items"]}
+        p2_ids = {i["id"] for i in p2["items"]}
+        assert p1_ids & p2_ids == set()
+        assert p1_ids | p2_ids == {r.id for r in rows}
 
     def test_paging_through_all_pages_neither_duplicates_nor_drops_rows(
         self, client, admin_headers, test_db
