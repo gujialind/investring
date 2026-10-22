@@ -2,7 +2,7 @@
 错误就近提示与参数风格统一测试（issue #86/#81）
 
 覆盖：
-- get_hint 按 details 动态插值（MARKET_AMBIGUOUS/PRODUCT_NOT_FOUND/INSUFFICIENT_SHARES）
+- get_hint 按 details 动态插值（MARKET_AMBIGUOUS/PRODUCT_NOT_FOUND/INSUFFICIENT_SHARES/INVALID_PARAM）
 - 无动态规则时 fallback 静态表；未知错误码返回 None
 - output.error 缺省 hints 时按 code+details 自动生成
 - available-cash/available-shares 双通道参数：--portfolio-code option 优先、
@@ -62,6 +62,15 @@ class TestGetHint:
     def test_unknown_code_returns_none(self):
         assert get_hint("SOME_UNKNOWN_CODE") is None
         assert get_hint("SOME_UNKNOWN_CODE", {"available_markets": ["CN_SH"]}) is None
+
+    def test_invalid_param_div_cash_gives_actionable_hint(self):
+        """#764：INVALID_PARAM 是共用兜底码，只对 div_cash 插值补救命令"""
+        hint = get_hint("INVALID_PARAM", {"field": "div_cash", "value": -0.0039})
+        assert "--div-cash" in hint
+        assert "share-event update" in hint
+        # 其他字段/无 details 仍无提示，避免给共用码编造错误指引
+        assert get_hint("INVALID_PARAM") is None
+        assert get_hint("INVALID_PARAM", {"field": "ratio"}) is None
 
     def test_static_table_new_entries_present(self):
         for code in ("NOT_FOUND", "PRODUCT_NOT_FOUND", "MARKET_AMBIGUOUS",

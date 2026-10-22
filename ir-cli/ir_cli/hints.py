@@ -74,6 +74,12 @@ def get_hint(code: str, details: Optional[dict] = None) -> Optional[str]:
                 f"当前可用份额为 {shares}，请调低份额后重试；"
                 "实时查询: ir position available-shares --portfolio-code <code> --product-code <product_code>"
             )
+    # INVALID_PARAM 是多处入参校验共用的兜底码，只对能给出具体补救动作的字段插值（#764）
+    if code == "INVALID_PARAM" and details.get("field") == "div_cash":
+        return (
+            "每份分红金额必须大于 0：创建时传 --div-cash <正数>；"
+            "已落库的存量值改 ir share-event update <id> --div-cash <正数>"
+        )
     # 份额变动事件（红利再投资）的净值错误带 event_id，与调仓同码但补救命令不同（#744）
     event_id = details.get("event_id")
     if code == "MISSING_NAV" and event_id is not None:
