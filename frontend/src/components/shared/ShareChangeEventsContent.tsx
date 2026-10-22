@@ -297,7 +297,11 @@ export default function ShareChangeEventsContent({
     const isReinvest = formData.event_type === "reinvest_dividend";
     const isDividend = formData.event_type === "cash_dividend" || isReinvest;
     // #764：分红类事件的每份分红金额必须为正（0/负值后端 422 INVALID_PARAM，负值还会算出
-    // 负向份额）。表单初值即 0，故用内联错误就地提示，不混入本文件其他校验的 toast 形态
+    // 负向份额）。表单初值即 0，故用内联错误就地提示，不混入本文件其他校验的 toast 形态。
+    // 与紧邻的 reinvest_nav 门禁（走 toast）是**刻意分叉**：div_cash 初值即 0，不就地拦住
+    // 就会让每条分红事件都先发一次注定 422 的请求；reinvest_nav 初值为空、只有用户主动填了
+    // 非正值才可能违规，toast 足够。编辑弹窗两条都是内联（初值取自既有记录，不存在「初值即
+    // 违规」），故那里没有这个分叉，也不打算把这里的 reinvest_nav 改成内联。
     if (isDividend && !((formData.div_cash ?? 0) > 0)) {
       setDivCashError("每份分红金额必须大于 0");
       return;
@@ -572,6 +576,11 @@ export default function ShareChangeEventsContent({
                           value={formData.div_cash}
                           onChange={(e) => {
                             setDivCashError(null);
+                            // `|| 0` 使「留空」落到 0 ⇒ 本弹窗产不出后端刻意放行的 NULL 形态：
+                            // NULL 只经 CLI（`ir share-event update <ID> --json '{"div_cash":null}'`）
+                            // 或 tushare 分红检测直造进入，口径见 business-constraints 的 #rule-event。
+                            // 补录场景不走这个弹窗，故这里不区分「留空」与「0」，两者都由 handleSubmit
+                            // 的 #764 门禁一并拦成内联错误。
                             setFormData({ ...formData, div_cash: parseFloat(e.target.value) || 0 });
                           }}
                         />

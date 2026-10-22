@@ -124,6 +124,10 @@ export function EventEditDialog({
       setDivCashError("每份分红金额必须大于 0");
       return;
     }
+    // NUM_FIELDS 的空串一律是「不改此字段」，其中 div_cash **没有清空通道**：下面的
+    // reinvest_nav / cash_pay_date / share_confirm_date 各自在留空时显式发 null，而清空
+    // div_cash 在界面上等于不提交该字段。故「存量 0/负值行」在本弹窗只有「改为正数」这一条
+    // 恢复路径；「显式清空为 null」只能走 CLI `ir share-event update <ID> --json '{"div_cash":null}'`。
     for (const field of NUM_FIELDS) {
       const raw = form[field].trim();
       if (raw !== "") payload[field] = parseFloat(raw);
