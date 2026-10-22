@@ -37,7 +37,7 @@
  *   `backend/tests/integration/test_seed_contract.py::TestE2EActiveContract` 锁定，
  *   改净值口径须两侧同步。
  */
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import {
   clearTradeDateRange,
   collectPageErrors,
@@ -346,9 +346,32 @@ async function pickArrivalPlatform(
   await settlePopovers(page);
 }
 
+/**
+ * mobile webkit 的用例预算（#763）。
+ *
+ * 现场：`--workers=2 --retries=0` 下本 spec 的两条长链路在 mobile 偶发「点击超时」，
+ * 单跑 `--workers=1` 全绿、失败集合还会漂移。trace 显示失败点既不是断言、也不是 #524
+ * 吞点击——是 Playwright 点击前的「stable」等待（连续两帧 bounding box 不变）在 webkit
+ * 上**按帧率计费**：页面 settle 后 webkit 不再主动产帧（trace 里 screencast 帧在最后
+ * 一次渲染后归零），2 vCPU 上 chromium worker 与 mobile worker 抢 CPU 时单帧间隔被拉
+ * 到秒级（同一次运行实测两次 stable 等待 1.76s / 1.88s，空闲时约 32ms），本 spec 几十个
+ * 动作累计数秒到数十秒，用例预算于是耗尽在**某一次点击中途**——报错停在
+ * 「waiting for element to be visible, enabled and stable」一行、点击自身的 timeout
+ * 根本没机会触发。chromium 的帧调度不依赖页面有无视觉变化，同条件全绿，故抖动只落在
+ * mobile。
+ *
+ * 处置只承认「同一动作序列在 webkit 上就是更慢」：按 project 放宽预算，不重试、不删
+ * 断言、不改等待条件（等待条件本身是对的，慢的是帧）。chromium 仍受原预算约束，桌面端
+ * 的慢回归照样红。
+ */
+function mobileTimeout(testInfo: TestInfo, ms: number): void {
+  if (testInfo.project.name === 'mobile') test.setTimeout(ms);
+}
+
 test.describe('调仓在途资金生命周期（#493）', () => {
   // 两条链路分别自建隔离组合（workerIndex 区分），故两条可并行、也可单独重跑
   test('买入：创建即扣款 → T 快照在途 → 确认后份额入账', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 120_000);
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
@@ -435,6 +458,9 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // mobile 30.5s 打满全局 30s）。超时不是断言失败却会被形态对比记成
     // 「unexpected timedOut」，故按最重用例放宽，其余用例仍受全局 30s 约束。
     test.setTimeout(60_000);
+    // #763：并发下 webkit 的 stable 等待按帧率计费，60s 在 --workers=2 抢 CPU 时仍不够
+    // （实测耗尽在确认按钮那次点击中途），mobile 侧再放宽一档；chromium 不受影响。
+    mobileTimeout(testInfo, 180_000);
     const errors = collectPageErrors(page);
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
