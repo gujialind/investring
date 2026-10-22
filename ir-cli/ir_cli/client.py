@@ -118,18 +118,28 @@ class APIClient:
             total = body["total"]
             page = body.get("page")
             page_size = body.get("page_size")
+            total_pages = body.get("total_pages")
             has_more = None
-            if page is not None and page_size is not None:
-                has_more = page * page_size < total
-            return {
-                "data": body["items"],
-                "meta": {
-                    "total": total,
-                    "page": page,
-                    "page_size": page_size,
-                    "has_more": has_more,
-                },
+            if page is not None:
+                # 后端给了 total_pages 就以它判（#752 起调仓列表按组边界切页，一页可能
+                # 多带同组剩余腿，`page * page_size < total` 会在末页误报还有下一页）；
+                # 未给则沿用它之前的行口径公式。
+                if total_pages is not None:
+                    has_more = page < total_pages
+                elif page_size is not None:
+                    has_more = page * page_size < total
+            meta = {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "has_more": has_more,
             }
+            # 组口径字段按「后端返回才透传」：目前只有 `trade list` 带（#752），其余列表端点
+            # 的响应里没有，不给它们凭空补 null。
+            for key in ("total_groups", "total_pages"):
+                if key in body:
+                    meta[key] = body[key]
+            return {"data": body["items"], "meta": meta}
         return {"data": body}
 
     def _extract_detail(self, resp: httpx.Response) -> str:

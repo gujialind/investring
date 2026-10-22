@@ -79,11 +79,13 @@ ir schema trade              # 仅输出指定命令组
 ```
 
 - `data`：主要数据，可以是对象或数组
-- `meta`：分页元数据（仅列表命令返回），包含 `total`（总数）、`page`（当前页）、`page_size`（每页大小）
+- `meta`：分页元数据（仅列表命令返回），包含 `total`（总数）、`page`（当前页）、`page_size`（每页大小）、`has_more`（是否还有下一页）
 - `meta` 的 `total` / `page_size` 一律是**行**口径；`trade list` 另带 `total_groups`（组数）与
   `total_pages`（后端按组边界折算的总页数）——它按组分页、同组两腿恒同页，故一页可能比
   `page_size` **多带同组剩余腿**（两腿组即最多 +1 行），总页数不再等于
-  `ceil(total / page_size)`，判页数用 `total_pages`。`--all` 的收尾条件仍按 `total`
+  `ceil(total / page_size)`，判页数用 `total_pages`（`0` = 筛选后无匹配行）。`has_more` 在响应带
+  `total_pages` 时按 `page < total_pages` 判，其余列表仍按行口径 `page * page_size < total`；
+  按行口径判会在「末页多带同组腿」时误报还有下一页。`--all` 的收尾条件仍按 `total`
   （行数）判，语义未变。详见 [`ir trade list`](#ir-trade-list)
 - `hints`：可选的顶层提示数组（如 create 返回 pending 时提示 confirm）
 
@@ -632,7 +634,7 @@ ir trade list [--portfolio-code <组合>] [--status <状态>] [--type <类型>] 
 >
 > **它是「补信息」不是「补行」**：对手腿被本页筛选条件（`--product-code` / `--market` / `--products` / `--platform-code` / `--status`）挡掉时仍会回填，但**不并入 `items`**，因此 `total`、页数、排序键与不加该字段时逐字一致（排序键 = `组锚点日期 desc, transfer_group, id desc`，2026-10-20 起 #734；锚点定义、按组分页下同组两腿恒同页、与筛选区间解耦的代价等完整口径由[业务规则·调仓交易](../docs/reference/business-constraints.md#rule-trade)单点持有，此处不复述）。`paired_leg.id` 就是真实 trade 行 id，同组对手腿恰好也在本页时，消费方应以此识别「真实行优先、派生兜底」，勿重复渲染。以下三种情况恒为 `null`：申赎配对的 `sub_` 组现金腿（对手方是 subscription 记录而非 trade 行）、`transfer_group` 为空串的行（列 NOT NULL、历史 NULL 已由迁移回填为 `legacy_{id}`，正常写入路径不产生，读侧仍作防御）、组内行数不等于 2 的异常组。
 >
-> **分页按组切（2026-10-22 起 #752）**：`--page` / `--page-size` 语义不变（`page_size` 仍是**行**数、`total` 仍是**行**数，故 `--all` 的收尾条件不变），但页边界不再落进组内——装满 `page_size` 行时若下一行是同组剩余腿，**整组一起带上**，下一页从该组之后开始。因此一页可能比 `page_size` 多出行（两腿组最多 +1 行），末页也可能短于 `page_size`；同组两腿恒同页 ⇒ 消费方不必再靠 `paired_leg` 跨页拼一笔卖出（它退为筛选把对手腿挡掉时的兜底）。判页数用 `meta.total_pages`（后端按组边界折算，**不等于** `ceil(total / page_size)`），`meta.total_groups` 是过滤后的组数（`transfer_group` 为空串的行各自独立成组）。
+> **分页按组切（2026-10-22 起 #752）**：`--page` / `--page-size` 语义不变（`page_size` 仍是**行**数、`total` 仍是**行**数，故 `--all` 的收尾条件不变），但页边界不再落进组内——装满 `page_size` 行时若下一行是同组剩余腿，**整组一起带上**，下一页从该组之后开始。因此一页可能比 `page_size` 多出行（两腿组最多 +1 行），末页也可能短于 `page_size`；同组两腿恒同页 ⇒ 消费方不必再靠 `paired_leg` 跨页拼一笔卖出（它退为筛选把对手腿挡掉时的兜底）。判页数用 `meta.total_pages`（后端按组边界折算，**不等于** `ceil(total / page_size)`；`0` = 筛选后无匹配行），`meta.total_groups` 是过滤后的组数（`transfer_group` 为空串的行各自独立成组），`meta.has_more` 同样按 `page < total_pages` 判——末页即使多带了同组剩余腿也是 `false`。
 
 #### `ir trade create`
 
