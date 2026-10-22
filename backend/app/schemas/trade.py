@@ -109,11 +109,19 @@ class TradeResponse(TradeBase):
 
 class PaginatedTradeResponse(BaseModel):
     """交易列表分页响应（issue #183）。items 元素复用 TradeResponse：
-    product_name 仅 list 端点填充，单对象端点恒为 None（见 TradeResponse 注释）。"""
+    product_name 仅 list 端点填充，单对象端点恒为 None（见 TradeResponse 注释）。
+
+    #752 起分页按组边界切分（同组两腿恒同页）：`total` 仍是**行数**、`page_size` 仍是
+    每页行数上限，但一页可能多带同组剩余腿（最多 `page_size + 组大小 - 1` 行），故总页数
+    不再等于 `ceil(total / page_size)`，由后端按组边界折算后以 `total_pages` 给出；
+    `total_groups` 是过滤后的组数（`transfer_group` 为空串的行各自独立成组）。
+    """
     items: List[TradeResponse]
     total: int
     page: int
     page_size: int
+    total_groups: int
+    total_pages: int
 
 
 class TradePreviewResult(BaseModel):

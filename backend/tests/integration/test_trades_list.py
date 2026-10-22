@@ -1,6 +1,7 @@
 # ============ 集成测试：调仓交易 — 列表筛选排序与读侧派生（自 test_trades.py 拆分，issue #469） ============
 # 含 TestListTradeFilters（#126 筛选/排序：#155 products 复合多选、同 transfer_group 两腿相邻）、
-# TestListTradeProductName（#175 读侧派生 product_name；#183 响应字段以 TradeResponse 为准）。
+# TestListTradeProductName（#175 读侧派生 product_name；#183 响应字段以 TradeResponse 为准）、
+# TestListGroupAnchorSort（#734 组锚点排序）、TestListGroupPagination（#752 按组分页）。
 
 from datetime import date
 
@@ -326,9 +327,9 @@ class TestListGroupAnchorSort:
     `test_trades_paired_leg.py`：5 failed / 29 passed）。红的是本类前三例、
     `test_anchor_decoupled_from_date_filter` 和别处的
     `TestListTradeFilters::test_sort_groups_adjacent`；
-    `test_equal_anchors_fall_back_to_transfer_group` 与
-    `test_group_split_across_page_boundary_keeps_paired_leg` 是绿的——它们钉的是二级键
-    与分页契约，对新旧首键都不敏感，改排序键时不会替你发现问题。
+    `test_equal_anchors_fall_back_to_transfer_group` 是绿的——它钉的是二级键，对新旧
+    首键都不敏感，改排序键时不会替你发现问题。分页侧的用例（含 #734 那条页边界拆组
+    用例，#752 落地后已改写判据）在 `TestListGroupPagination`。
     """
 
     def test_solo_rows_interleave_with_grouped_legs(self, client, admin_headers, test_db):
@@ -411,54 +412,6 @@ class TestListGroupAnchorSort:
         # 同锚点 9/6：transfer_group 升序 → rebal_ga4a 在前（与旧排序键的二级键一致）
         assert ids == [leg_t1.id, leg_t2.id]
 
-    def test_group_split_across_page_boundary_keeps_paired_leg(
-        self, client, admin_headers, test_db
-    ):
-        """(#734) 组锚点只保证结果集内相邻，不保证同页：page_size 把组推到页边界时
-        两腿分居两页，各自仍带 paired_leg（由 #719 派生兜底），total 不随分页变化。
-
-        这是当前分页契约的显式钉住——分组分页/游标（follow-up #752）落地后本用例即
-        变更点：两腿恒同页成立时改写断言，不是删掉。
-        """
-        create_portfolio(test_db, code="LT_GA5", status="active")
-        # 结果集顺序（锚点 DESC）：solo_late(9/8) → 组 rebal_ga5(锚点 max(9/1,9/5)=9/5,
-        # 组内 id DESC → cash_leg 后建 id 更大在前) → solo_early(8/29)
-        solo_late = create_trade(test_db, "LT_GA5", "CASH", "",
-                                 trade_date=date(2025, 9, 8))
-        fund_leg = create_trade(test_db, "LT_GA5", "510300.SH", "CN_EXCHANGE",
-                                trade_type="sell", trade_date=date(2025, 9, 1),
-                                transfer_group="rebal_ga5")
-        cash_leg = create_trade(test_db, "LT_GA5", "CASH", "",
-                                trade_type="buy", trade_date=date(2025, 9, 5),
-                                transfer_group="rebal_ga5")
-        solo_early = create_trade(test_db, "LT_GA5", "CASH", "",
-                                  trade_date=date(2025, 8, 29))
-
-        full = client.get(
-            "/api/trades?portfolio_code=LT_GA5&page_size=10", headers=admin_headers
-        ).json()
-        assert [i["id"] for i in full["items"]] == [
-            solo_late.id, cash_leg.id, fund_leg.id, solo_early.id
-        ]
-        assert full["total"] == 4
-
-        # page_size=2 把组的两腿切到第 1、2 页：第 1 页末 = cash_leg，第 2 页首 = fund_leg
-        p1 = client.get(
-            "/api/trades?portfolio_code=LT_GA5&page=1&page_size=2", headers=admin_headers
-        ).json()
-        p2 = client.get(
-            "/api/trades?portfolio_code=LT_GA5&page=2&page_size=2", headers=admin_headers
-        ).json()
-        # total = 分页前总数，两页一致、不因拆组变化
-        assert p1["total"] == p2["total"] == 4
-        assert [i["id"] for i in p1["items"]] == [solo_late.id, cash_leg.id]
-        assert [i["id"] for i in p2["items"]] == [fund_leg.id, solo_early.id]
-        # 两腿分居两页、对手腿不在本页结果集内，各自仍指向对方（#719 派生 pair 兜底）
-        cash_on_p1 = next(i for i in p1["items"] if i["id"] == cash_leg.id)
-        fund_on_p2 = next(i for i in p2["items"] if i["id"] == fund_leg.id)
-        assert cash_on_p1["paired_leg"]["id"] == fund_leg.id
-        assert fund_on_p2["paired_leg"]["id"] == cash_leg.id
-
     def test_anchor_decoupled_from_date_filter(self, client, admin_headers, test_db):
         """锚点取全组 max(trade_date)，与日期筛选区间解耦（#734 刻意取舍）。
 
@@ -483,3 +436,181 @@ class TestListGroupAnchorSort:
         assert resp.status_code == 200
         ids = [item["id"] for item in resp.json()["items"]]
         assert ids == [fund_leg.id, solo.id]
+
+
+class TestListGroupPagination:
+    """按组分页（issue #752）：分页单位仍是**行**，但同组两腿恒同页。
+
+    页尾若还有同组剩余腿则整组带上（一页最多 `page_size + 组大小 - 1` 行），下一页从该组
+    之后开始 ⇒ 页间不重叠、不漏行；`total` 保持行数语义（`ir trade list --all` 的
+    `len(items) >= meta.total` 收尾条件不变），组口径另以 `total_groups` / `total_pages`
+    给出。`transfer_group` 为空串的行各自独立成组（singleton）。
+
+    本类的前身是 `TestListGroupAnchorSort::test_group_split_across_page_boundary_keeps_paired_leg`
+    （#734 钉「两腿分居两页仍各带 paired_leg」）——按组分页落地后那个形态不再可达，
+    按 issue #752 的要求**改写判据**（同页 + 不重复）并连同新增用例一起移入本类。
+    """
+
+    def test_group_at_page_boundary_stays_on_same_page(
+        self, client, admin_headers, test_db
+    ):
+        """(#752) 组压在页边界上时整组进同一页、下一页从该组之后开始，不重叠不重复。
+
+        原用例（#734）钉的是「两腿分居两页、各自带 paired_leg 派生兜底」——按组分页
+        落地后该形态不再可达，故按 issue #752 的要求**改写判据**而非删除：现在断言
+        两腿同页相邻、第 1 页因此多带一行（`page_size + 组大小 - 1`）、第 2 页只剩
+        组外的行；`total` 仍是行数（4）、不因分页或 outerjoin 变化。
+        """
+        create_portfolio(test_db, code="LT_GA5", status="active")
+        # 结果集顺序（锚点 DESC）：solo_late(9/8) → 组 rebal_ga5(锚点 max(9/1,9/5)=9/5,
+        # 组内 id DESC → cash_leg 后建 id 更大在前) → solo_early(8/29)
+        solo_late = create_trade(test_db, "LT_GA5", "CASH", "",
+                                 trade_date=date(2025, 9, 8))
+        fund_leg = create_trade(test_db, "LT_GA5", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 9, 1),
+                                transfer_group="rebal_ga5")
+        cash_leg = create_trade(test_db, "LT_GA5", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, 5),
+                                transfer_group="rebal_ga5")
+        solo_early = create_trade(test_db, "LT_GA5", "CASH", "",
+                                  trade_date=date(2025, 8, 29))
+
+        full = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page_size=10", headers=admin_headers
+        ).json()
+        assert [i["id"] for i in full["items"]] == [
+            solo_late.id, cash_leg.id, fund_leg.id, solo_early.id
+        ]
+        assert full["total"] == 4
+        # 组：solo_late / rebal_ga5 / solo_early ⇒ 3 组；page_size=10 一页装完
+        assert full["total_groups"] == 3
+        assert full["total_pages"] == 1
+
+        # page_size=2 时组的两腿压在页边界上：整组带上 ⇒ 第 1 页 3 行（= page_size + 1）
+        p1 = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page=1&page_size=2", headers=admin_headers
+        ).json()
+        p2 = client.get(
+            "/api/trades?portfolio_code=LT_GA5&page=2&page_size=2", headers=admin_headers
+        ).json()
+        # total = 分页前行数，两页一致、不因整组进页变化
+        assert p1["total"] == p2["total"] == 4
+        assert p1["total_pages"] == p2["total_pages"] == 2
+        assert p1["total_groups"] == p2["total_groups"] == 3
+        assert [i["id"] for i in p1["items"]] == [
+            solo_late.id, cash_leg.id, fund_leg.id
+        ]
+        # 末页短页：只剩组外那一行（< page_size），且不含上一页已给过的任何行
+        assert [i["id"] for i in p2["items"]] == [solo_early.id]
+        # 两腿同页相邻 ⇒ paired_leg 指向的对手腿就在本页结果集内（#719 退为防御层）
+        cash_on_p1 = next(i for i in p1["items"] if i["id"] == cash_leg.id)
+        fund_on_p1 = next(i for i in p1["items"] if i["id"] == fund_leg.id)
+        assert cash_on_p1["paired_leg"]["id"] == fund_leg.id
+        assert fund_on_p1["paired_leg"]["id"] == cash_leg.id
+        page1_ids = {i["id"] for i in p1["items"]}
+        assert cash_on_p1["paired_leg"]["id"] in page1_ids
+        assert fund_on_p1["paired_leg"]["id"] in page1_ids
+
+    def test_empty_transfer_group_rows_are_singletons(
+        self, client, admin_headers, test_db
+    ):
+        """(#752) `transfer_group` 为空串的行各自独立成组，不聚成一个共享锚点的退化组。
+
+        三行空组号（日期 9/5、9/4、9/3）若被当成一组，`page_size=2` 会把三行整块塞进
+        第 1 页（limit 3、total_pages 1、total_groups 1）；按 singleton 则是 [1,1,1]，
+        第 1 页恰好 2 行、共 2 页 3 组 —— 三个断言各自都能区分这两种形态。
+        """
+        create_portfolio(test_db, code="LT_GS1", status="active")
+        # uq_trade_transfer_group = (transfer_group, product_code, trade_type)，故空组号的
+        # 多行必须靠产品/方向区分才写得进去（这本身也说明空组号不是正常写入路径的形态）
+        rows = []
+        for product, market, trade_type, day in [
+            ("CASH", "", "buy", 5),
+            ("CASH", "", "sell", 4),
+            ("510300.SH", "CN_EXCHANGE", "buy", 3),
+        ]:
+            trade = create_trade(test_db, "LT_GS1", product, market,
+                                 trade_type=trade_type,
+                                 trade_date=date(2025, 9, day))
+            trade.transfer_group = ""
+            test_db.flush()
+            rows.append(trade)
+
+        p1 = client.get(
+            "/api/trades?portfolio_code=LT_GS1&page=1&page_size=2", headers=admin_headers
+        ).json()
+        p2 = client.get(
+            "/api/trades?portfolio_code=LT_GS1&page=2&page_size=2", headers=admin_headers
+        ).json()
+        assert p1["total"] == 3
+        assert p1["total_groups"] == 3
+        assert p1["total_pages"] == 2
+        assert [i["id"] for i in p1["items"]] == [rows[0].id, rows[1].id]
+        assert [i["id"] for i in p2["items"]] == [rows[2].id]
+
+    def test_paging_through_all_pages_neither_duplicates_nor_drops_rows(
+        self, client, admin_headers, test_db
+    ):
+        """(#752) 连续翻页拼起来 == 一次取全，且 total_groups / total_pages 与组形态相符。
+
+        数据集刻意混排：3 个跨日两腿组（锚点互不相同）+ 2 条独占行 ⇒ 8 行 5 组，
+        排序序下的组大小 = [2, 2, 2, 1, 1]。`page_size=3` 逐页装（装满 3 行时若下一行
+        是同组剩余腿则整组带上）：p1 = 2+2 = **4** 行、p2 = 2+1 = 3 行、p3 = 1 行
+        ⇒ total_pages = 3。末页 1 行 < page_size，是「末页可短」的正常形态；p1 的 4 行
+        是「一页最多 page_size + 组大小 - 1」的可执行形式。
+        """
+        create_portfolio(test_db, code="LT_GP1", status="active")
+        expected: list[int] = []
+
+        def add_group(fund_day: int, cash_day: int, group: str):
+            fund = create_trade(test_db, "LT_GP1", "510300.SH", "CN_EXCHANGE",
+                                trade_type="sell", trade_date=date(2025, 9, fund_day),
+                                transfer_group=group)
+            cash = create_trade(test_db, "LT_GP1", "CASH", "",
+                                trade_type="buy", trade_date=date(2025, 9, cash_day),
+                                transfer_group=group)
+            # 组内 id DESC ⇒ 后建的现金腿在前
+            return [cash.id, fund.id]
+
+        # 锚点 = 组内 max(trade_date)：a=max(9/9,9/6)=9/9、b=max(9/5,9/8)=9/8、
+        # c=max(9/4,9/7)=9/7；两腿刻意跨日，让「按行自身日期分页」必然拆组
+        expected += add_group(9, 6, "rebal_gpa")
+        expected += add_group(5, 8, "rebal_gpb")
+        expected += add_group(4, 7, "rebal_gpc")
+        solo_late = create_trade(test_db, "LT_GP1", "CASH", "",
+                                 trade_date=date(2025, 9, 6))
+        solo_early = create_trade(test_db, "LT_GP1", "CASH", "",
+                                 trade_type="sell", trade_date=date(2025, 9, 5))
+
+        # 锚点 DESC：a(9/9) → b(9/8) → c(9/7) → solo_late(9/6) → solo_early(9/5)
+        expected += [solo_late.id, solo_early.id]
+
+        full = client.get(
+            "/api/trades?portfolio_code=LT_GP1&page_size=100", headers=admin_headers
+        ).json()
+        assert full["total"] == 8
+        assert full["total_groups"] == 5
+        assert full["total_pages"] == 1
+        assert [i["id"] for i in full["items"]] == expected
+
+        paged: list[int] = []
+        page_no = 1
+        lengths = []
+        while True:
+            data = client.get(
+                f"/api/trades?portfolio_code=LT_GP1&page={page_no}&page_size=3",
+                headers=admin_headers,
+            ).json()
+            assert data["total"] == 8
+            assert data["total_groups"] == 5
+            assert data["total_pages"] == 3
+            ids = [i["id"] for i in data["items"]]
+            assert ids, f"第 {page_no} 页为空但 total_pages=3，翻页会死循环"
+            lengths.append(len(ids))
+            paged += ids
+            if page_no >= data["total_pages"]:
+                break
+            page_no += 1
+
+        assert lengths == [4, 3, 1]
+        assert paged == expected, "连续翻页必须无重复、无遗漏，且顺序与一次取全一致"

@@ -101,7 +101,7 @@ def get_trades(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    items, total = list_trades(
+    items, total, total_groups, total_pages = list_trades(
         db,
         portfolio_code=portfolio_code,
         status=status,
@@ -146,7 +146,12 @@ def get_trades(
         for t in items
     ]
     return PaginatedTradeResponse(
-        items=enriched, total=total, page=page, page_size=page_size
+        items=enriched,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_groups=total_groups,
+        total_pages=total_pages,
     )
 
 

@@ -10,7 +10,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.trade import Trade
@@ -1922,6 +1922,41 @@ def delete_trade(db: Session, trade: Trade) -> None:
     db.delete(trade)
 
 
+def _walk_group_pages(
+    group_sizes: list[int], page: int, page_size: int
+) -> tuple[int, int, int]:
+    """把「按组边界切分」折成行级 offset/limit（#752）。
+
+    分页单位仍是**行**（`page_size` 语义不变），但组不拆：一页装满 `page_size` 行后，
+    若下一行属于本页已经开始的那个组，整组一起带上（故一页最多 `page_size + 组大小 - 1`
+    行，两腿组即最多 +1 行），下一页从该组之后开始 ⇒ 页间既不重叠也不留缝。
+
+    `group_sizes` 必须按列表排序序给出每组的行数（同组行在排序结果里恒相邻，见
+    `list_trades` 的组锚点排序）。返回 `(offset, limit, total_pages)`；`total_pages`
+    走完整条组序列得出，与请求的是第几页无关。`page` 越界 → `limit=0`（空页）。
+
+    `page_size <= 0` 时无法推进（装满 0 行的页永不结束），按既有退化形态返回空页。
+    """
+    if page_size <= 0:
+        return 0, 0, 0
+    offset = 0
+    idx = 0
+    total_pages = 0
+    window_offset = 0
+    window_limit = 0
+    while idx < len(group_sizes):
+        total_pages += 1
+        end = offset
+        target = offset + page_size
+        while idx < len(group_sizes) and end < target:
+            end += group_sizes[idx]
+            idx += 1
+        if total_pages == page:
+            window_offset, window_limit = offset, end - offset
+        offset = end
+    return window_offset, window_limit, total_pages
+
+
 def list_trades(
     db: Session,
     *,
@@ -1938,7 +1973,7 @@ def list_trades(
     confirm_date_end: Optional[date] = None,
     page: int = 1,
     page_size: int = 20,
-) -> tuple[list[Trade], int]:
+) -> tuple[list[Trade], int, int, int]:
     """调仓交易列表查询（服务端筛选 + 分页，issue #126）。
 
     - 日期区间均为闭区间；同组 start > end 抛 INVALID_DATE_RANGE（422）。
@@ -1951,13 +1986,17 @@ def list_trades(
       与单值参数互斥：products 与 product_code 或 market 同传抛
       PRODUCTS_PARAM_CONFLICT（422），避免两套过滤语义叠加产生歧义。
     - 排序（#734）：组锚点日期 DESC, transfer_group, id DESC——锚点 = 同组合内同
-      transfer_group 的 max(trade_date)，同组两腿共用一个日期档、结果集内恒相邻
-      （相邻 ≠ 同页）。完整口径含页边界残余、与筛选区间解耦的取舍及其代价，
-      由 docs/reference/business-constraints.md 的 #rule-trade 单点持有，此处不复述。
+      transfer_group 的 max(trade_date)，同组两腿共用一个日期档、结果集内恒相邻。
+    - 分页（#752）：分页单位仍是行、`page_size` 语义不变，但**组不拆**——页尾若还有
+      同组剩余腿则整组带上（一页最多 `page_size + 组大小 - 1` 行），下一页从该组之后
+      开始，故同组两腿恒同页、页间不重叠。`transfer_group` 为空串的行各自独立成组
+      （singleton），不聚成一个退化组。完整口径由 docs/reference/business-constraints.md
+      的 #rule-trade 单点持有，此处不复述。
     - trades 无 viewer 过滤（组合级操作，保持现状语义，不在本 PR 引入权限变化）。
 
     Returns:
-        (items, total)：当前页记录与过滤后总数（分页前）。
+        (items, total, total_groups, total_pages)：当前页记录、过滤后总**行数**（分页前，
+        语义与 #752 之前逐字一致）、过滤后的组数、按组边界折算的总页数。
     """
     if trade_date_start and trade_date_end and trade_date_start > trade_date_end:
         raise BusinessError(
@@ -2044,24 +2083,58 @@ def list_trades(
     group_anchor = group_anchor_query.group_by(
         Trade.portfolio_code, Trade.transfer_group
     ).subquery()
-    items = (
-        query.outerjoin(
-            group_anchor,
-            and_(
-                Trade.portfolio_code == group_anchor.c.grp_portfolio,
-                Trade.transfer_group == group_anchor.c.grp,
-            ),
+    anchor_expr = func.coalesce(group_anchor.c.anchor, Trade.trade_date)
+    join_cond = and_(
+        Trade.portfolio_code == group_anchor.c.grp_portfolio,
+        Trade.transfer_group == group_anchor.c.grp,
+    )
+
+    # 按组分页（#752）：先取「排序序下每组多少行」，再折成行级 offset/limit。
+    # 分组键 = (portfolio_code, transfer_group)，与锚点子查询同口径；`transfer_group`
+    # 为空串的行经 singleton_key 退化成「每行一组」（否则全部空组号行会聚成一个共享锚点
+    # 的退化组，页边界算术会把它们当一整块）。head_id = max(id) 让组的次序与行级
+    # `id DESC` 一致（组的首行就是它 id 最大的那行）。anchor_expr 一并进 GROUP BY：
+    # 它在组内恒定、不改变分组，但 MySQL 的 ONLY_FULL_GROUP_BY 无法从 join 子查询推出
+    # 函数依赖，不进 GROUP BY 就在 SELECT/ORDER BY 里引用不了。
+    # 只走组大小、不在 Python 里拉全表行；sum(sizes) == total（同一批筛选）。
+    # 组次序与行次序一致的前提是「同 (锚点, transfer_group) 的不同组不会在行级 id DESC
+    # 下交错」——跨组合撞同组号时才可能，而组号生成路径（uuid / sub_{id}）全局唯一，
+    # 且传了 portfolio_code 时结构上不可能。真撞上时退化回「页可能拆组」，不会重复或漏行。
+    singleton_key = case((Trade.transfer_group == "", Trade.id), else_=0)
+    group_sizes = [
+        row[0]
+        for row in (
+            # with_entities 必须在 outerjoin **之后**：它会清掉 SELECT 列里的 Trade 实体，
+            # 之后 outerjoin 就无法推断左表（而 query 已带筛选，select_from 也补不回来）。
+            query.outerjoin(group_anchor, join_cond)
+            .with_entities(func.count())
+            .group_by(
+                Trade.portfolio_code,
+                Trade.transfer_group,
+                singleton_key,
+                anchor_expr,
+            )
+            .order_by(
+                anchor_expr.desc(),
+                Trade.transfer_group,
+                func.max(Trade.id).desc(),
+            )
+            .all()
         )
+    ]
+    offset, limit, total_pages = _walk_group_pages(group_sizes, page, page_size)
+    items = (
+        query.outerjoin(group_anchor, join_cond)
         .order_by(
-            func.coalesce(group_anchor.c.anchor, Trade.trade_date).desc(),
+            anchor_expr.desc(),
             Trade.transfer_group,
             Trade.id.desc(),
         )
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        .offset(offset)
+        .limit(limit)
         .all()
     )
-    return items, total
+    return items, total, len(group_sizes), total_pages
 
 
 def build_paired_cash_leg_map(db: Session, trades: list) -> dict:
