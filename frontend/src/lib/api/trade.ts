@@ -44,9 +44,21 @@ export interface TradeMessageResponse {
   message: string;
 }
 
+/**
+ * 调仓列表响应（#752 按组分页）：在通用分页形状上多两个组口径字段。
+ * `total` 与 `page_size` 仍是**行**语义，但同组两腿恒同页 ⇒ 一页可能多带同组剩余腿
+ * （两腿组最多 +1 行），总页数不再等于 `ceil(total / page_size)`，分页条必须用后端
+ * 折算好的 `total_pages`。`total_groups` 是过滤后的组数（`transfer_group` 为空串的
+ * 行各自独立成组）。
+ */
+export interface TradeListResponse extends PaginatedResponse<Trade> {
+  total_groups: number;
+  total_pages: number;
+}
+
 export const tradeApi = {
   list: (params?: TradeListParams) =>
-    request<PaginatedResponse<Trade>>({ method: "GET", url: "/trades", params }),
+    request<TradeListResponse>({ method: "GET", url: "/trades", params }),
 
   get: (id: number) =>
     request<Trade>({ method: "GET", url: `/trades/${id}` }),

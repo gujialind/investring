@@ -30,9 +30,13 @@ class TestTradesOpenApiContract:
 
         schemas = spec["components"]["schemas"]
         paginated = schemas["PaginatedTradeResponse"]
-        assert set(paginated["required"]) == {"items", "total", "page", "page_size"}
+        # #752 按组分页：新增 total_groups / total_pages 两个组口径字段；
+        # total / page_size 仍是行语义，故 --all 的收尾条件与前端「共 N 条」不变
+        assert set(paginated["required"]) == {
+            "items", "total", "page", "page_size", "total_groups", "total_pages",
+        }
         assert set(paginated["properties"].keys()) == {
-            "items", "total", "page", "page_size",
+            "items", "total", "page", "page_size", "total_groups", "total_pages",
         }
         assert paginated["properties"]["items"]["items"] == {
             "$ref": "#/components/schemas/TradeResponse"

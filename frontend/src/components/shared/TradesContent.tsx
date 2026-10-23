@@ -220,6 +220,9 @@ export default function TradesContent({
 
   const trades = data?.items || [];
   const total = data?.total ?? 0;
+  // #752 按组分页：一页可能多带同组剩余腿，总页数不等于 ceil(total / pageSize)，
+  // 页数一律取后端折算值；失败期 data 为空 ⇒ undefined，PaginationBar 自行回落并不渲染
+  const totalPages = data?.total_pages;
   const platforms = platformsData?.items || [];
 
   // 结对视图行（#126 决策⑧）：保持后端组锚点排序序（#734），同组两腿跨日也恒相邻成对
@@ -1147,7 +1150,7 @@ export default function TradesContent({
               data **保留**，嵌套形在那一态下失败块不可达。
               不传 className（区块级缺省，与相邻两个 EmptyState 同尺寸，docs/design/visual-spec.md §14）。
               筛选栏那个「重置」按钮不因失败隐藏：它与「重试」是两个动作（改参数重查 vs 原参数重查），
-              故障期没收退出口更糟。PaginationBar 失败期自行不渲染（total 塌成 0 ≤ pageSize）。 */}
+              故障期没收退出口更糟。PaginationBar 失败期自行不渲染（totalPages 回落成 1 页）。 */}
           {tradesError ? (
             <QueryErrorState error={tradesErr} onRetry={refetchTrades} />
           ) : (
@@ -1169,6 +1172,7 @@ export default function TradesContent({
             page={page}
             pageSize={pageSize}
             total={total}
+            totalPages={totalPages}
             variant={variant}
             onPageChange={setPage}
             onPageSizeChange={(size) => {

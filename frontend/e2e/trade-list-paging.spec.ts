@@ -8,12 +8,13 @@
  * `transfer_group` 结对，跨页拆开后两条腿各自被 #719 的 `paired_leg` 升级成「派生 pair」
  * ⇒ 同一笔卖出在两页各出现一次，且两处都不是真实结对形态。
  *
- * 修复后：排序锚点 = 同组合内同 `transfer_group` 的 `max(trade_date)`，同组两腿共用一个
- * 日期档、**结果集内恒相邻**。相邻 ≠ 同页——offset/limit 下页边界仍可能落在组内（约
- * 1/page_size），此时两腿分居两页、各自被 #719 的 `paired_leg` 派生兜底（严格不拆需分组
- * 分页/游标，非本排序键能保证，见 issue #752）。本 spec 的数据刻意把被测组铺在第 1 页
- * 末尾两格（19、20），**零余量**：任何 ±1 行漂移都会切开该组并使本用例变红，位次本身
- * 由 API 段断言钉住，不是只写在这里。断言的是「本数据集内相邻且同页」，不是「排序键保证同页」。
+ * 修复后（#734 排序 + #752 按组分页）：排序锚点 = 同组合内同 `transfer_group` 的
+ * `max(trade_date)`，同组两腿共用一个日期档、结果集内恒相邻；#752 起**分页按组边界切**，
+ * 页边界不再落进组内 ⇒ 同组两腿**恒同页**，`paired_leg`（#719）退为「筛选把对手腿挡在
+ * 结果集外」时的兜底。代价是一页可能比 `page_size` 多带同组剩余腿（两腿组即 +1 行），
+ * 总页数由后端折算成 `total_pages`、不再等于 `ceil(total / page_size)`。
+ * 本 spec 的数据刻意把被测组铺在第 1 页末尾两格（1-based 19、20），**零余量**：任何 ±1 行
+ * 漂移都会切开该组并使本用例变红，位次本身由 API 段断言钉住，不是只写在这里。
  *
  * ── 数据构造与页边界算术（**手工推导**，不得「跑一遍看输出再填断言」）──
  * `TradesContent` 的 `pageSize` 缺省 20（选择器只有 20/50/100，20 已是最小档），故要让
@@ -25,7 +26,13 @@
  *   ③ **被测卖出组** 2 条：基金腿 trade_date = D2、CASH 到账腿 trade_date = C = D3（跨日）；
  *   ④ D3 当天现金转移 9 笔 = 18 条腿（组号是裸 12 位 hex）；
  *   ⑤ D2 当天现金转移 1 笔 = 2 条腿（同上）。
- *   合计 1 + 2 + 2 + 18 + 2 = 25 ⇒ 2 页（20 + 5），分页条因此必然渲染。
+ *   合计 1 + 2 + 2 + 18 + 2 = 25 行、**13 组**（9 个 D3 转移 + 被测卖出组 + D2 转移
+ *   + 买入组 + `sub_` 申赎腿），排序序下的组大小 = [2]×12 + [1]。
+ *   ⇒ `page_size=20` 时页窗口按组折算为 20 + 5 = **2 页**（第 1 页恰好 10 个完整组、
+ *      边界落在组缝上，不触发「+1 行」），分页条因此必然渲染。
+ *   ⇒ 要**看见**「整组带上」须让边界落进组内：`page_size=19` 时装满 18 行（9 个转移组）
+ *      后下一行正是被测卖出组的首腿 ⇒ 整组带上，第 1 页返回 **20 行 = page_size + 1**，
+ *      第 2 页仍是 5 行、`total_pages` 仍是 2。下面 API 段两种 page_size 都断言。
  *
  * 为什么日期要从 D 一路排到 D3（两条硬约束互相挤出来的，不是随手留白）：
  *   - 卖出创建时的可用份额校验以**最新快照**为唯一基线（`position_service.calculate_available_shares`
@@ -44,9 +51,11 @@
  *      后两者各派生一行对手腿（`trade-counterpart-subrow` 计数 = 2），且**没有**卖出基金主行；
  *      第 2 页则出现那条卖出基金腿（同样派生）。
  * 新排序（组锚点 max(trade_date) DESC, transfer_group ASC, id DESC）下的位次：
- *   锚点 D3：④ 的 18 条腿（1..18）→ ③ 的两条腿（**19、20**，同锚点同组 ⇒ 相邻；19、20 同落第 1 页故本例同页）；
+ *   锚点 D3：④ 的 18 条腿（1..18）→ ③ 的两条腿（**19、20**，同锚点同组 ⇒ 相邻）；
  *   锚点 D2：⑤ 的 2 条腿（21、22）；锚点 D：② 的 2 条腿（23、24）；锚点 D0：①（25）。
- *   ⇒ 第 1 页 = 10 个**完整**结对行、0 个派生 pair；第 2 页不含任何卖出组的腿。
+ *   ⇒ `page_size=20`：第 1 页 = 10 个**完整**结对行、0 个派生 pair；第 2 页 5 行、不含卖出组的腿。
+ *   ⇒ `page_size=19`：第 1 页 = 9 个转移组（18 行）+ 被测卖出组（2 行）= **20 行**（比 page_size 多 1，
+ *      即「整组带上」的可执行形式），两腿位次仍是 18、19（0-based）；第 2 页 5 行。
  *
  * 于是下列断言在两侧都是确定性的（不赌 uuid 组号字典序）：第 1 页有且仅有一行
  * 「沪深300联接A · 卖出」主行、其后紧跟真实现金子行、派生子行计数为 0；第 2 页不得出现
@@ -105,6 +114,14 @@ const TRANSFERS_ON_CASH_LEG_DATE = 9;
 const PAGE_SIZE = 20;
 /** 组合内 trade 行总数（推导见文件头 ①..⑤）：1 + 2 + 2 + 18 + 2 */
 const TOTAL_ROWS = 25;
+/** 组数（#752 起 meta 新增）：9 个 D3 转移 + 卖出组 + D2 转移 + 买入组 + `sub_` 申赎腿 */
+const TOTAL_GROUPS = 13;
+/**
+ * 刻意让页边界**落进**被测组的 page_size（#752）：装满 18 行（9 个转移组）后下一行正是
+ * 卖出组首腿 ⇒ 整组带上，该页返回 `STRADDLING_PAGE_SIZE + 1` 行。这是「一页可能多带
+ * 同组剩余腿」的可执行形式；PAGE_SIZE=20 那档边界恰落组缝上，看不出这个行为。
+ */
+const STRADDLING_PAGE_SIZE = 19;
 
 /** 统一 POST：非 2xx 即响亮失败并带上响应体（造数失败必须指名道姓，不留给下游断言猜） */
 async function apiPost(
@@ -122,22 +139,31 @@ async function apiPost(
   return resp.json();
 }
 
+/** 列表响应的分页 meta（#752：`total`/`page_size` 是行口径，页数看 `total_pages`） */
+type TradePage = {
+  items: Trade[];
+  total: number;
+  total_groups: number;
+  total_pages: number;
+};
+
 /** 不带日期筛选地取某一页（UI 侧清除「近1年」区间后发的就是这个形状的请求） */
 async function fetchTradesPage(
   page: Page,
   headers: Headers,
   code: string,
   pageNumber: number,
-): Promise<{ items: Trade[]; total: number }> {
+  pageSize: number = PAGE_SIZE,
+): Promise<TradePage> {
   const resp = await page.request.get(
-    `/api/trades?portfolio_code=${code}&page=${pageNumber}&page_size=${PAGE_SIZE}`,
+    `/api/trades?portfolio_code=${code}&page=${pageNumber}&page_size=${pageSize}`,
     { headers },
   );
   expect(
     resp.ok(),
     `查询交易列表第 ${pageNumber} 页失败 ${resp.status()} ${await resp.text()}`,
   ).toBeTruthy();
-  return (await resp.json()) as { items: Trade[]; total: number };
+  return (await resp.json()) as TradePage;
 }
 
 /** 组合全部 trade 行（造数后核对数据前提用，一页取全） */
@@ -308,8 +334,8 @@ function sellFundRow(page: Page) {
     .filter({ hasText: '卖出' });
 }
 
-test.describe('交易列表分页与组锚点排序（#734）', () => {
-  test('跨日同组两腿落在第 1 页末尾相邻：完整结对、第 2 页无重复（本数据集零余量）', async ({
+test.describe('交易列表分页与组锚点排序（#734 / #752）', () => {
+  test('跨日同组两腿恒同页：边界落进组内时整组带上、第 2 页无重复（本数据集零余量）', async ({
     page,
   }, testInfo) => {
     // 造数 ~20 次 REST 往返（含两次快照生成）+ 两页 UI 渲染，mobile webkit 约为 chromium
@@ -322,12 +348,16 @@ test.describe('交易列表分页与组锚点排序（#734）', () => {
     const code = isolatedPortfolioCode('E2E734', testInfo);
     const sell = await seedCrossDaySellGroup(page, headers, code, { d, d1, d2, d3 });
 
-    // ---- 1. API 层：total 未被 outerjoin 放大，两腿同在首页且相邻 ----
+    // ---- 1. API 层：total 仍是行数、组 meta 正确、两腿同在首页且相邻 ----
     const page1 = await fetchTradesPage(page, headers, code, 1);
     expect(
       page1.total,
-      'total 必须仍是真实行数（组锚点子查询是 outerjoin，不得放大计数）',
+      'total 必须仍是真实**行数**（#752 按组分页刻意没把它改成组数：ir trade list --all 的收尾条件按行数判）',
     ).toBe(TOTAL_ROWS);
+    expect(page1.total_groups, '组数应按 (组合, transfer_group) 折算，sub_ 申赎腿自成一组').toBe(
+      TOTAL_GROUPS,
+    );
+    expect(page1.total_pages, '25 行 13 组、page_size=20 ⇒ 边界恰落组缝上，仍是 2 页').toBe(2);
     expect(page1.items).toHaveLength(PAGE_SIZE);
     const fundIdx = page1.items.findIndex((t) => t.id === sell.fundLegId);
     const cashIdx = page1.items.findIndex((t) => t.id === sell.cashLegId);
@@ -343,9 +373,35 @@ test.describe('交易列表分页与组锚点排序（#734）', () => {
 
     const page2 = await fetchTradesPage(page, headers, code, 2);
     expect(page2.items).toHaveLength(TOTAL_ROWS - PAGE_SIZE);
+    expect(page2.total_pages).toBe(2);
     expect(
       page2.items.some((t) => t.id === sell.fundLegId || t.id === sell.cashLegId),
-      '第 2 页不得再出现被测组的任何一条腿（拆页即会重复渲染同一笔卖出）',
+      '第 2 页不得再出现被测组的任何一条腿（页间不得重叠 ⇒ 同一笔卖出不会被渲两次）',
+    ).toBe(false);
+
+    // ---- 1b. API 层（#752 的核心契约）：边界落进组内时整组带上，一页可比 page_size 多一行 ----
+    const straddle1 = await fetchTradesPage(page, headers, code, 1, STRADDLING_PAGE_SIZE);
+    expect(
+      straddle1.items,
+      `page_size=${STRADDLING_PAGE_SIZE} 装满 18 行后下一行是被测组首腿 ⇒ 整组带上，本页应为 page_size + 1 行`,
+    ).toHaveLength(STRADDLING_PAGE_SIZE + 1);
+    expect(straddle1.total, 'total 不随 page_size 变化').toBe(TOTAL_ROWS);
+    expect(straddle1.total_pages, '多带一行不改页数：第 2 页仍是剩下 5 行').toBe(2);
+    expect(
+      straddle1.items.findIndex((t) => t.id === sell.cashLegId),
+      'CASH 到账腿仍在第 1 页（倒数第二格）',
+    ).toBe(STRADDLING_PAGE_SIZE - 1);
+    expect(
+      straddle1.items.findIndex((t) => t.id === sell.fundLegId),
+      '卖出基金腿也必须在第 1 页（末格）——拆组即会是 -1',
+    ).toBe(STRADDLING_PAGE_SIZE);
+    const straddle2 = await fetchTradesPage(page, headers, code, 2, STRADDLING_PAGE_SIZE);
+    expect(straddle2.items, '第 2 页从被测组之后开始：25 - 20 = 5 行').toHaveLength(
+      TOTAL_ROWS - (STRADDLING_PAGE_SIZE + 1),
+    );
+    expect(
+      straddle2.items.some((t) => t.id === sell.fundLegId || t.id === sell.cashLegId),
+      '整组进第 1 页后，第 2 页不得重复给出其中任何一条腿',
     ).toBe(false);
 
     // ---- 2. UI 层第 1 页：真实结对行（主行 + 现金子行），零派生子行 ----
@@ -366,6 +422,11 @@ test.describe('交易列表分页与组锚点排序（#734）', () => {
       page.getByTestId('trade-counterpart-subrow'),
       '第 1 页每个组都完整 ⇒ 不应出现任何派生对手腿子行',
     ).toHaveCount(0);
+    // 分页条的页数取后端 `total_pages`（#752）：移动端直接以「第 x / N 页」呈现，桌面端
+    // 是页码原语，两端由 PaginationBar 的同一个 `pages` 变量驱动。
+    if (testInfo.project.name === 'mobile') {
+      await expect(page.getByText('第 1 / 2 页')).toBeVisible();
+    }
 
     // ---- 3. UI 层第 2 页：不重复渲染那笔卖出，也没有被拆开的组 ----
     const [page2Resp] = await Promise.all([
