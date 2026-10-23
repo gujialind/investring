@@ -557,6 +557,22 @@ _TASK_DISPATCH: Dict[str, Callable[[Session, int], dict]] = {
 }
 
 
+def _join_warnings(warnings: List[dict]) -> str:
+    """warnings 通道落终态 `error_message` 的逐条标签。
+
+    `auto_confirm_skipped` 附组合与事件身份（#771 评审）：只拼 type 会得到一串重复的
+    `auto_confirm_skipped`，运维看不出哪个组合的哪条事件在等补录，明细只能翻运行时
+    INFO 日志或手工查 pending 事件。形态照 nav_sync 的 `dividends_skipped`（产品@除息日
+    div_cash=…）。其余 warning 类型无稳定身份字段，保持只落 type。
+    """
+    return "; ".join(
+        f"{w.get('type')}({w.get('portfolio_code', '?')}#{w.get('event_id', '?')})"
+        if w.get("type") == "auto_confirm_skipped"
+        else w.get("type", "unknown")
+        for w in warnings
+    )
+
+
 def _derive_log_fields(
     task_code: str, result: dict
 ) -> Tuple[str, Optional[int], Optional[int], Optional[int], Optional[str]]:
@@ -639,15 +655,11 @@ def _derive_log_fields(
                     f"{r.get('code', 'UNKNOWN')}: {r.get('error', '')}" for r in failed_items
                 ))
             if warnings:
-                segments.append("warnings: " + "; ".join(
-                    w.get("type", "unknown") for w in warnings
-                ))
+                segments.append("warnings: " + _join_warnings(warnings))
             error_message = " | ".join(segments)[:ERROR_MESSAGE_MAX]
         elif warnings:
             status = "success"
-            error_message = (
-                "warnings: " + "; ".join(w.get("type", "unknown") for w in warnings)
-            )[:ERROR_MESSAGE_MAX]
+            error_message = ("warnings: " + _join_warnings(warnings))[:ERROR_MESSAGE_MAX]
         else:
             status = "success"
         return status, total, total - failed_count, failed_count, error_message

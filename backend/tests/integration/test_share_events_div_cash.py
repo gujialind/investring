@@ -462,8 +462,8 @@ class TestSchedulingPathSurfacesSkipInTaskWarnings:
     手动重算/追平/生成次日快照的响应本就透传 `auto_confirm_skipped`，但调度路径的
     `_generate_snapshots_for_date` 只收集 `auto_confirm_failed`，skip 被丢弃，任务终态
     `error_message` 对「有事件等人工补录」零记录——与检测口 `dividends_skipped` 落终态
-    不对称。本用例真跑 runner（只把快照生成打桩成 no-op），钉住三条：skip 进 warnings、
-    status 仍 success、不进 records_failed。
+    不对称。本用例真跑 runner（只把快照生成打桩成 no-op），钉住四条：skip 进 warnings、
+    status 仍 success、不进 records_failed、终态 `error_message` 带组合与事件身份。
     """
 
     def test_skip_reaches_task_terminal_message_without_failing(self, base, monkeypatch):
@@ -502,4 +502,6 @@ class TestSchedulingPathSurfacesSkipInTaskWarnings:
         status, total, success, failed, message = _derive_log_fields("snapshot_generate", outcome)
         assert status == "success"
         assert (total, success, failed) == (1, 1, 0)
-        assert message == "warnings: auto_confirm_skipped"
+        # #771 复审 S：终态须能定位到「哪个组合的哪条事件在等补录」，
+        # 只剩 type 名时运维得翻运行时 INFO 日志或手工查 pending 事件
+        assert message == f"warnings: auto_confirm_skipped({PORT}#{event.id})"

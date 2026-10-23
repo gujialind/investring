@@ -51,7 +51,7 @@ MSG_REINVEST_NAV_NOT_POSITIVE = "再投资净值必须大于 0；净值未发布
 MSG_DIV_CASH_NOT_POSITIVE = "每份分红金额必须大于 0"
 # #771：自动确认跳过「须补录」事件时给出的可操作指引（单点，供 snapshot_service 与测试引用）
 MSG_DIV_CASH_BACKFILL_HINT = (
-    "该事件的每份分红金额为 0 或负值，确认必然被拒绝；"
+    "该事件的每份分红金额无效（为 0、负值或非数值），确认必然被拒绝；"
     "请在事件编辑页补录正确的 div_cash 后再确认，或改录为取消"
 )
 

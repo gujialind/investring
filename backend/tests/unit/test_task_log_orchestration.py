@@ -243,6 +243,28 @@ class TestSnapshotGenerateDerivation:
         assert message == "warnings: negative_cash"
         assert (total, success, failed) == (1, 1, 0)
 
+    def test_auto_confirm_skipped_warning_carries_identity(self):
+        """#771 复审 S：skip 条目落终态须能定位到组合与事件，不能只剩重复的 type 名。
+        其余 warning 类型无稳定身份字段，保持只落 type（不连带变形）。"""
+        _, _, _, _, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1,
+            "warnings": [
+                {"type": "auto_confirm_skipped", "portfolio_code": "P1", "event_id": 7},
+                {"type": "negative_cash", "portfolio_code": "P2"},
+            ],
+            "auto_confirm_failed": [],
+        })
+        assert message == "warnings: auto_confirm_skipped(P1#7); negative_cash"
+
+    def test_auto_confirm_skipped_warning_missing_identity_degrades_to_placeholder(self):
+        """身份字段缺席时落 `?` 占位而非静默退回裸 type——占位本身就是「产生端漏带」的信号。"""
+        _, _, _, _, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1,
+            "warnings": [{"type": "auto_confirm_skipped"}],
+            "auto_confirm_failed": [],
+        })
+        assert message == "warnings: auto_confirm_skipped(?#?)"
+
     def test_calendar_exhausted_warning_is_success_not_failed(self):
         """#591：组合贴日历末尾被跳过 → 只落 warnings，任务记 success（不是 partial/failed）。"""
         status, total, success, failed, message = _derive_log_fields("snapshot_generate", {
