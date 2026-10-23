@@ -184,6 +184,40 @@ class TestNavSyncDerivation:
         assert total == success + failed
         assert "000001.OF" in message
 
+    def test_dividend_skip_shows_in_terminal_state_without_failing(self):
+        """#771：分红公告因 `div_cash` 缺失/非正未建事件 → 终态留痕，但不算失败。
+
+        与 #704 降级同一手法：不改 status/records（净值同步本身成功、事件是**刻意**不建
+        的），只写 error_message。静默吞掉会让「公告有、事件没建」与「压根没有公告」同形，
+        运维无从得知这笔红利要人工补录。
+        """
+        status, total, success, failed, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "dividends_skipped": [{
+                "product_code": "007169.OF", "ex_date": "2026-10-19",
+                "div_cash": -0.0039,
+                "reason": "每份分红金额缺失或非正，未建事件；请核对公告后手工录入",
+            }],
+        })
+        assert (status, total, success, failed) == ("success", 3, 3, 0)
+        assert total == success + failed
+        assert "分红公告跳过" in message
+        assert "007169.OF@2026-10-19" in message
+        assert "-0.0039" in message
+
+    def test_dividend_skip_kept_alongside_degradation(self):
+        """两类留痕同时出现时都保留（`|` 拼接），不得互相覆盖（#771）。"""
+        status, _, _, _, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "degraded_products": ["000001.OF"],
+            "dividends_skipped": [{
+                "product_code": "007169.OF", "ex_date": "2026-10-19",
+                "div_cash": None, "reason": "金额缺失",
+            }],
+        })
+        assert status == "success"
+        assert "累计净值降级" in message and "分红公告跳过" in message
+
     def test_missing_keys_degrade_to_zero_without_crash(self):
         status, total, success, failed, _ = _derive_log_fields("nav_sync", {})
         assert (status, total, success, failed) == ("success", 0, 0, 0)
@@ -208,6 +242,28 @@ class TestSnapshotGenerateDerivation:
         assert status == "success"
         assert message == "warnings: negative_cash"
         assert (total, success, failed) == (1, 1, 0)
+
+    def test_auto_confirm_skipped_warning_carries_identity(self):
+        """#771 复审 S：skip 条目落终态须能定位到组合与事件，不能只剩重复的 type 名。
+        其余 warning 类型无稳定身份字段，保持只落 type（不连带变形）。"""
+        _, _, _, _, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1,
+            "warnings": [
+                {"type": "auto_confirm_skipped", "portfolio_code": "P1", "event_id": 7},
+                {"type": "negative_cash", "portfolio_code": "P2"},
+            ],
+            "auto_confirm_failed": [],
+        })
+        assert message == "warnings: auto_confirm_skipped(P1#7); negative_cash"
+
+    def test_auto_confirm_skipped_warning_missing_identity_degrades_to_placeholder(self):
+        """身份字段缺席时落 `?` 占位而非静默退回裸 type——占位本身就是「产生端漏带」的信号。"""
+        _, _, _, _, message = _derive_log_fields("snapshot_generate", {
+            "portfolios_processed": 1,
+            "warnings": [{"type": "auto_confirm_skipped"}],
+            "auto_confirm_failed": [],
+        })
+        assert message == "warnings: auto_confirm_skipped(?#?)"
 
     def test_calendar_exhausted_warning_is_success_not_failed(self):
         """#591：组合贴日历末尾被跳过 → 只落 warnings，任务记 success（不是 partial/failed）。"""

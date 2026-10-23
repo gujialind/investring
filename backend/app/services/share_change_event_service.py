@@ -49,6 +49,11 @@ MSG_FUND_LEVEL_NO_HOLDINGS = "权益登记日无持仓，无需确认"
 MSG_REINVEST_ON_EXCHANGE = "场内份额只能现金分红，不支持红利再投资，请改录 cash_dividend"
 MSG_REINVEST_NAV_NOT_POSITIVE = "再投资净值必须大于 0；净值未发布可留空，确认时自动取除息日净值"
 MSG_DIV_CASH_NOT_POSITIVE = "每份分红金额必须大于 0"
+# #771：自动确认跳过「须补录」事件时给出的可操作指引（单点，供 snapshot_service 与测试引用）
+MSG_DIV_CASH_BACKFILL_HINT = (
+    "该事件的每份分红金额无效（为 0、负值或非数值），确认必然被拒绝；"
+    "请在事件编辑页补录正确的 div_cash 后再确认，或改录为取消"
+)
 
 
 class EventFieldResult(NamedTuple):
@@ -64,6 +69,30 @@ class EventFieldResult(NamedTuple):
     shares_after: Decimal
     cash_change: Optional[Decimal]
     dividend_amount: Optional[Decimal] = None
+
+
+def dividend_div_cash_invalid(event_type: str, div_cash: Optional[Decimal]) -> bool:
+    """分红类事件的 `div_cash` 是**显式非法值**（#764 的拒绝条件，#771 复用为跳过条件）。
+
+    与 `_validate_dividend_div_cash` 同一判据，单点定义以免两侧漂移：NULL 返回 False——
+    该列可空且「省略待人工补录」是既有口径，把缺失也判成非法会让补录前的行无法确认。
+
+    非有限值（NaN/Inf）判为非法且**不抛异常**：有序比较 `Decimal("NaN") <= 0` 抛的是
+    `InvalidOperation` 而非返回 False（与 `float('nan') <= 0` 不同），而本函数被
+    `auto_confirm_after_snapshot` 在 `_auto_confirm_guarded` 的 savepoint **之外**调用，
+    一条冒出的异常会直接掀掉整段自动确认。取数层（`tushare_client._div_cash_or_none`）
+    已把上游 NaN 归一为 None，本条是防其他调用方传入的纵深。
+
+    调用方：
+    - `_validate_dividend_div_cash`：创建 / 更新 / 确认与预览三处拒绝；
+    - `snapshot_service.auto_confirm_after_snapshot`：跳过这类存量脏行并给出补录指引，
+      不再每次快照撞一次门禁、刷一条 `auto_confirm_failed`（#771）；
+    - `task_runner._detect_dividends`：自动来源的「不建事件」判据（NULL 另由该处加挡）。
+    """
+    if event_type not in DIVIDEND_TYPES or div_cash is None:
+        return False
+    value = Decimal(str(div_cash))
+    return not value.is_finite() or value <= 0
 
 
 def compute_event_fields(
@@ -94,8 +123,13 @@ def compute_event_fields(
       _validate_adjustment_not_empty 拦截，预览路径同）
 
     份额类字段统一量化到 2 位（四舍五入），cash_change 是金额同样量化到 2 位（issue #94）。
+
+    分红分支的 `div_cash` 非正即拒（#771 在计算单点兜底，与确认 preamble 同码同消息）：
+    人工录入在创建/更新就挡了，但绕过服务层直造的存量行（tushare 检测器 #771 前的旧
+    行为、历史缺陷）会带着 `div_cash <= 0` 走到这里，折出负向份额或负向现金。
     """
     es = entitlement_shares or Decimal("0")
+    _validate_dividend_div_cash(event_type, div_cash)
     if event_type == "cash_dividend":
         cash = quantize_amount(es * Decimal(str(div_cash or 0)))
         return EventFieldResult(
@@ -456,24 +490,21 @@ def _validate_reinvest_input(
 
 
 def _validate_dividend_div_cash(event_type: str, div_cash: Optional[Decimal]) -> None:
-    """#764：分红类事件的每份分红金额，显式值必须为正。
+    """#764：分红类事件的每份分红金额，显式值必须为正（判据见 `dividend_div_cash_invalid`）。
 
-    创建、更新（合并后值）、确认三处同口径。`0` 会落一条「0 份额 / 0 现金」的空事件
-    污染列表与统计，负数会让 compute_event_fields 折出负向份额（再投资）或负向现金
-    （现金分红），成本摊薄与收益方向随之反转。
+    创建、更新（合并后值）、确认与预览共用，`compute_event_fields` 在计算单点再兜一次
+    （#771）。`0` 会落一条「0 份额 / 0 现金」的空事件污染列表与统计，负数会让
+    compute_event_fields 折出负向份额（再投资）或负向现金（现金分红），成本摊薄与
+    收益方向随之反转。
 
-    省略（None）保持既有行为：`cash_dividend` 的 `div_cash` 是可空列，且 tushare
-    分红检测（task_runner._detect_dividends）直造事件、不经本服务，其 `div_cash`
-    可能缺失——在确认侧拒绝缺失值会把「待人工补录」变成自动确认失败，超出本条范围。
+    省略（None）保持既有行为：`div_cash` 是可空列，人工录入允许「先建事件、金额待补」，
+    在确认侧拒绝缺失值会把「补录后可确认」变成确认失败。（历史上 tushare 分红检测也
+    靠这条放行缺失值——#771 起检测器不再建缺失/非正金额的事件，该后门已封。）
 
     非分红类不校验：前端历史上对所有类型都提交 `div_cash: 0`（同 reinvest_nav），
     对拆分/合并/送股/强制调整拒绝会误伤正常录入。
     """
-    if event_type not in DIVIDEND_TYPES:
-        return
-    if div_cash is None:
-        return
-    if Decimal(str(div_cash)) <= 0:
+    if dividend_div_cash_invalid(event_type, div_cash):
         raise BusinessError(
             "INVALID_PARAM", MSG_DIV_CASH_NOT_POSITIVE,
             details={"field": "div_cash", "value": float(div_cash)},

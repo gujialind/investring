@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from datetime import date
@@ -188,8 +189,8 @@ def get_fund_daily(
 
     result = []
     for _, row in df.iterrows():
-        # `is not None` 而非 truthiness（#692，与下方 get_fund_div 的 div_cash 同写法）：
-        # 平盘日 pct_chg 恰为 0.0，被 truthiness 折成 None 后前端读成「无数据」而非 0%。
+        # `is not None` 而非 truthiness（#692）：平盘日 pct_chg 恰为 0.0，被 truthiness
+        # 折成 None 后前端读成「无数据」而非 0%。NaN 由写侧 `_usable_price` 兜住，本层不归一。
         result.append({
             "trade_date": str(row["trade_date"]),
             "close": float(row["close"]) if row.get("close") is not None else None,
@@ -248,6 +249,29 @@ def get_fund_nav(
     return result
 
 
+def _div_cash_or_none(raw: Any) -> Optional[float]:
+    """`fund_div.div_cash` 原值 → float；缺值与非有限值（NaN/Inf）一律归一为 None。
+
+    不能只判 `is not None`：pandas 的缺失值是 `float('nan')` 而非 None，会原样透传下去。
+    下游三道出口的判据都是 `Decimal(str(x))` 的有序比较（服务层单点
+    `dividend_div_cash_invalid`、检测口复用它、读侧 `reinvest_receivable` 的 `amount <= 0`），
+    而 NaN 让这条比较抛 `InvalidOperation`（不是返回 False）——检测口抛出的
+    异常会被产品级 `except Exception` 兜住并 `db.rollback()`，把该产品本轮已建的有效事件一起
+    撤掉，且只要这行公告还在就每轮重演（正是 #771 要消除的反复失败形态）。净值列的同一形态
+    （`get_fund_nav` 的 NaN）不改这里，因为写侧 `_usable_nav` 已有 `isfinite` 判据兜住；
+    `div_cash` 没有对应的写侧闸门，故在单一来源归一，让下游自然走既有 NULL 口径。
+
+    本层不判正负：0/负值是「上游给了一个坏值」，留给检测口留痕跳过、服务层拒绝。
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def get_fund_div(
     ts_code: str,
 ) -> List[Dict[str, Any]]:
@@ -275,7 +299,7 @@ def get_fund_div(
         result.append({
             "ex_date": str(row.get("ex_date", "")),
             "record_date": str(row.get("record_date", "")),
-            "div_cash": float(row["div_cash"]) if row.get("div_cash") is not None else None,
+            "div_cash": _div_cash_or_none(row.get("div_cash")),
             "div_proc": str(row.get("div_proc", "")),
         })
 

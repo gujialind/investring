@@ -7,8 +7,10 @@ Tushare 客户端限流增强测试（P5.1）
 - 重试耗尽后抛 TushareAPIError
 - fund_daily 行映射：平盘日 pct_chg=0.0 不被 truthiness 折成缺值（#692）
 - fund_nav 行映射：unit_nav/accum_nav 的 0.0 同样不折成缺值，判正交给写入侧（#701）
+- fund_div 行映射：div_cash 的 NaN/Inf 归一为 None（#771 评审，下游判据遇 NaN 会抛异常）
 """
 import math
+from decimal import Decimal
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -217,3 +219,76 @@ class TestFundNavRowMapping:
         assert math.isnan(result[0]["unit_nav"]), "缺值不再被折成 None，交给写侧判坏"
         assert result[0]["accum_nav"] is None
         assert result[1] == {"trade_date": "20260916", "unit_nav": 1.5, "accum_nav": 0.0}
+
+
+class TestFundDivRowMapping:
+    """#771 评审：`fund_div.div_cash` 的非有限值在单一来源归一为 None。
+
+    pandas 的缺失值是 `float('nan')`，`is not None` 拦不住它；下游三道出口（检测口、
+    服务层判据、读侧）都按 `Decimal(str(x)) <= 0` 判非正，NaN 让这条有序比较抛
+    `InvalidOperation`——检测口抛出的异常被产品级 `except Exception` 兜住后
+    `db.rollback()`，该产品本轮已建的有效事件一起撤销，且每轮 nav_sync 重演。归一成
+    None 后它们自然走既有「缺失」口径，不需要每个调用点各补一道 NaN 检查。
+
+    净值列（`get_fund_nav`）的同一形态**刻意不归一**：写侧 `_usable_price`/`_usable_nav`
+    已有 `isfinite` 判据兜住并能点名，`div_cash` 没有对应的写侧闸门。
+    """
+
+    @staticmethod
+    def _frame(rows):
+        df = MagicMock()
+        df.empty = False
+        df.iterrows.return_value = list(enumerate(rows))
+        return df
+
+    @staticmethod
+    def _row(div_cash, ex_date="20261020"):
+        return {
+            "ex_date": ex_date, "record_date": "20261019",
+            "div_cash": div_cash, "div_proc": "实施",
+        }
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_non_finite_becomes_none(self, mock_get_pro, mock_sleep):
+        mock_pro = MagicMock()
+        mock_pro.fund_div.return_value = self._frame([
+            self._row(float("nan")),
+            self._row(float("inf"), "20261021"),
+            self._row(float("-inf"), "20261022"),
+            self._row(Decimal("NaN"), "20261023"),
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        result = tushare_client.get_fund_div("007169.OF")
+
+        assert [item["div_cash"] for item in result] == [None, None, None, None]
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_explicit_zero_and_negative_are_preserved(self, mock_get_pro, mock_sleep):
+        """本层不判正负：0/-0.0039 是「上游给了坏值」，原样下传由检测口留痕、服务层拒绝。"""
+        mock_pro = MagicMock()
+        mock_pro.fund_div.return_value = self._frame([
+            self._row(0.0), self._row(-0.0039, "20261021"), self._row(0.0039, "20261022"),
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        result = tushare_client.get_fund_div("007169.OF")
+
+        assert [item["div_cash"] for item in result] == [0.0, -0.0039, 0.0039]
+
+    @patch("app.services.tushare_client.time.sleep")
+    @patch("app.services.tushare_client._get_tushare_pro")
+    def test_missing_and_non_finite_are_not_distinguished(self, mock_get_pro, mock_sleep):
+        """NULL 与 NaN 归一到同一个「上游没给值」形态，检测口只认这一种缺失。"""
+        mock_pro = MagicMock()
+        mock_pro.fund_div.return_value = self._frame([
+            self._row(None), self._row(float("nan"), "20261021"),
+        ])
+        mock_get_pro.return_value = mock_pro
+
+        result = tushare_client.get_fund_div("007169.OF")
+
+        assert [item["div_cash"] for item in result] == [None, None]
+        assert [item["div_proc"] for item in result] == ["实施", "实施"]

@@ -157,15 +157,18 @@ def list_reinvest_receivables(
             platform_code)`，值含 `shares`）。只在生成 `D == entitlement_date`
             的快照时提供——此时当日持仓尚未落库。
 
-    金额为 0（基数为 0、`div_cash` 为空或折算后不足一分）的应收跳过：不落
-    0 值在途行，与既有「0 在途不建行」口径一致。
+    金额为 0（基数为 0、`div_cash` 为空或折算后不足一分）**或为负**（存量脏行带
+    非正 `div_cash`，#771）的应收一律跳过：前者不落 0 值在途行、与既有口径一致，
+    后者不落负向在途行——负应收会把总市值拉到净值以下，与「红利只增不减」的口径
+    相反。折算拒绝逻辑在服务层确认侧（`dividend_div_cash_invalid`），本模块只读，
+    不得因脏行抛错阻断快照生成。
     """
     result = []
     for row in _query_rows(db, [portfolio_code], target_date):
         if not (row.ex_date <= target_date < row.share_confirm_date):
             continue
         amount = _amount(row, target_date, live_positions)
-        if amount == 0:
+        if amount <= 0:
             continue
         result.append(
             ReinvestReceivable(
@@ -198,13 +201,16 @@ def aggregate_receivable_flows(
     两端都无条件产出、由消费方按行快照日过滤（`compute_event_cash_addbacks` 取
     `<= 行快照日`、`compute_daily_profits` 取 `== 行快照日`），与既有事件现金腿
     的聚合形态一致。
+
+    非正金额（0 或脏行的负 `div_cash`）跳过，与 `list_reinvest_receivables` 同判据：
+    两端必须成对消失，否则只补一端会在窗口内凭空造出收益。
     """
     flows: Dict[Tuple[str, str, str, str], List[Tuple[date, float]]] = {}
     if not portfolio_codes:
         return flows
     for row in _query_rows(db, portfolio_codes, max_date):
         amount = _amount(row, row.ex_date, None)
-        if amount == 0:
+        if amount <= 0:
             continue
         key = (row.portfolio_code, row.product_code, row.market, row.platform_code)
         value = float(amount)
