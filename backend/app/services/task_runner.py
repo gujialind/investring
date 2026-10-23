@@ -265,6 +265,10 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     #715 增 `failed_portfolios`：fail-fast 中断回补的组合条目（portfolio_code/date/
     code/error），经 _derive_log_fields 落终态 partial_success——此前只 logger.error，
     终态仍 success，调度侧无从判断「当日快照未成功」。
+    #771 评审：`warnings` 另承载 auto_confirm 的 `auto_confirm_skipped` 条目
+    （type="auto_confirm_skipped"，带 portfolio_code/date/event_id 与补录指引），
+    使「有事件等人工补录」在任务终态可见（此前只落产生端一条 INFO）；按 warnings
+    既有语义不改 status、不进 records_failed。
     """
     from app.services.snapshot_service import generate_daily_snapshots, auto_confirm_after_snapshot
     from app.services.exceptions import BusinessError
@@ -331,6 +335,22 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
                     {**r, "portfolio_code": portfolio.code}
                     for r in auto_results if r.get("action") == "auto_confirm_failed"
                 )
+                # #771 评审：`auto_confirm_skipped`（div_cash 非正的存量事件等人工补录）
+                # 此前只有产生端一条 INFO 运行日志，任务终态零记录，与检测口的
+                # dividends_skipped 落终态不对称。并入既有 warnings 通道——
+                # _derive_log_fields 的 snapshot_generate 分支已把 warnings 落
+                # error_message 且不改 status；「等补录」不是失败，故不进
+                # auto_confirm_failed、不影响 records_failed。
+                outcome["warnings"].extend(
+                    {
+                        "type": "auto_confirm_skipped",
+                        "date": current.isoformat(),
+                        "portfolio_code": portfolio.code,
+                        "event_id": r.get("id"),
+                        "message": r.get("hint") or r.get("error"),
+                    }
+                    for r in auto_results if r.get("action") == "auto_confirm_skipped"
+                )
                 db.commit()
                 outcome["generated"] += 1
             except Exception as e:
@@ -366,8 +386,9 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
 
     **为什么是「不建事件」而不是「建一条待补录的事件」**（#771）：
     - 建事件需要新状态（或复用 pending + 一个标记列），而 pending 正是病灶本身——
-      快照闸门放行 pending、auto_confirm 逐日重试，`div_cash <= 0` 的行每次撞
-      `_validate_dividend_div_cash` 失败，永久停在 pending 并反复刷告警；
+      快照闸门放行 pending、auto_confirm 每经过其生效日窗口就重试一次，
+      `div_cash <= 0` 的行每次撞 `_validate_dividend_div_cash` 失败，永久停在
+      pending 并在重算/追平反复刷告警；
     - `div_cash` 缺失/为 0 时确认会折出「0 份额 / 0 现金」的空事件（列表、统计与
       摊薄成本都被污染），补录金额又受 `SNAPSHOT_DEPENDENCY` 冻结（应收一旦进快照
       即不可改），用户能做的只有取消，等于把垃圾行推给用户清理；

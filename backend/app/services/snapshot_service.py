@@ -1994,8 +1994,9 @@ def auto_confirm_after_snapshot(
 
     #771：`div_cash` 显式非正的分红事件**不进入确认**，直接记一条
     `action=auto_confirm_skipped` 并带补录指引——这类行确认必被 #764 门禁拒绝，
-    逐日重试只会刷 WARNING 且永久 pending；跳过不计入 auto_confirm_failed，
-    由人工补录金额后再确认。
+    每次尝试只会刷 WARNING 且事件永久 pending（尝试频率见 `pending_events` 查询：
+    按 `share_effective_date` 精确匹配，重算/追平每经过该生效日窗口重试一次）；
+    跳过不计入 auto_confirm_failed，由人工补录金额后再确认。
 
     Args:
         db: 数据库会话
@@ -2156,11 +2157,15 @@ def auto_confirm_after_snapshot(
         event_id = event.id
         entry: Dict[str, Any] = {"id": event_id, "type": "event"}
         # #771：显式非正 div_cash 的分红事件确认必被 #764 门禁拒绝（创建/更新已挡，
-        # 走到这里的只有绕过服务层直造的存量行）。照旧逐日重试只会每批刷一条
+        # 走到这里的只有绕过服务层直造的存量行）。照旧尝试只会刷一条
         # auto_confirm_failed WARNING、事件永久 pending；改为跳过并给出补录指引。
+        # 重试频率不是「逐日」：上面的查询按 share_effective_date == next_confirm_date
+        # 精确匹配，脏行只在生成其生效日前一交易日的快照时被试一次；反复刷告警发生在
+        # 重算/追平每经过该生效日窗口时（现场形态即来源于此）。
         # 缺失（NULL）不跳——它仍能确认成空事件，是 #764 刻意放行的既有口径。
         # action 用独立值：task_runner 按 action=="auto_confirm_failed" 计数归并，
-        # 「等人工补录」不是失败，不得计入 records_failed。
+        # 「等人工补录」不是失败，不得计入 records_failed；调度路径把它并进 warnings
+        # 落任务终态（task_runner._generate_snapshots_for_date）。
         if dividend_div_cash_invalid(event.event_type, event.div_cash):
             entry.update({
                 "action": "auto_confirm_skipped",

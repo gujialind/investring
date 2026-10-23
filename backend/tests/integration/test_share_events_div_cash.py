@@ -455,3 +455,51 @@ class TestAutoConfirmSkipsBackfillNeededEvents:
         row = base.get(ShareChangeEvent, event.id)
         assert (row.status, row.shares_change) == ("confirmed", Decimal("33.64"))
 
+
+class TestSchedulingPathSurfacesSkipInTaskWarnings:
+    """串联守门（#771 复审 S）：产生端的 skip 条目须经调度路径进任务终态。
+
+    手动重算/追平/生成次日快照的响应本就透传 `auto_confirm_skipped`，但调度路径的
+    `_generate_snapshots_for_date` 只收集 `auto_confirm_failed`，skip 被丢弃，任务终态
+    `error_message` 对「有事件等人工补录」零记录——与检测口 `dividends_skipped` 落终态
+    不对称。本用例真跑 runner（只把快照生成打桩成 no-op），钉住三条：skip 进 warnings、
+    status 仍 success、不进 records_failed。
+    """
+
+    def test_skip_reaches_task_terminal_message_without_failing(self, base, monkeypatch):
+        from app.models.portfolio import Portfolio
+        from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
+        from app.services import snapshot_service
+        from app.services.task_runner import _derive_log_fields, _generate_snapshots_for_date
+
+        event = _dirty_event(base, "reinvest_dividend", Decimal("-0.0039"))
+        # 调度路径只处理 active + auto_snapshot_enabled 的组合，并从其最新快照日之后首个
+        # 交易日逐日回补：把基线挪到 ENT 前一交易日，使回补循环覆盖 ENT——auto_confirm
+        # 的判键是 share_effective_date == next_trading_day(ENT) == EX，脏行正在这天被试。
+        prev_day = date(2026, 10, 15)
+        ensure_trading_day(base, prev_day, is_open=True)
+        base.query(Portfolio).filter_by(code=PORT).one().auto_snapshot_enabled = True
+        base.query(PortfolioValueSnapshot).filter_by(portfolio_code=PORT).update(
+            {"snapshot_date": prev_day}, synchronize_session=False,
+        )
+        base.commit()
+        monkeypatch.setattr(
+            snapshot_service, "generate_daily_snapshots",
+            lambda db, portfolio_code, target_date: {"warnings": []},
+        )
+
+        outcome = _generate_snapshots_for_date(base, ENT)
+
+        skips = [w for w in outcome["warnings"] if w.get("type") == "auto_confirm_skipped"]
+        assert [w.get("event_id") for w in skips] == [event.id], outcome["warnings"]
+        assert skips[0]["portfolio_code"] == PORT
+        assert skips[0]["date"] == ENT.isoformat()
+        assert "补录" in skips[0]["message"]
+        # 「等人工补录」不是失败：不进 auto_confirm_failed / failed_portfolios
+        assert outcome["auto_confirm_failed"] == []
+        assert outcome["failed_portfolios"] == []
+        # 终态归一：warnings 通道落 error_message 且不改 status、不改三计数
+        status, total, success, failed, message = _derive_log_fields("snapshot_generate", outcome)
+        assert status == "success"
+        assert (total, success, failed) == (1, 1, 0)
+        assert message == "warnings: auto_confirm_skipped"
