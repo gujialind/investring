@@ -40,12 +40,15 @@ FUND_LEVEL_TYPES = {"share_split", "share_merge", "bonus_share"}
 PLATFORM_LEVEL_TYPES = {"cash_dividend", "reinvest_dividend", "forced_adjustment"}
 # 场内（证券登记结算系统）份额只能现金分红，红利再投资只发生在场外登记份额（#744）
 REINVEST_ALLOWED_MARKETS = {"CN_OTC", "HK_MUTUAL"}
+# 每份分红金额（div_cash）有业务含义的类型：两类都按「正数」同口径校验（#764）
+DIVIDEND_TYPES = {"cash_dividend", "reinvest_dividend"}
 
 # 确认与预览共用的拒绝文案（#460 评审：单点定义，杜绝「同码不同消息」两侧漂移）
 MSG_POSITION_SNAPSHOT_MISSING = "权益登记日持仓快照不存在"
 MSG_FUND_LEVEL_NO_HOLDINGS = "权益登记日无持仓，无需确认"
 MSG_REINVEST_ON_EXCHANGE = "场内份额只能现金分红，不支持红利再投资，请改录 cash_dividend"
 MSG_REINVEST_NAV_NOT_POSITIVE = "再投资净值必须大于 0；净值未发布可留空，确认时自动取除息日净值"
+MSG_DIV_CASH_NOT_POSITIVE = "每份分红金额必须大于 0"
 
 
 class EventFieldResult(NamedTuple):
@@ -452,6 +455,31 @@ def _validate_reinvest_input(
         )
 
 
+def _validate_dividend_div_cash(event_type: str, div_cash: Optional[Decimal]) -> None:
+    """#764：分红类事件的每份分红金额，显式值必须为正。
+
+    创建、更新（合并后值）、确认三处同口径。`0` 会落一条「0 份额 / 0 现金」的空事件
+    污染列表与统计，负数会让 compute_event_fields 折出负向份额（再投资）或负向现金
+    （现金分红），成本摊薄与收益方向随之反转。
+
+    省略（None）保持既有行为：`cash_dividend` 的 `div_cash` 是可空列，且 tushare
+    分红检测（task_runner._detect_dividends）直造事件、不经本服务，其 `div_cash`
+    可能缺失——在确认侧拒绝缺失值会把「待人工补录」变成自动确认失败，超出本条范围。
+
+    非分红类不校验：前端历史上对所有类型都提交 `div_cash: 0`（同 reinvest_nav），
+    对拆分/合并/送股/强制调整拒绝会误伤正常录入。
+    """
+    if event_type not in DIVIDEND_TYPES:
+        return
+    if div_cash is None:
+        return
+    if Decimal(str(div_cash)) <= 0:
+        raise BusinessError(
+            "INVALID_PARAM", MSG_DIV_CASH_NOT_POSITIVE,
+            details={"field": "div_cash", "value": float(div_cash)},
+        )
+
+
 def _validate_confirm_preconditions(db: Session, event: ShareChangeEvent) -> None:
     """确认与确认预览共用的前置校验序列（#424；#460 评审抽公共 preamble）。
 
@@ -471,6 +499,7 @@ def _validate_confirm_preconditions(db: Session, event: ShareChangeEvent) -> Non
         db, event.product_code, event.market, event.event_type, event.shares_change
     )
     _validate_reinvest_input(event.event_type, event.market, event.reinvest_nav)
+    _validate_dividend_div_cash(event.event_type, event.div_cash)
 
 
 def check_platform_coverage(
@@ -741,6 +770,7 @@ def create_share_change_event(
     _validate_adjustment_not_empty(event_type, shares_change, cash_change)
     _validate_product_allows_shares_change(db, product_code, market, event_type, shares_change)
     _validate_reinvest_input(event_type, market, reinvest_nav)
+    _validate_dividend_div_cash(event_type, div_cash)
 
     # 分级校验：平台级必填 platform_code，基金级禁止指定
     if event_type in PLATFORM_LEVEL_TYPES:
@@ -897,6 +927,9 @@ def update_share_change_event(
     )
     _validate_reinvest_input(
         event.event_type, event.market, updates.get("reinvest_nav", event.reinvest_nav)
+    )
+    _validate_dividend_div_cash(
+        event.event_type, updates.get("div_cash", event.div_cash)
     )
 
     for field, value in updates.items():

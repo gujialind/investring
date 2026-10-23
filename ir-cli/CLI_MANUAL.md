@@ -811,7 +811,7 @@ ir share-event create \
 | `--shares-change` | 否 | 变动份额 |
 | `--shares-after` | 否 | 变动后份额 |
 | `--ratio` | 否 | 比例（拆合股用） |
-| `--div-cash` | 否 | 现金分红金额 |
+| `--div-cash` | 否 | 每份分红金额（> 0，仅 `cash_dividend` / `reinvest_dividend`；其他类型不校验）；0/负数 `INVALID_PARAM`（`details.field = "div_cash"`）；省略（NULL）放行，但折算侧按 0 处理 ⇒ 会产出「0 现金 / 0 份额」的空事件，见[业务规则·份额变动事件](../docs/reference/business-constraints.md#rule-event) |
 | `--reinvest-nav` | 否 | 再投资净值（> 0，仅 `reinvest_dividend`）；省略则确认时取除息日数据源净值，填写仅作一致性校验（不一致 `PRICE_NAV_MISMATCH`）；0/负数 `INVALID_PARAM` |
 | `--cash-change` | 否 | 现金变动 |
 | `--event-source` | 否 | 事件来源 |
@@ -854,9 +854,12 @@ ir share-event update <ID> --json '{"share_confirm_date":null}'
 
 # 清空再投资净值，确认时改取除息日数据源净值（存量 0 值须先清空才能确认）
 ir share-event update <ID> --json '{"reinvest_nav":null}'
+
+# 清空每份分红金额（存量 0/负值须改为正数或清空；界面编辑弹窗没有清空通道，只有这里能发显式 null）
+ir share-event update <ID> --json '{"div_cash":null}'
 ```
 
-> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。`--share-confirm-date` 仅用于红利再投资，**必须为交易日**且晚于除息日，设置后才允许权益登记日 = 除息日；省略不修改原值，清空同样走 `--json` 显式 `null`，没有专用清空选项。pending 事件的再投资应收若已计入 ex_date 及之后的快照，修改（仅改备注除外）、取消、删除会被拒绝（`SNAPSHOT_DEPENDENCY`，须先删除该日及之后快照）。两者均无逐命令清空参数；已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
+> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。`--share-confirm-date` 仅用于红利再投资，**必须为交易日**且晚于除息日，设置后才允许权益登记日 = 除息日；省略不修改原值，清空同样走 `--json` 显式 `null`，没有专用清空选项。`--div-cash` 省略不修改原值，按**合并后值**校验（> 0，仅 `cash_dividend` / `reinvest_dividend`），清空同样只能走 `--json` 显式 `null`；清空后确认会折出「0 现金 / 0 份额」的空事件，NULL 放行的后果边界见[业务规则](../docs/reference/business-constraints.md#rule-event)。pending 事件的再投资应收若已计入 ex_date 及之后的快照，修改（仅改备注除外）、取消、删除会被拒绝（`SNAPSHOT_DEPENDENCY`，须先删除该日及之后快照）。两者均无逐命令清空参数；已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
 
 #### `ir share-event delete`
 

@@ -88,12 +88,14 @@ export function EventEditDialog({
   const [form, setForm] = useState<EditFormState | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
   const [shareConfirmDateError, setShareConfirmDateError] = useState<string | null>(null);
+  const [divCashError, setDivCashError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && event) setForm(toForm(event));
     if (!open) setForm(null);
     setNavError(null);
     setShareConfirmDateError(null);
+    setDivCashError(null);
   }, [open, event]);
 
   if (!event || !form) return null;
@@ -112,6 +114,20 @@ export function EventEditDialog({
     if (event.event_type === "cash_dividend") {
       payload.cash_pay_date = form.cash_pay_date || null;
     }
+    // #764：每份分红金额非空时必须为正（0/负值后端 422 INVALID_PARAM）；空串 = 不改此字段，
+    // 与下方 NUM_FIELDS「非空才入 payload」同口径，故不拦
+    if (
+      (event.event_type === "cash_dividend" || event.event_type === "reinvest_dividend") &&
+      form.div_cash.trim() !== "" &&
+      !(parseFloat(form.div_cash) > 0)
+    ) {
+      setDivCashError("每份分红金额必须大于 0");
+      return;
+    }
+    // NUM_FIELDS 的空串一律是「不改此字段」，其中 div_cash **没有清空通道**：下面的
+    // reinvest_nav / cash_pay_date / share_confirm_date 各自在留空时显式发 null，而清空
+    // div_cash 在界面上等于不提交该字段。故「存量 0/负值行」在本弹窗只有「改为正数」这一条
+    // 恢复路径；「显式清空为 null」只能走 CLI `ir share-event update <ID> --json '{"div_cash":null}'`。
     for (const field of NUM_FIELDS) {
       const raw = form[field].trim();
       if (raw !== "") payload[field] = parseFloat(raw);
@@ -221,8 +237,12 @@ export function EventEditDialog({
                     type="number"
                     step="0.0001"
                     value={form.div_cash}
-                    onChange={(e) => setField({ div_cash: e.target.value })}
+                    onChange={(e) => {
+                      setDivCashError(null);
+                      setField({ div_cash: e.target.value });
+                    }}
                   />
+                  {divCashError && <p className="text-xs text-destructive">{divCashError}</p>}
                 </div>
                 {event.event_type === "reinvest_dividend" && (
                   <div className="space-y-2">

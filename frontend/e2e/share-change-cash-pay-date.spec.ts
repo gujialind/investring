@@ -516,3 +516,73 @@ test.describe('红利再投资份额确认日（#743，双端）', () => {
     }
   });
 });
+
+test.describe('每份分红金额正数校验（#764，双端）', () => {
+  test('新建与编辑对 0/负值内联拦截不发请求，正值落库不变', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const s = await setupPortfolio(page, testInfo, 'F');
+    await seedHolding(page, s);
+    const create = await openCreate(page, s);
+    const divCash = create.getByLabel('每份分红金额（元）', { exact: true });
+    const inline = create.getByText('每份分红金额必须大于 0', { exact: true });
+    const createdIds: number[] = [];
+    try {
+      // 现金分红：0 值内联报错且不发 POST。openCreate 已预填 0.5（#522 用例断言
+      // 0.5 × 基数份额 = 500 现金），故此处显式清零；表单初值本身也是 0，两者落到
+      // 拦截判据上是同一份 formData 状态。
+      await divCash.fill('0');
+      await expect(divCash).toHaveValue('0');
+      let writes = trackEventWrites(page);
+      await create.getByRole('button', { name: '创建', exact: true }).click();
+      await expect(inline).toBeVisible();
+      writes.stop();
+      expect(writes.sent).toEqual([]);
+
+      // 红利再投资：负值（#743 处置期实测可创建，算出 shares_change = -3.86）同样拦截
+      await pickEventType(page, create, '分红再投资');
+      await expect(inline).toHaveCount(0);
+      await divCash.fill('-0.0039');
+      writes = trackEventWrites(page);
+      await create.getByRole('button', { name: '创建', exact: true }).click();
+      await expect(inline).toBeVisible();
+      writes.stop();
+      expect(writes.sent).toEqual([]);
+
+      // 正值：拦截解除，正常创建落库
+      await divCash.fill('0.5');
+      await expect(inline).toHaveCount(0);
+      const created = await submitEvent(page, create);
+      createdIds.push(created.event.id);
+      expect(created.payload).toHaveProperty('div_cash', 0.5);
+      expect((await getStored(page, s.headers, created.event.id)).div_cash).toBe(0.5);
+
+      // 编辑弹窗同口径：0/负值内联拦截不发 PUT，正值可保存
+      const row = page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+      await row.getByTitle('编辑', { exact: true }).click();
+      const edit = dialogByTitle(page, '编辑份额变动事件');
+      const editDivCash = edit.getByLabel('每份分红金额（元）', { exact: true });
+      const editInline = edit.getByText('每份分红金额必须大于 0', { exact: true });
+      await expect(editDivCash).toHaveValue('0.5');
+      for (const bad of ['0', '-0.0039']) {
+        await editDivCash.fill(bad);
+        const putWrites = trackEventWrites(page, created.event.id);
+        await edit.getByRole('button', { name: '保存', exact: true }).click();
+        await expect(editInline).toBeVisible();
+        putWrites.stop();
+        expect(putWrites.sent).toEqual([]);
+      }
+      await editDivCash.fill('0.8');
+      await expect(editInline).toHaveCount(0);
+      const updated = await submitEvent(page, edit, created.event.id);
+      expect(updated.payload).toHaveProperty('div_cash', 0.8);
+      expect((await getStored(page, s.headers, created.event.id)).div_cash).toBe(0.8);
+      expect(errors).toEqual([]);
+    } finally {
+      for (const id of createdIds) {
+        const response = await page.request.delete(`/api/share-change-events/${id}`, { headers: s.headers });
+        await expect(response).toBeOK();
+      }
+    }
+  });
+});
