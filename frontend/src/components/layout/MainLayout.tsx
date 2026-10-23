@@ -52,7 +52,9 @@ export default function MainLayout({
       <Navbar />
       <div className="flex">
         <Sidebar />
-        <main className="flex-1 p-4 lg:p-8 pb-20 lg:pb-8">
+        {/* min-w-0 解除 flex 子项的内容自动最小宽：否则页内的表/长数值会把 main 顶到
+            自身最小内容宽，先挤掉 sidebar，再挤破视口（#772）。窄内容改由各自的滚动容器承接。 */}
+        <main className="min-w-0 flex-1 p-4 lg:p-8 pb-20 lg:pb-8">
           {children}
         </main>
       </div>
