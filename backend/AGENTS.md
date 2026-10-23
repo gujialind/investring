@@ -248,7 +248,7 @@ SQLite 的 prepare 仅建模型/调度表与任务种子，**不跑 MySQL 历史
 
 ## 7. E2E 相关脚本
 
-- `scripts/run_e2e_backend.py`：本地 E2E 后端，先独占监听 `127.0.0.1`，每次独占新建 SQLite 并灌种子，空 lifespan 跳迁移；导入不启动。默认临时目录在退出时清理，`--database` / `E2E_DB_PATH` 指定的新文件保留，已有文件或符号链接拒绝、绝不删除；端口由 `--port` / `E2E_PORT` 指定，默认 8000。子进程隔离 cwd/应用配置，关闭行情和调度。前后端联调优先使用[本地隔离入口](../frontend/AGENTS.md#4-e2eplaywright)，不复用其他运行的库或服务（#619）。
+- `scripts/run_e2e_backend.py`：本地 E2E 后端，先独占监听 `127.0.0.1`，每次独占新建 SQLite 并灌种子，空 lifespan 跳迁移；导入不启动。默认临时目录在退出时清理，`--database` / `E2E_DB_PATH` 指定的新文件保留，已有文件或符号链接拒绝、绝不删除；端口由 `--port` / `E2E_PORT` 指定，默认 8000。子进程隔离 cwd/应用配置，关闭行情和调度。前后端联调优先使用[本地隔离入口](../frontend/e2e/AGENTS.md#1-e2eplaywright)，不复用其他运行的库或服务（#619）。
 - `scripts/seed_e2e.py`：CI E2E 种子入口，**未设 `DATABASE_URL` 直接拒绝**（防误连）。
 
 ## 8. OpenAPI 契约检查与导出

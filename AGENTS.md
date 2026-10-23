@@ -24,8 +24,8 @@
 | 任务 | 默认加载 | 验证入口 |
 | --- | --- | --- |
 | 后端业务 | [后端指南](backend/AGENTS.md)、[对应领域规则](docs/reference/business-constraints.md)、目标服务及相关测试 | 后端指南“跑测试”的影响面表 |
-| 前端交互 | [前端指南](frontend/AGENTS.md)、目标页面与 API 契约；涉及业务时读对应规则 | 前端指南的质量门禁与影响面 E2E |
-| 前端视觉 | 前端交互的入口 + [visual-spec](docs/design/visual-spec.md) | 前端指南的双端目检 |
+| 前端交互 | [前端指南](frontend/AGENTS.md)、目标页面与 API 契约；涉及业务时读对应规则；改 E2E 或做纯测试重构加读 [E2E 指南](frontend/e2e/AGENTS.md) | 前端指南的质量门禁与影响面 E2E |
+| 前端视觉 | 前端交互的入口 + [visual-spec](docs/design/visual-spec.md)；目检与 E2E 共用本地栈，运行前提见 [E2E 指南](frontend/e2e/AGENTS.md#2-运行前置检查) | [前端指南](frontend/AGENTS.md#5-目检视觉验证)的双端目检 |
 | CLI | [CLI 指南](ir-cli/AGENTS.md)、[手册对应命令组](ir-cli/CLI_MANUAL.md)（先 `ir schema --index`） | CLI 单测与响应字段契约检查 |
 | 发布与运维 | [versioning](docs/reference/versioning.md)、目标 workflow、相关 runbook | 版本/契约验证及 runbook 的成功与恢复判据 |
 | 日志与任务记录 | 模块指南 + [logging](docs/reference/logging.md) | 对应服务/任务日志测试 |
@@ -34,7 +34,7 @@
 
 ### 本地验证入口
 
-从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`run env` 核对当前解释器已装包与 `backend/requirements.txt` 声明钉版的漂移，`--json` 输出机器可读结果（#619）。E2E/目检的运行前提及参数入口见[前端指南](frontend/AGENTS.md#4-e2eplaywright)。
+从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`run env` 核对当前解释器已装包与 `backend/requirements.txt` 声明钉版的漂移，`--json` 输出机器可读结果（#619）。E2E 的运行前提与参数入口见 [E2E 指南](frontend/e2e/AGENTS.md)，两者共用的本地栈前提在其[运行前置检查](frontend/e2e/AGENTS.md#2-运行前置检查)，目检入口见[前端指南](frontend/AGENTS.md#5-目检视觉验证)。
 
 `plan` 不是验证，单次 `run` 不是全任务验收；每次真实执行、不缓存跳测，输出范围、状态和日志引用，不替代对应业务测试、人工看图或必需 CI。`scripts/check_openapi_stop.py` 仅提供契约 Stop 适配；宿主接线需单独确认，不自动修改私有配置。
 

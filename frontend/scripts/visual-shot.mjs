@@ -14,7 +14,7 @@
  * 故同一个 --path 双端通用。认证状态仅保存在本次输出目录。
  *
  * 通常由 scripts/visual-verify.sh 调用（那个脚本负责起后端与 standalone 前端）。
- * 造数与红线见 frontend/AGENTS.md §4「目检」。
+ * 造数与红线见 frontend/AGENTS.md §5「目检」。
  */
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +25,7 @@ const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
   mobile: { descriptor: devices['iPhone 13'], launch: () => webkit.launch() },
 };
-// 种子契约组合（见 frontend/AGENTS.md §4）：E2E_ACTIVE 有已确认交易/申赎，表格里有行
+// 种子契约组合（见 frontend/AGENTS.md §5）：E2E_ACTIVE 有已确认交易/申赎，表格里有行
 const DEFAULT_PATHS = [
   '/portfolio/E2E_ACTIVE/trades',
   '/portfolio/E2E_ACTIVE/subscriptions',

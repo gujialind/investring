@@ -251,7 +251,7 @@ jobs:
         run: npx playwright test --retries=${{ inputs.retries }}
 
       # capture 模式：--retries=0 让 flaky 不能被洗成 passed（形态对比失真，见
-      # frontend/AGENTS.md §4）；rc 非 0 不直接失败——用例状态已进 JSON，
+      # frontend/e2e/AGENTS.md §3）；rc 非 0 不直接失败——用例状态已进 JSON，
       # 由 compare job 的形态 diff 判定。
       - name: Run Playwright tests (capture)
         if: inputs.mode == 'capture'
