@@ -80,13 +80,15 @@ ir schema trade              # 仅输出指定命令组
 
 - `data`：主要数据，可以是对象或数组
 - `meta`：分页元数据（仅列表命令返回），包含 `total`（总数）、`page`（当前页）、`page_size`（每页大小）、`has_more`（是否还有下一页）
-- `meta` 的 `total` / `page_size` 一律是**行**口径；`trade list` 另带 `total_groups`（组数）与
-  `total_pages`（后端按组边界折算的总页数）——它按组分页、同组两腿恒同页，故一页可能比
+- `meta` 的 `total` / `page_size` 一律是**行**口径；`trade list` 的**单页**响应另带 `total_groups`
+  （组数）与 `total_pages`（后端按组边界折算的总页数）——它按组分页、同组两腿恒同页，故一页可能比
   `page_size` **多带同组剩余腿**（两腿组即最多 +1 行），总页数不再等于
-  `ceil(total / page_size)`，判页数用 `total_pages`（`0` = 筛选后无匹配行）。`has_more` 在响应带
-  `total_pages` 时按 `page < total_pages` 判，其余列表仍按行口径 `page * page_size < total`；
-  按行口径判会在「末页多带同组腿」时误报还有下一页。`--all` 的收尾条件仍按 `total`
-  （行数）判，语义未变。详见 [`ir trade list`](#ir-trade-list)
+  `ceil(total / page_size)`，判页数用 `total_pages`（筛选后无匹配行、或 `page_size <= 0` 时为
+  `0`）。`has_more` 在响应带 `total_pages` 时按 `page < total_pages` 判，其余列表仍按行口径
+  `page * page_size < total`；按行口径判会在「末页多带同组腿」时误报还有下一页。
+  `--all` 不走上述单页 meta：CLI 自行翻页合并后重建 meta，只含 `total`（合并到的**行**数）与
+  `has_more`（恒 `false`），**不带** `page` / `page_size` / `total_groups` / `total_pages`；其翻页
+  收尾条件仍按每页 `total`（行数）判，语义未变。详见 [`ir trade list`](#ir-trade-list)
 - `hints`：可选的顶层提示数组（如 create 返回 pending 时提示 confirm）
 
 ### 3.2 错误响应（exit code 1=业务错误 / 2=认证错误 / 3=连接错误 / 64=用法错误）
