@@ -139,9 +139,13 @@ def seed_base_data(db: Session) -> None:
     #    测试随时间集体失效（首爆点 2027-01-04 阻断 CI OK 与 CD）。
     #    幂等守卫从「表空才写」改为增量补尾：本地复用库已有旧终点时继续向后延伸，
     #    而不是被旧数据挡住（CI 空库起跑与旧守卫行为等价）。
+    #    #777 双日历：种子只写 SSE（既有测试与 E2E 的单日历契约不变）；终点探测按
+    #    exchange=SSE 过滤，HKEX 行由同步链路/专项测试按需创建，不参与种子补尾。
     start = date(2025, 1, 1)
     end = date.today() + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)
-    last_seeded = db.query(func.max(TradingCalendar.calendar_date)).scalar()
+    last_seeded = db.query(func.max(TradingCalendar.calendar_date)).filter(
+        TradingCalendar.exchange == "SSE"
+    ).scalar()
     current = max(start, last_seeded + timedelta(days=1)) if last_seeded else start
     while current <= end:
         is_weekday = current.weekday() < 5  # Mon-Fri

@@ -19,6 +19,7 @@ from app.services.exceptions import BusinessError
 from app.services.trading_calendar_service import (
     sync_trading_calendar as sync_service,
     get_calendar_query,
+    SUPPORTED_EXCHANGES,
     TushareNotConfiguredError,
     TushareAPIError,
 )
@@ -27,18 +28,21 @@ from app.error_reporting import report_unexpected
 router = APIRouter()
 
 _CALENDAR_NOT_SYNCED = ("CALENDAR_NOT_SYNCED", "交易日历数据缺失，请先同步交易日历")
+# 双日历市场参数校验（#777）：查询端点缺省 SSE，既有调用方零变化
+_EXCHANGE_PATTERN = "^(SSE|HKEX)$"
 
 
 @router.get("/next", response_model=TradingDayResponse)
 def get_next_trading_day(
     from_date: date = Query(..., description="起始日期"),
     days: int = Query(1, ge=1, le=365, description="向后第 N 个交易日"),
+    exchange: str = Query("SSE", pattern=_EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """查询 from_date 之后第 days 个交易日"""
     # 日历不足由 helper 抛 CALENDAR_NOT_SYNCED（422 + details），不再在 router 判回退哨兵
-    result = trading_utils.get_next_trading_day(db, from_date, days)
+    result = trading_utils.get_next_trading_day(db, from_date, days, exchange=exchange)
     return TradingDayResponse(from_date=from_date, trading_day=result)
 
 
@@ -46,18 +50,20 @@ def get_next_trading_day(
 def get_prev_trading_day(
     from_date: date = Query(..., description="起始日期"),
     days: int = Query(1, ge=1, le=365, description="向前第 N 个交易日"),
+    exchange: str = Query("SSE", pattern=_EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """查询 from_date 之前第 days 个交易日"""
     # 日历不足由 helper 抛 CALENDAR_NOT_SYNCED（422 + details）
-    result = trading_utils.get_prev_trading_day(db, from_date, days)
+    result = trading_utils.get_prev_trading_day(db, from_date, days, exchange=exchange)
     return TradingDayResponse(from_date=from_date, trading_day=result)
 
 
 @router.get("/is-open", response_model=TradingDayIsOpenResponse)
 def get_is_trading_day(
     query_date: date = Query(..., alias="date", description="查询日期"),
+    exchange: str = Query("SSE", pattern=_EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -65,13 +71,16 @@ def get_is_trading_day(
     # 区分“非交易日”与“日历未同步”：无该日期记录视为日历数据缺失
     exists = (
         db.query(TradingCalendar)
-        .filter(TradingCalendar.calendar_date == query_date)
+        .filter(
+            TradingCalendar.calendar_date == query_date,
+            TradingCalendar.exchange == exchange,
+        )
         .first()
     )
     if exists is None:
         raise BusinessError(*_CALENDAR_NOT_SYNCED, http_status=422)
     return TradingDayIsOpenResponse(
-        date=query_date, is_open=trading_utils.is_trading_day(db, query_date)
+        date=query_date, is_open=trading_utils.is_trading_day(db, query_date, exchange=exchange)
     )
 
 
@@ -81,13 +90,14 @@ def get_trading_calendar(
     start_date: Optional[date] = Query(None, description="开始日期"),
     end_date: Optional[date] = Query(None, description="结束日期"),
     is_open: Optional[bool] = Query(None, description="是否开盘"),
+    exchange: Optional[str] = Query(None, pattern=_EXCHANGE_PATTERN, description="按日历市场过滤（缺省全部市场）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """
     获取交易日历列表
 
-    支持按年份、日期范围、是否开盘过滤
+    支持按年份、日期范围、是否开盘、市场（#777）过滤
     """
     query = get_calendar_query(
         db=db,
@@ -95,6 +105,7 @@ def get_trading_calendar(
         start_date=start_date,
         end_date=end_date,
         is_open=is_open,
+        exchange=exchange,
     )
     return query.all()
 
@@ -108,16 +119,23 @@ def sync_trading_calendar(
     """
     同步指定年份的交易日历
 
-    从 Tushare 获取交易日历数据并写入数据库
+    从 Tushare 获取交易日历数据并写入数据库；exchange 缺省同步 SSE + HKEX
+    两套（#777，与 trading_calendar_sync 任务口径一致），显式传值只同步该市场。
     """
     try:
-        result = sync_service(db=db, year=request.year)
+        exchanges = [request.exchange] if request.exchange else list(SUPPORTED_EXCHANGES)
+        synced_count = 0
+        breakdown = []
+        for ex in exchanges:
+            result = sync_service(db=db, year=request.year, exchange=ex)
+            synced_count += result["synced_count"]
+            breakdown.append(f"{ex} {result['synced_count']} 条")
         # service 不 commit（backend/AGENTS.md「分层目录与职责」节），事务边界在 router
         db.commit()
         return TradingCalendarSyncResponse(
-            synced_count=result["synced_count"],
-            year=result["year"],
-            message="交易日历同步成功",
+            synced_count=synced_count,
+            year=request.year,
+            message=f"交易日历同步成功（{'，'.join(breakdown)}）",
         )
     except TushareNotConfiguredError as e:
         raise HTTPException(

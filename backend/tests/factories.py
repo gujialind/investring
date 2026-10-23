@@ -189,12 +189,17 @@ def create_price_record(
 # 交易日历
 # ---------------------------------------------------------------------------
 
-def ensure_trading_day(db: Session, d: date, is_open: bool = True) -> TradingCalendar:
-    """确保指定日期在交易日历中存在"""
-    existing = db.query(TradingCalendar).filter(TradingCalendar.calendar_date == d).first()
+def ensure_trading_day(
+    db: Session, d: date, is_open: bool = True, exchange: str = "SSE"
+) -> TradingCalendar:
+    """确保指定日期在 exchange 日历中存在（#777 双日历后按 (date, exchange) 判定）"""
+    existing = db.query(TradingCalendar).filter(
+        TradingCalendar.calendar_date == d,
+        TradingCalendar.exchange == exchange,
+    ).first()
     if existing:
         return existing
-    cal = TradingCalendar(calendar_date=d, is_open=is_open, exchange="SSE")
+    cal = TradingCalendar(calendar_date=d, is_open=is_open, exchange=exchange)
     db.add(cal)
     db.commit()
     db.refresh(cal)

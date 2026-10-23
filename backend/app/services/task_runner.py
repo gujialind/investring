@@ -523,18 +523,32 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
 
 
 def run_calendar_sync(db: Session, year: Optional[int] = None) -> dict:
-    """执行交易日历同步任务"""
-    from app.services.trading_calendar_service import sync_trading_calendar
+    """执行交易日历同步任务（#777 起 SSE + HKEX 双日历）
+
+    两套日历逐一同步、synced_count 汇总；任一市场失败即异常上抛，
+    任务终态响亮失败，不静默吸收（HKEX 缺同步会让港互认取价回退无据）。
+    """
+    from app.services.trading_calendar_service import (
+        sync_trading_calendar,
+        SUPPORTED_EXCHANGES,
+    )
 
     if year is None:
         # 元旦 00:00–07:59 CST 在 UTC 进程钟上仍属旧年（#746）：取年份必须用业务日，
         # 否则 1 月 1 日 02:00 的年度日历同步会同步到旧年度
         year = business_today().year
 
-    result = sync_trading_calendar(db=db, year=year)
+    total = 0
+    per_exchange = {}
+    for ex in SUPPORTED_EXCHANGES:
+        result = sync_trading_calendar(db=db, year=year, exchange=ex)
+        per_exchange[ex] = result["synced_count"]
+        total += result["synced_count"]
+
     return {
-        "synced_count": result["synced_count"],
-        "year": result["year"],
+        "synced_count": total,
+        "year": year,
+        "per_exchange": per_exchange,
     }
 
 

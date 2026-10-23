@@ -11,6 +11,7 @@ from app.models.price_record import PriceRecord
 from app.models.product import Product
 from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
+from app.services.trading_utils import exchange_for_market
 from app.services.tushare_client import get_fund_daily, get_fund_nav, TushareAPIError
 from app.utils.business_time import business_today
 from app.utils.quantize import quantize_nav
@@ -352,6 +353,8 @@ def get_nav_coverage(
             TradingCalendar.calendar_date >= start_date,
             TradingCalendar.calendar_date <= end_date,
             TradingCalendar.is_open.is_(True),
+            # nav_coverage 盘点是 SSE 快照日口径；双日历后必须显式过滤（#777）
+            TradingCalendar.exchange == "SSE",
         ).all()
     }
     synced_dates = {
@@ -412,7 +415,9 @@ def resolve_incremental_start_date(
     刻意相反，#591 的分工）：本函数返回值只是「问上游要哪段区间」，不写进任何财务数据；
     抛错会把「日历短」升级成「该产品净值从此不再更新」，而真正的缺净值仍由快照侧响亮报
     MISSING_NAV。降级也不伪造日期——返回的恒是日历里真实存在的开市日，或旧口径 MAX+1。
-    不按 exchange 过滤（全仓一致口径；回看只是放宽抓取区间，HK 产品借 SSE 日历无害）。
+    exchange 过滤（#777）：双日历后同一日期有两行，不过滤会让 limit 窗口被另一市场
+    的行稀释一半；按产品市场经 exchange_for_market 取对应日历（HK 产品用 HKEX 开市日
+    回看，语义更准；SSE 产品行为不变）。
     """
     latest = db.query(func.max(PriceRecord.price_date)).filter(
         PriceRecord.product_code == product_code,
@@ -424,6 +429,7 @@ def resolve_incremental_start_date(
     open_days = db.query(TradingCalendar.calendar_date).filter(
         TradingCalendar.calendar_date < latest,
         TradingCalendar.is_open.is_(True),
+        TradingCalendar.exchange == exchange_for_market(market),
     ).order_by(TradingCalendar.calendar_date.desc()).limit(
         NAV_LOOKBACK_TRADING_DAYS
     ).all()

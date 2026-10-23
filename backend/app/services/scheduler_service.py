@@ -142,7 +142,11 @@ def _should_run_today(db, lock_name: str) -> bool:
         return False
 
     today = business_today()
-    cal = db.query(TradingCalendar).filter(TradingCalendar.calendar_date == today).first()
+    # 调度闸门是 SSE 快照日口径；双日历后同一日期有两行，必须显式过滤（#777）
+    cal = db.query(TradingCalendar).filter(
+        TradingCalendar.calendar_date == today,
+        TradingCalendar.exchange == "SSE",
+    ).first()
     if not cal or not cal.is_open:
         logger.info(f"{today} 非交易日，跳过 {lock_name}")
         return False

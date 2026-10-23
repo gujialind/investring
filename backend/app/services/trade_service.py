@@ -18,7 +18,9 @@ from app.models.product import Product
 from app.models.portfolio import Portfolio
 from app.models.platform import Platform
 from app.services.nav_lookup import get_exact_unit_price
-from app.services.trading_utils import get_next_trading_day, is_trading_day, get_latest_snapshot_date
+from app.services.trading_utils import (
+    get_next_trading_day, is_trading_day, get_latest_snapshot_date, exchange_for_market,
+)
 from app.services.position_service import calculate_available_cash, calculate_available_shares
 from app.services.product_service import resolve_product_market
 from app.services.exceptions import BusinessError, NotFoundError
@@ -34,14 +36,20 @@ from app.utils.quantize import quantize_amount, quantize_nav, quantize_shares
 logger = logging.getLogger(__name__)
 
 
-def validate_trade_date(db: Session, portfolio_code: str, trade_date: date) -> None:
+def validate_trade_date(
+    db: Session, portfolio_code: str, trade_date: date, market: Optional[str] = None
+) -> None:
     """交易日与快照日校验（#182 从 create_trade 抽取，创建/编辑共用）。
 
     纯查询、不触碰 ORM，供「先校验后写入」路径复用：
     - 非交易日 -> NON_TRADING_DAY（编辑路径废除静默滚交易日，D4）
     - trade_date <= 最新快照日 -> DATE_BEFORE_SNAPSHOT
+
+    交易日按产品市场日历判定（#777）：HK_MUTUAL 传 market 后在 HKEX 日历上校验
+    ——港股休市日基金暂停申赎且当日净值永不发布，放行会制造确认期永久 MISSING_NAV；
+    market 缺省/其余市场仍走 SSE，既有调用零变化。快照日比较与日历无关，不变。
     """
-    if not is_trading_day(db, trade_date):
+    if not is_trading_day(db, trade_date, exchange=exchange_for_market(market)):
         raise BusinessError("NON_TRADING_DAY", "非交易日，请等待交易日再提交")
     latest_snapshot_date = get_latest_snapshot_date(db, portfolio_code)
     if latest_snapshot_date and trade_date <= latest_snapshot_date:
@@ -513,6 +521,7 @@ def sync_transfer_group(
                             paired_trade.confirm_date = get_next_trading_day(
                                 db, paired_trade.trade_date,
                                 days=paired_product.confirm_days or 0,
+                                exchange=exchange_for_market(paired_trade.market),
                             )
                 if mirror_amount is not None and paired_trade.product_code == "CASH":
                     paired_trade.amount = mirror_amount
@@ -693,7 +702,8 @@ def resolve_cash_leg_plan(
             "fund_confirm_date": effective_confirm_date,
         }
 
-    if not is_trading_day(db, effective_confirm_date):
+    # 基金确认日按产品市场日历校验（#777：HK_MUTUAL 用 HKEX，其余 SSE 不变）
+    if not is_trading_day(db, effective_confirm_date, exchange=exchange_for_market(trade.market)):
         raise BusinessError(
             "NON_TRADING_DAY",
             f"确认日 {effective_confirm_date} 非交易日，请改为交易日",
@@ -750,6 +760,8 @@ def resolve_cash_leg_plan(
 
     # 卖出：确认时才录入到账信息；A 缺省 = C，平台缺省 = 基金腿平台
     arrival_date = cash_confirm_date if cash_confirm_date is not None else effective_confirm_date
+    # 到账日恒按 SSE 日历校验（#777 决策A：现金在内地平台清算，与基金估值日历解耦；
+    # HK_MUTUAL 的 C 落在「SSE 休市、港股开市」日时，缺省 A=C 会被本校验拒绝，须显式传 SSE 交易日的 A）
     if not is_trading_day(db, arrival_date):
         raise BusinessError(
             "NON_TRADING_DAY", f"到账日 {arrival_date} 非交易日，请改为交易日"
@@ -1140,11 +1152,14 @@ def create_trade(
     if portfolio.status != "active":
         raise BusinessError("PORTFOLIO_NOT_ACTIVE", "组合未激活")
 
-    # 交易日 + 快照日校验（#182 起与 PUT 编辑路径共用同一实现）
-    validate_trade_date(db, portfolio_code, trade_date)
-
-    # #83：market 省略时按产品唯一市场自动补全；LOF 一码多市场抛 MARKET_AMBIGUOUS
+    # #83：market 省略时按产品唯一市场自动补全；LOF 一码多市场抛 MARKET_AMBIGUOUS。
+    # 解析提前到交易日校验之前（#777）：HK_MUTUAL 的下单日须在 HKEX 日历上校验，
+    # 校验需要先知道 market。错误优先级相应变化——产品不存在/市场歧义先于
+    # NON_TRADING_DAY（既有测试未钉住两者同时命中的形态）。
     product_code, market = resolve_product_market(db, product_code, market)
+
+    # 交易日 + 快照日校验（#182 起与 PUT 编辑路径共用同一实现；日历按 market 解析，#777）
+    validate_trade_date(db, portfolio_code, trade_date, market=market)
 
     product = db.query(Product).filter(
         Product.code == product_code, Product.market == market
@@ -1226,7 +1241,10 @@ def create_trade(
         )
 
     confirm_days = product.confirm_days or 0
-    expected_confirm_date = get_next_trading_day(db, trade_date, days=confirm_days)
+    # 确认间隔在产品所属市场日历上推算（#777：HK_MUTUAL 用 HKEX，其余 SSE 不变）
+    expected_confirm_date = get_next_trading_day(
+        db, trade_date, days=confirm_days, exchange=exchange_for_market(market)
+    )
     # 手续费为金额字段，统一量化到 2 位（issue #94）
     fee_d = quantize_amount(fee) if fee else Decimal("0")
     price_d = Decimal(str(price)) if price else None
@@ -1390,6 +1408,7 @@ def _update_confirmed_sell_arrival_date(
             "该卖出交易没有配对 CASH 腿，无法修改到账日；"
             "请先取消确认后重新确认并录入到账信息",
         )
+    # 到账日恒按 SSE 日历校验（#777 决策A，同 resolve_cash_leg_plan 卖出口径）
     if not is_trading_day(db, new_arrival):
         raise BusinessError(
             "NON_TRADING_DAY", f"到账日 {new_arrival} 非交易日，请改为交易日"
@@ -1548,13 +1567,14 @@ def update_trade(db: Session, trade: Trade, update_data: dict) -> Trade:
     # 新 confirm_date 在此算出并留给下方写入段复用（同一次计算，避免两处推导漂移）。
     new_confirm_date: Optional[date] = None
     if date_changed:
-        validate_trade_date(db, trade.portfolio_code, trade_date_input)
+        validate_trade_date(db, trade.portfolio_code, trade_date_input, market=trade.market)
         product = db.query(Product).filter(
             Product.code == trade.product_code, Product.market == trade.market
         ).first()
         new_confirm_date = get_next_trading_day(
             db, trade_date_input,
             days=(product.confirm_days or 0) if product else 0,
+            exchange=exchange_for_market(trade.market),
         )
     # 组级快照保护（#493 决策 4）：组内任一非 cancelled 腿确认日及之后已有快照则
     # 拒绝——半确认组里买入扣款腿的 T、卖出到账腿的 A 都在组内，故「日期后移」
@@ -1854,7 +1874,8 @@ def unconfirm_trade(db: Session, trade: Trade) -> Trade:
         ).first()
         if product:
             trade.confirm_date = get_next_trading_day(
-                db, trade.trade_date, days=product.confirm_days or 0
+                db, trade.trade_date, days=product.confirm_days or 0,
+                exchange=exchange_for_market(trade.market),
             )
     cash_leg_audit = sync_transfer_group(db, trade, "pending")
 

@@ -155,6 +155,55 @@ def get_trade_calendar_years(years: List[int], exchange: str = "SSE") -> List[Di
     return all_dates
 
 
+def get_hk_trade_calendar(year: int) -> List[Dict[str, Any]]:
+    """
+    获取指定年份的港股（HKEX）交易日历（issue #777）
+
+    走 Tushare 专用接口 hk_tradecal（2000 积分档，现有 token 已实测可调）；
+    通用 trade_cal 的 exchange 参数只覆盖内地交易所，不支持 HKEX。
+    单次上限 2000 行，按年拉取（365/366 行）不触限。
+
+    Args:
+        year: 年份，如 2026
+
+    Returns:
+        交易日历列表，结构与 get_trade_calendar 对齐：
+        [{"date": "2026-10-19", "is_open": False}, ...]
+
+    Raises:
+        TushareNotConfiguredError: Tushare token 未配置
+        TushareAPIError: API 调用失败（含积分不足）
+    """
+    pro = _get_tushare_pro()
+
+    start_date = f"{year}0101"
+    end_date = f"{year}1231"
+
+    df = _retry_with_rate_limit(
+        lambda: pro.hk_tradecal(
+            start_date=start_date,
+            end_date=end_date,
+            fields="cal_date,is_open",
+        ),
+        "获取港股交易日历失败",
+    )
+
+    if df is None or df.empty:
+        return []
+
+    result = []
+    for _, row in df.iterrows():
+        cal_date = str(row["cal_date"])
+        formatted_date = f"{cal_date[:4]}-{cal_date[4:6]}-{cal_date[6:]}"
+        is_open = bool(row["is_open"] == 1)
+        result.append({
+            "date": formatted_date,
+            "is_open": is_open,
+        })
+
+    return result
+
+
 def get_fund_daily(
     ts_code: str,
     start_date: Optional[str] = None,
