@@ -527,6 +527,11 @@ def run_calendar_sync(db: Session, year: Optional[int] = None) -> dict:
 
     两套日历逐一同步、synced_count 汇总；任一市场失败即异常上抛，
     任务终态响亮失败，不静默吸收（HKEX 缺同步会让港互认取价回退无据）。
+
+    部分写入边界（#778 评审 m-3）：SSE 段 flush 后 HKEX 段抛错时，run_task 的
+    异常路径不回滚复用 session，已 flush 的 SSE 行会随 failed 终态提交落库——
+    「响亮失败」指任务状态与 error_message，不承诺零写入。日历是幂等参考数据
+    （重同步判重跳过），该残留无害、不单独加事务分段。
     """
     from app.services.trading_calendar_service import (
         sync_trading_calendar,

@@ -8,6 +8,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, get_current_admin
 from app.models.trading_calendar import TradingCalendar
 from app.schemas.trading_calendar import (
+    EXCHANGE_PATTERN,
     TradingCalendarResponse,
     TradingCalendarSyncRequest,
     TradingCalendarSyncResponse,
@@ -28,15 +29,16 @@ from app.error_reporting import report_unexpected
 router = APIRouter()
 
 _CALENDAR_NOT_SYNCED = ("CALENDAR_NOT_SYNCED", "交易日历数据缺失，请先同步交易日历")
-# 双日历市场参数校验（#777）：查询端点缺省 SSE，既有调用方零变化
-_EXCHANGE_PATTERN = "^(SSE|HKEX)$"
+# 双日历市场参数校验（#777）：四个查询端点一律缺省 SSE，既有调用方零变化；
+# pattern 单点在 schemas（评审 n-2），市场常量单点在 trading_utils（评审 n-1）
+_DEFAULT_EXCHANGE = trading_utils.SSE_EXCHANGE
 
 
 @router.get("/next", response_model=TradingDayResponse)
 def get_next_trading_day(
     from_date: date = Query(..., description="起始日期"),
     days: int = Query(1, ge=1, le=365, description="向后第 N 个交易日"),
-    exchange: str = Query("SSE", pattern=_EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
+    exchange: str = Query(_DEFAULT_EXCHANGE, pattern=EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -50,7 +52,7 @@ def get_next_trading_day(
 def get_prev_trading_day(
     from_date: date = Query(..., description="起始日期"),
     days: int = Query(1, ge=1, le=365, description="向前第 N 个交易日"),
-    exchange: str = Query("SSE", pattern=_EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
+    exchange: str = Query(_DEFAULT_EXCHANGE, pattern=EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -63,7 +65,7 @@ def get_prev_trading_day(
 @router.get("/is-open", response_model=TradingDayIsOpenResponse)
 def get_is_trading_day(
     query_date: date = Query(..., alias="date", description="查询日期"),
-    exchange: str = Query("SSE", pattern=_EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
+    exchange: str = Query(_DEFAULT_EXCHANGE, pattern=EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -90,14 +92,16 @@ def get_trading_calendar(
     start_date: Optional[date] = Query(None, description="开始日期"),
     end_date: Optional[date] = Query(None, description="结束日期"),
     is_open: Optional[bool] = Query(None, description="是否开盘"),
-    exchange: Optional[str] = Query(None, pattern=_EXCHANGE_PATTERN, description="按日历市场过滤（缺省全部市场）"),
+    exchange: str = Query(_DEFAULT_EXCHANGE, pattern=EXCHANGE_PATTERN, description="日历市场（SSE/HKEX）"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """
     获取交易日历列表
 
-    支持按年份、日期范围、是否开盘、市场（#777）过滤
+    支持按年份、日期范围、是否开盘过滤；exchange 缺省 SSE（#777 评审 M-1(a)：
+    与 next/prev/is-open 同模式，既有消费方——前端 date-picker、CLI calendar——
+    零变化；双日历后缺省返回全部市场会让同日两行混入既有消费方）
     """
     query = get_calendar_query(
         db=db,

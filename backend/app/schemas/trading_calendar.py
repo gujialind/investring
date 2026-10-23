@@ -2,6 +2,10 @@ from pydantic import BaseModel, Field, field_serializer
 from datetime import date, datetime
 from typing import Optional
 
+# exchange 入参校验单点（#777 评审 n-2）：router 查询参数与 sync 请求体共用；
+# 合法值与 trading_calendar_service.SUPPORTED_EXCHANGES 同步扩展
+EXCHANGE_PATTERN = "^(SSE|HKEX)$"
+
 
 class TradingCalendarBase(BaseModel):
     calendar_date: date
@@ -35,7 +39,7 @@ class TradingCalendarSyncRequest(BaseModel):
     """
     year: int
     # 非法市场在 schema 层 422（pydantic pattern），不落 service 的 ValueError → 500
-    exchange: Optional[str] = Field(None, pattern="^(SSE|HKEX)$")
+    exchange: Optional[str] = Field(None, pattern=EXCHANGE_PATTERN)
 
 
 class TradingCalendarSyncResponse(BaseModel):

@@ -11,7 +11,7 @@ from app.models.price_record import PriceRecord
 from app.models.product import Product
 from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
-from app.services.trading_utils import exchange_for_market
+from app.services.trading_utils import SSE_EXCHANGE, exchange_for_market
 from app.services.tushare_client import get_fund_daily, get_fund_nav, TushareAPIError
 from app.utils.business_time import business_today
 from app.utils.quantize import quantize_nav
@@ -354,7 +354,7 @@ def get_nav_coverage(
             TradingCalendar.calendar_date <= end_date,
             TradingCalendar.is_open.is_(True),
             # nav_coverage 盘点是 SSE 快照日口径；双日历后必须显式过滤（#777）
-            TradingCalendar.exchange == "SSE",
+            TradingCalendar.exchange == SSE_EXCHANGE,
         ).all()
     }
     synced_dates = {

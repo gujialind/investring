@@ -123,3 +123,59 @@ class TestHkMutualTradeCalendar:
         assert resp.status_code in (200, 201), resp.json()
         trade = test_db.query(Trade).filter(Trade.id == resp.json()["id"]).first()
         assert trade.trade_date == HK_CLOSE
+
+
+class TestCreateErrorPriority:
+    """#778 评审 m-2：钉住 create_trade 中 resolve_product_market 提前后的错误优先级。
+
+    HK_MUTUAL 的交易日校验需要 market（HKEX 日历分支），故 market 解析先于
+    NON_TRADING_DAY；「market 省略 + 产品解析失败 + 非交易日」组合形态下
+    产品解析错误优先。日后重排校验顺序会撞红本组用例。
+    """
+
+    def _post_no_market(self, client, admin_headers, port_code, product_code, platform_code):
+        return client.post(
+            "/api/trades",
+            json={
+                "portfolio_code": port_code,
+                "product_code": product_code,
+                "trade_type": "buy",
+                "amount": 10000.0,
+                "platform_code": platform_code,
+                "trade_date": HK_CLOSE.isoformat(),  # SSE 开市、HKEX 休市
+            },
+            headers=admin_headers,
+        )
+
+    def test_unknown_product_beats_non_trading_day(
+        self, client, admin_headers, test_db, hkex_oct_2026,
+    ):
+        create_portfolio(test_db, code="HK_TC5", status="active")
+        create_platform(test_db, code="HK_TCP5")
+
+        resp = self._post_no_market(
+            client, admin_headers, "HK_TC5", "NOSUCH777", "HK_TCP5",
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"] == "PRODUCT_NOT_FOUND"
+
+    def test_market_ambiguous_beats_non_trading_day(
+        self, client, admin_headers, test_db, hkex_oct_2026,
+    ):
+        create_portfolio(test_db, code="HK_TC6", status="active")
+        create_platform(test_db, code="HK_TCP6")
+        # LOF 一码多市场：省略 market 时解析歧义
+        create_product(
+            test_db, code="LOF777.OF", market="CN_OTC", product_type="LOF",
+            asset_class_code="ASSET_STOCK", confirm_days=1, is_qdii=False,
+        )
+        create_product(
+            test_db, code="LOF777.OF", market="CN_EXCHANGE", product_type="LOF",
+            asset_class_code="ASSET_STOCK", confirm_days=0, is_qdii=False,
+        )
+
+        resp = self._post_no_market(
+            client, admin_headers, "HK_TC6", "LOF777.OF", "HK_TCP6",
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "MARKET_AMBIGUOUS"

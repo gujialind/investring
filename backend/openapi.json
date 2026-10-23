@@ -2286,7 +2286,7 @@
           "交易日历"
         ],
         "summary": "Get Trading Calendar",
-        "description": "获取交易日历列表\n\n支持按年份、日期范围、是否开盘、市场（#777）过滤",
+        "description": "获取交易日历列表\n\n支持按年份、日期范围、是否开盘过滤；exchange 缺省 SSE（#777 评审 M-1(a)：\n与 next/prev/is-open 同模式，既有消费方——前端 date-picker、CLI calendar——\n零变化；双日历后缺省返回全部市场会让同日两行混入既有消费方）",
         "operationId": "get_trading_calendar_api_trading_calendar_get",
         "security": [
           {
@@ -2373,19 +2373,13 @@
             "in": "query",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^(SSE|HKEX)$"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "按日历市场过滤（缺省全部市场）",
+              "type": "string",
+              "pattern": "^(SSE|HKEX)$",
+              "description": "日历市场（SSE/HKEX）",
+              "default": "SSE",
               "title": "Exchange"
             },
-            "description": "按日历市场过滤（缺省全部市场）"
+            "description": "日历市场（SSE/HKEX）"
           }
         ],
         "responses": {
