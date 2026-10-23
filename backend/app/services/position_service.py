@@ -700,9 +700,9 @@ def calculate_available_shares(
 
     # 按 ex_date 选窗，**刻意不切** `share_effective_date`（#743）：本查询只计负向
     # shares_change，而可设 share_confirm_date 的仅 reinvest、其红利正常为正，落不进
-    # 该过滤；即便负 div_cash 造出负向 reinvest（#764 起创建/更新/确认三处拒绝，但
-    # tushare 分红检测直造事件不经服务层、存量脏行也可能带负值），按更早的
-    # ex_date 扣减与「正向保守低估」同向，只会更紧、不会放行超卖。
+    # 该过滤；即便负 div_cash 造出负向 reinvest（#764 起创建/更新/确认三处拒绝，
+    # #771 起 tushare 检测器也不再建这类行，但存量脏行仍在库里且可已 confirmed），
+    # 按更早的 ex_date 扣减与「正向保守低估」同向，只会更紧、不会放行超卖。
     event_query = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.product_code == product_code,

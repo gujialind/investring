@@ -12,6 +12,8 @@
   CASH、不计可用现金、不动份额）；pending 闸门与 auto_confirm 判键都按
   `share_effective_date`；确认日份额落地、成本基数守恒（#673）、应收窗口关闭。
 - **读侧**：日收益、持有收益、累计收益在窗口两端各加回一次 → 总市值只随净值波动。
+- **脏行**（#771）：`div_cash` 为 0/负的存量行（检测器旧行为直造）在应收与收益加回
+  **两端整体缺席**，既不落负向在途行、也不抛错阻断快照生成。
 
 数值刻意选「每份分红 == 净值跌幅」（0.0037 = 1.0136 − 1.0099），使除息日的市值
 跌幅与应收金额精确相等，连续性可按 0.00 等值断言而非容差。
@@ -24,7 +26,9 @@ import pytest
 
 from app.models import PortfolioPosition, PortfolioValueSnapshot, ShareChangeEvent
 from app.services.position_service import calculate_available_cash
-from app.services.reinvest_receivable import list_reinvest_receivables
+from app.services.reinvest_receivable import (
+    aggregate_receivable_flows, list_reinvest_receivables,
+)
 from app.services.share_change_event_service import (
     cancel_share_change_event,
     confirm_share_change_event,
@@ -42,6 +46,7 @@ from tests.factories import (
     create_position_snapshot,
     create_price_record,
     create_product,
+    create_share_change_event as create_raw_event,
     create_subscription,
     create_trade,
     create_value_snapshot,
@@ -152,6 +157,22 @@ def _event(db, port, fund, plat, *, entitlement=EX, ex_date=EX, confirm_date=APP
         db, portfolio_code=port, product_code=fund, market=MARKET, platform_code=plat,
         event_type=event_type, ex_date=ex_date, entitlement_date=entitlement,
         share_confirm_date=confirm_date, div_cash=div_cash, force_cover=True, **kwargs,
+    )
+    db.commit()
+    return event
+
+
+def _raw_event(db, port, fund, plat, *, entitlement=EX, ex_date=EX, confirm_date=APPLY,
+               div_cash=DIV_CASH, event_source="tushare", **kwargs):
+    """绕过服务层校验直造事件行（#771 脏行的来源形态）。
+
+    `_event` 走 service，非正 `div_cash` 会被 #764 门禁当场拒绝——那是要防的正门；
+    读侧守卫只能用工厂直造，才复现得出检测器旧行为/历史缺陷留下的存量行。
+    """
+    event = create_raw_event(
+        db, port, fund, MARKET, event_type="reinvest_dividend", ex_date=ex_date,
+        entitlement_date=entitlement, platform_code=plat, div_cash=div_cash,
+        share_confirm_date=confirm_date, event_source=event_source, **kwargs,
     )
     db.commit()
     return event
@@ -670,6 +691,57 @@ class TestReadSideContinuity:
         assert calculate_available_cash(test_db, port, plat, EX) == Decimal("0")
         fund_row = _by_product(client, admin_headers, port, EX)[fund]
         assert abs(Decimal(str(fund_row["cumulative_profit"] or 0))) <= CENT
+
+
+# ---------------------------------------------------------------------------
+# 脏行（div_cash 非正）的读侧守卫（#771）
+# ---------------------------------------------------------------------------
+
+
+class TestNonPositiveDivCashOnReadSide:
+    """存量脏行的 `div_cash` 为 0 或负时，派生应收与收益加回都必须整体缺席。
+
+    读侧只读、不得抛：快照生成若为一条脏行报错，会连带阻断整个组合当日快照（既有
+    「0 值跳过」口径正是为此）。负值与 0 同判据 `amount <= 0`，且**两端必须同时消失**
+    ——`list_reinvest_receivables`（快照在途）与 `aggregate_receivable_flows`（收益加回）
+    只少一端，窗口内就会凭空造出收益或凭空缺口。
+    """
+
+    @pytest.mark.parametrize(
+        "suffix,bad_div_cash", [("NRZ", Decimal("0")), ("NRN", Decimal("-0.0039"))]
+    )
+    def test_no_receivable_and_no_paired_flows(self, test_db, suffix, bad_div_cash):
+        port, plat, fund = _env(test_db, suffix)
+        _raw_event(test_db, port, fund, plat, entitlement=BASE, div_cash=bad_div_cash)
+
+        for day in (EX, MID):
+            assert list_reinvest_receivables(test_db, port, day) == [], day
+        assert aggregate_receivable_flows(test_db, [port], APPLY) == {}
+
+    def test_ex_date_snapshot_stays_clean(self, client, admin_headers, test_db):
+        """除息日快照：无 IN_TRANSIT_DIVIDEND 行、在途合计 0、总市值即纯净持仓市值。"""
+        port, plat, fund = _env(test_db, "NRS")
+        _raw_event(test_db, port, fund, plat, entitlement=BASE, div_cash=Decimal("-0.0039"))
+
+        _generate(client, admin_headers, port, EX)
+        rows = _rows(test_db, port, EX)
+        assert ("IN_TRANSIT_DIVIDEND", plat) not in rows
+        assert Decimal(str(rows[(fund, plat)].shares)) == SHARES
+
+        snapshot = _value(test_db, port, EX)
+        assert Decimal(str(snapshot.in_transit_total)) == Decimal("0")
+        assert Decimal(str(snapshot.total_value)) == quantize_nav(SHARES * NAV_EX)
+
+    def test_positive_event_still_books_both_ends(self, client, admin_headers, test_db):
+        """对照组：`<= 0` 的判据不得顺手砍掉正常分红（窗口两端都在）。"""
+        port, plat, fund = _env(test_db, "NRK")
+        event = _event(test_db, port, fund, plat)
+        _generate(client, admin_headers, port, EX)
+
+        assert [r.amount for r in list_reinvest_receivables(test_db, port, EX)] == [RECEIVABLE]
+        flows = aggregate_receivable_flows(test_db, [port], APPLY)[(port, fund, MARKET, plat)]
+        assert sorted(flows) == sorted([(EX, float(RECEIVABLE)), (APPLY, -float(RECEIVABLE))])
+        assert event.status == "pending"
 
 
 # ---------------------------------------------------------------------------
