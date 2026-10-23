@@ -126,12 +126,16 @@ class TestHkMutualTradeCalendar:
 
 
 class TestCreateErrorPriority:
-    """#778 评审 m-2：钉住 create_trade 中 resolve_product_market 提前后的错误优先级。
+    """#778 评审 m-2 / R-1：钉住 create_trade 中 resolve_product_market 提前后的错误优先级。
 
-    HK_MUTUAL 的交易日校验需要 market（HKEX 日历分支），故 market 解析先于
-    NON_TRADING_DAY；「market 省略 + 产品解析失败 + 非交易日」组合形态下
-    产品解析错误优先。日后重排校验顺序会撞红本组用例。
+    顺序哨兵形态（R-1 补强）：trade_date 取 **SSE 非交易日**（2026-10-18 周日）——
+    旧顺序（validate_trade_date 先行、SSE 日历）会先报 NON_TRADING_DAY；
+    新顺序（resolve 先行，HKEX 分支需要 market）报产品解析错误。断言产品解析
+    错误优先，才真正把校验顺序钉死，日后重排即撞红；原 HK_CLOSE（SSE 开市）
+    形态顺序不敏感，已按评审意见替换。
     """
+
+    SSE_CLOSED_DAY = date(2026, 10, 18)  # 周日：SSE 休市（种子工作日规则）
 
     def _post_no_market(self, client, admin_headers, port_code, product_code, platform_code):
         return client.post(
@@ -142,13 +146,13 @@ class TestCreateErrorPriority:
                 "trade_type": "buy",
                 "amount": 10000.0,
                 "platform_code": platform_code,
-                "trade_date": HK_CLOSE.isoformat(),  # SSE 开市、HKEX 休市
+                "trade_date": self.SSE_CLOSED_DAY.isoformat(),
             },
             headers=admin_headers,
         )
 
     def test_unknown_product_beats_non_trading_day(
-        self, client, admin_headers, test_db, hkex_oct_2026,
+        self, client, admin_headers, test_db,
     ):
         create_portfolio(test_db, code="HK_TC5", status="active")
         create_platform(test_db, code="HK_TCP5")
@@ -160,7 +164,7 @@ class TestCreateErrorPriority:
         assert resp.json()["detail"]["error"] == "PRODUCT_NOT_FOUND"
 
     def test_market_ambiguous_beats_non_trading_day(
-        self, client, admin_headers, test_db, hkex_oct_2026,
+        self, client, admin_headers, test_db,
     ):
         create_portfolio(test_db, code="HK_TC6", status="active")
         create_platform(test_db, code="HK_TCP6")
