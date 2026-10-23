@@ -604,7 +604,10 @@ test.describe('现金流水页（#725，双端）', () => {
 
   // #730 反向用例：`-¥1,234,567.89` = 14 字符未达阈值，不得过度降档——移动双列 /
   // 桌面四列同排（桌面 1280 命中 lg）。钉住「判据取展示串长度」不会把 7 位金额也拖进单列。
-  test('概览四卡：移动端 7 位带符号仍双列（#730 不过度降档）', async ({ page }) => {
+  // 桌面侧另钉「宽视口确实是四列」（#772 的容器查询判据）：下面那对 y/x 断言在两列下同样
+  // 为真，`@min-[848px]:grid-cols-4` 静默失效（类名笔误、任意值容器查询变体未生成、twMerge
+  // 误并）时全绿——只有数「四卡占几行」才能区分 2 列与 4 列。
+  test('概览四卡：移动端 7 位带符号仍双列（#730 不过度降档）', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
     await mockOverviewValues(page, {
       available: '-1234567.89',
@@ -626,6 +629,23 @@ test.describe('现金流水页（#725，双端）', () => {
     expect(second, 'stat-in_transit 应已渲染').not.toBeNull();
     expect(second!.y).toBe(first!.y);
     expect(second!.x).toBeGreaterThan(first!.x);
+
+    if (testInfo.project.name !== 'mobile') {
+      // 1280 视口 → 栅格容器 910px ≥ 848px → 四列单行；降两列则是 2 行 × 2 卡。
+      const keys = ['available', 'in_transit', 'inflow', 'outflow'] as const;
+      const rows = new Map<number, string[]>();
+      for (const k of keys) {
+        const box = await page.getByTestId(`stat-${k}`).boundingBox();
+        expect(box, `stat-${k} 应已渲染`).not.toBeNull();
+        const y = Math.round(box!.y);
+        rows.set(y, [...(rows.get(y) ?? []), k]);
+      }
+      expect(
+        rows.size,
+        `容器 910px ≥ 848px 应为四列单行，实测 ${rows.size} 行：${[...rows.values()].map((r) => r.join('/')).join(' | ')}`,
+      ).toBe(1);
+      expect([...rows.values()][0], '单行应含全部四卡').toHaveLength(4);
+    }
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });

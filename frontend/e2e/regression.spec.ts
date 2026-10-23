@@ -4,7 +4,7 @@
  * 本文件针对排查报告中已修复的 P0 问题设立回归防线，
  * 每个用例注明其防止复发的具体问题。
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   E2E_ACTIVE,
   E2E_PORT,
@@ -479,5 +479,206 @@ test.describe('读侧失败伪装成空态（#683 A 平台页 / C 交易列表�
     await expect(page.getByText('加载失败：带筛选交易查询服务暂不可用')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('无符合筛选条件的记录')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^重置筛选$/ })).toHaveCount(0);
+  });
+});
+
+/**
+ * 统计卡栅格（#774，双端）：首页 DashboardStatsCards 与组合详情 PortfolioStatsCards 同构，
+ * 桌面列数按**容器宽**取（`@min-[804px]:grid-cols-4`，阈值推导见组件注释）。
+ *
+ * 钉两端而不只钉窄窗：既有用例形态是「窄档不是四列」，四列分支若静默失效（类名写错、
+ * Tailwind 未产出该任意容器查询变体）它们照样绿，故宽视口另断「确为四列单行」。
+ * 金额注入 8 位带符号最坏值（`-12345678.90`，格式化后 15 字符）——栅格轨道是
+ * `minmax(0,1fr)`，能被压到单行墨迹之下，只有够宽的值才让「列数不足」显形为邻卡数字相碰。
+ */
+const D8 = '-12345678.90';
+const DASHBOARD_STAT_IDS = ['total_value', 'avg_return', 'active_count', 'investor_count'] as const;
+const PORTFOLIO_STAT_IDS = ['total_value', 'nav', 'profit', 'holding_days'] as const;
+
+type StatPrefix = 'dashboard' | 'portfolio';
+
+/** 把概览统计卡的金额数据源注成指定值（只改响应体，不落库、不碰种子） */
+async function mockStatAmount(page: Page, target: StatPrefix, raw: string): Promise<void> {
+  const value = Number(raw);
+  if (target === 'dashboard') {
+    await page.route(
+      (url) => url.pathname === '/api/portfolios' && url.searchParams.get('page_size') === '100',
+      async (route) => {
+        const resp = await route.fetch();
+        const json = (await resp.json()) as {
+          items: { code: string; total_value: number | null }[];
+        };
+        // useDashboardStats 的 totalValue = **全部活跃组合** total_value 之和，其余组合的余额会被
+        // 同批用例的写操作改动，故一并注成 0，让首页总额恰等于夹具值（断言不依赖执行时序）
+        json.items = json.items.map((it) => ({
+          ...it,
+          total_value: it.code === E2E_ACTIVE ? value : 0,
+        }));
+        await route.fulfill({ response: resp, body: JSON.stringify(json) });
+      },
+    );
+    return;
+  }
+  await page.route(
+    (url) => url.pathname === `/api/portfolios/${E2E_ACTIVE}`,
+    async (route) => {
+      const resp = await route.fetch();
+      const json = (await resp.json()) as Record<string, unknown>;
+      json.total_value = value;
+      json.total_profit = value;
+      await route.fulfill({ response: resp, body: JSON.stringify(json) });
+    },
+  );
+}
+
+interface StatGridMeasure {
+  columns: number;
+  rows: string[][];
+  minGap: number;
+  gaps: { pair: string; gap: number }[];
+  inks: { id: string; text: string; width: number }[];
+  gridWidth: number;
+}
+
+/**
+ * 量栅格列数与同排邻卡的主数值墨迹间隙（负值即叠印）。
+ * 墨迹取文本节点的 `Range.getBoundingClientRect()`（口径同 cash-flows.spec.ts::statValueInks），
+ * 不是盒宽——值 div 是块级、被轨道拉满，盒宽量不出相碰。
+ */
+function measureStatGrid(
+  page: Page,
+  prefix: StatPrefix,
+  ids: readonly string[],
+): Promise<StatGridMeasure> {
+  return page.evaluate(
+    ({ prefix, ids }: { prefix: string; ids: readonly string[] }) => {
+      const grid = document.querySelector(`[data-testid="${prefix}-stat-grid"]`);
+      if (!grid) throw new Error(`${prefix}-stat-grid 未渲染`);
+      const round = (n: number) => Math.round(n * 100) / 100;
+      const cards = ids.map((id) => {
+        const value = grid.querySelector(`[data-testid="${prefix}-stat-${id}"]`);
+        const node = value?.firstChild;
+        if (!value || !node) throw new Error(`${prefix}-stat-${id} 主数值文本节点缺失`);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const ink = range.getBoundingClientRect();
+        // 值 div → CardContent → Card：同排判定用卡片上缘，不用墨迹上缘
+        const card = value.parentElement?.parentElement;
+        if (!card) throw new Error(`${prefix}-stat-${id} 卡片祖先缺失`);
+        return {
+          id,
+          text: (value.textContent ?? '').trim(),
+          left: round(ink.left),
+          right: round(ink.right),
+          width: round(ink.width),
+          top: round(card.getBoundingClientRect().top),
+        };
+      });
+      const byRow = new Map<number, typeof cards>();
+      for (const c of cards) {
+        const key = [...byRow.keys()].find((t) => Math.abs(t - c.top) < 2) ?? c.top;
+        byRow.set(key, [...(byRow.get(key) ?? []), c]);
+      }
+      const rows = [...byRow.values()]
+        .sort((a, b) => a[0].top - b[0].top)
+        .map((row) => row.sort((a, b) => a.left - b.left));
+      const gaps: { pair: string; gap: number }[] = [];
+      for (const row of rows) {
+        for (let i = 1; i < row.length; i += 1) {
+          gaps.push({
+            pair: `${row[i - 1].id}→${row[i].id}`,
+            gap: round(row[i].left - row[i - 1].right),
+          });
+        }
+      }
+      return {
+        columns: getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter(Boolean).length,
+        rows: rows.map((row) => row.map((c) => c.id)),
+        minGap: Math.min(...gaps.map((g) => g.gap)),
+        gaps,
+        inks: cards.map((c) => ({ id: c.id, text: c.text, width: c.width })),
+        gridWidth: round(grid.getBoundingClientRect().width),
+      };
+    },
+    { prefix, ids },
+  );
+}
+
+function fmtStatGrid(prefix: StatPrefix, m: StatGridMeasure): string {
+  return (
+    `${prefix} 栅格 ${m.gridWidth}px：${m.columns} 列 ${JSON.stringify(m.rows)}` +
+    ` 间隙 ${JSON.stringify(m.gaps)} 墨迹 ${JSON.stringify(m.inks)}`
+  );
+}
+
+/** 注入 8 位带符号金额、进页面、等到注入值上屏，再量栅格 */
+async function measureWithWideAmount(
+  page: Page,
+  target: StatPrefix,
+  ids: readonly string[],
+  mobilePath: boolean,
+): Promise<StatGridMeasure> {
+  await mockStatAmount(page, target, D8);
+  const prefix = mobilePath ? '/m' : '';
+  await page.goto(target === 'dashboard' ? `${prefix}/dashboard` : `${prefix}/portfolio/${E2E_ACTIVE}`);
+  await expect(page.getByTestId(`${target}-stat-total_value`)).toContainText('12,345,678.90', {
+    timeout: 15_000,
+  });
+  return measureStatGrid(page, target, ids);
+}
+
+test.describe('统计卡栅格宽视口与移动端（#774）', () => {
+  test('宽视口桌面：两页统计卡为四列单行，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === 'mobile', '四列断言针对桌面项目（1280 视口 → 容器 960px）');
+    const errors = collectPageErrors(page);
+
+    const dashboard = await measureWithWideAmount(page, 'dashboard', DASHBOARD_STAT_IDS, false);
+    expect(dashboard.columns, fmtStatGrid('dashboard', dashboard)).toBe(4);
+    expect(dashboard.rows, fmtStatGrid('dashboard', dashboard)).toHaveLength(1);
+    expect(dashboard.minGap, fmtStatGrid('dashboard', dashboard)).toBeGreaterThan(0);
+
+    const portfolio = await measureWithWideAmount(page, 'portfolio', PORTFOLIO_STAT_IDS, false);
+    expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(4);
+    expect(portfolio.rows, fmtStatGrid('portfolio', portfolio)).toHaveLength(1);
+    expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  test('移动端：两页统计卡为两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile', '移动 variant 断言针对移动项目（iPhone 13 原生视口）');
+    const errors = collectPageErrors(page);
+
+    const dashboard = await measureWithWideAmount(page, 'dashboard', DASHBOARD_STAT_IDS, true);
+    expect(dashboard.columns, fmtStatGrid('dashboard', dashboard)).toBe(2);
+    expect(dashboard.minGap, fmtStatGrid('dashboard', dashboard)).toBeGreaterThan(0);
+
+    const portfolio = await measureWithWideAmount(page, 'portfolio', PORTFOLIO_STAT_IDS, true);
+    expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(2);
+    expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+});
+
+test.describe('统计卡栅格窄桌面档（#774，1024 视口）', () => {
+  test.use({ viewport: { width: 1024, height: 900 } });
+
+  // #772 给 main 加了全局 min-w-0，1024 档 main 内容宽从 750 降到 704px；四列轨道随之
+  // 只有 164px，8 位带符号金额的单行墨迹（详情页 191px、首页 195px）越出卡片压到邻卡
+  // （重叠 11px / 15px），故按容器宽降到两列（轨道 344px）。
+  test('1024 档：两页统计卡降两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', '窄桌面档断言仅针对桌面项目');
+    const errors = collectPageErrors(page);
+
+    const dashboard = await measureWithWideAmount(page, 'dashboard', DASHBOARD_STAT_IDS, false);
+    expect(dashboard.columns, fmtStatGrid('dashboard', dashboard)).toBe(2);
+    expect(dashboard.minGap, fmtStatGrid('dashboard', dashboard)).toBeGreaterThan(0);
+
+    const portfolio = await measureWithWideAmount(page, 'portfolio', PORTFOLIO_STAT_IDS, false);
+    expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(2);
+    expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 });
