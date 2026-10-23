@@ -184,6 +184,40 @@ class TestNavSyncDerivation:
         assert total == success + failed
         assert "000001.OF" in message
 
+    def test_dividend_skip_shows_in_terminal_state_without_failing(self):
+        """#771：分红公告因 `div_cash` 缺失/非正未建事件 → 终态留痕，但不算失败。
+
+        与 #704 降级同一手法：不改 status/records（净值同步本身成功、事件是**刻意**不建
+        的），只写 error_message。静默吞掉会让「公告有、事件没建」与「压根没有公告」同形，
+        运维无从得知这笔红利要人工补录。
+        """
+        status, total, success, failed, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "dividends_skipped": [{
+                "product_code": "007169.OF", "ex_date": "2026-10-19",
+                "div_cash": -0.0039,
+                "reason": "每份分红金额缺失或非正，未建事件；请核对公告后手工录入",
+            }],
+        })
+        assert (status, total, success, failed) == ("success", 3, 3, 0)
+        assert total == success + failed
+        assert "分红公告跳过" in message
+        assert "007169.OF@2026-10-19" in message
+        assert "-0.0039" in message
+
+    def test_dividend_skip_kept_alongside_degradation(self):
+        """两类留痕同时出现时都保留（`|` 拼接），不得互相覆盖（#771）。"""
+        status, _, _, _, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "degraded_products": ["000001.OF"],
+            "dividends_skipped": [{
+                "product_code": "007169.OF", "ex_date": "2026-10-19",
+                "div_cash": None, "reason": "金额缺失",
+            }],
+        })
+        assert status == "success"
+        assert "累计净值降级" in message and "分红公告跳过" in message
+
     def test_missing_keys_degrade_to_zero_without_crash(self):
         status, total, success, failed, _ = _derive_log_fields("nav_sync", {})
         assert (status, total, success, failed) == ("success", 0, 0, 0)

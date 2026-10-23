@@ -17,7 +17,8 @@
 import logging
 import traceback
 from datetime import datetime, timedelta
-from typing import Callable, Dict, Optional, Tuple
+from decimal import Decimal
+from typing import Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -121,6 +122,10 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
     返回的 `degraded_products`（#704）是「同步成功但累计净值整段降级」的产品：单位净值
     已落库、既有 accumulated_nav 已保留，不计入 `failed_products`，但经
     `_derive_log_fields` 落到任务终态的 error_message 上，避免与完全正常的成功同形。
+
+    返回的 `dividends_skipped`（#771）同手法：分红公告有效、但 `div_cash` 缺失或非正，
+    检测器**刻意不建事件**（建了只会永久 pending），只在终态 error_message 留痕，
+    不计入 `failed_products`、不改 status。口径取舍见 `_detect_dividends`。
     """
     from app.services.market_data_service import (
         sync_product_prices, resolve_incremental_start_date, ACCUM_DEGRADED_NOTE,
@@ -202,7 +207,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         # 此处保留增量持久化：中途崩溃不丢已同步产品的价格与同步明细
         db.commit()
 
-    dividends_detected = _detect_dividends(db, products)
+    dividends_detected, dividends_skipped = _detect_dividends(db, products)
 
     return {
         "synced_count": total_synced,
@@ -210,6 +215,8 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         "failed_products": failed_products,
         "degraded_products": degraded_products,
         "dividends_detected": dividends_detected,
+        # #771：因 div_cash 缺失/非正而未建事件的公告，供 _derive_log_fields 落终态留痕
+        "dividends_skipped": dividends_skipped,
         "target_date": target_date.isoformat(),
     }
 
@@ -349,17 +356,40 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     return outcome
 
 
-def _detect_dividends(db: Session, products: list) -> int:
+def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     """分红检测：从 tushare fund_div 获取分红数据，自动创建 pending reinvest_dividend 事件。
 
     逐产品 commit/rollback 是编排层有意的 checkpoint 语义：逐只远程 API 调用，
-    部分成功须保留，单产品失败仅回滚该产品。"""
+    部分成功须保留，单产品失败仅回滚该产品。
+
+    返回 `(detected, skipped)`：`skipped` 是「公告有效但因 `div_cash` 缺失/非正而
+    **刻意不建事件**」的留痕（按 `(产品, 除息日)` 去重），供任务日志可见。
+
+    **为什么是「不建事件」而不是「建一条待补录的事件」**（#771）：
+    - 建事件需要新状态（或复用 pending + 一个标记列），而 pending 正是病灶本身——
+      快照闸门放行 pending、auto_confirm 逐日重试，`div_cash <= 0` 的行每次撞
+      `_validate_dividend_div_cash` 失败，永久停在 pending 并反复刷告警；
+    - `div_cash` 缺失/为 0 时确认会折出「0 份额 / 0 现金」的空事件（列表、统计与
+      摊薄成本都被污染），补录金额又受 `SNAPSHOT_DEPENDENCY` 冻结（应收一旦进快照
+      即不可改），用户能做的只有取消，等于把垃圾行推给用户清理；
+    - 新状态/标记列会波及快照闸门、事件列表、响应契约与 CLI，超出本缺陷的范围
+      （AGENTS.md 铁律 3：最小必要变更）。
+    代价是这类公告不再出现在事件列表里，故必须留痕：跳过项写进 nav_sync 结果的
+    `dividends_skipped`，由 `_derive_log_fields` 落任务日志的 error_message（与 #704
+    累计净值降级同一手法——不改 status、不改 records，只让终态可见）。红利本身仍
+    可由用户按公告手工录入（走服务层校验，正数即通过）。
+
+    幂等性不变：`div_cash` 修复后重跑检测，同 `(组合, 产品, 除息日, 平台)` 仍由
+    `existing` 判据去重，不重复建；跳过留痕同样按 `(产品, 除息日)` 去重。
+    """
     from app.services.tushare_client import get_fund_div, TushareNotConfiguredError, TushareAPIError
     from app.models.share_change_event import ShareChangeEvent
     from app.models.portfolio_position import PortfolioPosition
     from sqlalchemy import func as sa_func, and_
 
     detected = 0
+    skipped: List[dict] = []
+    skipped_keys = set()
     otc_products = [p for p in products if p.market == "CN_OTC" and (p.data_source or "tushare") == "tushare"]
 
     for product in otc_products:
@@ -384,6 +414,13 @@ def _detect_dividends(db: Session, products: list) -> int:
 
                 if ex_date <= entitlement_date:
                     continue
+
+                # #771：直造 ORM 绕过服务层校验，是「闸门装在正门、检测走后门」的根因。
+                # 金额缺失（tushare 该列可为 NULL）或非正（现场实测 -0.0039）都不建事件，
+                # 判据与人工录入侧的 `_validate_dividend_div_cash` 一致，另把 NULL 一并挡在
+                # 检测口——自动来源没有「先建后补」的语义，宁缺不造空事件。
+                div_cash = div.get("div_cash")
+                unusable_div_cash = div_cash is None or Decimal(str(div_cash)) <= 0
 
                 latest_dates = db.query(
                     PortfolioPosition.portfolio_code,
@@ -418,6 +455,20 @@ def _detect_dividends(db: Session, products: list) -> int:
                     if existing:
                         continue
 
+                    if unusable_div_cash:
+                        # 留痕只在「本来会建事件」时产生：无持仓/已过除息日/已有事件的
+                        # 组合本来就不该有这笔分红，报出来是噪音
+                        key = (product.code, ex_date)
+                        if key not in skipped_keys:
+                            skipped_keys.add(key)
+                            skipped.append({
+                                "product_code": product.code,
+                                "ex_date": ex_date.isoformat(),
+                                "div_cash": div_cash,
+                                "reason": "每份分红金额缺失或非正，未建事件；请核对公告后手工录入",
+                            })
+                        continue
+
                     event = ShareChangeEvent(
                         portfolio_code=pos.portfolio_code,
                         product_code=product.code,
@@ -427,7 +478,7 @@ def _detect_dividends(db: Session, products: list) -> int:
                         entitlement_date=entitlement_date,
                         platform_code=pos.platform_code,
                         event_source="tushare",
-                        div_cash=div.get("div_cash"),
+                        div_cash=div_cash,
                         status="pending",
                         notes=f"自动检测：tushare fund_div {ts_code}",
                     )
@@ -443,7 +494,7 @@ def _detect_dividends(db: Session, products: list) -> int:
             logger.error(f"分红检测失败 {product.code}: {e}")
             db.rollback()
 
-    return detected
+    return detected, skipped
 
 
 def run_calendar_sync(db: Session, year: Optional[int] = None) -> dict:
@@ -512,12 +563,23 @@ def _derive_log_fields(
         status = "success" if not failed else "partial_success"
         # 降级不是失败（单位净值已同步、既有累计净值已保留），但必须在终态可见（#704），
         # 与 snapshot_generate 用 error_message 承载 warnings 同一手法。
+        # 分红跳过（#771）同理：公告有效但金额不可用，未建事件不是失败，不记不静默。
         degraded = result.get("degraded_products") or []
-        error_message = (
-            f"累计净值降级: {', '.join(degraded)}（本批未取到累计净值，已有值保留）"
-            [:ERROR_MESSAGE_MAX]
-            if degraded else None
-        )
+        skipped_dividends = result.get("dividends_skipped") or []
+        segments = []
+        if degraded:
+            segments.append(
+                f"累计净值降级: {', '.join(degraded)}（本批未取到累计净值，已有值保留）"
+            )
+        if skipped_dividends:
+            segments.append(
+                "分红公告跳过: " + "; ".join(
+                    f"{item.get('product_code', '?')}@{item.get('ex_date', '?')} "
+                    f"div_cash={item.get('div_cash')}（{item.get('reason', '金额不可用')}）"
+                    for item in skipped_dividends
+                )
+            )
+        error_message = (" | ".join(segments)[:ERROR_MESSAGE_MAX] if segments else None)
         return status, total, total - failed, failed, error_message
 
     if task_code == "snapshot_generate":
