@@ -9,8 +9,14 @@
 `(产品, 除息日)` 去重留痕、留痕只覆盖「本来会建事件」的有效公告，以及幂等
 （重复抓取不重复建、金额修复后重跑能补上）。跳过项经任务终态可见的用例在
 `test_task_log_orchestration.py::TestNavSyncDerivation`。
+
+另钉 NaN/Inf（评审补充）：pandas 的缺失值是 NaN 而非 None，`is not None` 拦不住，
+而旧判据的有序比较遇 NaN 直接抛异常。取数层 `tushare_client.get_fund_div` 已把它
+归一为 None（形态用例在 `test_tushare_rate_limit.py::TestFundDivRowMapping`），检测口
+复用服务层判据自带 `is_finite` 防御——本文件的用例**打桩绕过取数层**，钉的是第二道。
 """
 from datetime import date
+import math
 from unittest.mock import patch
 
 import pytest
@@ -78,7 +84,7 @@ def _skip(fund, div_cash):
     }
 
 
-class TestDetectorThreeStates:
+class TestDetectorDivCashStates:
     def test_positive_div_cash_creates_pending_event(self, test_db):
         fund = _env(test_db, "OK")
         detected, skipped = _run(test_db, fund, [_div()])
@@ -112,6 +118,38 @@ class TestDetectorThreeStates:
 
         assert detected == 1
         assert [item["div_cash"] for item in skipped] == [0]
+        assert [float(e.div_cash) for e in _rows(test_db, fund)] == [0.0051]
+
+    @pytest.mark.parametrize(
+        "suffix,div_cash",
+        [("NAN", float("nan")), ("INF", float("inf")), ("NINF", float("-inf"))],
+        ids=["nan", "positive_infinity", "negative_infinity"],
+    )
+    def test_non_finite_is_skipped_instead_of_raising(self, test_db, suffix, div_cash):
+        """非有限值走「跳过留痕」，不得抛异常（#771 评审）。
+
+        `Decimal(str(nan)) <= 0` 抛 `InvalidOperation` 而不是返回 False：旧写法下异常被
+        产品级 `except Exception` 兜住并 `db.rollback()`，该产品本轮**已建的有效事件一起
+        撤销**、后续公告也不再处理，只要这行公告还在就每轮 nav_sync 重演。
+        """
+        fund = _env(test_db, suffix)
+        detected, skipped = _run(test_db, fund, [_div(div_cash=div_cash)])
+
+        assert detected == 0
+        assert len(skipped) == 1
+        assert skipped[0]["product_code"] == fund and skipped[0]["ex_date"] == EX.isoformat()
+        assert _rows(test_db, fund) == []
+
+    def test_non_finite_does_not_discard_the_rest_of_the_batch(self, test_db):
+        """一条非有限公告只作废自己：同产品同批的好公告照常建事件。"""
+        fund = _env(test_db, "MIXNAN")
+        detected, skipped = _run(test_db, fund, [
+            _div(div_cash=float("nan")),
+            _div(ex_date="20261022", record_date="20261021", div_cash=0.0051),
+        ])
+
+        assert detected == 1
+        assert len(skipped) == 1 and math.isnan(skipped[0]["div_cash"])
         assert [float(e.div_cash) for e in _rows(test_db, fund)] == [0.0051]
 
 

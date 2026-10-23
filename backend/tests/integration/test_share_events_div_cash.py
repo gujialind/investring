@@ -17,7 +17,7 @@ from app.models.audit_log import AuditLog
 from app.models.share_change_event import ShareChangeEvent
 from app.services.exceptions import BusinessError
 from app.services.share_change_event_service import (
-    MSG_DIV_CASH_NOT_POSITIVE, compute_event_fields,
+    MSG_DIV_CASH_NOT_POSITIVE, compute_event_fields, dividend_div_cash_invalid,
 )
 from app.services.snapshot_service import auto_confirm_after_snapshot
 from tests.factories import (
@@ -306,6 +306,54 @@ class TestComputeEventFieldsRejectsNonPositiveDivCash:
             "share_split", Decimal("1000"), ratio=Decimal("2"), div_cash=Decimal("0")
         )
         assert result.shares_change == Decimal("1000")
+
+
+# ---------------- 判据单点对非有限值的防御（#771 评审） ----------------
+
+NON_FINITE = [float("nan"), float("inf"), float("-inf"), Decimal("NaN"), Decimal("Infinity")]
+
+
+class TestDivCashInvalidCriterionNonFinite:
+    """`dividend_div_cash_invalid` 遇 NaN/Inf 返回 True 且**不抛异常**。
+
+    有序比较 `Decimal("NaN") <= 0` 抛 `InvalidOperation`（与 `float('nan') <= 0` 返回
+    False 不同）。本函数是三道出口的判据单点，其中 `auto_confirm_after_snapshot` 在
+    `_auto_confirm_guarded` 的 savepoint **之外**调它（snapshot_service.py 的跳过检查），
+    一条冒出的异常会掀掉整段自动确认；检测口同样复用本函数，故防御装在这里一处即可。
+    取数层已把上游 NaN 归一为 None（`test_tushare_rate_limit.py::TestFundDivRowMapping`），
+    本类钉的是防其他调用方传入的纵深。
+    """
+
+    @pytest.mark.parametrize("event_type", DIVIDEND_TYPES)
+    @pytest.mark.parametrize("bad_div_cash", NON_FINITE)
+    def test_non_finite_is_invalid(self, event_type, bad_div_cash):
+        assert dividend_div_cash_invalid(event_type, bad_div_cash) is True
+
+    @pytest.mark.parametrize("ok", [Decimal("0.0039"), 0.0039, Decimal("0"), 0, -0.0039])
+    def test_explicit_values_keep_764_semantics(self, ok):
+        """既有显式值口径不放宽也不收紧：正数放行，0/负数仍非法。"""
+        expected = Decimal(str(ok)) <= 0
+        assert dividend_div_cash_invalid("reinvest_dividend", ok) is expected
+
+    def test_null_still_valid(self):
+        """NULL 是「省略待补录」的既有口径，不得因加防御而顺带判非法。"""
+        for event_type in DIVIDEND_TYPES:
+            assert dividend_div_cash_invalid(event_type, None) is False
+
+    @pytest.mark.parametrize("bad_div_cash", [float("nan"), Decimal("NaN")])
+    def test_non_dividend_types_not_caught(self, bad_div_cash):
+        """非分红类历史上恒提交 `div_cash: 0`，本判据对它们恒返回 False（既有边界）。"""
+        assert dividend_div_cash_invalid("share_split", bad_div_cash) is False
+
+    def test_compute_event_fields_rejects_non_finite(self):
+        """计算单点走同一判据：拿到 NaN 是拒绝，不是折出 NaN 份额写进快照。"""
+        with pytest.raises(BusinessError) as exc:
+            compute_event_fields(
+                "reinvest_dividend", Decimal(str(SHARES)),
+                div_cash=Decimal("NaN"), reinvest_nav=Decimal(str(NAV)),
+            )
+        assert exc.value.code == "INVALID_PARAM"
+        assert exc.value.message == MSG_DIV_CASH_NOT_POSITIVE
 
 
 # ---------------- auto_confirm 跳过 + 补录指引（#771） ----------------

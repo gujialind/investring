@@ -72,19 +72,27 @@ class EventFieldResult(NamedTuple):
 
 
 def dividend_div_cash_invalid(event_type: str, div_cash: Optional[Decimal]) -> bool:
-    """分红类事件的 `div_cash` 是**显式非正值**（#764 的拒绝条件，#771 复用为跳过条件）。
+    """分红类事件的 `div_cash` 是**显式非法值**（#764 的拒绝条件，#771 复用为跳过条件）。
 
     与 `_validate_dividend_div_cash` 同一判据，单点定义以免两侧漂移：NULL 返回 False——
     该列可空且「省略待人工补录」是既有口径，把缺失也判成非法会让补录前的行无法确认。
 
+    非有限值（NaN/Inf）判为非法且**不抛异常**：有序比较 `Decimal("NaN") <= 0` 抛的是
+    `InvalidOperation` 而非返回 False（与 `float('nan') <= 0` 不同），而本函数被
+    `auto_confirm_after_snapshot` 在 `_auto_confirm_guarded` 的 savepoint **之外**调用，
+    一条冒出的异常会直接掀掉整段自动确认。取数层（`tushare_client._div_cash_or_none`）
+    已把上游 NaN 归一为 None，本条是防其他调用方传入的纵深。
+
     调用方：
     - `_validate_dividend_div_cash`：创建 / 更新 / 确认与预览三处拒绝；
     - `snapshot_service.auto_confirm_after_snapshot`：跳过这类存量脏行并给出补录指引，
-      不再每次快照撞一次门禁、刷一条 `auto_confirm_failed`（#771）。
+      不再每次快照撞一次门禁、刷一条 `auto_confirm_failed`（#771）；
+    - `task_runner._detect_dividends`：自动来源的「不建事件」判据（NULL 另由该处加挡）。
     """
     if event_type not in DIVIDEND_TYPES or div_cash is None:
         return False
-    return Decimal(str(div_cash)) <= 0
+    value = Decimal(str(div_cash))
+    return not value.is_finite() or value <= 0
 
 
 def compute_event_fields(

@@ -17,7 +17,6 @@
 import logging
 import traceback
 from datetime import datetime, timedelta
-from decimal import Decimal
 from typing import Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import or_, select
@@ -383,6 +382,7 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     `existing` 判据去重，不重复建；跳过留痕同样按 `(产品, 除息日)` 去重。
     """
     from app.services.tushare_client import get_fund_div, TushareNotConfiguredError, TushareAPIError
+    from app.services.share_change_event_service import dividend_div_cash_invalid
     from app.models.share_change_event import ShareChangeEvent
     from app.models.portfolio_position import PortfolioPosition
     from sqlalchemy import func as sa_func, and_
@@ -417,10 +417,14 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
 
                 # #771：直造 ORM 绕过服务层校验，是「闸门装在正门、检测走后门」的根因。
                 # 金额缺失（tushare 该列可为 NULL）或非正（现场实测 -0.0039）都不建事件，
-                # 判据与人工录入侧的 `_validate_dividend_div_cash` 一致，另把 NULL 一并挡在
-                # 检测口——自动来源没有「先建后补」的语义，宁缺不造空事件。
+                # 判据直接复用服务层的 `dividend_div_cash_invalid`（与人工录入侧同一函数，
+                # 含 NaN/Inf 不抛异常的防御），另把 NULL 一并挡在检测口——自动来源没有
+                # 「先建后补」的语义，宁缺不造空事件。
+                event_type = "reinvest_dividend"
                 div_cash = div.get("div_cash")
-                unusable_div_cash = div_cash is None or Decimal(str(div_cash)) <= 0
+                unusable_div_cash = (
+                    div_cash is None or dividend_div_cash_invalid(event_type, div_cash)
+                )
 
                 latest_dates = db.query(
                     PortfolioPosition.portfolio_code,
@@ -473,7 +477,7 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                         portfolio_code=pos.portfolio_code,
                         product_code=product.code,
                         market=product.market,
-                        event_type="reinvest_dividend",
+                        event_type=event_type,
                         ex_date=ex_date,
                         entitlement_date=entitlement_date,
                         platform_code=pos.platform_code,
