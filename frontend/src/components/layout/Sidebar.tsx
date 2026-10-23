@@ -14,7 +14,7 @@ export default function Sidebar() {
   const navItems = navItemsForRole(user?.role);
 
   return (
-    <aside className="hidden lg:block w-64 border-r bg-background">
+    <aside className="hidden lg:block w-64 shrink-0 border-r bg-background">
       <nav className="flex flex-col gap-2 p-4">
         {navItems.map((item) => {
           const Icon = item.icon;

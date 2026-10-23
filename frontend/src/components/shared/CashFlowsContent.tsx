@@ -552,13 +552,18 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
 
       {/* 概览四卡 */}
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 @container">
           <div className="mb-3 flex justify-end">
             <Button variant="outline" size="sm" data-testid="open-breakdown" onClick={() => setBreakdownOpen(true)}>
               按平台构成
             </Button>
           </div>
-          <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : (wideValueDesktop ? "grid-cols-2" : "grid-cols-2 lg:grid-cols-4"))}>
+          {/* 桌面列数按**容器宽**而非视口宽取（#772）：主数值是 nowrap 墨迹，栅格轨道
+              用 minmax(0,1fr) 可被压到墨迹之下——轨道叠印、末卡墨迹越出卡片。四列不叠印
+              需轨道 ≥ 15 字符墨迹（实测 216.05px）− gap 16 = 200px，即容器 ≥ 4×200 + 3×16
+              = 848px；窄于此就降两列。用 lg: 视口断点判不了这件事：main 从视口扣掉
+              sidebar 256 与 p-8 64 后，1024 视口只剩 654 容器（轨道 151.5，必叠印）。 */}
+          <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : (wideValueDesktop ? "grid-cols-2" : "grid-cols-2 @min-[848px]:grid-cols-4"))}>
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-sm text-muted-foreground">{s.label}</span>
