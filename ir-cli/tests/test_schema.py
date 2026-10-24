@@ -10,6 +10,8 @@ ir schema 响应字段契约与索引模式测试（issue #64）
     PYTHONPATH=ir-cli .venv/bin/python -m pytest ir-cli/tests/ -q
 """
 import json
+import runpy
+from pathlib import Path
 
 import pytest
 import typer
@@ -139,3 +141,50 @@ class TestShareEventCashPayDate:
         assert "update 省略不改" in workflow["notes"]
         assert '--json \'{"cash_pay_date":null}\'' in workflow["notes"]
         assert "允许非交易日" in workflow["notes"]
+
+
+class TestShareEventDividendChoice:
+    @pytest.mark.parametrize("group_name", [None, "share-event"])
+    @pytest.mark.parametrize("command", ["preview", "confirm"])
+    def test_candidate_options_are_discovered(self, root, group_name, command):
+        entry = build_schema(root, group_name)["commands"]["share-event"][command]
+        params = {p["opt"]: p for p in entry["params"] if "opt" in p}
+        expected = {"--event-type", "--cash-pay-date", "--share-confirm-date"}
+        assert set(params) == expected | ({"--sync-nav"} if command == "confirm" else set())
+        for name in expected:
+            assert not params[name].get("required", False)
+            assert "default" not in params[name]
+        method_help = params["--event-type"]["help"]
+        assert "cash_dividend" in method_help and "reinvest_dividend" in method_help
+        assert "完整候选" in method_help and "dividend_pending" in method_help
+        for name in ("--cash-pay-date", "--share-confirm-date"):
+            assert "YYYY-MM-DD" in params[name]["help"]
+            assert "默认除息日" in params[name]["help"]
+            assert "不保留旧日期" in params[name]["help"]
+        assert next(p for p in entry["params"] if p.get("arg") == "id")["required"]
+
+    def test_preview_is_in_index(self, root):
+        groups = build_schema(root, index_only=True)["groups"]
+        share_events = next(g.split(":", 1)[1].split() for g in groups.split(";") if g.startswith("share-event:"))
+        assert "preview" in share_events
+        assert "confirm" in share_events
+
+    def test_workflows_cover_optional_preview_and_both_choices(self, full_schema):
+        workflows = full_schema["workflows"]
+        assert any("ir share-event preview <id>" in step for step in workflows["份额变动事件"]["steps"])
+        workflow = workflows["待定分红选择"]
+        for command in ("preview", "confirm"):
+            for method in ("cash_dividend", "reinvest_dividend"):
+                assert any(f"ir share-event {command} <id> --event-type {method}" in step for step in workflow["steps"])
+        notes = workflow["notes"]
+        for text in ("完整候选", "省略或 null 均默认除息日", "不是局部修改", "显式传入", "不强制 preview"):
+            assert text in notes
+        assert "DIVIDEND_METHOD_REQUIRED" in notes
+        assert "DIVIDEND_METHOD_REQUIRED" in full_schema["error_hints"]
+
+    def test_preview_response_model_is_registered_for_regeneration(self):
+        # 只检查生成器登记，不运行 main、不写生成产物；后端完成后统一导出契约。
+        script = Path(__file__).resolve().parents[1] / "scripts" / "gen_response_fields.py"
+        generator = runpy.run_path(str(script))
+        preview = [entry for entry in generator["COMMAND_SCHEMA_MAP"] if entry[:2] == ("share-event", "preview")]
+        assert preview == [("share-event", "preview", "ShareChangeEventPreviewResponse", "object", None)]

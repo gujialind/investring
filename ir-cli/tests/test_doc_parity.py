@@ -566,6 +566,47 @@ class TestManualOptionParity:
             assert option in head, f"通用选项 {option} 未在 §4 之前的手册正文中说明"
 
 
+class TestShareEventDividendChoiceParity:
+    """#775：新预览与候选参数必须被手册/配方实际覆盖，不借共享段落或豁免漏检。"""
+
+    @pytest.mark.parametrize("command", ["preview", "confirm"])
+    def test_candidate_commands_have_dedicated_manual_sections(self, sections, specs, command):
+        path = f"ir share-event {command}"
+        matching = [section for section in sections if path in section.paths]
+        assert len(matching) == 1
+        expected = {"--event-type", "--cash-pay-date", "--share-confirm-date"}
+        if command == "confirm":
+            expected.add("--sync-nav")
+        assert matching[0].options == specs[path].options == expected
+        assert not matching[0].required  # 已知事件仍可无候选确认/预览
+        assert check_manual_option_parity(matching, specs, {}, {}) == []
+
+    def test_choice_recipe_carries_method_on_preview_and_confirm(self, steps):
+        choice_steps = [step for step in steps if step.workflow == "待定分红选择"]
+        for command in ("preview", "confirm"):
+            matches = [step for step in choice_steps if step.path == f"ir share-event {command}"]
+            assert len(matches) == 2
+            assert all("--event-type" in step.options for step in matches)
+            assert any("--cash-pay-date" in step.options for step in matches)
+            assert any("--share-confirm-date" in step.options for step in matches)
+
+    def test_no_method_update_or_unrelated_list_options(self, specs):
+        assert "--event-type" not in specs["ir share-event update"].options
+        assert specs["ir share-event list"].options == {
+            "--portfolio-code", "--page", "--page-size", "--all", "--fields",
+        }
+
+    def test_manual_explains_candidate_defaults_and_preview_envelope(self, manual_text):
+        section = manual_text.split("### 4.7 ", 1)[1].split("### 4.8 ", 1)[0]
+        for text in (
+            "完整候选", "省略或 API `null` 均默认除息日", "不是局部修改",
+            "无 body POST", "data.preview", "cash_effective_date", "share_effective_date",
+            "DIVIDEND_METHOD_REQUIRED", "保留原 `--event-type` 及日期参数",
+        ):
+            assert text in section
+        assert "../docs/reference/business-constraints.md#rule-event" in section
+
+
 # --------------------------------------------------------------------------- #
 # 断言 4：退出码闭包
 # --------------------------------------------------------------------------- #

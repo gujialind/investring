@@ -180,11 +180,12 @@ async function expectPreview(page: Page, row: Locator, id: number, date: string,
   const { preview } = await response.json();
   expect(Number(preview.cash_change)).toBe(500);
   const dlg = dialogByTitle(page, '确认份额变动事件');
-  // 现金分红的红利金额（#744）与现金变化同值
-  await expect(dlg.getByText('¥500.00', { exact: true })).toHaveCount(2);
-  await expect(dlg.getByText('现金到账日', { exact: true })).toBeVisible();
-  await expect(dlg.getByText(date, { exact: true })).toHaveCount(isDefault ? 2 : 1);
-  await expect(dlg.getByText('（默认除息日）', { exact: true })).toHaveCount(isDefault ? 1 : 0);
+  const values = dlg.getByTestId('event-confirm-preview');
+  // 现金分红的红利金额（#744）与现金变化同值；#775 日期输入与后端预览分区定位。
+  await expect(values.getByText('¥500.00', { exact: true })).toHaveCount(2);
+  await expect(values.getByText('现金到账日', { exact: true })).toBeVisible();
+  await expect(values.getByText(date, { exact: true })).toHaveCount(isDefault ? 2 : 1);
+  await expect(values.getByText('（默认除息日）', { exact: true })).toHaveCount(isDefault ? 1 : 0);
   await expect(dlg.getByRole('button', { name: '确认', exact: true })).toBeEnabled();
   await dlg.getByRole('button', { name: '取消', exact: true }).click();
   await expect(dlg).toBeHidden();
@@ -340,7 +341,7 @@ test.describe('红利再投资净值留空与确认预览（#744，双端）', (
 
       // 缺净值：预览 422 经 error 通道展示后端文案 + 就近补救指引，确认按钮禁用
       const missing = `产品${PRODUCT.code}在除息日${s.ex}的净值尚未同步，无法计算红利再投资份额`;
-      await page.route(`**/api/share-change-events/${event.id}/preview`, (route) =>
+      await page.route(`**/api/share-change-events/${event.id}/preview?*`, (route) =>
         route.fulfill({
           status: 422,
           contentType: 'application/json',
@@ -352,7 +353,7 @@ test.describe('红利再投资净值留空与确认预览（#744，双端）', (
       await expect(confirmDlg.getByText('请在「产品」页同步该产品净值后重试')).toBeVisible();
       await expect(confirmDlg.getByRole('button', { name: '确认', exact: true })).toBeDisabled();
       await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
-      await page.unroute(`**/api/share-change-events/${event.id}/preview`);
+      await page.unroute(`**/api/share-change-events/${event.id}/preview?*`);
 
       // 编辑：非正数就地拦截不发请求；留空提交显式 null
       await row.getByTitle('编辑', { exact: true }).click();
@@ -466,7 +467,7 @@ test.describe('红利再投资份额确认日（#743，双端）', () => {
       await expect(standardRow).toHaveCount(1);
       await expect(sameDayRow).toHaveCount(1);
 
-      // 确认弹窗：记录字段行（preview 响应不含该字段）
+      // #775：确认弹窗日期取后端候选的 share_effective_date，不从列表行推断。
       const [preview] = await Promise.all([
         page.waitForResponse((r) => new URL(r.url()).pathname === `/api/share-change-events/${standard.event.id}/preview`),
         standardRow.getByTitle('确认', { exact: true }).click(),
@@ -474,7 +475,8 @@ test.describe('红利再投资份额确认日（#743，双端）', () => {
       expect(preview.ok(), await preview.text()).toBeTruthy();
       const confirmDlg = dialogByTitle(page, '确认份额变动事件');
       await expect(confirmDlg.getByText('再投资份额确认日', { exact: true })).toBeVisible();
-      await expect(confirmDlg.getByText(s.confirmDay, { exact: true })).toHaveCount(1);
+      await expect(confirmDlg.getByTestId('event-confirm-preview').getByText(s.confirmDay, { exact: true })).toHaveCount(1);
+      await expect(confirmDlg.locator('button#confirm_share_confirm_date')).toHaveText(s.confirmDay);
       await confirmDlg.getByRole('button', { name: '取消', exact: true }).click();
       await expect(confirmDlg).toBeHidden();
 

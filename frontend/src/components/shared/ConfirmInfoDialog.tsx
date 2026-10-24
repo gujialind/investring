@@ -33,6 +33,8 @@ interface ConfirmInfoDialogProps {
   onConfirm: () => void;
   /** 确认请求进行中 */
   isConfirming?: boolean;
+  /** 业务输入尚未就绪等额外禁用条件；不改变其他调用方的默认行为 */
+  confirmDisabled?: boolean;
   confirmLabel?: string;
   /**
    * **常驻输入槽位**：渲染在内容区的固定位置，loading / error / 就绪三态下**同一父节点、
@@ -61,11 +63,12 @@ export function ConfirmInfoDialog({
   error = null,
   onConfirm,
   isConfirming = false,
+  confirmDisabled = false,
   confirmLabel = "确认",
   inputSlot,
   children,
 }: ConfirmInfoDialogProps) {
-  const blocked = isLoading || !!error || isConfirming;
+  const blocked = confirmDisabled || isLoading || !!error || isConfirming;
   // 内容区三态的「状态分支」槽位：加载/失败各出自己的提示，就绪时整段交给 children。
   // 刻意算成一个变量、只占固定的一个子索引，与下方常驻输入槽互不影响（#551 方案 A）。
   const statusBranch = isLoading ? (

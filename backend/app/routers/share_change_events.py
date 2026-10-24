@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 from app.database import get_db
 from app.models.share_change_event import ShareChangeEvent
 from app.schemas.share_change_event import (
     ShareChangeEventCreate,
     ShareChangeEventUpdate,
+    ShareChangeEventConfirmSelection,
     ShareChangeEventResponse,
     ShareChangeEventPreviewResponse,
     PaginatedShareEventResponse,
@@ -16,6 +17,7 @@ from app.dependencies import get_current_user, get_current_admin
 from app.services.exceptions import BusinessError
 from app.services.product_service import build_product_label_maps
 from app.services.share_change_event_service import (
+    DividendSelection,
     create_share_change_event as create_event_service,
     update_share_change_event as update_event_service,
     confirm_share_change_event as confirm_event_service,
@@ -146,6 +148,9 @@ def create_share_change_event(
 @router.get("/{id}/preview", response_model=ShareChangeEventPreviewResponse)
 def preview_share_change_event(
     id: int,
+    event_type: Optional[Literal["cash_dividend", "reinvest_dividend"]] = None,
+    cash_pay_date: Optional[date] = None,
+    share_confirm_date: Optional[date] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
@@ -159,7 +164,10 @@ def preview_share_change_event(
     event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
     if not event:
         raise HTTPException(status_code=404, detail="份额变动事件不存在")
-    preview = compute_share_change_event_preview(db, event)
+    if event_type is None and (cash_pay_date is not None or share_confirm_date is not None):
+        raise BusinessError("INVALID_PARAM", "预览分红到账日期时须同时指定分红方式 event_type")
+    selection = DividendSelection(event_type, cash_pay_date, share_confirm_date) if event_type else None
+    preview = compute_share_change_event_preview(db, event, selection=selection)
     return ShareChangeEventPreviewResponse(preview=preview)
 
 
@@ -178,6 +186,7 @@ def get_share_change_event(
 @router.post("/{id}/confirm")
 def confirm_share_change_event(
     id: int,
+    selection: Optional[ShareChangeEventConfirmSelection] = None,
     sync_nav: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
@@ -188,10 +197,11 @@ def confirm_share_change_event(
       净值未同步 → 422 MISSING_NAV，手填净值与数据源不一致 → 422 PRICE_NAV_MISMATCH
     - sync_nav=true：命中 MISSING_NAV 时自动回填净值并重试一次（会访问外部数据源）
     """
-    event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).with_for_update().first()
+    event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).populate_existing().with_for_update().first()
     if not event:
         raise HTTPException(status_code=404, detail="份额变动事件不存在")
-    confirm_event_service(db, event, sync_nav=sync_nav)
+    candidate = DividendSelection(**selection.model_dump()) if selection is not None else None
+    confirm_event_service(db, event, sync_nav=sync_nav, selection=candidate)
     db.commit()
     db.refresh(event)
     return {"message": "份额变动事件确认成功", "event": ShareChangeEventResponse.from_orm(event)}
@@ -241,7 +251,7 @@ def update_share_change_event(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
-    db_event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).first()
+    db_event = db.query(ShareChangeEvent).filter(ShareChangeEvent.id == id).populate_existing().with_for_update().first()
     if not db_event:
         raise HTTPException(status_code=404, detail="份额变动事件不存在")
 

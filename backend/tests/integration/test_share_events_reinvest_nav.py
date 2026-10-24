@@ -154,6 +154,9 @@ class TestReinvestNavResolution:
         assert resp.status_code == 200, resp.json()
         preview = resp.json()["preview"]
         assert preview == {
+            "event_type": "reinvest_dividend",
+            "cash_effective_date": EX.isoformat(),
+            "share_effective_date": EX.isoformat(),
             "entitlement_shares": SHARES,
             "shares_change": 33.64,
             "shares_after": 8742.83,

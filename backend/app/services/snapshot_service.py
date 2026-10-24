@@ -41,6 +41,7 @@ from app.constants.audit_actions import (
 from app.constants.share_change_events import (
     CAPITAL_FREE_SHARE_EVENT_TYPES,
     CASH_EFFECT_EVENT_TYPES,
+    PENDING_DIVIDEND_TYPE,
 )
 from app.models.manual_market_value import ManualMarketValue
 from app.utils.quantize import quantize_nav, quantize_shares
@@ -2146,13 +2147,14 @@ def auto_confirm_after_snapshot(
         ShareChangeEvent.status == "pending",
         ShareChangeEvent.share_effective_date == next_confirm_date,
         ShareChangeEvent.parent_event_id.is_(None),  # 只处理父/独立记录
-    ).all()
+    ).populate_existing().with_for_update().all()
 
     # 委托公共确认实现（基金级自动拆分 / 平台级回写 + #279 校验
     # + forced_adjustment 持仓精查），重算路径不得绕过校验
     from app.services.share_change_event_service import (
         MSG_DIV_CASH_BACKFILL_HINT,
         MSG_DIV_CASH_NOT_POSITIVE,
+        MSG_DIVIDEND_METHOD_REQUIRED,
         confirm_share_change_event,
         dividend_div_cash_invalid,
     )
@@ -2160,6 +2162,16 @@ def auto_confirm_after_snapshot(
     for event in pending_events:
         event_id = event.id
         entry: Dict[str, Any] = {"id": event_id, "type": "event"}
+        if event.event_type == PENDING_DIVIDEND_TYPE:
+            entry.update({
+                "action": "auto_confirm_skipped",
+                "code": "DIVIDEND_METHOD_REQUIRED",
+                "error": MSG_DIVIDEND_METHOD_REQUIRED,
+                "hint": "请在份额变动事件的确认弹窗选择分红方式并确认，再继续生成快照",
+            })
+            results.append(entry)
+            logger.info(f"分红方式待选择: portfolio={portfolio_code}, event_id={event_id}")
+            continue
         # #771：显式非正 div_cash 的分红事件确认必被 #764 门禁拒绝（创建/更新已挡，
         # 走到这里的只有绕过服务层直造的存量行）。照旧尝试只会刷一条
         # auto_confirm_failed WARNING、事件永久 pending；改为跳过并给出补录指引。
@@ -2343,17 +2355,21 @@ def _check_share_change_events(
     `_compute_in_transit_amounts` 计入本日快照；到确认日仍未确认则照旧阻断。
     `share_confirm_date` 为 NULL 的存量事件判键回落 `ex_date`，行为不变。
     """
-    pending_events = db.query(ShareChangeEvent).filter(
+    pending_events = db.query(ShareChangeEvent.id, ShareChangeEvent.event_type).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.share_effective_date <= target_date,
         ShareChangeEvent.status == "pending"
-    ).count()
-    
-    if pending_events > 0:
+    ).all()
+
+    if pending_events:
+        message = f"存在{len(pending_events)}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
+        undecided = [str(event.id) for event in pending_events if event.event_type == PENDING_DIVIDEND_TYPE]
+        if undecided:
+            message += f"；分红方式待定事件 #{'、#'.join(undecided)}，请先选择分红方式并确认"
         return {
             "check_type": "share_change_events",
             "status": "failed",
-            "message": f"存在{pending_events}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
+            "message": message,
         }
     return {"check_type": "share_change_events", "status": "passed", "message": "无未确认的份额变动事件"}
 

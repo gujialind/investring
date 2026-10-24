@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { shareChangeEventApi, getErrorMessage, ApiException, ShareChangeEventListParams } from "@/lib/api";
-import { ShareChangeEventCreate, ShareChangeEventUpdate } from "@/types/share-change-event";
+import { ShareChangeEventCreate, ShareChangeEventUpdate, ShareChangeEventConfirmSelection } from "@/types/share-change-event";
 import { queryKeys } from "@/lib/queryKeys";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -19,10 +19,14 @@ export function useShareChangeEventList(portfolioCode: string, params?: ShareCha
 
 // 确认前预览 Hook（#424）：确认弹窗打开时才发请求；禁用重试，错误即时展示在弹窗内。
 // staleTime=0 保证重开弹窗必 refetch——预览值即确认值，不得基于过期值确认（同 useTradePreview）
-export function useShareChangeEventPreview(id: number | null, enabled: boolean) {
+export function useShareChangeEventPreview(
+  id: number | null,
+  enabled: boolean,
+  selection?: ShareChangeEventConfirmSelection,
+) {
   return useQuery({
-    queryKey: queryKeys.shareChangeEvents.preview(id ?? 0),
-    queryFn: () => shareChangeEventApi.preview(id!),
+    queryKey: queryKeys.shareChangeEvents.previewWith(id ?? 0, selection),
+    queryFn: () => shareChangeEventApi.preview(id!, selection),
     enabled: enabled && !!id,
     retry: false,
     staleTime: 0,
@@ -91,9 +95,15 @@ export function useConfirmShareChangeEvent(portfolioCode: string) {
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: (id: number) => shareChangeEventApi.confirm(id),
-    onSuccess: () => {
+    mutationFn: ({ id, selection }: { id: number; selection?: ShareChangeEventConfirmSelection }) =>
+      shareChangeEventApi.confirm(id, selection),
+    onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.shareChangeEvents.byPortfolio(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.shareChangeEvents.preview(id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.positions.byPortfolio(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.status(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       addToast({
         type: "success",
         title: "确认成功",
