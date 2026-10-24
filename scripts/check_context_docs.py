@@ -13,6 +13,7 @@ MANAGED_DOCS = (
     "CLAUDE.md",
     "backend/AGENTS.md",
     "frontend/AGENTS.md",
+    "frontend/e2e/AGENTS.md",
     "ir-cli/AGENTS.md",
     "docs/reference/documentation.md",
     "docs/reference/business-constraints.md",

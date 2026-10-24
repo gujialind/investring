@@ -112,7 +112,7 @@
 
 - [共享组件与预览](../../frontend/AGENTS.md#12-组件复用)：确认弹窗走 preview，query key 包含影响结果的输入，加载/失败时禁止提交；重开、切换对象、修改输入不能用旧缓存确认。移动端路由存在性以 `src/app/m/` 为准，不凭印象 skip。
 - [视觉规范](../design/visual-spec.md)：数值走 `format*`、份额走 `formatSharesUnit`、空值用 `--`、红绿仅用于盈亏；共享表格/图表列结构改动须用 `scripts/visual-verify.sh` 双端目检有代表性数据（#355），空表截图不能证明列宽、换行和结对布局正确。
-- [E2E 约定](../../frontend/AGENTS.md#4-e2eplaywright)：定位器契约与选择框/浮层 helper、真实双端覆盖、合法 skip、种子和重试隔离；**禁止对共享 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**，推进场景自建隔离组合。运行前确认服务、端口和数据归属，不能测到其他 worktree 或旧版本。
+- [E2E 约定](../../frontend/e2e/AGENTS.md#1-e2eplaywright)：定位器契约与选择框/浮层 helper、真实双端覆盖、合法 skip、种子和重试隔离；**禁止对共享 `E2E_ACTIVE` 跑 recalculate/catch-up/generate-next**，推进场景自建隔离组合。运行前确认服务、端口和数据归属，不能测到其他 worktree 或旧版本。
 
 <a id="review-contracts"></a>
 ### 4.4 安全、公开契约与 CLI
@@ -125,7 +125,7 @@
 ### 4.5 测试设施、CI 与工具链
 
 - 门禁变更要审扫描范围、空集合、路径映射、退出码、`continue-on-error`、结果聚合及例外回收，并补能让错误规则失败的反例；不能同时放宽规则与测试后用绿灯自证（#490 / #509 / #590）。`CI OK` 是 job 结果核验，不证明内部每一步都执行，也不是抵御同时篡改策略与测试的安全边界。
-- 纯测试重构应保持 E2E pass/skip 形态；[形态对比](../../frontend/AGENTS.md#e2e-归一化对比纯测试重构验证)两侧应用均为 PR head，只替换 E2E 目录，不能据此证明应用无回归。预期形态变化经核实并授权后才用 `e2e-morph-expected`，写明原因并回收；标签巡检只报警变红，不自动摘标，也不是 required check（#410 / #483）。
+- 纯测试重构应保持 E2E pass/skip 形态；[形态对比](../../frontend/e2e/AGENTS.md#3-归一化对比纯测试重构验证)两侧应用均为 PR head，只替换 E2E 目录，不能据此证明应用无回归。预期形态变化经核实并授权后才用 `e2e-morph-expected`，写明原因并回收；标签巡检只报警变红，不自动摘标，也不是 required check（#410 / #483）。
 - 脚本参数错误、失败、中断及产物缺失不能假成功，恢复现场时只处理归属明确的对象；测试库不能凭名字含 test 就清理，遵循[测试库隔离约定](../../backend/AGENTS.md#2-跑测试)。新增脚本纳入 `scripts/tests/`，验证失败出口与产物而非只看命令启动。
 - 后端镜像安装来源是 `backend/requirements.txt`，仅改 `pyproject.toml` 不改变安装结果，未钉传递依赖不能声称可复现（#314）。工具链升级后先跑适配单测：Playwright 升级须跑 `scripts/tests/test_e2e_normalize.py` 验证 reporter 形态假设（#402），Vitest 联动升级遵循[前端指南](../../frontend/AGENTS.md#3-单元测试vitestissue-253)。
 

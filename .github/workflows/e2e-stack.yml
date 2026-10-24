@@ -72,7 +72,10 @@ env:
 jobs:
   e2e:
     name: "E2E Stack"
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已滚到 26.04（ICU 78），而 Playwright webkit-2359 的 MiniBrowser 依赖
+    # libicudata.so.74，mobile 用例在启动阶段即 1-3ms 全红。先固定 24.04；待 Playwright
+    # 升级到兼容 ICU 78 的 webkit 构建后再放宽。
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     services:
@@ -251,7 +254,7 @@ jobs:
         run: npx playwright test --retries=${{ inputs.retries }}
 
       # capture 模式：--retries=0 让 flaky 不能被洗成 passed（形态对比失真，见
-      # frontend/AGENTS.md §4）；rc 非 0 不直接失败——用例状态已进 JSON，
+      # frontend/e2e/AGENTS.md §3）；rc 非 0 不直接失败——用例状态已进 JSON，
       # 由 compare job 的形态 diff 判定。
       - name: Run Playwright tests (capture)
         if: inputs.mode == 'capture'

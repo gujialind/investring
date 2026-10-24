@@ -146,7 +146,7 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 // 抽自 platform-detail 的 pickDialogDay 与 trade-in-transit 的 pickDay——两份逐行同形，
 // 漂移出来的正是多套一层 getByRole('dialog') 的那份（#640 T-1 因此从未真正执行过）；
 // 第四轮再消掉 trade-buy-amount-linkage 的 selectTradeDate（同形、只少那条跳过守卫）。
-// 刻意未并的两处见 frontend/AGENTS.md §4 的台账：share-change-cash-pay-date 的 pickDay
+// 刻意未并的两处见 frontend/e2e/AGENTS.md §1 的台账：share-change-cash-pay-date 的 pickDay
 // 同为 ISO 口径但翻页基准取控件当前值、点击前额外断言 toBeEnabled；datepicker-in-dialog
 // 按「当月某日」（data-day$="-18"）定位，不属本函数口径。
 // ===========================================================================
@@ -600,7 +600,7 @@ export async function nextTradingDays(
  *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
  * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
  *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
- *   `frontend/AGENTS.md` §4「E2E（Playwright）」的「净值夹具」条）。
+ *   `frontend/e2e/AGENTS.md` §1「E2E（Playwright）」的「净值夹具」条）。
  *
  * 若日后推翻本定案，腾位首选压日期段（`yyyyMMdd` → `yyMMdd` 省 2 位），**不要**删 project
  * 标记或 retry 段：那两段正是跨 project / 跨 retry 唯一性所系，删一个就重新引入上面要防的撞车。
