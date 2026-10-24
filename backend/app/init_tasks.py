@@ -44,8 +44,8 @@ def scheduled_task_definitions() -> list[dict]:
             "code": "trading_calendar_sync",
             "name": "交易日历同步",
             "description": (
-                "每年 1 月 1 日 02:00 同步新年度交易日历；"
-                "禁用将导致新年度缺少交易日数据，交易确认日与快照日期推算失败"
+                "每年 1 月 1 日 02:00 同步新年度交易日历（SSE + HKEX 双日历，#777）；"
+                "禁用将导致新年度缺少交易日数据，交易确认日、港互认取价与快照日期推算失败"
             ),
             "cron_expr": "0 2 1 1 *",
         },

@@ -9,6 +9,12 @@
   （confirm_date、取价日、快照日），静默回退会把编造的日期持久化。
 - `try_get_next_trading_day` / `try_get_prev_trading_day`：**日历不足返回 `None`**，
   仅供编排把「日历到头」当合法控制流（循环推进、逐组合跳过），调用点显式表达该意图。
+
+多市场日历（#777）：`trading_calendar` 按 `(calendar_date, exchange)` 双日历存储
+（`SSE` 上交所 / `HKEX` 港交所）。全部 helper 带 `exchange` 参数、缺省 `SSE`——
+A 股既有调用点零变化；港互认（HK_MUTUAL）消费点经 `exchange_for_market` 单点
+映射后显式传 `HKEX`。**所有 TradingCalendar 查询必须带 exchange 过滤**：双日历
+落地后同一日期有两行，漏过滤的查询会随机命中另一市场的行（#777）。
 """
 from datetime import date
 from typing import Optional
@@ -19,11 +25,32 @@ from sqlalchemy.orm import Session
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError
+from app.utils.product_code import HK_MUTUAL_MARKET
+
+SSE_EXCHANGE = "SSE"
+HKEX_EXCHANGE = "HKEX"
 
 
-def is_trading_day(db: Session, target_date: date) -> bool:
-    """判断指定日期是否为交易日"""
-    cal = db.query(TradingCalendar).filter(TradingCalendar.calendar_date == target_date).first()
+def exchange_for_market(market: Optional[str]) -> str:
+    """产品市场 → 交易日历 exchange 的单点映射（#777）。
+
+    港互认基金（HK_MUTUAL）的净值发布与申赎确认跟随港股交易日 → HKEX；
+    其余市场（CN_EXCHANGE / CN_OTC / 虚拟产品 / None）→ SSE。
+    现金腿与投资人份额申赎是平台/组合层语义，不属产品市场，不经本映射。
+    """
+    return HKEX_EXCHANGE if market == HK_MUTUAL_MARKET else SSE_EXCHANGE
+
+
+def is_trading_day(db: Session, target_date: date, exchange: str = SSE_EXCHANGE) -> bool:
+    """判断指定日期是否为 exchange 日历的交易日"""
+    cal = (
+        db.query(TradingCalendar)
+        .filter(
+            TradingCalendar.calendar_date == target_date,
+            TradingCalendar.exchange == exchange,
+        )
+        .first()
+    )
     if not cal:
         return False
     return cal.is_open
@@ -32,46 +59,48 @@ def is_trading_day(db: Session, target_date: date) -> bool:
 _CALENDAR_MSG = "交易日历数据缺失，请先同步交易日历"
 
 
-def _step_next(db: Session, cursor: date) -> Optional[date]:
+def _step_next(db: Session, cursor: date, exchange: str) -> Optional[date]:
     return (
         db.query(func.min(TradingCalendar.calendar_date))
         .filter(
             TradingCalendar.calendar_date > cursor,
             TradingCalendar.is_open == True,
+            TradingCalendar.exchange == exchange,
         )
         .scalar()
     )
 
 
-def _step_prev(db: Session, cursor: date) -> Optional[date]:
+def _step_prev(db: Session, cursor: date, exchange: str) -> Optional[date]:
     return (
         db.query(func.max(TradingCalendar.calendar_date))
         .filter(
             TradingCalendar.calendar_date < cursor,
             TradingCalendar.is_open == True,
+            TradingCalendar.exchange == exchange,
         )
         .scalar()
     )
 
 
-def _advance(db: Session, from_date: date, steps: int, step) -> Optional[date]:
+def _advance(db: Session, from_date: date, steps: int, step, exchange: str) -> Optional[date]:
     """逐日走 steps 步；任一步走不动即返回 None（steps==0 → 零查询、返回 from_date）。"""
     cursor = from_date
     for _ in range(steps):
-        cursor = step(db, cursor)
+        cursor = step(db, cursor, exchange)
         if cursor is None:
             return None
     return cursor
 
 
 def _walk_with_count(
-    db: Session, from_date: date, steps: int, step
+    db: Session, from_date: date, steps: int, step, exchange: str
 ) -> tuple[Optional[date], int]:
     """与 _advance 同，但额外回报**已成功走到的步数**——部分耗尽时错误 details
     要如实写 `resolved_days`（days=3 只剩 1 天 ≠ 完全无日历）。"""
     cursor = from_date
     for resolved in range(steps):
-        nxt = step(db, cursor)
+        nxt = step(db, cursor, exchange)
         if nxt is None:
             return None, resolved
         cursor = nxt
@@ -79,31 +108,34 @@ def _walk_with_count(
 
 
 def _exhausted_details(
-    from_date: date, direction: str, requested: int, resolved: int
+    from_date: date, direction: str, requested: int, resolved: int, exchange: str
 ) -> dict:
     return {
         "from_date": from_date.isoformat(),
         "direction": direction,
         "requested_days": requested,
         "resolved_days": resolved,
+        "exchange": exchange,
     }
 
 
 def try_get_next_trading_day(
-    db: Session, from_date: date, days: int = 1
+    db: Session, from_date: date, days: int = 1, exchange: str = SSE_EXCHANGE
 ) -> Optional[date]:
     """from_date 之后第 days 个交易日；日历不足返回 None，绝不编造。仅供编排控制流。"""
-    return _advance(db, from_date, max(days, 0), _step_next)
+    return _advance(db, from_date, max(days, 0), _step_next, exchange)
 
 
 def try_get_prev_trading_day(
-    db: Session, from_date: date, days: int = 1
+    db: Session, from_date: date, days: int = 1, exchange: str = SSE_EXCHANGE
 ) -> Optional[date]:
     """from_date 之前第 days 个交易日；日历不足返回 None，绝不编造。仅供编排控制流。"""
-    return _advance(db, from_date, max(days, 0), _step_prev)
+    return _advance(db, from_date, max(days, 0), _step_prev, exchange)
 
 
-def get_next_trading_day(db: Session, from_date: date, days: int = 1) -> date:
+def get_next_trading_day(
+    db: Session, from_date: date, days: int = 1, exchange: str = SSE_EXCHANGE
+) -> date:
     """
     获取 from_date 之后第 days 个交易日（days=0 表示当天，零查询、返回 from_date）。
 
@@ -112,25 +144,27 @@ def get_next_trading_day(db: Session, from_date: date, days: int = 1) -> date:
     try_get_next_trading_day。
     """
     steps = max(days, 0)
-    result, resolved = _walk_with_count(db, from_date, steps, _step_next)
+    result, resolved = _walk_with_count(db, from_date, steps, _step_next, exchange)
     if result is None:
         raise BusinessError(
             "CALENDAR_NOT_SYNCED",
             f"{_CALENDAR_MSG}：{from_date} 之后第 {steps} 个交易日不在日历内",
-            details=_exhausted_details(from_date, "next", steps, resolved),
+            details=_exhausted_details(from_date, "next", steps, resolved, exchange),
         )
     return result
 
 
-def get_prev_trading_day(db: Session, from_date: date, days: int = 1) -> date:
+def get_prev_trading_day(
+    db: Session, from_date: date, days: int = 1, exchange: str = SSE_EXCHANGE
+) -> date:
     """获取前 N 个交易日；日历不足抛 CALENDAR_NOT_SYNCED（同 get_next_trading_day）。"""
     steps = max(days, 0)
-    result, resolved = _walk_with_count(db, from_date, steps, _step_prev)
+    result, resolved = _walk_with_count(db, from_date, steps, _step_prev, exchange)
     if result is None:
         raise BusinessError(
             "CALENDAR_NOT_SYNCED",
             f"{_CALENDAR_MSG}：{from_date} 之前第 {steps} 个交易日不在日历内",
-            details=_exhausted_details(from_date, "prev", steps, resolved),
+            details=_exhausted_details(from_date, "prev", steps, resolved, exchange),
         )
     return result
 

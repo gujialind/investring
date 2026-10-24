@@ -90,7 +90,20 @@ class TestHKMutualConfirmNav:
 
     事故复刻：市场白名单曾仅含 CN_OTC，HK_MUTUAL 落入「不重算」分支，
     确认后 price/shares 为空（即使 price_record 已有 T 日净值）。
+
+    #777 起 HK_MUTUAL 的下单日/确认日在 HKEX 日历上校验与推算：本类经
+    autouse fixture 镜像 2025-10 的 HKEX 日历行，teardown 删除（共享库契约，
+    见 calendar_helpers 模块 docstring）。
     """
+
+    @pytest.fixture(autouse=True)
+    def _hkex_october_calendar(self, test_db):
+        from tests.integration.calendar_helpers import (
+            mirror_hkex_calendar, remove_hkex_calendar,
+        )
+        mirror_hkex_calendar(test_db, date(2025, 10, 1), date(2025, 10, 31))
+        yield
+        remove_hkex_calendar(test_db, date(2025, 10, 1), date(2025, 10, 31))
 
     def test_confirm_hk_mutual_uses_t_nav(self, client, admin_headers, test_db):
         """HK_MUTUAL 买入确认：取 T 日净值回填 price 并计算 shares"""

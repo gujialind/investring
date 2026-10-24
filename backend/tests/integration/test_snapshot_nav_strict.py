@@ -441,9 +441,24 @@ class TestExchangeQdiiPricing:
 
 class TestNavLagDaysPricing:
     """#228 滞后取价泛化：快照取价日只看产品 `nav_lag_days`，与 is_qdii/market 解耦
-    （互认基金等非 QDII 品种可直接设 1；QDII 标签设 0 则不滞后）"""
+    （互认基金等非 QDII 品种可直接设 1；QDII 标签设 0 则不滞后）
 
-    def test_non_qdii_nav_lag_1_uses_prev_trading_day_nav(self, client, admin_headers, test_db):
+    #777 起 HK_MUTUAL 的 T-N 取价日在 HKEX 日历上解析：HK 用例经 fixture 镜像
+    2025-06 的 HKEX 日历行（teardown 删除，见 calendar_helpers 模块 docstring）。
+    """
+
+    @pytest.fixture
+    def hkex_june_calendar(self, test_db):
+        from tests.integration.calendar_helpers import (
+            mirror_hkex_calendar, remove_hkex_calendar,
+        )
+        mirror_hkex_calendar(test_db, date(2025, 6, 1), date(2025, 6, 30))
+        yield
+        remove_hkex_calendar(test_db, date(2025, 6, 1), date(2025, 6, 30))
+
+    def test_non_qdii_nav_lag_1_uses_prev_trading_day_nav(
+        self, client, admin_headers, test_db, hkex_june_calendar,
+    ):
         """非 QDII 产品设 nav_lag_days=1（互认基金场景）→ 快照严格用 T-1 净值"""
         port = create_portfolio(test_db, code="NAV_L1", status="active")
         create_product(test_db, code="HKMR1", market="HK_MUTUAL",
@@ -470,7 +485,9 @@ class TestNavLagDaysPricing:
         assert Decimal(str(pos.unit_price)) == Decimal("2.0")
         assert Decimal(str(pos.market_value)) == Decimal("200.0")
 
-    def test_non_qdii_nav_lag_1_missing_t1_rejected_no_fallback(self, client, admin_headers, test_db):
+    def test_non_qdii_nav_lag_1_missing_t1_rejected_no_fallback(
+        self, client, admin_headers, test_db, hkex_june_calendar,
+    ):
         """非 QDII nav_lag_days=1 缺 T-1（仅 T-2 与当日有价）→ MISSING_NAV，
         既不回退 T-2 也不改用当日价，message 指出所需 T-1 日期"""
         port = create_portfolio(test_db, code="NAV_L2", status="active")
