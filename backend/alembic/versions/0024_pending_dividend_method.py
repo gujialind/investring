@@ -41,6 +41,27 @@ AUDIT = sa.table(
     sa.column("resource_id", sa.String(50)),
     sa.column("action", sa.String(20)),
 )
+CONFIRM_ACTIONS = ("confirm", "unconfirm", "cascade_unconfirm")
+
+
+def _confirmation_audit_ids(bind):
+    """已留确认/回退痕迹的事件 ID（字符串形态，与 audit_log.resource_id 同型）。
+
+    一次性取回再在 Python 侧精确比对，不在 SQL 里 CAST 整数：`audit_log.resource_id`
+    是 VARCHAR，而 MySQL 8.4 的连接排序规则（utf8mb4_0900_ai_ci）与库/列的
+    utf8mb4_general_ci 不同，`resource_id = CAST(id AS CHAR)` 会撞 1267
+    Illegal mix of collations；隐式转整数又会把 `0123`、`123-x` 这类不同资源 ID
+    误认成同一条。SQLite 两侧都不报错，只有真实 MySQL 能暴露，故此处不留 SQL 比较。
+    """
+    return {
+        row.resource_id
+        for row in bind.execute(
+            sa.select(AUDIT.c.resource_id).where(
+                AUDIT.c.resource_type == TABLE,
+                AUDIT.c.action.in_(CONFIRM_ACTIONS),
+            )
+        )
+    }
 
 
 def _candidate_filter():
@@ -56,7 +77,6 @@ def upgrade():
     children = EVENTS.alias("child")
     # unconfirm 与快照 cascade_unconfirm 会清空 confirmed_at 和计算值，但不清净值。
     # 即使净值后来被清空，已留存的这三个审计 action 仍是确认历史证据。
-    # resource_id 必须按字符串比，不能让 MySQL 把其他资源 ID 隐式转成整数。
     # 审计是 best-effort 且可清理：无日志不证明从未确认，仍须检查所有形态和依赖。
     candidates = bind.execute(
         sa.select(
@@ -68,13 +88,10 @@ def upgrade():
                 SNAPSHOTS.c.portfolio_code == EVENTS.c.portfolio_code,
                 SNAPSHOTS.c.snapshot_date >= EVENTS.c.ex_date,
             ).label("has_snapshots"),
-            sa.exists().where(
-                AUDIT.c.resource_type == TABLE,
-                AUDIT.c.resource_id == sa.cast(EVENTS.c.id, sa.String(50)),
-                AUDIT.c.action.in_(("confirm", "unconfirm", "cascade_unconfirm")),
-            ).label("has_confirmation_audit"),
         ).where(_candidate_filter()).order_by(EVENTS.c.id)
     ).mappings().all()
+
+    audited = _confirmation_audit_ids(bind) if candidates else set()
 
     rejected = []
     for row in candidates:
@@ -95,7 +112,7 @@ def upgrade():
         non_null = [name for name in NULL_FIELDS if row[name] is not None]
         if non_null:
             reasons.append("非检测器字段非空: " + ", ".join(non_null))
-        if row["has_confirmation_audit"]:
+        if str(row["id"]) in audited:
             reasons.append("audit_log 存在确认/回退历史")
         if row["has_snapshots"]:
             reasons.append("除息日起存在 portfolio_value_snapshot")

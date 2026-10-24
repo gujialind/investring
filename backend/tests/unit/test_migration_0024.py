@@ -373,20 +373,25 @@ def test_downgrade_refuses_pending_type_for_every_status_and_source(migration_co
     )
 
 
+def test_audit_resource_id_matches_exactly_not_numerically(migration_conn):
+    """不同 resource_id 不能被当成同一事件——比较必须在 Python 侧做字符串相等。
+
+    曾在 SQL 里写 `resource_id = CAST(id AS CHAR)`：MySQL 8.4 会因连接排序规则
+    （utf8mb4_0900_ai_ci）与列的 utf8mb4_general_ci 不同报 1267，而去掉 CAST 改隐式
+    转整数又会把 `0123` / `123-other` 误认成 123。SQLite 两种写法都不报错，
+    故这条形态守卫在任何方言上都跑（不再挂 MySQL 标记）。
+    """
+    conn = migration_conn
+    key = _event(conn)
+    _audit(conn, f"{key}-other", "confirm")
+    _audit(conn, f"0{key}", "unconfirm")
+    before = _state(conn)
+    _run(migration.upgrade, conn)
+    _assert_only_types_changed(conn, before, [key])
+
+
 @pytest.mark.dialect
 class TestMysqlMigration:
-    def test_audit_resource_id_does_not_use_numeric_coercion(self, migration_conn):
-        if migration_conn.dialect.name != "mysql":
-            pytest.skip("MySQL 字符串/整数隐式比较验证")
-        conn = migration_conn
-        key = _event(conn)
-        # MySQL 的字符串 = 整数会把这些不同 ID 错认成 key，迁移必须字符串对字符串。
-        _audit(conn, f"{key}-other", "confirm")
-        _audit(conn, f"0{key}", "unconfirm")
-        before = _state(conn)
-        _run(migration.upgrade, conn)
-        _assert_only_types_changed(conn, before, [key])
-
     def test_upgrade_has_no_implicit_ddl_commit(self, migration_conn):
         if migration_conn.dialect.name != "mysql":
             pytest.skip("MySQL 纯 DML 迁移可事务回滚验证")
