@@ -41,6 +41,7 @@ from app.constants.audit_actions import (
 from app.constants.share_change_events import (
     CAPITAL_FREE_SHARE_EVENT_TYPES,
     CASH_EFFECT_EVENT_TYPES,
+    PENDING_DIVIDEND_TYPE,
 )
 from app.models.manual_market_value import ManualMarketValue
 from app.utils.quantize import quantize_nav, quantize_shares
@@ -2141,18 +2142,21 @@ def auto_confirm_after_snapshot(
     # 因此在 D（= ex_date）快照生成**之后**才被尝试确认，此时它的基数快照已存在
     # （resolve_entitlement_shares 不再报 MISSING_POSITION_SNAPSHOT），无需显式排除；
     # share_confirm_date 为 NULL 的存量事件判键回落 ex_date，行为不变。
+    # id 定序（#782 评审）：批量加锁与单笔确认/PUT 或另一批量路径并发时，行锁获取序
+    # 可预期，收窄死锁窗口；死锁重试覆盖面维持现状（仅 generate 端点）。
     pending_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "pending",
         ShareChangeEvent.share_effective_date == next_confirm_date,
         ShareChangeEvent.parent_event_id.is_(None),  # 只处理父/独立记录
-    ).all()
+    ).populate_existing().order_by(ShareChangeEvent.id).with_for_update().all()
 
     # 委托公共确认实现（基金级自动拆分 / 平台级回写 + #279 校验
     # + forced_adjustment 持仓精查），重算路径不得绕过校验
     from app.services.share_change_event_service import (
         MSG_DIV_CASH_BACKFILL_HINT,
         MSG_DIV_CASH_NOT_POSITIVE,
+        MSG_DIVIDEND_METHOD_REQUIRED,
         confirm_share_change_event,
         dividend_div_cash_invalid,
     )
@@ -2160,6 +2164,16 @@ def auto_confirm_after_snapshot(
     for event in pending_events:
         event_id = event.id
         entry: Dict[str, Any] = {"id": event_id, "type": "event"}
+        if event.event_type == PENDING_DIVIDEND_TYPE:
+            entry.update({
+                "action": "auto_confirm_skipped",
+                "code": "DIVIDEND_METHOD_REQUIRED",
+                "error": MSG_DIVIDEND_METHOD_REQUIRED,
+                "hint": "请在份额变动事件的确认弹窗选择分红方式并确认，再继续生成快照",
+            })
+            results.append(entry)
+            logger.info(f"分红方式待选择: portfolio={portfolio_code}, event_id={event_id}")
+            continue
         # #771：显式非正 div_cash 的分红事件确认必被 #764 门禁拒绝（创建/更新已挡，
         # 走到这里的只有绕过服务层直造的存量行）。照旧尝试只会刷一条
         # auto_confirm_failed WARNING、事件永久 pending；改为跳过并给出补录指引。
@@ -2343,17 +2357,26 @@ def _check_share_change_events(
     `_compute_in_transit_amounts` 计入本日快照；到确认日仍未确认则照旧阻断。
     `share_confirm_date` 为 NULL 的存量事件判键回落 `ex_date`，行为不变。
     """
-    pending_events = db.query(ShareChangeEvent).filter(
+    # id 定序（#782 复审）：超过 10 笔上限时「前 10」取最早登记者，重复运行提示子集可复现。
+    pending_events = db.query(ShareChangeEvent.id, ShareChangeEvent.event_type).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.share_effective_date <= target_date,
         ShareChangeEvent.status == "pending"
-    ).count()
-    
-    if pending_events > 0:
+    ).order_by(ShareChangeEvent.id).all()
+
+    if pending_events:
+        message = f"存在{len(pending_events)}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
+        undecided = [str(event.id) for event in pending_events if event.event_type == PENDING_DIVIDEND_TYPE]
+        if undecided:
+            # error_message 有 1000 字符上限且本段位于聚合尾部（#782 评审）：
+            # ID 只列前 10 笔，完整清单交给事件列表页筛选。
+            shown = "、".join(f"#{event_id}" for event_id in undecided[:10])
+            overflow = f"（共 {len(undecided)} 笔）" if len(undecided) > 10 else ""
+            message += f"；分红方式待定事件 {shown}{overflow}，请先选择分红方式并确认"
         return {
             "check_type": "share_change_events",
             "status": "failed",
-            "message": f"存在{pending_events}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
+            "message": message,
         }
     return {"check_type": "share_change_events", "status": "passed", "message": "无未确认的份额变动事件"}
 

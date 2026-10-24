@@ -139,6 +139,7 @@ ir schema trade              # 仅输出指定命令组
 | `INSUFFICIENT_SHARES` | 卖出/赎回份额超过可用份额 |
 | `NON_TRADING_DAY` | 提交日期不是交易日 |
 | `MISSING_NAV` | 交易确认/快照生成时缺少净值数据 |
+| `DIVIDEND_METHOD_REQUIRED` | 待定分红尚未选择方式；执行 `ir share-event confirm <ID> --event-type cash_dividend` 或选择 `reinvest_dividend`；日期省略默认除息日，保留原日期须显式传入（见 §4.7） |
 | `PRODUCT_NOT_FOUND` | 产品不存在（`details` 含查询的 code/market） |
 | `MARKET_AMBIGUOUS` | 产品代码对应多个市场（如 LOF），需显式指定 market（`details.available_markets` 列出可选市场） |
 | `NO_SNAPSHOT_BASELINE` | 组合无任何快照基线，无法追平/推进（先用 `snapshot generate` 建首日快照） |
@@ -781,7 +782,7 @@ ir trade update <ID> --cash-confirm-date YYYY-MM-DD [--notes <备注>]
 
 ### 4.7 `ir share-event` — 份额变动事件管理
 
-管理分红、再投资、拆合股等份额变动事件。
+管理分红、再投资、拆合股等份额变动事件。自动发现的 `dividend_pending` 表示“分红方式待定”，用 `preview` / `confirm` 的候选参数选择现金或再投资（#775）；人工 `create` 仍使用下表六种类型。完整业务规则由[份额变动事件](../docs/reference/business-constraints.md#rule-event)持有。
 
 #### `ir share-event list`
 
@@ -850,7 +851,7 @@ ir share-event get <ID>
 
 #### `ir share-event update`
 
-更新事件信息。
+更新事件信息，不支持修改 `event_type`（也不要通过 `--json` 传入该字段）。待定分红只编辑公告公共字段（权益登记日、除息日、每份红利、备注），分红方式及适用日期通过 `preview` / `confirm` 候选参数提交。
 
 ```bash
 ir share-event update <ID> [--ex-date YYYY-MM-DD] [--entitlement-shares N] [--ratio N] \
@@ -886,19 +887,44 @@ ir share-event delete <ID> --yes
 
 > **破坏性操作**：物理删除该事件及其子记录；已确认事件删除后还须重算其生效日及之后的快照。
 
-#### `ir share-event confirm`
+#### `ir share-event preview`
 
-确认事件（校验权益登记日持仓快照存在）。
+只读预览确认结果，不保存分红选择，也不同步外部净值。
 
 ```bash
-ir share-event confirm <ID> [--sync-nav]
+ir share-event preview <ID> [--event-type <方式>] \
+  [--cash-pay-date YYYY-MM-DD] [--share-confirm-date YYYY-MM-DD]
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|:------:|------|
+| `--event-type` | 不传 | 仅 `cash_dividend` / `reinvest_dividend`；提供即提交完整候选；不传则沿用当前记录 |
+| `--cash-pay-date` | 不传 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend`；须与 `--event-type` 同传 |
+| `--share-confirm-date` | 不传 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend`；须与 `--event-type` 同传 |
+
+**preview / confirm 共用候选语义**：带 `--event-type` 就是完整候选，两个日期省略或 API `null` 均默认除息日，**不是局部修改**，不会保留旧日期；如需保留，必须显式传入适用日期。CLI 通过省略日期表达默认，不提供 `--json` 候选入口。不带类型不能单给日期，CLI 会中文报错且不发请求；非空的不适用日期交由后端拒绝。无候选时沿用当前记录，`dividend_pending` 无方式由后端报 `DIVIDEND_METHOD_REQUIRED`。
+
+成功输出保留 `data.preview` 外壳与原计算字段；其中所有事件类型均含 `event_type`（string）、`cash_effective_date` / `share_effective_date`（YYYY-MM-DD），表示**本次预览**的类型和实际生效日，不从旧记录推断。预览是可选步骤，若先预览，确认时须携带相同候选参数。
+
+#### `ir share-event confirm`
+
+确认事件；可直接确认，无需先 preview，也不会先 GET 探测状态。
+
+```bash
+ir share-event confirm <ID> [--event-type <方式>] \
+  [--cash-pay-date YYYY-MM-DD] [--share-confirm-date YYYY-MM-DD] [--sync-nav]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--event-type` | 不传 | 仅 `cash_dividend` / `reinvest_dividend`；完整候选语义同上方 preview；待定分红必须选择 |
+| `--cash-pay-date` | 不传 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend`；须与 `--event-type` 同传，候选省略默认除息日 |
+| `--share-confirm-date` | 不传 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend`；须与 `--event-type` 同传，候选省略默认除息日 |
 | `--sync-nav` | false | 红利再投资的除息日净值缺失（`MISSING_NAV`）时自动同步该产品自除息日起的净值并重试一次（会访问外部数据源）；同步失败或仍缺失照常报 `MISSING_NAV` |
 
-> **约束**：仅 `pending` 状态可确认，且权益登记日必须有持仓快照。`reinvest_dividend` 按除息日数据源净值折算份额并回写 `reinvest_nav`：净值未同步报 `MISSING_NAV`，手填净值与数据源不一致报 `PRICE_NAV_MISMATCH`（#744）。折算份额与摊薄成本在**份额生效日**（`share_effective_date`：设了 `share_confirm_date` 取该确认日，否则取除息日）的快照入账；设了确认日时 ex_date 起至确认日前一交易日的快照按应收计入 IN_TRANSIT_DIVIDEND 在途（派生值、不落库）。
+不带候选保持原来的无 body POST；带候选以 JSON body 提交，`--sync-nav` 仍为 query 参数。选择仅在确认成功时保存。发生 `MISSING_NAV` 后，在原确认命令上追加 `--sync-nav`，或按错误中的产品与日期执行 `ir market sync` 回补；重试须保留原 `--event-type` 及日期参数，不能把待定分红改成无方式重试。
+
+仅 `pending` 可确认，已确认事件改选须先按快照保护规则 `unconfirm`；日期、净值、在途及快照校验均由后端处理，详见[业务规则](../docs/reference/business-constraints.md#rule-event)。
 
 #### `ir share-event cancel`
 
@@ -1677,6 +1703,8 @@ ir trade update 2 --cash-confirm-date 2025-01-13
 
 ### 5.2 分红处理
 
+**人工已选方式的事件**（无候选确认保留原日期）：
+
 ```bash
 # 1. 创建现金分红事件：周五除息，周六到账（允许非交易日）
 ir share-event create --portfolio-code PORT001 --product-code 000051.OF --market CN_OTC \
@@ -1698,6 +1726,23 @@ ir snapshot generate-next --portfolio-code PORT001
 ```
 
 `--cash-pay-date` 可选，格式为 YYYY-MM-DD；创建省略或 JSON `null` 时默认除息日到账。更新时省略不改，清空用 `ir share-event update <ID> --json '{"cash_pay_date":null}'`（须在未确认状态，已确认先按快照保护规则取消确认）。到账只改变现金可用时间，不再确认一次分红收益；业务口径见[份额变动事件](../docs/reference/business-constraints.md#rule-event)与[现金账本](../docs/reference/business-constraints.md#rule-cash)。
+
+**自动发现的待定分红**（#775）：用 `ir share-event list --portfolio-code PORT001` 找到 `event_type=dividend_pending` 的事件 ID，再从下面两种方式中选一种。预览可跳过；若预览，确认须带相同候选。候选省略日期默认除息日，保留旧日期须显式传入，详见 §4.7。
+
+```bash
+# 方式一：现金分红；到账日按实际公告填写
+ir share-event preview <ID> --event-type cash_dividend --cash-pay-date <到账日>
+ir share-event confirm <ID> --event-type cash_dividend --cash-pay-date <到账日>
+```
+
+```bash
+# 方式二：红利再投资（与现金方案二选一）；份额确认日按实际公告填写
+ir share-event preview <ID> --event-type reinvest_dividend --share-confirm-date <份额确认日>
+ir share-event confirm <ID> --event-type reinvest_dividend --share-confirm-date <份额确认日>
+# 若 MISSING_NAV，保留上述候选参数，在原 confirm 命令上追加 --sync-nav
+```
+
+待定分红阻塞快照时，先选择方式并成功确认，再执行 `ir snapshot catch-up --portfolio-code PORT001 --to-date <目标日>` 继续推进；不要通过 PUT 改方式或删除事件来绕过。完整阻塞与恢复边界见[业务规则](../docs/reference/business-constraints.md#rule-event)。
 
 ### 5.3 日常运维
 

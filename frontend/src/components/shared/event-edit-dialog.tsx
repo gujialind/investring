@@ -101,6 +101,8 @@ export function EventEditDialog({
   if (!event || !form) return null;
 
   const setField = (patch: Partial<EditFormState>) => setForm({ ...form, ...patch });
+  const isPendingDividend = event.event_type === "dividend_pending";
+  const isDividend = isPendingDividend || event.event_type === "cash_dividend" || event.event_type === "reinvest_dividend";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,7 +119,7 @@ export function EventEditDialog({
     // #764：每份分红金额非空时必须为正（0/负值后端 422 INVALID_PARAM）；空串 = 不改此字段，
     // 与下方 NUM_FIELDS「非空才入 payload」同口径，故不拦
     if (
-      (event.event_type === "cash_dividend" || event.event_type === "reinvest_dividend") &&
+      isDividend &&
       form.div_cash.trim() !== "" &&
       !(parseFloat(form.div_cash) > 0)
     ) {
@@ -128,7 +130,9 @@ export function EventEditDialog({
     // reinvest_nav / cash_pay_date / share_confirm_date 各自在留空时显式发 null，而清空
     // div_cash 在界面上等于不提交该字段。故「存量 0/负值行」在本弹窗只有「改为正数」这一条
     // 恢复路径；「显式清空为 null」只能走 CLI `ir share-event update <ID> --json '{"div_cash":null}'`。
-    for (const field of NUM_FIELDS) {
+    // 待定分红只能编辑公告公共字段，不能重发隐藏的方式专属/派生值（即使存量有残留）。
+    const fields = isPendingDividend ? (["div_cash"] as const) : NUM_FIELDS;
+    for (const field of fields) {
       const raw = form[field].trim();
       if (raw !== "") payload[field] = parseFloat(raw);
     }
@@ -165,7 +169,11 @@ export function EventEditDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>编辑份额变动事件</DialogTitle>
-          <DialogDescription>事件类型、产品、市场、平台不可修改</DialogDescription>
+          <DialogDescription>
+            {isPendingDividend
+              ? "分红方式在确认时选择，此处仅编辑公告公共字段；产品、市场、平台不可修改"
+              : "事件类型、产品、市场、平台不可修改"}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
@@ -227,8 +235,8 @@ export function EventEditDialog({
               </div>
             )}
 
-            {/* 按事件类型渲染可编辑数值字段（镜像新建弹窗字段集） */}
-            {(event.event_type === "cash_dividend" || event.event_type === "reinvest_dividend") && (
+            {/* 按事件类型渲染可编辑数值字段（待定分红也需补录每份红利） */}
+            {isDividend && (
               <div className={gridCls}>
                 <div className="space-y-2">
                   <Label htmlFor="edit_div_cash">每份分红金额（元）</Label>

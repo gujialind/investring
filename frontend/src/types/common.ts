@@ -37,6 +37,7 @@ export type TransactionStatus = "pending" | "confirmed" | "cancelled";
 export type EventType =
   | "cash_dividend"
   | "reinvest_dividend"
+  | "dividend_pending"
   | "share_split"
   | "share_merge"
   | "bonus_share"

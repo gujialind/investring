@@ -78,6 +78,13 @@ export interface ShareChangeEventUpdate {
   notes?: string;
 }
 
+/** 完整分红候选（#775）：带方式时，适用日期省略/null 均默认除息日，不沿用旧日期。 */
+export interface ShareChangeEventConfirmSelection {
+  event_type: "cash_dividend" | "reinvest_dividend";
+  cash_pay_date?: string | null;
+  share_confirm_date?: string | null;
+}
+
 /**
  * 事件确认前预览的计算结果（#424，与后端 ShareChangeEventPreviewResult 对齐）。
  * 与确认后落库值逐一相等；强制调整的 shares_after 恒为 null（确认不写回该字段）。
@@ -85,6 +92,9 @@ export interface ShareChangeEventUpdate {
  * 解析净值）与 nav_date（取价日 = 除息日）仅分红再投资有值。
  */
 export interface ShareChangeEventPreview {
+  event_type: string;
+  cash_effective_date: string;
+  share_effective_date: string;
   entitlement_shares?: number;
   shares_change?: number;
   shares_after?: number;

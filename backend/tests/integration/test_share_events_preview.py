@@ -112,6 +112,9 @@ class TestShareChangeEventPreview:
         test_db.expire_all()
         confirmed = test_db.query(ShareChangeEvent).filter(ShareChangeEvent.id == event.id).one()
         assert preview == {
+            "event_type": confirmed.event_type,
+            "cash_effective_date": confirmed.cash_effective_date.isoformat(),
+            "share_effective_date": confirmed.share_effective_date.isoformat(),
             "entitlement_shares": float(confirmed.entitlement_shares),
             "shares_change": float(confirmed.shares_change),
             "shares_after": float(confirmed.shares_after),

@@ -108,11 +108,21 @@ WORKFLOWS = {
         "steps": [
             "ir share-event create --event-type <type> --entitlement-date D1 --ex-date D2 [--cash-pay-date A] [--share-confirm-date S] ...",
             "确保 entitlement_date 当日快照已存在",
+            "ir share-event preview <id>（可选，只读核对当前记录的确认结果）",
             "ir share-event confirm <id>",
             "ir snapshot generate --portfolio-code <code> --target-date <ex_date>",
             "延期到账时继续逐交易日生成快照；非交易日到账由下一交易日快照消费",
         ],
-        "notes": "默认 ex_date > entitlement_date 且均为交易日；reinvest_dividend 设了 share_confirm_date 时允许 entitlement_date == ex_date（同日登记/除息）。share_confirm_date 仅 reinvest_dividend 可设、须为交易日且晚于 ex_date（非法报 INVALID_SHARE_CONFIRM_DATE）；份额生效日统一为 share_effective_date（设 S 取 S、否则取 ex_date），份额应用、快照窗口与自动确认都按它。pending 事件设了 S 后应收已计入 ex_date 及之后的快照，改/取消/删除会报 SNAPSHOT_DEPENDENCY，须先删该日及之后快照。清空 S 用 ir share-event update <id> --json '{\"share_confirm_date\":null}'（未确认状态）。基金级事件（拆分/合并/送股）不传 platform_code，平台级（分红等）必传。cash_pay_date 为可选 YYYY-MM-DD，仅 cash_dividend 可设，须 >= ex_date，允许非交易日；创建省略/null 默认除息日，update 省略不改，清空用 ir share-event update <id> --json '{\"cash_pay_date\":null}'，不新增清空选项。confirmed 仍须先 unconfirm 才能修改；除息日起未到账计 IN_TRANSIT_DIVIDEND（现金分红在途与再投资应收共用该方向），不计可用现金、派生不落库；到账不重复确认分红收益。reinvest_dividend 仅限场外份额（CN_OTC/HK_MUTUAL），--reinvest-nav 可省略：确认时取除息日数据源净值折算并回写，手填仅作校验；除息日净值未同步报 MISSING_NAV，可 ir share-event confirm <id> --sync-nav",
+        "notes": "不带候选参数的 preview/confirm 沿用当前记录；待定分红见「待定分红选择」配方。cash_pay_date 仅 cash_dividend 可设，允许非交易日；share_confirm_date 仅 reinvest_dividend 可设。日期均为 YYYY-MM-DD，创建省略/null 默认除息日，update 省略不改；清空用 ir share-event update <id> --json '{\"cash_pay_date\":null}' 或 --json '{\"share_confirm_date\":null}'。update 不支持改 event_type；confirmed 须先按快照保护规则 unconfirm。MISSING_NAV 可在原确认命令上追加 --sync-nav，保留原 --event-type 及日期参数。完整日期、净值、在途与快照规则见 docs/reference/business-constraints.md#rule-event。",
+    },
+    "待定分红选择": {
+        "steps": [
+            "ir share-event list --portfolio-code <code>（定位 dividend_pending 事件）",
+            "ir share-event preview <id> --event-type cash_dividend [--cash-pay-date A] 或 ir share-event preview <id> --event-type reinvest_dividend [--share-confirm-date S]（可选，只读）",
+            "ir share-event confirm <id> --event-type cash_dividend [--cash-pay-date A] 或 ir share-event confirm <id> --event-type reinvest_dividend [--share-confirm-date S]（若已预览，携带相同候选）",
+            "ir snapshot catch-up --portfolio-code <code> --to-date <目标日>（确认后继续推进）",
+        ],
+        "notes": "dividend_pending 必须显式选方式，否则后端报 DIVIDEND_METHOD_REQUIRED；CLI 不预先 GET 探测，也不强制 preview。preview/confirm 带 --event-type 即完整候选，cash_pay_date/share_confirm_date 省略或 null 均默认除息日，不是局部修改；保留旧日期必须显式传入。没有 --event-type 不能单给日期。预览不保存选择，确认成功才落库；preview 外壳内的 event_type/cash_effective_date/share_effective_date 是本次结果，不从旧记录推断。完整业务边界见 docs/reference/business-constraints.md#rule-event。",
     },
     "快照追平": {
         "steps": [

@@ -36,6 +36,7 @@ ERROR_HINTS: dict = {
     "CANNOT_CANCEL_EXCHANGE": "场内交易当天确认、不可 cancel；已确认的用 unconfirm 回退",
     "TRANSFER_NOT_READY": "转移未到确认日，到 confirm_date 当日再执行 ir cash-transfer confirm",
     "MISSING_POSITION_SNAPSHOT": "权益登记日持仓快照缺失，先生成该日快照: ir snapshot generate",
+    "DIVIDEND_METHOD_REQUIRED": "请先选择分红方式：ir share-event confirm <id> --event-type cash_dividend 或 ir share-event confirm <id> --event-type reinvest_dividend；可先用 ir share-event preview <id> 携带相同候选参数核对；适用日期省略默认除息日，保留原日期须显式传入",
     "MANUAL_OVERRIDE_NOT_FOUND": "未找到对应现金覆盖记录: ir position list-cash-overrides --portfolio-code <code> 核查后重试",
     "PLATFORM_NOT_COVERED": "平台级事件未覆盖全部有持仓平台，补录其余平台事件，或传 --force-cover 降级为 warning",
     "PLATFORM_REQUIRED": "该平台操作必须指定平台: 加 --platform-code <平台代码>，用 ir platform list 查询可用平台",
@@ -82,13 +83,17 @@ def get_hint(code: str, details: Optional[dict] = None) -> Optional[str]:
         )
     # 份额变动事件（红利再投资）的净值错误带 event_id，与调仓同码但补救命令不同（#744）
     event_id = details.get("event_id")
+    if code == "DIVIDEND_METHOD_REQUIRED" and event_id is not None:
+        return ERROR_HINTS[code].replace("<id>", str(event_id))
     if code == "MISSING_NAV" and event_id is not None:
         product = details.get("product_code") or "<product_code>"
         market = details.get("market") or "<market>"
         nav_date = details.get("nav_date") or "<除息日>"
         return (
-            f"除息日净值未同步: ir share-event confirm {event_id} --sync-nav 自动同步并确认，"
-            f"或 ir market sync {product} {market} --start-date {nav_date} --end-date {nav_date} 回补后重试"
+            "除息日净值未同步: 在原确认命令上追加 --sync-nav 自动同步并确认"
+            f"（ir share-event confirm {event_id} --sync-nav）；"
+            "若原命令带 --event-type 及日期参数，重试须保留完整候选；待定分红仍须显式选择方式。"
+            f"或 ir market sync {product} {market} --start-date {nav_date} --end-date {nav_date} 回补后携带原候选参数重试"
         )
     if code == "PRICE_NAV_MISMATCH" and event_id is not None:
         return (

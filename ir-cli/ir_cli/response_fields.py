@@ -89,6 +89,10 @@ RESPONSE_FIELDS: dict = {
             "notes": {
                 "product_name": "读侧派生：仅 list 端点 join 产品表填充，产品缺失为null；get/单对象端点恒为null"
             }
+        },
+        "preview": {
+            "shape": "object",
+            "fields": "preview:obj"
         }
     },
     "asset-classification": {

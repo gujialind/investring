@@ -1,11 +1,11 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, ConfigDict
+from typing import List, Literal, Optional
 from datetime import date, datetime
 
 
 class ShareChangeEventBase(BaseModel):
     portfolio_code: str
-    event_type: str  # cash_dividend/reinvest_dividend/share_split/share_merge/bonus_share/forced_adjustment
+    event_type: str  # dividend_pending/cash_dividend/reinvest_dividend/share_split/share_merge/bonus_share/forced_adjustment
     ex_date: date
     entitlement_date: date
     cash_pay_date: Optional[date] = None
@@ -31,6 +31,14 @@ class ShareChangeEventBase(BaseModel):
 
 class ShareChangeEventCreate(ShareChangeEventBase):
     pass
+
+
+class ShareChangeEventConfirmSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["cash_dividend", "reinvest_dividend"]
+    cash_pay_date: Optional[date] = None
+    share_confirm_date: Optional[date] = None
 
 
 class ShareChangeEventUpdate(BaseModel):
@@ -76,6 +84,9 @@ class ShareChangeEventPreviewResult(BaseModel):
     nav_date 为其取价日（= 除息日），仅 reinvest_dividend 有值。
     """
 
+    event_type: str
+    cash_effective_date: date
+    share_effective_date: date
     entitlement_shares: Optional[float] = None
     shares_change: Optional[float] = None
     shares_after: Optional[float] = None

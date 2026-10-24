@@ -4704,6 +4704,60 @@
               "type": "integer",
               "title": "Id"
             }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "cash_dividend",
+                    "reinvest_dividend"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "name": "cash_pay_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cash Pay Date"
+            }
+          },
+          {
+            "name": "share_confirm_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Share Confirm Date"
+            }
           }
         ],
         "responses": {
@@ -4909,6 +4963,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ShareChangeEventConfirmSelection"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Selection"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -12587,6 +12658,48 @@
         "title": "RecalculationResult",
         "description": "区间重算结果"
       },
+      "ShareChangeEventConfirmSelection": {
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "cash_dividend",
+              "reinvest_dividend"
+            ],
+            "title": "Event Type"
+          },
+          "cash_pay_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Pay Date"
+          },
+          "share_confirm_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Confirm Date"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_type"
+        ],
+        "title": "ShareChangeEventConfirmSelection"
+      },
       "ShareChangeEventCreate": {
         "properties": {
           "portfolio_code": {
@@ -12831,6 +12944,20 @@
       },
       "ShareChangeEventPreviewResult": {
         "properties": {
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "cash_effective_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Cash Effective Date"
+          },
+          "share_effective_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Share Effective Date"
+          },
           "entitlement_shares": {
             "anyOf": [
               {
@@ -12922,6 +13049,11 @@
           }
         },
         "type": "object",
+        "required": [
+          "event_type",
+          "cash_effective_date",
+          "share_effective_date"
+        ],
         "title": "ShareChangeEventPreviewResult",
         "description": "事件确认前预览的计算结果（与真实确认共用同一计算实现，#424）。\n\n四个字段与确认后落库值逐一相等，例外都在 forced_adjustment：\nshares_change/cash_change 是用户直填值的回显；shares_after 恒为 null——\n确认路径刻意保留用户直填的「调整后余额」、不计算写回（见 apply_event_fields），\n预览照实回 null，不编造确认不会产生的值。\n\n分红明细（#744）：div_cash（每份分红）与 dividend_amount（到分的红利金额）仅\ncash_dividend / reinvest_dividend 有值；reinvest_nav 为确认将回写的解析净值、\nnav_date 为其取价日（= 除息日），仅 reinvest_dividend 有值。"
       },

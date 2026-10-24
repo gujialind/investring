@@ -4,6 +4,7 @@ import {
   ShareChangeEventCreate,
   ShareChangeEventUpdate,
   ShareChangeEventPreviewResponse,
+  ShareChangeEventConfirmSelection,
 } from "@/types/share-change-event";
 import { PaginatedResponse } from "@/types/common";
 
@@ -33,10 +34,11 @@ export const shareChangeEventApi = {
     request<ShareChangeEvent>({ method: "GET", url: `/share-change-events/${id}` }),
 
   /** 确认前预览（#424）：与真实确认共用后端计算实现，返回值即确认后将落库的值 */
-  preview: (id: number) =>
+  preview: (id: number, selection?: ShareChangeEventConfirmSelection) =>
     request<ShareChangeEventPreviewResponse>({
       method: "GET",
       url: `/share-change-events/${id}/preview`,
+      params: selection,
     }),
 
   create: (data: ShareChangeEventCreate, options?: { forceCover?: boolean }) =>
@@ -52,10 +54,11 @@ export const shareChangeEventApi = {
   update: (id: number, data: ShareChangeEventUpdate) =>
     request<ShareChangeEvent>({ method: "PUT", url: `/share-change-events/${id}`, data }),
 
-  confirm: (id: number) =>
+  confirm: (id: number, selection?: ShareChangeEventConfirmSelection) =>
     request<{ message: string; event: ShareChangeEvent }>({
       method: "POST",
       url: `/share-change-events/${id}/confirm`,
+      data: selection,
     }),
 
   unconfirm: (id: number) =>
