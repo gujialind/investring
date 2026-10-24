@@ -604,7 +604,10 @@ test.describe('现金流水页（#725，双端）', () => {
 
   // #730 反向用例：`-¥1,234,567.89` = 14 字符未达阈值，不得过度降档——移动双列 /
   // 桌面四列同排（桌面 1280 命中 lg）。钉住「判据取展示串长度」不会把 7 位金额也拖进单列。
-  test('概览四卡：移动端 7 位带符号仍双列（#730 不过度降档）', async ({ page }) => {
+  // 桌面侧另钉「宽视口确实是四列」（#772 的容器查询判据）：下面那对 y/x 断言在两列下同样
+  // 为真，`@min-[848px]:grid-cols-4` 静默失效（类名笔误、任意值容器查询变体未生成、twMerge
+  // 误并）时全绿——只有数「四卡占几行」才能区分 2 列与 4 列。
+  test('概览四卡：移动端 7 位带符号仍双列（#730 不过度降档）', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
     await mockOverviewValues(page, {
       available: '-1234567.89',
@@ -626,6 +629,23 @@ test.describe('现金流水页（#725，双端）', () => {
     expect(second, 'stat-in_transit 应已渲染').not.toBeNull();
     expect(second!.y).toBe(first!.y);
     expect(second!.x).toBeGreaterThan(first!.x);
+
+    if (testInfo.project.name !== 'mobile') {
+      // 1280 视口 → 栅格容器 910px ≥ 848px → 四列单行；降两列则是 2 行 × 2 卡。
+      const keys = ['available', 'in_transit', 'inflow', 'outflow'] as const;
+      const rows = new Map<number, string[]>();
+      for (const k of keys) {
+        const box = await page.getByTestId(`stat-${k}`).boundingBox();
+        expect(box, `stat-${k} 应已渲染`).not.toBeNull();
+        const y = Math.round(box!.y);
+        rows.set(y, [...(rows.get(y) ?? []), k]);
+      }
+      expect(
+        rows.size,
+        `容器 910px ≥ 848px 应为四列单行，实测 ${rows.size} 行：${[...rows.values()].map((r) => r.join('/')).join(' | ')}`,
+      ).toBe(1);
+      expect([...rows.values()][0], '单行应含全部四卡').toHaveLength(4);
+    }
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
@@ -683,4 +703,70 @@ test.describe('现金流水页（#725，双端）', () => {
       expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
     });
   }
+});
+
+/**
+ * #772：窄桌面档（`lg` 下界 1024）的页面级形态。此前 `main` 作为 flex 子项带内容自动
+ * 最小宽，被明细表的最小内容宽（实测 861.84px，七列表头/`whitespace-nowrap` 单元格之和）
+ * 钉在 975.84px → 先挤 sidebar（1024 档只剩 99px）、再挤破视口（`scrollWidth` 1075）。
+ * 本用例钉住修复后的三件事：整页不横滚、sidebar 保住 `w-64`、四卡在该档降两列后仍无叠印。
+ * 四卡取 #745/#770 同一 15 字符夹具（`-¥12,345,678.90`，墨迹 216.05px）——它是四列档
+ * 的临界串长，两列下余量最大，故同时是「不该再给四列」的判据。
+ */
+test.describe('概览页窄桌面档（#772，1024 视口）', () => {
+  test.use({ viewport: { width: 1024, height: 900 } });
+
+  test('1024 档：无整页横向滚动、sidebar 保 256px、四卡降两列不叠印', async ({ page }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== 'chromium',
+      '1024 属桌面 `lg` 档：mobile project 是 390px iPhone 13 视口，该档无 sidebar 与四列栅格（移动形态由上方 #730 用例覆盖）',
+    );
+    const errors = collectPageErrors(page);
+    const wide = '-12345678.90';
+    await mockOverviewValues(page, {
+      available: wide,
+      in_transit: wide,
+      inflow: wide,
+      outflow: wide,
+    });
+
+    await gotoPortfolioSubpage(page, E2E_ACTIVE, 'cash-flows');
+    await expect(page.getByTestId('stat-available')).toContainText('-¥12,345,678.90');
+
+    // ① 整页不横滚：明细表的溢出由表自身的滚动容器承接，不外溢到文档
+    const box = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    expect(
+      box.scrollWidth,
+      `1024 档整页 scrollWidth=${box.scrollWidth} 应 ≤ 视口宽 ${box.innerWidth}`,
+    ).toBeLessThanOrEqual(box.innerWidth);
+
+    // ② sidebar 不被压窄（`w-64 shrink-0` = 256px；修复前实测 99px）
+    const aside = await page.locator('aside').boundingBox();
+    expect(aside, '1024 档应渲染桌面 sidebar').not.toBeNull();
+    expect(Math.abs(aside!.width - 256), `sidebar 宽应为 256px，实测 ${aside!.width}`).toBeLessThan(1);
+
+    // ③ 四卡：降两列后同排墨迹间隙仍为正，末卡墨迹不越视口
+    const inks = await statValueInks(page, ['available', 'in_transit', 'inflow', 'outflow']);
+    const gaps = inks.flatMap((a) =>
+      inks
+        .filter((b) => b.key !== a.key && Math.abs(b.top - a.top) < 2 && b.left > a.left)
+        .map((b) => b.left - a.right),
+    );
+    gaps.forEach((g) =>
+      expect(
+        g,
+        `1024 档邻卡主数值墨迹间隙应 ≥8px，实测 [${gaps.map((v) => v.toFixed(2)).join(', ')}]`,
+      ).toBeGreaterThanOrEqual(8),
+    );
+    expect(gaps, '1024 档容器 654px 不足四列（需 ≥848px），应降两列、量到 2 对同排邻卡').toHaveLength(2);
+    expect(
+      Math.max(...inks.map((i) => i.right)),
+      '末卡墨迹右缘不应越过视口宽',
+    ).toBeLessThanOrEqual(box.innerWidth);
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
 });

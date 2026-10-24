@@ -491,3 +491,47 @@ class TestExhaustedCalendarWrites:
             error_code="CALENDAR_NOT_SYNCED", invalid_date=self.LAST_OPEN.isoformat(),
         )
         assert resp.json()["detail"]["details"]["direction"] == "next"
+
+
+class TestCalendarListExchangeDefault:
+    """GET /api/trading-calendar 列表端点 exchange 缺省 SSE（#778 评审 M-1(a)/R-2 钉住）。
+
+    双日历行并存时缺省只回 SSE 行——前端 date-picker 绿点集合与 CLI calendar
+    输出行数的既有语义由此锁定；防未来改回「缺省=全部市场」造成同日两行混入。
+    """
+
+    def test_default_returns_only_sse_rows_when_dual_calendar(
+        self, client, viewer_headers, test_db,
+    ):
+        from tests.integration.calendar_helpers import (
+            mirror_hkex_calendar, remove_hkex_calendar,
+        )
+        start, end = date(2026, 11, 2), date(2026, 11, 6)  # 周一至周五，种子 SSE 窗口内
+        try:
+            mirror_hkex_calendar(test_db, start, end)
+
+            resp = client.get(
+                "/api/trading-calendar",
+                params={"start_date": start.isoformat(), "end_date": end.isoformat()},
+                headers=viewer_headers,
+            )
+            assert resp.status_code == 200
+            rows = resp.json()
+            assert len(rows) == 5
+            assert {r["exchange"] for r in rows} == {"SSE"}
+
+            resp_hk = client.get(
+                "/api/trading-calendar",
+                params={
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                    "exchange": "HKEX",
+                },
+                headers=viewer_headers,
+            )
+            assert resp_hk.status_code == 200
+            rows_hk = resp_hk.json()
+            assert len(rows_hk) == 5
+            assert {r["exchange"] for r in rows_hk} == {"HKEX"}
+        finally:
+            remove_hkex_calendar(test_db, start, end)

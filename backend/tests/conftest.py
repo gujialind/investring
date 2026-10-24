@@ -267,8 +267,10 @@ def viewer_headers(viewer_token: str) -> dict:
 def sample_trading_day(test_db: Session) -> date:
     """返回一个确认为交易日的日期（2025-01-06 是周一）"""
     d = date(2025, 1, 6)
-    # 确保该日期存在于交易日历中
-    existing = test_db.query(TradingCalendar).filter(TradingCalendar.calendar_date == d).first()
+    # 确保该日期存在于交易日历中（#777 双日历后按 (date, exchange) 判定）
+    existing = test_db.query(TradingCalendar).filter(
+        TradingCalendar.calendar_date == d, TradingCalendar.exchange == "SSE"
+    ).first()
     if not existing:
         test_db.add(TradingCalendar(calendar_date=d, is_open=True, exchange="SSE"))
         test_db.commit()
@@ -279,7 +281,9 @@ def sample_trading_day(test_db: Session) -> date:
 def sample_non_trading_day(test_db: Session) -> date:
     """返回一个确认为非交易日的日期（2025-01-04 是周六）"""
     d = date(2025, 1, 4)
-    existing = test_db.query(TradingCalendar).filter(TradingCalendar.calendar_date == d).first()
+    existing = test_db.query(TradingCalendar).filter(
+        TradingCalendar.calendar_date == d, TradingCalendar.exchange == "SSE"
+    ).first()
     if not existing:
         test_db.add(TradingCalendar(calendar_date=d, is_open=False, exchange="SSE"))
         test_db.commit()
