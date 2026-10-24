@@ -2142,12 +2142,14 @@ def auto_confirm_after_snapshot(
     # 因此在 D（= ex_date）快照生成**之后**才被尝试确认，此时它的基数快照已存在
     # （resolve_entitlement_shares 不再报 MISSING_POSITION_SNAPSHOT），无需显式排除；
     # share_confirm_date 为 NULL 的存量事件判键回落 ex_date，行为不变。
+    # id 定序（#782 评审）：批量加锁与单笔确认/PUT 或另一批量路径并发时，行锁获取序
+    # 可预期，收窄死锁窗口；死锁重试覆盖面维持现状（仅 generate 端点）。
     pending_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "pending",
         ShareChangeEvent.share_effective_date == next_confirm_date,
         ShareChangeEvent.parent_event_id.is_(None),  # 只处理父/独立记录
-    ).populate_existing().with_for_update().all()
+    ).populate_existing().order_by(ShareChangeEvent.id).with_for_update().all()
 
     # 委托公共确认实现（基金级自动拆分 / 平台级回写 + #279 校验
     # + forced_adjustment 持仓精查），重算路径不得绕过校验
@@ -2365,7 +2367,11 @@ def _check_share_change_events(
         message = f"存在{len(pending_events)}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
         undecided = [str(event.id) for event in pending_events if event.event_type == PENDING_DIVIDEND_TYPE]
         if undecided:
-            message += f"；分红方式待定事件 #{'、#'.join(undecided)}，请先选择分红方式并确认"
+            # error_message 有 1000 字符上限且本段位于聚合尾部（#782 评审）：
+            # ID 只列前 10 笔，完整清单交给事件列表页筛选。
+            shown = "、".join(f"#{event_id}" for event_id in undecided[:10])
+            overflow = f"（共 {len(undecided)} 笔）" if len(undecided) > 10 else ""
+            message += f"；分红方式待定事件 {shown}{overflow}，请先选择分红方式并确认"
         return {
             "check_type": "share_change_events",
             "status": "failed",

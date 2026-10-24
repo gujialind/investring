@@ -127,8 +127,14 @@ export function useUnconfirmShareChangeEvent(portfolioCode: string) {
 
   return useMutation({
     mutationFn: (id: number) => shareChangeEventApi.unconfirm(id),
-    onSuccess: () => {
+    // 回退反转确认的全部账务效果（份额/现金/快照闸门），失效集合与 confirm 对称（#782 评审）
+    onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.shareChangeEvents.byPortfolio(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.shareChangeEvents.preview(id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.positions.byPortfolio(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.status(portfolioCode) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       addToast({
         type: "success",
         title: "取消确认成功",

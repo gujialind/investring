@@ -943,6 +943,9 @@ def test_mysql_two_sessions_recheck_locked_event_before_writing(test_engine, _se
             winner.rollback()
             if event_id is not None:
                 winner.query(AuditLog).filter_by(resource_type="share_change_event", resource_id=str(event_id)).delete()
+            # generate_daily_snapshots 会提交 snapshot 审计（resource_name=组合码）；不按本用例
+            # UUID 组合删净，会毒化 test_audit_service / test_system_logs 的空表与计数断言（仅 MySQL 显形）。
+            winner.query(AuditLog).filter_by(resource_type="snapshot", resource_name=env.port).delete(synchronize_session=False)
             for model in (ShareChangeEvent, InvestorHolding, PortfolioPosition, PortfolioValueSnapshot, Trade, Subscription):
                 winner.query(model).filter_by(portfolio_code=env.port).delete(synchronize_session=False)
             winner.query(PriceRecord).filter_by(product_code=env.fund).delete(synchronize_session=False)
