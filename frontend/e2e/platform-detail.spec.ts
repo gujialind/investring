@@ -859,7 +859,7 @@ test.describe("现金市值更新 Dialog", () => {
     // 为什么必须自建组合：共享 E2E_ACTIVE 上两支的正向分支都不可达——它在写入日有 1 笔
     // 已确认现金交易（warnings 恒非空 ⇒ 落 warnings 支，短文案永不渲染），而固定快照形态
     // 使 regen 恒 false（长文案支永不渲染）。禁止对 E2E_ACTIVE 跑 recalculate/catch-up/
-    // generate-next 来凑形态（frontend/AGENTS.md §4 红线：固定快照与可编辑窗口是种子契约）。
+    // generate-next 来凑形态（frontend/e2e/AGENTS.md §1 红线：固定快照与可编辑窗口是种子契约）。
     // 选日依据：申购确认同样产生 confirmed CASH 腿，日期 = apply_date 的 T+1
     // （backend/app/services/subscription_service.py 的 get_next_trading_day），所以
     // 「不造交易」并不能让 warnings 为空，必须把写入日错开到确认日之后：

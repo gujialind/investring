@@ -294,7 +294,7 @@ test.describe("产品详情页", () => {
   test("整页读取失败 → 页级失败态与重试，而非「未找到该产品持仓」空态（#681）", async ({ page }) => {
     // 本条断的是「后端消息上桌 / 不落空态 / 重试真重发」，**不**断言像素：多传紧凑
     // `className` 让页级形态退回卡内，这条照样绿（E2E 只断定位与文本，视觉层归目检，
-    // 见 frontend/AGENTS.md §4 与 §目检）。「不传 className」靠代码评审与三处渲染同一个
+    // 见 frontend/e2e/AGENTS.md §1 与 frontend/AGENTS.md §5「目检」）。「不传 className」靠代码评审与三处渲染同一个
     // 组件缺省分支来保证。
     // 判据 scoped 到 holdings/by-product，绝不写 `**/api/**`：本页还发 nav-analysis、
     // nav-history、trades 与 /api/platforms，写宽会把它们一并打成 500，用例就不再只对

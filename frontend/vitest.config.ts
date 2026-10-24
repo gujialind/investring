@@ -42,7 +42,7 @@ import { defineConfig } from "vitest/config";
 // createJSONStorage catch 成 undefined）整体退化为「每次 set 只 console.warn、不落盘」，
 // 所以并入换来的是**低覆盖**（会红）而非假覆盖，但真正要验的那条契约「登录态持久化」
 // 在 node 下永远测不到。要收它先得有浏览器环境，即回到「不引 jsdom/RTL」的取舍。
-// 职责边界不变：hooks 与组件交互归 Playwright E2E（§4）。重新评估的触发条件（可判定，
+// 职责边界不变：hooks 与组件交互归 Playwright E2E（见 frontend/e2e/AGENTS.md）。重新评估的触发条件（可判定，
 // 不是「以后再看」）：① 出现任一「根因在 hooks 内的纯计算逻辑、且 E2E 定位不到具体
 // 分支」的线上缺陷——已知形态即 useDashboardStats 里 filter/reduce 出来的 totalValue
 // 与 avgReturn：算式是纯的，却包在四个 react-query hook 底下，出错只在页面上表现为
