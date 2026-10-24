@@ -2357,11 +2357,12 @@ def _check_share_change_events(
     `_compute_in_transit_amounts` 计入本日快照；到确认日仍未确认则照旧阻断。
     `share_confirm_date` 为 NULL 的存量事件判键回落 `ex_date`，行为不变。
     """
+    # id 定序（#782 复审）：超过 10 笔上限时「前 10」取最早登记者，重复运行提示子集可复现。
     pending_events = db.query(ShareChangeEvent.id, ShareChangeEvent.event_type).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.share_effective_date <= target_date,
         ShareChangeEvent.status == "pending"
-    ).all()
+    ).order_by(ShareChangeEvent.id).all()
 
     if pending_events:
         message = f"存在{len(pending_events)}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"

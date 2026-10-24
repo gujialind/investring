@@ -255,6 +255,22 @@ def test_http_without_selection_rejects(client, admin_headers, test_db, base, op
     assert test_db.query(ShareChangeEvent).filter_by(parent_event_id=event_id).count() == 0
 
 
+def test_gate_message_caps_undecided_ids_in_id_order(test_db, ledger):
+    """积压超过 10 笔时消息只按 id 序列出前 10 笔并附总数（#782 复审 Nit）。
+
+    error_message 有 1000 字符上限，截断抗性依赖「前 10 + 共 M 笔」；定序让
+    重复运行提示的 ID 子集可复现，完整清单交给事件列表页筛选。
+    """
+    events = [_raw(test_db, ledger) for _ in range(11)]
+    blocked = _check_share_change_events(test_db, ledger.port, EX)
+    assert blocked["status"] == "failed"
+    message = blocked["message"]
+    assert "（共 11 笔）" in message
+    for event in events[:10]:
+        assert f"#{event.id}" in message
+    assert f"#{events[10].id}" not in message
+
+
 @pytest.mark.parametrize("method", METHODS)
 @pytest.mark.parametrize("delayed", [False, True], ids=["ex-date", "later-date"])
 def test_api_choice_resumes_snapshots_and_recalculation_is_idempotent(
