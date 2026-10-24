@@ -135,6 +135,7 @@ def _should_run_today(db, lock_name: str) -> bool:
     """
     from sqlalchemy import text
     from app.models.trading_calendar import TradingCalendar
+    from app.services.trading_utils import SSE_EXCHANGE
 
     acquired = db.execute(text("SELECT GET_LOCK(:name, 0)"), {"name": lock_name}).scalar()
     if not acquired or acquired == 0:
@@ -142,7 +143,11 @@ def _should_run_today(db, lock_name: str) -> bool:
         return False
 
     today = business_today()
-    cal = db.query(TradingCalendar).filter(TradingCalendar.calendar_date == today).first()
+    # 调度闸门是 SSE 快照日口径；双日历后同一日期有两行，必须显式过滤（#777）
+    cal = db.query(TradingCalendar).filter(
+        TradingCalendar.calendar_date == today,
+        TradingCalendar.exchange == SSE_EXCHANGE,
+    ).first()
     if not cal or not cal.is_open:
         logger.info(f"{today} 非交易日，跳过 {lock_name}")
         return False

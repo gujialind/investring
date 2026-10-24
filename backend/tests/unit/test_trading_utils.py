@@ -75,6 +75,7 @@ class TestExhaustionRaises:
             "direction": "next",
             "requested_days": 3,
             "resolved_days": 2,
+            "exchange": "SSE",
         }
 
     def test_full_exhaustion_prev(self, test_db):
@@ -147,3 +148,58 @@ class TestReturnAnnotations:
         assert typing.get_type_hints(
             trading_utils.try_get_next_trading_day
         )["return"] == typing.Optional[date]
+
+
+class TestExchangeDimension:
+    """#777 双日历：helper 按 exchange 解析；缺省 SSE，既有调用语义不变。"""
+
+    def _reset(self, db):
+        db.query(TradingCalendar).delete(synchronize_session=False)
+
+    def test_same_date_two_calendars_independent(self, test_db):
+        """同一日期 SSE 开市 / HKEX 休市：is_trading_day 按 exchange 各答各的。"""
+        self._reset(test_db)
+        _cal(test_db, FAR, is_open=True)
+        test_db.add(TradingCalendar(calendar_date=FAR, is_open=False, exchange="HKEX"))
+        test_db.flush()
+        assert trading_utils.is_trading_day(test_db, FAR) is True
+        assert trading_utils.is_trading_day(test_db, FAR, exchange="HKEX") is False
+
+    def test_step_helpers_stay_in_own_calendar(self, test_db):
+        """HKEX 行走 HKEX 日历；SSE 方向不因 HKEX 行续命（#591 语义分市场成立）。"""
+        self._reset(test_db)
+        _cal(test_db, FAR)  # SSE 仅 2099-01-10 开市
+        test_db.add(
+            TradingCalendar(calendar_date=date(2099, 1, 9), is_open=True, exchange="HKEX")
+        )
+        test_db.flush()
+        assert trading_utils.get_prev_trading_day(
+            test_db, FAR, days=1, exchange="HKEX"
+        ) == date(2099, 1, 9)
+        with pytest.raises(BusinessError) as ei:
+            trading_utils.get_prev_trading_day(test_db, FAR, days=1)  # SSE 前方无行
+        assert ei.value.code == "CALENDAR_NOT_SYNCED"
+
+    def test_exhausted_details_carry_exchange(self, test_db):
+        _only(test_db)  # 全表仅 SSE FAR 一行
+        with pytest.raises(BusinessError) as ei:
+            trading_utils.get_prev_trading_day(test_db, FAR, days=1, exchange="HKEX")
+        assert ei.value.details["exchange"] == "HKEX"
+
+    def test_try_helpers_exchange_aware(self, test_db):
+        self._reset(test_db)
+        _cal(test_db, FAR)
+        test_db.flush()
+        assert trading_utils.try_get_next_trading_day(
+            test_db, date(2099, 1, 9), days=1
+        ) == FAR
+        assert trading_utils.try_get_next_trading_day(
+            test_db, date(2099, 1, 9), days=1, exchange="HKEX"
+        ) is None
+
+    def test_exchange_for_market_mapping(self):
+        assert trading_utils.exchange_for_market("HK_MUTUAL") == "HKEX"
+        assert trading_utils.exchange_for_market("CN_OTC") == "SSE"
+        assert trading_utils.exchange_for_market("CN_EXCHANGE") == "SSE"
+        assert trading_utils.exchange_for_market("") == "SSE"
+        assert trading_utils.exchange_for_market(None) == "SSE"

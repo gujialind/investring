@@ -84,6 +84,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **流水的现金日 = 余额锚点日**（#725）：卖出腿锚 `trade_date`、买入腿锚 `confirm_date`、事件锚有效现金日、重估锚 `value_date`——与可用现金的时点口径逐字同源，因此「平台日终余额」列**必须等于 `calculate_available_cash(as_of=现金日, 该平台)` 的单次调用**，不得另立第二套余额实现；否则详情弹窗的对账块不可能闭合。**对账式是组级而非单笔级**：前日日终 + 同日同平台**全部已生效流量** = 日终；重估日以覆盖值替换该式（覆盖是绝对值，不参与求和）。「前日 + 本笔 = 日终」只在当日该平台恰好一笔、且非重估日时成立，不得写成通用口径。取价按 `(平台, 现金日)` 去重后批量计算，前一交易日走 `try_get_prev_trading_day`（日历覆盖不足返回空值，不让只读列表因区间贴近日历起点整体失败）。方向按**账本口径**：申购的 CASH buy 腿 = 流入（投资人注资入账）、赎回的 CASH sell 腿 = 流出；按「申购 = 扣款」的基金视角反向标注会与余额列不闭合。金额 4 位原值直出、读侧不量化（量化职责见[量化产生点清单](#量化产生点清单)），展示格式由前端承担。
 - **流水的已生效 / 在途是派生两值**（`settled` / `in_transit`），不透出 raw `trade.status`：confirmed 且锚点日 ≤ 今天为已生效，否则在途（confirmed + 未来到账日在余额语义上仍是在途）。该口径**不等于**快照的 `IN_TRANSIT_*` 虚拟产品口径：后者买入侧含「现金已扣、基金腿未生效」，而那笔 CASH sell 腿在本视图里是已生效行；两套判据不得互换。重估行金额是**绝对值不是增量**：两级流入/流出都排除、也不进在途（未生效的重估是「覆盖还没被快照吸收」而不是钱在路上），由 `is_override` 标记供前端打断余额链。**重估行的 `settled` 判据与流量行不同**：取「已烘焙进快照」（`value_date ≤ 今天` 且 `≤ 最新快照日`，判据见上条 #645），未烘焙时行状态标「待重算」+ note，`status=in_transit` 会选中它（尚未生效）但它对 `overview.in_transit` 的金额贡献恒为 0——存量卡与筛选档在重估行上刻意不同源，不得据其一推另一。
 - **流入/流出的两级排除与构成对账**（#725）：组合级不含平台间转移两腿（内部搬运，不改组合现金总额），平台级含该平台的转移腿；两级都不含重估、不含在途行。按平台构成弹窗的行值 = 筛该平台时的四卡、合计 = 组合口径，故**行和与合计之差 = 本期已生效的转移腿净额**（转出计、在途转入不计），该差必须显式命名，不得静默不平。流量卡对**筛选后全集**聚合（不是当页），存量卡（可用现金 / 在途）只随平台筛选切 scope、不随区间/类型/状态变化；「当日另有 N 笔」的 N 由后端按「解除类型筛选、保留区间/平台/状态」的同 `(平台, 现金日)` 组给出，前端不得按当页自行推断（类型筛选态下在屏行看不见被隐藏的同类行）。
+- **流水的方向标签由后端给出**（#725）：`flow_type_label` 是读侧唯一的方向文案来源，前端一律消费、**不按 `flow_type` 或申赎类型自行重算方向**（设计 mockup 上的申赎方向标注是错的，不作基线）；页面视觉形态（rowSpan 合并段、金额三档、口径注记分色）见[视觉规范](../design/visual-spec.md) §8 与 §12。**端点与页面是单向消费关系**：现金流水页消费 `/cash-flows`，故撤端点前必须先撤页面（#726 端点、#727 页面），端点不可在页面仍在时单独撤。
 - 市值 = Σ(场内份额 × 收盘价) + Σ(场外份额 × 净值) + Σ(现金行 cash_amount)；净值 `unit_price = total_value / total_shares`（4 位），在途合计另记 `portfolio_value_snapshot.in_transit_total`。
 
 <a id="rule-snapshot"></a>
@@ -95,7 +96,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **生成前到期补确认**（#495）：生成依赖校验前自动确认「最新快照日 < confirm_date ≤ 目标日」的 pending 申赎（`auto_confirm_before_snapshot`），与生成后 `auto_confirm_after_snapshot`（按 apply_date 匹配）互补——当天补录（申请日 == 最新快照日、确认日 == 目标日）由此在 pending 校验前消化，否则其 confirm_date == 目标日会被 pending 校验阻断、而生成后 auto_confirm 只在快照落地后运行，死锁。confirm_date ≤ 最新快照日的历史/异常 pending 不在窗口，仍阻断、须人工处理（防静默漏记，与零快照守卫同族）。
 - **连续原则**：严格从最新快照日的下一交易日起连续生成，失败即停，不能跳日；单日生成只接受最新日重建或下一交易日。
 - **增量累加**：当日基金持仓/CASH = 前日基线 + 窗口内 confirmed 交易 + 事件增量 + manual_market_value 绝对覆盖。事件份额按**份额生效日**（`share_effective_date`，#743 起替代 `ex_date` 作为窗口判键；再投资设了确认日时份额与 #673 成本摊薄随之移到确认日）、现金按有效现金日分别选窗；再投资应收与三类在途同按当日绝对计算、不继承前日，见[现金账本](#rule-cash)。
-- **严格取价**（#96/#178，#228 起泛化）：只由产品 nav_lag_days 决定取价日，0 取当日、N 取交易日历上前第 N 个交易日；缺指定日行情必须报 `MISSING_NAV`，不得回退。调仓确认始终取 T 日价格、按落库 confirm_days 决定间隔，与快照估值正交。
+- **严格取价**（#96/#178，#228 起泛化）：只由产品 nav_lag_days 决定取价日，0 取当日、N 取交易日历上前第 N 个交易日；缺指定日行情必须报 `MISSING_NAV`，不得回退。调仓确认始终取 T 日价格、按落库 confirm_days 决定间隔，与快照估值正交。**取价日历按产品市场解析（#777）**：港互认（HK_MUTUAL）的 T-N 在 HKEX 日历上解析——「A股开市、港股休市」日估值自动回落到最近一个港股交易日的已发布净值（休市日估值冻结）；其余市场仍在 SSE 日历解析，快照日序列本身恒为 SSE 口径。详见[交易日](#rule-trading-day)的双市场日历段。
 - **「缺价」只有一种形态**（#701）：`price_record.unit_price` 的写入判据在 #580 的可用性（None/空串/NaN/Inf/非数字）之上**还必须为正**（`quantize_nav` 收口后比较，落库会塌成 `0.0000` 的极小正值同样拒），非正单价与坏值同族：跳过整行 + WARNING 点名交易日，整批为空仍按「跳过而非失败」收口（#613）。理由是 0/负价一旦入库就是「有价的一天」而不是缺行——快照据此把市值算成 0（或负），`nav_coverage` 只按 `price_date` 计数、会把这天报成已覆盖，缺口从此无法从盘点定位；这与迁移 0017 对 NULL 行的判断是同一条错法。`accumulated_nav` 非正时**只丢这一列**、不连累已合格的价格：把一个派生口径的坏值升级成「这一天没有净值」属于过度处置。边界：`MISSING_NAV` 因此恒等于「该日无合格单价记录」，不存在「有行但算成 0 价」的第二种形态；判据分表与实现入口见[后端指南](../../backend/AGENTS.md#backend-models)。
 - **删除必级联**：删某日及以后全部快照。按数据依赖回退：apply_date 落在区间的 confirmed 申赎、entitlement_date 落在区间的 confirmed 事件退回 pending；配对 CASH 腿删除，基金级父事件的子记录物理删除。交易依赖产品行情而非组合快照，**不级联**。单日删除任一笔回退失败，该次调用整体回滚（#203）；批量删除从最新日倒序、逐日提交，失败日回滚，但此前已成功删除的日期保留，不要求整个批次无变化。
 - **重算为单一事务**：先对整区间做行情完整性预校验，再逐交易日删旧、级联回退、重建、auto_confirm，全程不 commit；任一天重建失败即停，对外完整成功或无变化。每日 auto_confirm 处理到期 pending 申赎、事件、跨天现金转移，**不含调仓**（#493/#471）；被级联回退的记录由此重确认，日期键见后端指南的 `auto_confirm_after_snapshot` 说明。允许的单笔失败记 auto_confirm_failed 并继续，不能与需要整体回滚的失败混同。
@@ -172,7 +173,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * **可用现金时点口径**：pending 卖出不增加可用现金；买入按扣款平台校验可用现金（[现金账本](#rule-cash)），确认时不足同样拒绝（卖出确认对称校验份额；`skip_available_check` 仅限 auto\_confirm 路径）。现金转移按 `transfer_date` 验资、available-cash 接口按当天时点（#493，`calculate_available_cash(as_of_date=…)`）。
 
-* **确认取价**：`confirm_date` 创建时即按 `product.confirm_days` 设定（`confirm` 可传参覆盖，补录用）；场内用成交价（录入时必填）、场外严格用 T 日净值（含 QDII；未同步则拒绝，禁止向前查找；可传 `sync_nav`/`--sync-nav` 在 MISSING\_NAV 时自动回填净值并重试一次，#90）。场外确认可选传入价格，仅与 T 日净值做一致性校验（不一致 `PRICE_NAV_MISMATCH`），不覆盖净值。快照估值侧与此正交：按产品 `nav_lag_days` 取价（`0`=当日、`N`=前第 N 个交易日），详见[快照规则](#rule-snapshot)。
+* **确认取价**：`confirm_date` 创建时即按 `product.confirm_days` 设定（`confirm` 可传参覆盖，补录用）；场内用成交价（录入时必填）、场外严格用 T 日净值（含 QDII；未同步则拒绝，禁止向前查找；可传 `sync_nav`/`--sync-nav` 在 MISSING\_NAV 时自动回填净值并重试一次，#90）。场外确认可选传入价格，仅与 T 日净值做一致性校验（不一致 `PRICE_NAV_MISMATCH`），不覆盖净值。快照估值侧与此正交：按产品 `nav_lag_days` 取价（`0`=当日、`N`=前第 N 个交易日），详见[快照规则](#rule-snapshot)。**HK_MUTUAL 的下单日校验与确认间隔推算在 HKEX 日历上进行（#777）**：港股休市日基金暂停申赎且当日净值永不发布，下单直接拒 `NON_TRADING_DAY`；卖出到账日与现金腿日期仍按 SSE 校验（现金在内地平台清算），HK_MUTUAL 的确认日落入「SSE 休市、港股开市」日时，缺省到账日 = 确认日会被 SSE 校验拒绝，须显式传 SSE 交易日的到账日。
 
 * 防重：同组合/产品/市场/平台/方向/交易日且金额（买）或份额（卖）相同的 pending/confirmed 交易，未传 `allow_duplicate` 报 `DUPLICATE_TRADE`（cancelled 不算）。
 
@@ -370,6 +371,8 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 ## 交易日
 
 交易操作（申购、赎回、调仓、现金进出、事件权益登记日与除息日）原则上仅允许交易日，以 `trading_calendar.is_open` 为准，不用自然日或周一至周五替代。**唯一新增例外为现金分红 `cash_pay_date`（#522）**：允许非交易日，按实际到账日生效，由下一交易日快照窗口消费；不扩展到事件 `ex_date` / `entitlement_date`、调仓到账日或其他业务日期，快照本身仍只在交易日生成。实现入口为 [trading_utils.py](../../backend/app/services/trading_utils.py) 的 `get_next_trading_day` / `get_prev_trading_day`；[test_trading_day.py](../../backend/tests/integration/test_trading_day.py) 的 `TestClosedWeekCalendar` / `TestClosedWeekWrites` 显式构造工作日闭市、连续长假和缺失记录，并验证写入口拒绝时无业务字段残留。
+
+**双市场日历（#777）**：`trading_calendar` 按 `(calendar_date, exchange)` 联合唯一存两套日历——`SSE`（上交所，缺省）与 `HKEX`（港交所，源 Tushare `hk_tradecal`）。全部日历 helper 带 `exchange` 参数（缺省 SSE，A 股调用点零变化）；产品市场 → 日历的单点映射为 `trading_utils.exchange_for_market`（HK_MUTUAL → HKEX，其余 → SSE）。**切 HKEX 的只有三处**：港互认快照取价的 T-N 解析（休市日估值冻结到最近港股交易日净值）、港互认调仓腿的下单日校验、港互认确认间隔推算。**保持 SSE 的**：组合快照日序列与生成闸门、投资人份额申赎、份额变动事件、现金腿/现金转移与卖出到账日（现金在内地平台清算）。HKEX 日历覆盖不足同抛 `CALENDAR_NOT_SYNCED`（`details` 含 `exchange`）；同步侧 `trading_calendar_sync` 任务与 `POST /api/trading-calendar/sync`（缺省）一次同步两套，查询端点带可选 `exchange` 参数（缺省 SSE）。**所有 `TradingCalendar` 查询必须带 exchange 过滤**——双日历后同一日期有两行，漏过滤会随机命中另一市场的行。
 
 **「今天」的业务日定义（#746）**：调度与取数窗口语境下的「今天」是 `settings.timezone`（默认 Asia/Shanghai）的当日，经 [business_time.py](../../backend/app/utils/business_time.py) 的 `business_today()` 取得——与进程/容器时区解耦（生产容器为 UTC 时，07:00 CST 触发瞬间的进程日期仍是前一日）。交易日闸门的判断日、`nav_sync` / 快照任务的目标日（业务昨天）、取数上界缺省值均属此类业务日期；进程瞬时戳（`started_at`、JWT exp 等）不在此列。口径正文见[任务执行规范的业务时钟段](logging.md#logging-tasks)。
 

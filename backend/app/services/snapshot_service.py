@@ -24,6 +24,8 @@ from app.models import (
     TradingCalendar, Investor
 )
 from app.services.trading_utils import (
+    SSE_EXCHANGE,
+    exchange_for_market,
     is_trading_day as _trading_utils_is_trading_day,
     try_get_next_trading_day,
     get_latest_snapshot_date,
@@ -850,6 +852,8 @@ def compute_missing_snapshot_dates(
             TradingCalendar.calendar_date >= first_date,
             TradingCalendar.calendar_date <= last_date,
             TradingCalendar.is_open.is_(True),
+            # 快照日序列是 SSE 口径；双日历后必须按 exchange 过滤，否则 HKEX 行混入（#777）
+            TradingCalendar.exchange == SSE_EXCHANGE,
         ).all()
     }
     snapshot_days = {
@@ -2203,9 +2207,10 @@ def auto_confirm_after_snapshot(
 # ==================== 校验函数 ====================
 
 def _check_trading_day(db: Session, target_date: date) -> Dict[str, Any]:
-    """检查目标日期是否为交易日"""
+    """检查目标日期是否为交易日（快照日序列为 SSE 口径，#777 双日历后显式过滤）"""
     cal = db.query(TradingCalendar).filter(
-        TradingCalendar.calendar_date == target_date
+        TradingCalendar.calendar_date == target_date,
+        TradingCalendar.exchange == SSE_EXCHANGE,
     ).first()
     
     if not cal or not cal.is_open:
@@ -2438,8 +2443,8 @@ def _calculate_frozen_amount(
 
 # ==================== 工具函数 ====================
 
-def _prev_trading_day(db: Session, target_date: date, offset: int = 1) -> date:
-    """获取目标日期之前第 offset 个交易日。
+def _prev_trading_day(db: Session, target_date: date, offset: int = 1, exchange: str = SSE_EXCHANGE) -> date:
+    """获取目标日期之前第 offset 个交易日（exchange 指定日历市场，#777）。
 
     日历覆盖不足（前序开市日少于 offset，即 target_date 贴近日历**起点**）时抛
     `CALENDAR_NOT_SYNCED`——**绝不回退为 `target_date - offset 自然日`**（#591）：
@@ -2451,7 +2456,8 @@ def _prev_trading_day(db: Session, target_date: date, offset: int = 1) -> date:
         return target_date
     trading_days = db.query(TradingCalendar.calendar_date).filter(
         TradingCalendar.calendar_date < target_date,
-        TradingCalendar.is_open == True
+        TradingCalendar.is_open == True,
+        TradingCalendar.exchange == exchange
     ).order_by(TradingCalendar.calendar_date.desc()).limit(offset).all()
 
     if len(trading_days) < offset:
@@ -2465,6 +2471,7 @@ def _prev_trading_day(db: Session, target_date: date, offset: int = 1) -> date:
                 "target_date": target_date.isoformat(),
                 "requested_offset": offset,
                 "resolved_offset": len(trading_days),
+                "exchange": exchange,
             },
         )
 
@@ -2477,8 +2484,13 @@ def _snapshot_nav_date_and_rule(db: Session, product, target_date: date) -> tupl
     产品 `nav_lag_days`=0 → 取 target_date 当日（"T"）；=N>0 → 取前第 N 个
     交易日（"T-N"，如场外 QDII / 互认基金 N=1）。禁止向前回退，取不到即
     由调用方报 MISSING_NAV。is_qdii 不参与判断（已降级为纯展示标签）。
+
+    取价日历按产品市场解析（#777）：港互认（HK_MUTUAL）在 HKEX 日历上取
+    T-N——港股休市日自动落到最近一个港股交易日的已发布净值（休市日估值冻结）；
+    其余市场仍在 SSE 日历上解析，行为不变。
     """
     lag = int(product.nav_lag_days or 0)
     if lag <= 0:
         return target_date, "T"
-    return _prev_trading_day(db, target_date, lag), f"T-{lag}"
+    exchange = exchange_for_market(product.market)
+    return _prev_trading_day(db, target_date, lag, exchange=exchange), f"T-{lag}"

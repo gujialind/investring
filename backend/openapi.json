@@ -2099,6 +2099,19 @@
               "title": "Days"
             },
             "description": "向后第 N 个交易日"
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(SSE|HKEX)$",
+              "description": "日历市场（SSE/HKEX）",
+              "default": "SSE",
+              "title": "Exchange"
+            },
+            "description": "日历市场（SSE/HKEX）"
           }
         ],
         "responses": {
@@ -2164,6 +2177,19 @@
               "title": "Days"
             },
             "description": "向前第 N 个交易日"
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(SSE|HKEX)$",
+              "description": "日历市场（SSE/HKEX）",
+              "default": "SSE",
+              "title": "Exchange"
+            },
+            "description": "日历市场（SSE/HKEX）"
           }
         ],
         "responses": {
@@ -2215,6 +2241,19 @@
               "title": "Date"
             },
             "description": "查询日期"
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(SSE|HKEX)$",
+              "description": "日历市场（SSE/HKEX）",
+              "default": "SSE",
+              "title": "Exchange"
+            },
+            "description": "日历市场（SSE/HKEX）"
           }
         ],
         "responses": {
@@ -2247,7 +2286,7 @@
           "交易日历"
         ],
         "summary": "Get Trading Calendar",
-        "description": "获取交易日历列表\n\n支持按年份、日期范围、是否开盘过滤",
+        "description": "获取交易日历列表\n\n支持按年份、日期范围、是否开盘过滤；exchange 缺省 SSE（#777 评审 M-1(a)：\n与 next/prev/is-open 同模式，既有消费方——前端 date-picker、CLI calendar——\n零变化；双日历后缺省返回全部市场会让同日两行混入既有消费方）",
         "operationId": "get_trading_calendar_api_trading_calendar_get",
         "security": [
           {
@@ -2328,6 +2367,19 @@
               "title": "Is Open"
             },
             "description": "是否开盘"
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(SSE|HKEX)$",
+              "description": "日历市场（SSE/HKEX）",
+              "default": "SSE",
+              "title": "Exchange"
+            },
+            "description": "日历市场（SSE/HKEX）"
           }
         ],
         "responses": {
@@ -2364,7 +2416,7 @@
           "交易日历"
         ],
         "summary": "Sync Trading Calendar",
-        "description": "同步指定年份的交易日历\n\n从 Tushare 获取交易日历数据并写入数据库",
+        "description": "同步指定年份的交易日历\n\n从 Tushare 获取交易日历数据并写入数据库；exchange 缺省同步 SSE + HKEX\n两套（#777，与 trading_calendar_sync 任务口径一致），显式传值只同步该市场。",
         "operationId": "sync_trading_calendar_api_trading_calendar_sync_post",
         "requestBody": {
           "content": {
@@ -15578,6 +15630,11 @@
             "title": "Is Open",
             "default": true
           },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange",
+            "default": "SSE"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -15601,6 +15658,18 @@
           "year": {
             "type": "integer",
             "title": "Year"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(SSE|HKEX)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
           }
         },
         "type": "object",
@@ -15608,7 +15677,7 @@
           "year"
         ],
         "title": "TradingCalendarSyncRequest",
-        "description": "交易日历同步请求"
+        "description": "交易日历同步请求\n\nexchange 缺省 None = SSE + HKEX 两套都同步（#777，与 trading_calendar_sync\n任务口径一致）；显式传 SSE / HKEX 只同步该市场。"
       },
       "TradingCalendarSyncResponse": {
         "properties": {

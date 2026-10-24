@@ -1279,11 +1279,13 @@ ir system calendar [--year N] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] 
 
 #### `ir system calendar-sync`
 
-从 Tushare 同步交易日历。
+从 Tushare 同步交易日历。#777 起一次同步 **SSE + HKEX 双日历**（SSE 走 `trade_cal`、HKEX 走 `hk_tradecal`），`synced_count` 为两套合计；REST 侧 `POST /api/trading-calendar/sync` 可用 `exchange` 字段只同步单一市场。
 
 ```bash
 ir system calendar-sync --year <年份>
 ```
+
+> `ir system calendar` / `calendar-next` / `calendar-prev` / `calendar-isopen` 走 REST 缺省 `exchange=SSE`（CLI 未暴露该参数）；需要查港股日历直接用 REST 端点带 `exchange=HKEX`。
 
 #### `ir system datasources`
 

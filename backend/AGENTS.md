@@ -89,6 +89,8 @@
 
 * `trade.transfer_group` **NOT NULL**（每笔 trade 必属一个业务组），唯一约束 `(transfer_group, product_code, trade_type)`：基金腿与 CASH 腿按 `product_code` 区分、现金转移两腿按 `trade_type` 区分、申赎为单腿 `sub_{id}`，故 NOT NULL 下仍无碰撞。
 
+* `trading_calendar` 为 **`(calendar_date, exchange)` 联合唯一**（#777）：双市场日历（`SSE` 缺省 / `HKEX`），`exchange` NOT NULL + server_default 'SSE'，存量形态由迁移 0023 收敛（完整可逆：downgrade 删非 SSE 行、恢复单列唯一）。**所有 TradingCalendar 查询必须带 exchange 过滤**——同一日期有两行，漏过滤会随机命中另一市场的行、`limit` 窗口被稀释。产品市场 → 日历的单点映射在 `trading_utils.exchange_for_market`（HK_MUTUAL→HKEX，其余→SSE）；切换面与保持 SSE 的边界见[交易日规则](../docs/reference/business-constraints.md#rule-trading-day)。测试种HKEX 行经 `tests/integration/calendar_helpers.py` 镜像生成、用后必须删除（共享库契约）。
+
 * `portfolio_position` 有 CHECK 约束：`shares` 与 `cash_amount` 二者恰有其一（净值型 vs 非净值型）。
 
 * `share_change_event` 日期分工：`entitlement_date`（权益登记日，基数日）+ `ex_date`（除息日）；**「份额应用日」的职责属 hybrid property `share_effective_date`**（#743：reinvest 且设了确认日取 `share_confirm_date`，其余一律 `ex_date`，写法仿既有 `cash_effective_date`、Python/SQL 两侧同口径），快照份额窗口、pending 闸门与 auto_confirm 都按它判键，不存在「份额恒在除息日应用」。默认要求 `ex_date > entitlement_date` 且均为交易日；**设了可空 `share_confirm_date`（仅 reinvest，须为交易日且晚于除息日，#743）才放宽为 `>=`（同日登记/除息）**。可空 `cash_pay_date` 仅供现金分红到账（#522，允许非交易日）。两个可空日期字段都是清除型（显式 null = 清空），省略/清空与生效规则见[事件正文](../docs/reference/business-constraints.md#rule-event)。`parent_event_id` 为基金级拆分子记录自引用。
@@ -155,6 +157,7 @@ cd backend && pytest tests -q
   | 金额/份额量化 | `pytest tests/unit/test_quantize.py tests/integration/test_amount_precision.py tests/integration/test_shares_precision.py tests/unit/test_snapshot_service.py tests/integration/test_trades_validation_preview.py tests/integration/test_snapshot_position_precision.py tests/integration/test_snapshot_holding_precision.py -q` |
   | 分层红线（service 事务/异常约定） | `pytest tests/unit/test_service_no_commit.py -q` |
   | 交易日 / 严格取价（`trading_utils.py` 的 get_*/try_get_* 与快照取价 `_prev_trading_day`） | `pytest tests/unit/test_trading_utils.py tests/integration/test_trading_day.py tests/integration/test_snapshot_nav_strict.py tests/integration/test_snapshot_calendar_exhaustion.py -q` |
+  | 交易日历双市场（HKEX 同步 / 迁移 0023 / 港互认取价与调仓日历，#777） | `pytest tests/unit/test_calendar_sync_hkex.py tests/unit/test_migration_0023.py tests/integration/test_snapshot_hk_calendar.py tests/integration/test_trades_hk_calendar.py -q` |
   | 原子性 / 双层账本测试及共享状态 helper | `pytest tests/integration/test_snapshots.py tests/integration/test_snapshot_observability.py tests/integration/test_trades_in_transit_lifecycle.py tests/integration/test_subscriptions_create.py -q` |
   | 死锁有界重试（`utils/db_retry.py`、`routers/snapshots.py` 的 generate 端点） | `pytest tests/unit/test_db_retry.py tests/integration/test_snapshots_deadlock_retry.py tests/integration/test_router_catchall_observability.py tests/unit/test_catchall_logging_guard.py -q` |
   | 任务执行记录（`task_runner.run_task` / `scheduler_service` / `routers/tasks.py`） | `pytest tests/unit/test_task_log_orchestration.py tests/unit/test_scheduler_service.py tests/unit/test_run_nav_sync.py tests/unit/test_detect_dividends.py tests/integration/test_task_execution_log.py tests/integration/test_tasks.py tests/integration/test_log_cleanup.py -q` |
@@ -241,7 +244,7 @@ SQLite 的 prepare 仅建模型/调度表与任务种子，**不跑 MySQL 历史
 
 ## 7. E2E 相关脚本
 
-- `scripts/run_e2e_backend.py`：本地 E2E 后端，先独占监听 `127.0.0.1`，每次独占新建 SQLite 并灌种子，空 lifespan 跳迁移；导入不启动。默认临时目录在退出时清理，`--database` / `E2E_DB_PATH` 指定的新文件保留，已有文件或符号链接拒绝、绝不删除；端口由 `--port` / `E2E_PORT` 指定，默认 8000。子进程隔离 cwd/应用配置，关闭行情和调度。前后端联调优先使用[本地隔离入口](../frontend/AGENTS.md#4-e2eplaywright)，不复用其他运行的库或服务（#619）。
+- `scripts/run_e2e_backend.py`：本地 E2E 后端，先独占监听 `127.0.0.1`，每次独占新建 SQLite 并灌种子，空 lifespan 跳迁移；导入不启动。默认临时目录在退出时清理，`--database` / `E2E_DB_PATH` 指定的新文件保留，已有文件或符号链接拒绝、绝不删除；端口由 `--port` / `E2E_PORT` 指定，默认 8000。子进程隔离 cwd/应用配置，关闭行情和调度。前后端联调优先使用[本地隔离入口](../frontend/e2e/AGENTS.md#1-e2eplaywright)，不复用其他运行的库或服务（#619）。
 - `scripts/seed_e2e.py`：CI E2E 种子入口，**未设 `DATABASE_URL` 直接拒绝**（防误连）。
 
 ## 8. OpenAPI 契约检查与导出

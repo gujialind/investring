@@ -56,13 +56,17 @@ class TestSyncPriceDataTx:
 class TestTradingCalendarSyncTx:
     """交易日历同步端点的事务边界"""
 
+    # #777：sync 缺省同步 SSE + HKEX 两套，HKEX 客户端一并 mock（空返回 = 0 条），
+    # 本用例焦点仍是「SSE 行落库 + 计数正确」的事务边界语义
+    @patch("app.services.trading_calendar_service.get_hk_trade_calendar")
     @patch("app.services.trading_calendar_service.get_trade_calendar")
-    def test_sync_persists_calendar(self, mock_cal, client, admin_headers, test_db):
+    def test_sync_persists_calendar(self, mock_cal, mock_hk, client, admin_headers, test_db):
         mock_cal.return_value = [
             {"date": "2031-01-02", "is_open": True},
             {"date": "2031-01-03", "is_open": True},
             {"date": "2031-01-04", "is_open": False},
         ]
+        mock_hk.return_value = []
         resp = client.post(
             "/api/trading-calendar/sync",
             json={"year": 2031},
