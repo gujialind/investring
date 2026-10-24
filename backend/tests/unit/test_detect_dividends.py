@@ -92,8 +92,10 @@ class TestDetectorDivCashStates:
         assert (detected, skipped) == (1, [])
         event = _rows(test_db, fund)[0]
         assert (event.status, event.event_type, event.event_source) == (
-            "pending", "reinvest_dividend", "tushare",
+            "pending", "dividend_pending", "tushare",
         )
+        assert event.shares_change is None and event.cash_change is None
+        assert event.reinvest_nav is None and event.share_confirm_date is None
         assert float(event.div_cash) == 0.0039
         assert (event.entitlement_date, event.ex_date) == (ENT, EX)
 
@@ -184,6 +186,21 @@ class TestSkipScope:
 
 
 class TestDetectorIdempotency:
+    @pytest.mark.parametrize("event_type", ["cash_dividend", "reinvest_dividend", "dividend_pending"])
+    def test_repeat_fetch_preserves_existing_method(self, test_db, event_type):
+        fund = _env(test_db, "KEEP")
+        assert _run(test_db, fund, [_div()]) == (1, [])
+        event = _rows(test_db, fund)[0]
+        event.event_type = event_type
+        test_db.commit()
+        assert _run(test_db, fund, [_div()]) == (0, [])
+        assert _rows(test_db, fund)[0].event_type == event_type
+
+    def test_same_day_announcement_still_skipped(self, test_db):
+        fund = _env(test_db, "SAME")
+        assert _run(test_db, fund, [_div(record_date=EX.strftime("%Y%m%d"))]) == (0, [])
+        assert _rows(test_db, fund) == []
+
     def test_repeat_fetch_does_not_duplicate_event(self, test_db):
         """重复抓取幂等：第二次同公告不再建（`existing` 判据未被本次改动绕过）。"""
         fund = _env(test_db, "IDEM")

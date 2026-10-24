@@ -1,4 +1,5 @@
 import type { TradeConfirmParams } from "@/types/trade";
+import type { ShareChangeEventConfirmSelection } from "@/types/share-change-event";
 
 /**
  * react-query queryKey 统一工厂。
@@ -108,6 +109,16 @@ export const queryKeys = {
       ["share-change-events", portfolioCode, params] as const,
     // 确认预览（#424，同 trades/subscriptions 口径）
     preview: (id: number) => ["share-change-events", id, "preview"] as const,
+    // #775：完整候选与「沿用记录」分键；日期缺省/null 同义，调用方先归一有效输入。
+    previewWith: (id: number, selection?: ShareChangeEventConfirmSelection) =>
+      [
+        "share-change-events",
+        id,
+        "preview",
+        selection?.event_type ?? null,
+        selection?.cash_pay_date ?? null,
+        selection?.share_confirm_date ?? null,
+      ] as const,
   },
   cashTransfers: {
     root: ["cash-transfers"] as const,

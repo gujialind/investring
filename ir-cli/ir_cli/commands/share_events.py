@@ -8,6 +8,30 @@ from ir_cli.utils import build_body, resolve_body, run_list
 app = typer.Typer(no_args_is_help=True)
 
 
+def _dividend_choice(
+    event_type: Optional[str],
+    cash_pay_date: Optional[str],
+    share_confirm_date: Optional[str],
+) -> Optional[dict]:
+    """预览和确认共用完整候选；省略日期由后端默认到除息日，不读取旧值补齐。"""
+    if event_type is None:
+        if cash_pay_date is not None or share_confirm_date is not None:
+            error(
+                "VALIDATION_ERROR",
+                "不能单独提供日期：--cash-pay-date / --share-confirm-date 必须与 "
+                "--event-type 一起提供（cash_dividend 或 reinvest_dividend）",
+            )
+        return None
+    if event_type not in ("cash_dividend", "reinvest_dividend"):
+        error("VALIDATION_ERROR", "--event-type 仅允许 cash_dividend 或 reinvest_dividend")
+    return resolve_body(
+        None,
+        event_type=event_type,
+        cash_pay_date=cash_pay_date,
+        share_confirm_date=share_confirm_date,
+    )
+
+
 @app.command("list")
 def list_events(
     portfolio_code: Optional[str] = typer.Option(None, "--portfolio-code", help="组合代码"),
@@ -136,15 +160,36 @@ def delete(
     success(data=result["data"])
 
 
+@app.command("preview")
+def preview(
+    id: int = typer.Argument(..., help="事件ID"),
+    event_type: Optional[str] = typer.Option(None, "--event-type", help="分红方式：cash_dividend / reinvest_dividend；提供即完整候选，不带则沿用记录；dividend_pending 必须选择"),
+    cash_pay_date: Optional[str] = typer.Option(None, "--cash-pay-date", help="现金分红到账日(YYYY-MM-DD)，仅 cash_dividend；须与 --event-type 同传，候选中省略默认除息日，不保留旧日期"),
+    share_confirm_date: Optional[str] = typer.Option(None, "--share-confirm-date", help="再投资份额确认日(YYYY-MM-DD)，仅 reinvest_dividend；须与 --event-type 同传，候选中省略默认除息日，不保留旧日期"),
+):
+    """预览确认结果（只读）；候选参数与 confirm 相同，不保存选择。"""
+    choice = _dividend_choice(event_type, cash_pay_date, share_confirm_date)
+    client = APIClient.from_config()
+    result = client.get(f"/api/share-change-events/{id}/preview", params=choice)
+    success(data=result["data"])
+
+
 @app.command("confirm")
 def confirm(
     id: int = typer.Argument(..., help="事件ID"),
     sync_nav: bool = typer.Option(False, "--sync-nav", help="红利再投资除息日净值缺失(MISSING_NAV)时自动同步净值并重试一次（会访问外部数据源）"),
+    event_type: Optional[str] = typer.Option(None, "--event-type", help="分红方式：cash_dividend / reinvest_dividend；提供即完整候选，不带则沿用记录；dividend_pending 必须选择"),
+    cash_pay_date: Optional[str] = typer.Option(None, "--cash-pay-date", help="现金分红到账日(YYYY-MM-DD)，仅 cash_dividend；须与 --event-type 同传，候选中省略默认除息日，不保留旧日期"),
+    share_confirm_date: Optional[str] = typer.Option(None, "--share-confirm-date", help="再投资份额确认日(YYYY-MM-DD)，仅 reinvest_dividend；须与 --event-type 同传，候选中省略默认除息日，不保留旧日期"),
 ):
-    """确认事件"""
+    """确认事件；可直接提交完整分红候选，无需先 preview。"""
+    choice = _dividend_choice(event_type, cash_pay_date, share_confirm_date)
     client = APIClient.from_config()
     params = {"sync_nav": True} if sync_nav else None
-    result = client.post(f"/api/share-change-events/{id}/confirm", params=params)
+    if choice is None:
+        result = client.post(f"/api/share-change-events/{id}/confirm", params=params)
+    else:
+        result = client.post(f"/api/share-change-events/{id}/confirm", json_data=choice, params=params)
     success(
         data=result["data"],
         hints=["确认后需生成 ex_date 日快照: ir snapshot generate --portfolio-code <code> --target-date <ex_date>；现金分红按 cash_pay_date（未设则 ex_date）到账，此前计分红在途、不计可用现金；非交易日到账由下一交易日快照消费；红利再投资设了 share_confirm_date 时份额按该确认日应用，ex_date 起至确认日前一交易日的快照计再投资应收在途、不计可用现金"],

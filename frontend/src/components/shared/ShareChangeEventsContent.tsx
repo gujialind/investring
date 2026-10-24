@@ -67,7 +67,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import SearchableProductSelect from "@/components/shared/SearchableProductSelect";
-import { EVENT_TYPE_LABELS, EventConfirmDialog } from "@/components/shared/event-confirm-dialog";
+import { CREATABLE_EVENT_TYPES, EVENT_TYPE_LABELS, EventConfirmDialog } from "@/components/shared/event-confirm-dialog";
 import { EventEditDialog } from "@/components/shared/event-edit-dialog";
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import ProductCell from "@/components/shared/ProductCell";
@@ -207,9 +207,9 @@ export default function ShareChangeEventsContent({
 
   // #248 确认信息核对弹窗：确认按钮先开弹窗，弹窗内二次点击才发起确认
   const [confirmEventId, setConfirmEventId] = useState<number | null>(null);
-  const confirmingEvent = events.find((e) => e.id === confirmEventId) ?? null;
-  // 行掉出当前列表时（refetch/他端确认）同步清空 confirmEventId：open 以「行在列表
-  // 中」门控属被动关闭（onOpenChange 不触发），不清 state 行重现时弹窗会自发重开
+  const confirmingEvent = events.find((e) => e.id === confirmEventId && e.status === "pending") ?? null;
+  // 行掉出当前列表或已非 pending 时（refetch/他端确认）同步清空 confirmEventId：
+  // 被动关闭不触发 onOpenChange，不清 state 行重现时弹窗会自发重开
   useEffect(() => {
     if (confirmEventId !== null && !confirmingEvent) {
       setConfirmEventId(null);
@@ -479,9 +479,9 @@ export default function ShareChangeEventsContent({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {Object.entries(EVENT_TYPE_LABELS).map(([key, label]) => (
-                          <SelectItem key={key} value={key}>
-                            {label}
+                        {CREATABLE_EVENT_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {EVENT_TYPE_LABELS[type]}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -744,7 +744,7 @@ export default function ShareChangeEventsContent({
                   </TableHeader>
                   <TableBody>
                     {events.map((event) => (
-                      <TableRow key={event.id}>
+                      <TableRow key={event.id} data-testid={`share-event-${event.id}`}>
                         <TableCell className="whitespace-nowrap">
                           {EVENT_TYPE_LABELS[event.event_type] || event.event_type}
                         </TableCell>
@@ -888,9 +888,9 @@ export default function ShareChangeEventsContent({
         event={confirmingEvent}
         platformNameMap={platformNameMap}
         isConfirming={confirmEvent.isPending}
-        onConfirm={() => {
+        onConfirm={(selection) => {
           if (confirmEventId === null) return;
-          confirmEvent.mutate(confirmEventId, { onSuccess: () => setConfirmEventId(null) });
+          confirmEvent.mutate({ id: confirmEventId, selection }, { onSuccess: () => setConfirmEventId(null) });
         }}
       />
 

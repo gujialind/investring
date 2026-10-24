@@ -42,6 +42,7 @@ COMMAND_SCHEMA_MAP = [
     ("trade", "list", "TradeResponse", "list", "trade"),
     ("sub", "list", "SubscriptionResponse", "list", "subscription"),
     ("share-event", "list", "ShareChangeEventResponse", "list", None),
+    ("share-event", "preview", "ShareChangeEventPreviewResponse", "object", None),
     ("asset-classification", "list", "AssetClassificationItem", "list", "asset_classification"),
     ("asset-classification", "get", "AssetClassificationDetail", "object", None),
     ("task", "run", "TaskRunAcceptedResponse", "object", None),

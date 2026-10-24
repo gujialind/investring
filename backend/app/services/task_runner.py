@@ -376,7 +376,7 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
 
 
 def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
-    """分红检测：从 tushare fund_div 获取分红数据，自动创建 pending reinvest_dividend 事件。
+    """分红检测：从 tushare fund_div 获取分红数据，自动创建 pending dividend_pending（方式待定）事件。
 
     逐产品 commit/rollback 是编排层有意的 checkpoint 语义：逐只远程 API 调用，
     部分成功须保留，单产品失败仅回滚该产品。
@@ -404,6 +404,7 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     """
     from app.services.tushare_client import get_fund_div, TushareNotConfiguredError, TushareAPIError
     from app.services.share_change_event_service import dividend_div_cash_invalid
+    from app.constants.share_change_events import PENDING_DIVIDEND_TYPE
     from app.models.share_change_event import ShareChangeEvent
     from app.models.portfolio_position import PortfolioPosition
     from sqlalchemy import func as sa_func, and_
@@ -441,7 +442,7 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                 # 判据直接复用服务层的 `dividend_div_cash_invalid`（与人工录入侧同一函数，
                 # 含 NaN/Inf 不抛异常的防御），另把 NULL 一并挡在检测口——自动来源没有
                 # 「先建后补」的语义，宁缺不造空事件。
-                event_type = "reinvest_dividend"
+                event_type = PENDING_DIVIDEND_TYPE
                 div_cash = div.get("div_cash")
                 unusable_div_cash = (
                     div_cash is None or dividend_div_cash_invalid(event_type, div_cash)

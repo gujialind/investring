@@ -17,6 +17,7 @@
 # 其余类型（reinvest_dividend / share_split / share_merge / bonus_share）的 cash_change
 # 恒为 0，只动份额。
 CASH_EFFECT_EVENT_TYPES = ("cash_dividend", "forced_adjustment")
+PENDING_DIVIDEND_TYPE = "dividend_pending"
 
 # 这四类事件增加（或减少）份额时**没有对应的外部资金进出**（#673）：再投资用的是
 # 基金自己派发的红利，拆分/合并只改份额与净值、送股是白给。故持仓的成本基数

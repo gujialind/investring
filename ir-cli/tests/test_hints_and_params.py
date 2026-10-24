@@ -13,7 +13,9 @@
     PYTHONPATH=ir-cli .venv/bin/python -m pytest ir-cli/tests/ -q
 """
 import json
+from unittest.mock import Mock
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -480,3 +482,185 @@ class TestShareEventReinvestNav:
         result = _runner().invoke(app, ["share-event", "confirm", "42"])
         assert result.exit_code == 0, result.stdout
         assert stub_client.post_params == [None]
+
+
+class TestShareEventDividendChoice:
+    """#775：preview query 与 confirm body 共用完整候选，旧确认不增加请求。"""
+
+    @pytest.mark.parametrize("command", ["preview", "confirm"])
+    @pytest.mark.parametrize("event_type,date_field", [
+        ("cash_dividend", "cash_pay_date"),
+        ("reinvest_dividend", "share_confirm_date"),
+    ])
+    @pytest.mark.parametrize("with_date", [False, True])
+    def test_candidate_query_and_body(self, stub_client, command, event_type, date_field, with_date):
+        args = ["share-event", command, "42", "--event-type", event_type]
+        choice = {"event_type": event_type}
+        if with_date:
+            args += ["--" + date_field.replace("_", "-"), "2026-06-08"]
+            choice[date_field] = "2026-06-08"
+        result = _runner().invoke(app, args)
+        assert result.exit_code == 0, result.stdout
+        if command == "preview":
+            assert stub_client.calls == [("/api/share-change-events/42/preview", choice)]
+            assert stub_client.writes == []
+        else:
+            assert stub_client.writes == [("POST", "/api/share-change-events/42/confirm", choice)]
+            assert stub_client.post_params == [None]
+            assert stub_client.calls == []  # 不读取旧日期，也不强制先预览
+
+    @pytest.mark.parametrize("event_type,date_field", [
+        ("cash_dividend", "cash_pay_date"),
+        ("reinvest_dividend", "share_confirm_date"),
+    ])
+    def test_candidate_with_sync_nav_keeps_query_separate(self, stub_client, event_type, date_field):
+        result = _runner().invoke(app, [
+            "share-event", "confirm", "42", "--event-type", event_type,
+            "--" + date_field.replace("_", "-"), "2026-06-08", "--sync-nav",
+        ])
+        assert result.exit_code == 0, result.stdout
+        assert stub_client.writes == [("POST", "/api/share-change-events/42/confirm", {
+            "event_type": event_type, date_field: "2026-06-08",
+        })]
+        assert stub_client.post_params == [{"sync_nav": True}]
+        assert stub_client.calls == []
+
+    @pytest.mark.parametrize("sync_nav", [False, True])
+    def test_legacy_confirm_exact_call_without_json_body(self, stub_client, monkeypatch, sync_nav):
+        post = Mock(wraps=stub_client.post)
+        monkeypatch.setattr(stub_client, "post", post)
+        result = _runner().invoke(app, ["share-event", "confirm", "42"] + (
+            ["--sync-nav"] if sync_nav else []
+        ))
+        assert result.exit_code == 0, result.stdout
+        post.assert_called_once_with(
+            "/api/share-change-events/42/confirm", params={"sync_nav": True} if sync_nav else None,
+        )
+        assert stub_client.calls == []
+        assert json.loads(result.stdout)["data"] == {}
+        assert "确认后需生成 ex_date 日快照" in json.loads(result.stdout)["hints"][0]
+
+    @pytest.mark.parametrize("command", ["preview", "confirm"])
+    @pytest.mark.parametrize("dates", [
+        ["--cash-pay-date", "2026-06-08"],
+        ["--share-confirm-date", "2026-06-08"],
+        ["--cash-pay-date", "2026-06-08", "--share-confirm-date", "2026-06-09"],
+    ])
+    def test_dates_without_method_are_rejected_before_client(self, monkeypatch, command, dates):
+        factory = Mock()
+        monkeypatch.setattr(APIClient, "from_config", factory)
+        result = _runner().invoke(app, ["share-event", command, "42", *dates])
+        assert result.exit_code == 1
+        doc = json.loads(result.stdout)
+        assert doc["error"]["code"] == "VALIDATION_ERROR"
+        assert "不能单独提供日期" in doc["error"]["message"]
+        assert "--event-type" in doc["error"]["message"]
+        factory.assert_not_called()
+
+    @pytest.mark.parametrize("command", ["preview", "confirm"])
+    @pytest.mark.parametrize("event_type", ["dividend_pending", "share_split", "unknown"])
+    def test_invalid_method_is_rejected(self, stub_client, command, event_type):
+        result = _runner().invoke(app, ["share-event", command, "42", "--event-type", event_type])
+        assert result.exit_code == 1
+        doc = json.loads(result.stdout)
+        assert doc["error"]["code"] == "VALIDATION_ERROR"
+        assert "仅允许 cash_dividend 或 reinvest_dividend" in doc["error"]["message"]
+        assert stub_client.calls == stub_client.writes == []
+
+    @pytest.mark.parametrize("command", ["preview", "confirm"])
+    @pytest.mark.parametrize("event_type,date_field", [
+        ("cash_dividend", "cash_pay_date"),
+        ("reinvest_dividend", "share_confirm_date"),
+    ])
+    @pytest.mark.parametrize("bad_date", ["null", "20260608", "2026-W24-1", "2026-02-30"])
+    def test_candidate_dates_use_shared_format_validation(self, stub_client, command, event_type, date_field, bad_date):
+        result = _runner().invoke(app, [
+            "share-event", command, "42", "--event-type", event_type,
+            "--" + date_field.replace("_", "-"), bad_date,
+        ])
+        assert result.exit_code == 1
+        doc = json.loads(result.stdout)
+        assert doc["error"]["code"] == "VALIDATION_ERROR"
+        assert date_field in doc["error"]["message"]
+        assert "YYYY-MM-DD" in doc["error"]["message"]
+        assert stub_client.calls == stub_client.writes == []
+
+    @pytest.mark.parametrize("event_type", [
+        "cash_dividend", "reinvest_dividend", "share_split", "share_merge", "bonus_share", "forced_adjustment",
+    ])
+    def test_preview_preserves_envelope_and_effective_fields(self, stub_client, event_type):
+        stub_client.response_data = {"preview": {
+            "event_type": event_type,
+            "cash_effective_date": "2026-06-08",
+            "share_effective_date": "2026-06-05",
+            "entitlement_shares": 1000,
+            "shares_before": 1000,
+            "shares_after": 1000,
+            "shares_change": 0,
+            "cash_change": 50,
+            "reinvest_nav": None,
+        }}
+        result = _runner().invoke(app, ["share-event", "preview", "42"])
+        assert result.exit_code == 0, result.stdout
+        assert json.loads(result.stdout) == {"ok": True, "data": stub_client.response_data}
+        assert stub_client.calls == [("/api/share-change-events/42/preview", None)]
+        assert stub_client.writes == []
+
+    @pytest.mark.parametrize("command,code,choice", [
+        ("preview", "DIVIDEND_METHOD_REQUIRED", None),
+        ("confirm", "DIVIDEND_METHOD_REQUIRED", None),
+        ("confirm", "MISSING_NAV", {"event_type": "reinvest_dividend", "share_confirm_date": "2026-06-08"}),
+        ("preview", "INVALID_PARAM", {"event_type": "cash_dividend", "share_confirm_date": "2026-06-08"}),
+        ("confirm", "INVALID_PARAM", {"event_type": "cash_dividend", "share_confirm_date": "2026-06-08"}),
+    ])
+    def test_backend_rejection_uses_one_exact_request(self, monkeypatch, command, code, choice):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(422, json={"detail": {
+                "error": code, "message": "后端校验拒绝", "details": {"event_id": 42},
+            }})
+
+        client = APIClient("http://test")
+        client.close()
+        with httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler)) as transport_client:
+            client._client = transport_client
+            monkeypatch.setattr(APIClient, "from_config", classmethod(lambda cls: client))
+            args = ["share-event", command, "42"]
+            for key, value in (choice or {}).items():
+                args += ["--" + key.replace("_", "-"), value]
+            result = _runner().invoke(app, args)
+        assert result.exit_code == 1, result.stdout
+        doc = json.loads(result.stdout)
+        assert doc["error"]["code"] == code
+        assert doc["error"]["message"] == "后端校验拒绝"
+        assert len(requests) == 1  # 无 GET 探测、预览或失败重试
+        request = requests[0]
+        assert request.method == ("GET" if command == "preview" else "POST")
+        assert request.url.path == f"/api/share-change-events/42/{command}"
+        assert dict(request.url.params) == ((choice or {}) if command == "preview" else {})
+        if command == "confirm" and choice:
+            assert json.loads(request.content) == choice
+        else:
+            assert request.content == b""
+        if code == "DIVIDEND_METHOD_REQUIRED":
+            hint = doc["error"]["hints"][0]
+            assert "ir share-event confirm 42 --event-type cash_dividend" in hint
+            assert "ir share-event confirm 42 --event-type reinvest_dividend" in hint
+        elif code == "MISSING_NAV":
+            assert "--event-type 及日期参数" in doc["error"]["hints"][0]
+
+    def test_required_method_hint_has_fallback(self):
+        hint = get_hint("DIVIDEND_METHOD_REQUIRED")
+        assert hint == ERROR_HINTS["DIVIDEND_METHOD_REQUIRED"]
+        assert "ir share-event confirm <id> --event-type cash_dividend" in hint
+        assert "ir share-event confirm <id> --event-type reinvest_dividend" in hint
+        assert "preview" in hint
+
+    def test_missing_nav_hint_does_not_guess_method_from_event_id(self):
+        hint = get_hint("MISSING_NAV", {"event_id": 42})
+        assert "--event-type 及日期参数" in hint
+        assert "保留完整候选" in hint
+        assert "--event-type reinvest_dividend" not in hint
+        assert "--event-type cash_dividend" not in hint

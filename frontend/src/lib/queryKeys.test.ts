@@ -34,6 +34,41 @@ describe("queryKeys.shareChangeEvents", () => {
   });
 });
 
+describe("queryKeys.shareChangeEvents.previewWith（#775 完整候选）", () => {
+  it("省略候选沿用事件，与显式现金/再投候选不同键", () => {
+    const existing = queryKeys.shareChangeEvents.previewWith(7);
+    const cash = queryKeys.shareChangeEvents.previewWith(7, { event_type: "cash_dividend" });
+    const reinvest = queryKeys.shareChangeEvents.previewWith(7, { event_type: "reinvest_dividend" });
+    expect(existing).toEqual(["share-change-events", 7, "preview", null, null, null]);
+    expect(cash).toEqual(["share-change-events", 7, "preview", "cash_dividend", null, null]);
+    expect(reinvest).toEqual(["share-change-events", 7, "preview", "reinvest_dividend", null, null]);
+    expect(existing).not.toEqual(cash);
+    expect(cash).not.toEqual(reinvest);
+    expect(cash.slice(0, 3)).toEqual(queryKeys.shareChangeEvents.preview(7));
+    expect(cash).not.toEqual(queryKeys.shareChangeEvents.previewWith(8, { event_type: "cash_dividend" }));
+  });
+
+  it("两种日期各自参与缓存键，null 与省略同义", () => {
+    const base = queryKeys.shareChangeEvents.previewWith(7, { event_type: "cash_dividend" });
+    expect(queryKeys.shareChangeEvents.previewWith(7, {
+      event_type: "cash_dividend", cash_pay_date: null, share_confirm_date: null,
+    })).toEqual(base);
+    expect(queryKeys.shareChangeEvents.previewWith(7, {
+      event_type: "cash_dividend", cash_pay_date: "2026-10-26",
+    })).toEqual(["share-change-events", 7, "preview", "cash_dividend", "2026-10-26", null]);
+    expect(queryKeys.shareChangeEvents.previewWith(7, {
+      event_type: "reinvest_dividend", share_confirm_date: "2026-10-27",
+    })).toEqual(["share-change-events", 7, "preview", "reinvest_dividend", null, "2026-10-27"]);
+  });
+
+  it("现金到账日选择除息日归一后与省略日期同键，仍保留完整候选的方式", () => {
+    expect(queryKeys.shareChangeEvents.previewWith(7, {
+      event_type: "cash_dividend",
+      cash_pay_date: normalizePreviewOption("2026-10-26", "2026-10-26"),
+    })).toEqual(queryKeys.shareChangeEvents.previewWith(7, { event_type: "cash_dividend" }));
+  });
+});
+
 // #484：全域工厂。key 是 queryClient 路由缓存与失效的唯一坐标系——域段改名会让
 // invalidateQueries 的值相等匹配静默失配（#344 的同类事故），root 不是真前缀则
 // 「失效整域」刷不掉子键。两处都用字面量断言钉死，让改动必须先过测试。

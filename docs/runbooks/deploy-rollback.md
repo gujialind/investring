@@ -124,8 +124,13 @@ commit）。
 | 0020 | `price_record.pct_change` 存量回填（#692 场外/港互认日涨跌；只补 NULL、幂等，约 24.4 万行） | **刻意 no-op**（不反向置 NULL） | 无损：回填值可由同表 `accumulated_nav` / `unit_price` 重新推导（重跑本迁移即可），没有任何数据被销毁。反向置 NULL 反而会连带删掉上线后新同步写入的合法值——库里无从区分「迁移补的」与「同步写的」。`pct_change` 是纯展示列（消费方仅 nav-history 端点与两个前端页面），无账务下游，回滚功能本身不需要动数据。⚠️ 本仓第一条**非采纳型** no-op：0013/0016 的 `upgrade()` 对已存在的库近乎 no-op，而 0020 真写了数据，故执行 downgrade 后库里仍留着回填值，不要按「已回到 0019 状态」理解 |
 | 0021 | `product.hk_sale_code`（#705 港互认 6 位内地销售码）+ 存量两只港基回填（`1001767344→968050`、`1001767346→968052`，静态映射取自 2026-10-13 实测东财 `fund_hk_rank_em`；迁移期不联网） | 已实现 | 无损：downgrade 直接 `drop_column`。回填值可按同一静态映射重跑迁移恢复。该列只由港互认建档归一（`product_service.create_product`）或本迁移写入，**界面/CLI 无人工纠错入口**（`ProductCreate` / `ProductUpdate` 均无 `hk_sale_code` 字段，后者还 `extra="forbid"`），故不存在「上线后人工改过、回滚即丢」的第三来源；纠错只能改库（该列只服务展示与搜索命中，不参与取价、份额或现金口径，回退后港互认显示码回落到 10 位机器码、`968050` 搜索不再命中，功能降级但账务无影响）。`add_column` 带存在性守卫（`create_all` 建库的测试库幂等） |
 | 0022 | `share_change_event.share_confirm_date`（#743 再投资份额确认日，可空新列，无数据回填） | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提（与 0019 同族）：downgrade 先探测「存在非空 `share_confirm_date`」，命中即 `RuntimeError` 且拒绝发生在任何 DDL 之前——该列一旦被使用即承载「份额在哪一天到账」的记账事实，删列等于销毁，只能走前滚（§4.1）或 RDS 快照恢复；未使用的库（含 CI 空库往返）完整可逆，列不存在时空转 |
+| 0024 | 自动分红存量改为 `event_type="dividend_pending"`（#775，接 0023，纯数据迁移，无列结构变化） | **有条件拒绝（零写入整体中止）**；没有新类型时 no-op | 只要存在任何 `dividend_pending`（包括 cancelled、任何来源），downgrade 即列 ID 并在任何 DML 前拒绝；未知方式不能逆推成再投资。完全没有该类型时可安全空转回退；存在时走前滚（§4.1）或另行授权的数据处置，禁止批量猜方式或 stamp 旧 revision |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
+
+**0024 存量升级与拒绝处置**（[迁移实现](../../backend/alembic/versions/0024_pending_dividend_method.py)）：先读取全部 `event_source=tushare/status=pending/event_type=reinvest_dividend` 候选，只转换原检测器形态（CN_OTC、除息日晚于登记日、平台明确、无父/子记录、无确认派生值或方式专属字段），并要求同组合除息日起没有市值快照。仅改类型，身份、公告、金额、备注及时间原样保留；旧 `div_cash` 缺失或非法也不改值，留待新版本补录后选择方式。manual、confirmed、cancelled 及其他类型不动，重复升级空转。
+
+普通/快照级联回退会清空确认时间和计算值，不能凭这些列为空断言「从未确认」；迁移还检查保留的净值及 `audit_log` 的 `confirm/unconfirm/cascade_unconfirm` 动作（按资源类型与字符串 ID 匹配）。审计是 best-effort 且可清理，无日志不构成历史未确认的证明。任一候选非标准、有确认痕迹或快照依赖，**本条迁移在任何 DML 前整批拒绝并列出所有异常 ID 与原因**；另获授权逐笔核实后重跑，不跳过坏行、不自动清字段或删快照。拒绝只证明 0024 零业务写入，不证明同次 prepare 的前序迁移没有执行，仍按 §2/§7.4 判断现场。
 
 ## 5. 自动化配合（deploy.yml + server_deploy.sh）
 
@@ -202,6 +207,11 @@ CD 不构建（消费 CI `image-smoke` 产出并经 `release_bundle.py verify` �
 - 目标发布已 staged：`ls /opt/investring/releases/` 里有 `<sha7>-<run>.<attempt>` 目录。
   此时它**还不在** `state/accepted-releases.log` 里——该日志只在发布被接受后追加，
   exit 4 的发布只有目录、没有记录，别用「日志里查不到」判断发布不存在。
+- **升级跨 0024 时，须另获停写授权并先停止全部旧 writer/scheduler，等待在途写事务结束，
+  再取目标发布的 bootstrap 指纹并按下列流程授权迁移。** 初始化锁与指纹不冻结业务数据；
+  旧代码可能把新类型当作「未知但可确认」，因此停写必须持续到支持待定类型的新版本通过
+  check、上线及业务冒烟，不能让新旧 writer 混跑。失败时保持停写，按 §4 处置；这些操作
+  须由获授权的执行者实施，本说明本身不授予停服务或生产写权限。
 
 ### 7.2 步骤
 
@@ -245,7 +255,9 @@ CD 不构建（消费 CI `image-smoke` 产出并经 `release_bundle.py verify` �
 - run 全绿，「执行部署」步骤日志出现 `✅ 迁移升级完成: <发布 id>`；
 - 该步骤打印的迁移后 status JSON 为 `"state": "ready"`、`revisions` 等于新 head、
   `missing_*` 全空，且 `schema_fingerprint` 与 `fingerprint` **都已变化**（没变说明 DDL
-  其实没发生）；
+  其实没发生）。**仅执行 0024 的例外**：纯数据迁移不改列，`schema_fingerprint` 应不变，
+  `fingerprint` 因 revision 前进而变化；迁移前 `missing_columns` 也应为空。还须在新版本
+  抽查原候选只变为待定类型、其他字段未变，旧非法金额仍待补录，不以 schema 检查代替数据验收；
 - 服务器上 `readlink -f current` 指向该发布；`state/accepted-releases.log` 追加了一行
   `kind=migrate`；`state/last-known-good` 已推进到该发布——**此后 rollback 的目标就是它**，
   而回滚镜像不会回滚 DDL（§5），跨有损迁移的回退能力见 §4.3；
