@@ -25,7 +25,7 @@ const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
   mobile: { descriptor: devices['iPhone 13'], launch: () => webkit.launch() },
 };
-// 种子契约组合（见 frontend/AGENTS.md §5）：E2E_ACTIVE 有已确认交易/申赎，表格里有行
+// 种子契约组合（见 frontend/e2e/AGENTS.md §1）：E2E_ACTIVE 有已确认交易/申赎，表格里有行
 const DEFAULT_PATHS = [
   '/portfolio/E2E_ACTIVE/trades',
   '/portfolio/E2E_ACTIVE/subscriptions',
