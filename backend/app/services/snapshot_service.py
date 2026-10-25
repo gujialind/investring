@@ -2111,7 +2111,9 @@ def auto_confirm_after_snapshot(
             continue
         processed_groups.add(trade.transfer_group)
         group = trade.transfer_group
-        # TRANSFER_NOT_READY 守卫
+        # TRANSFER_NOT_READY 守卫：查询已限定 confirm_date == next_confirm_date，
+        # #747 到期守卫又保证 next_confirm_date <= today，故当前恒假；保留作二次防线，
+        # 防后续改动查询条件时漏掉到期判断。
         if trade.confirm_date and trade.confirm_date > today:
             logger.info(f"跨天转移 {group} 未到确认日，跳过")
             continue

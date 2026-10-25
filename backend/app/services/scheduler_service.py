@@ -48,7 +48,7 @@ trigger_type=cascade 记录，不破坏账本）。
 """
 import logging
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 from apscheduler.jobstores.base import BaseJobStore
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -243,7 +243,7 @@ def _trigger_nav_sync_retry(attempt: int):
         db.close()
 
 
-def _run_nav_sync_and_derive(db, trigger_type: str) -> tuple:
+def _run_nav_sync_and_derive(db, trigger_type: str) -> Tuple[str, dict]:
     """执行 nav_sync 并返回 `(status, result)`（#715 重试判定 + #747 联动判据）。
 
     终态经 `_derive_log_fields` 派生（与 TaskExecutionLog 落库同一实现，不分叉）；
