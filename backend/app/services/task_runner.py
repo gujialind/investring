@@ -28,7 +28,7 @@ from app.models.nav_sync_detail import NavSyncDetail
 from app.models.product import Product
 from app.models.portfolio import Portfolio
 from app.services.exceptions import NotFoundError
-from app.utils.business_time import business_today
+from app.utils.business_time import business_today, business_yesterday
 
 logger = logging.getLogger(__name__)
 
@@ -125,12 +125,15 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
     返回的 `dividends_skipped`（#771）同手法：分红公告有效、但 `div_cash` 缺失或非正，
     检测器**刻意不建事件**（建了只会永久 pending），只在终态 error_message 留痕，
     不计入 `failed_products`、不改 status。口径取舍见 `_detect_dividends`。
+
+    `new_nav_count`（#747）是本次运行**新增的价格日**总数（增量窗重放回看段不计）：
+    调度侧据此判断「是否有新净值值得联动快照」，与 `synced_count`（含幂等重写）分工。
     """
     from app.services.market_data_service import (
         sync_product_prices, resolve_incremental_start_date, ACCUM_DEGRADED_NOTE,
     )
 
-    target_date = business_today() - timedelta(days=1)
+    target_date = business_yesterday()
 
     products = db.query(Product).filter(
         Product.market.in_(["CN_EXCHANGE", "CN_OTC", "HK_MUTUAL"]),
@@ -140,6 +143,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
     if not products:
         return {
             "synced_count": 0,
+            "new_nav_count": 0,
             "products_count": 0,
             "failed_products": [],
             "degraded_products": [],
@@ -147,6 +151,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         }
 
     total_synced = 0
+    total_new = 0
     failed_products = []
     degraded_products = []
 
@@ -166,6 +171,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
 
             if result["success"]:
                 total_synced += result.get("synced_count", 0)
+                total_new += result.get("new_count", 0)
                 # 累计净值整段降级（#704）：单位净值已落库、冲突行的既有累计净值已保留，
                 # 故仍算 success，但要在任务终态里显式可见——否则与「全部取到」的成功批次
                 # 同形，运维无从得知哪些产品待补。
@@ -210,6 +216,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
 
     return {
         "synced_count": total_synced,
+        "new_nav_count": total_new,
         "products_count": len(products),
         "failed_products": failed_products,
         "degraded_products": degraded_products,
@@ -235,7 +242,7 @@ def run_snapshot_generate(db: Session) -> dict:
     （此前只落运行日志、终态仍 success），调度侧的快照联动补跑据此判断
     「当日快照未成功」。
     """
-    target_date = business_today() - timedelta(days=1)
+    target_date = business_yesterday()
     gen = _generate_snapshots_for_date(db, target_date)
     return {
         "snapshots_generated": gen["generated"],
@@ -245,6 +252,36 @@ def run_snapshot_generate(db: Session) -> dict:
         "failed_portfolios": gen.get("failed_portfolios") or [],
         "target_date": target_date.isoformat(),
     }
+
+
+def _route_auto_confirm_results(
+    outcome: dict, portfolio_code: str, date_iso: str, auto_results: list
+) -> None:
+    """把 auto_confirm 结果并入既有终态通道（逐日回补与到期补确认共用，#747）。
+
+    - `auto_confirm_failed` → `auto_confirm_failed`，附组合身份供 records_failed
+      按唯一组合去重（条目本身只带订阅/事件粒度字段）；
+    - `auto_confirm_skipped` → `warnings`（type/date/组合/事件 id/补录指引），
+      「等人工补录」不是失败，不进 records_failed；
+    - `auto_confirmed` 只在服务层记 INFO，与逐日路径口径一致。
+
+    回补路径此前内联了这段分类；#747 的补确认若不共用，新增 action 或改字段时
+    会只改到其中一条路径。
+    """
+    outcome["auto_confirm_failed"].extend(
+        {**r, "portfolio_code": portfolio_code}
+        for r in auto_results if r.get("action") == "auto_confirm_failed"
+    )
+    outcome["warnings"].extend(
+        {
+            "type": "auto_confirm_skipped",
+            "date": date_iso,
+            "portfolio_code": portfolio_code,
+            "event_id": r.get("id"),
+            "message": r.get("hint") or r.get("error"),
+        }
+        for r in auto_results if r.get("action") == "auto_confirm_skipped"
+    )
 
 
 def _generate_snapshots_for_date(db: Session, target_date) -> dict:
@@ -260,8 +297,10 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
 
     #305 返回结构：{"generated": int, "warnings": [...], "auto_confirm_failed": [...]}
     ——告警逐条补 date 键；自动确认失败条目透传（含 code）。
-    #406 增 `portfolios_processed`：进入逐日回补循环的组合数，供 records_total 归一
-    （与 `generated` 不同——后者是「组合×日」的成功日数）。
+    #406 增 `portfolios_processed`：进入逐日回补循环的组合数；#747 起补确认产生
+    任一结果的组合也计入——它是 records_total 的单位，否则补确认失败会因 total=0
+    被 `_derive_log_fields` 的 min() 折成 records_failed=0（与 `generated` 不同：
+    后者是「组合×日」的成功快照数）。
     #715 增 `failed_portfolios`：fail-fast 中断回补的组合条目（portfolio_code/date/
     code/error），经 _derive_log_fields 落终态 partial_success——此前只 logger.error，
     终态仍 success，调度侧无从判断「当日快照未成功」。
@@ -269,6 +308,13 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     （type="auto_confirm_skipped"，带 portfolio_code/date/event_id 与补录指引），
     使「有事件等人工补录」在任务终态可见（此前只落产生端一条 INFO）；按 warnings
     既有语义不改 status、不进 records_failed。
+
+    #747 补确认：组合的最新快照已追平 end_date（无日可补）时，仍对**最新快照日**
+    补一次 auto_confirm_after_snapshot——周六提前生成周五快照会撞上「下一交易日 >
+    业务今天」的到期守卫，周一 07:30 的快照任务因此成为到期事项的补确认窗口。
+    结果经 `_route_auto_confirm_results` 并入既有 `auto_confirm_failed` / `warnings`
+    通道（不新增结果键），失败仍按单组合 fail-fast 记 `failed_portfolios`；
+    补确认不计 `generated`。
     """
     from app.services.snapshot_service import generate_daily_snapshots, auto_confirm_after_snapshot
     from app.services.exceptions import BusinessError
@@ -321,35 +367,50 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
                 ),
             })
             continue
-        if current <= end_date:
-            outcome["portfolios_processed"] += 1
+        if current > end_date:
+            # 无日可补（最新快照已追平 end_date）：仍对最新快照日补一次到期确认。
+            # 典型形态：周六 nav 联动提前生成周五快照（到期守卫挡下周一到期项），
+            # 周一 07:30 的快照任务经此路径补确认。latest_snapshot 必非空——为 None 时
+            # current 就是 end_date，不会走到这里。
+            try:
+                auto_results = auto_confirm_after_snapshot(
+                    db=db, portfolio_code=portfolio.code, snapshot_date=latest_snapshot
+                )
+                if auto_results:
+                    # 有结果才计入 records_total：补确认失败的 records_failed 需要
+                    # 同一单位的分母，否则会被 _derive_log_fields 的 min() 折成 0。
+                    outcome["portfolios_processed"] += 1
+                    _route_auto_confirm_results(
+                        outcome,
+                        portfolio.code,
+                        latest_snapshot.isoformat(),
+                        auto_results,
+                    )
+                    db.commit()
+            except Exception as e:
+                db.rollback()
+                code = e.code if isinstance(e, BusinessError) else type(e).__name__
+                logger.error(
+                    f"组合 {portfolio.code} 于 {latest_snapshot} 到期补确认失败: "
+                    f"code={code}, error={str(e)}"
+                )
+                outcome["portfolios_processed"] += 1
+                outcome["failed_portfolios"].append({
+                    "portfolio_code": portfolio.code,
+                    "date": latest_snapshot.isoformat(),
+                    "code": code,
+                    "error": str(e),
+                })
+            continue
+        outcome["portfolios_processed"] += 1
         while current and current <= end_date:
             try:
                 gen_result = generate_daily_snapshots(db=db, portfolio_code=portfolio.code, target_date=current)
                 for w in gen_result.get("warnings") or []:
                     outcome["warnings"].append({**w, "date": current.isoformat()})
                 auto_results = auto_confirm_after_snapshot(db=db, portfolio_code=portfolio.code, snapshot_date=current)
-                # 附 portfolio_code：records_failed 按唯一组合去重计数需要组合身份
-                # （auto_confirm_failed 条目本身只带 subscription/event 粒度字段，#715 复核 Blocker）
-                outcome["auto_confirm_failed"].extend(
-                    {**r, "portfolio_code": portfolio.code}
-                    for r in auto_results if r.get("action") == "auto_confirm_failed"
-                )
-                # #771 评审：`auto_confirm_skipped`（div_cash 非正的存量事件等人工补录）
-                # 此前只有产生端一条 INFO 运行日志，任务终态零记录，与检测口的
-                # dividends_skipped 落终态不对称。并入既有 warnings 通道——
-                # _derive_log_fields 的 snapshot_generate 分支已把 warnings 落
-                # error_message 且不改 status；「等补录」不是失败，故不进
-                # auto_confirm_failed、不影响 records_failed。
-                outcome["warnings"].extend(
-                    {
-                        "type": "auto_confirm_skipped",
-                        "date": current.isoformat(),
-                        "portfolio_code": portfolio.code,
-                        "event_id": r.get("id"),
-                        "message": r.get("hint") or r.get("error"),
-                    }
-                    for r in auto_results if r.get("action") == "auto_confirm_skipped"
+                _route_auto_confirm_results(
+                    outcome, portfolio.code, current.isoformat(), auto_results
                 )
                 db.commit()
                 outcome["generated"] += 1

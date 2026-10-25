@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.models.scheduled_task import ScheduledTask
 from app.models.task_execution_log import TaskExecutionLog
+from app.models.trading_calendar import TradingCalendar
 from app.services import scheduler_service
 from app.services.task_runner import (
     TRIGGER_CASCADE,
@@ -37,6 +38,7 @@ from app.utils.business_time import business_day_start, business_now, business_t
 from tests.unit.business_clock_helpers import (
     MON_0700_CST,
     SAT_0700_CST,
+    SUN_0700_CST,
     TUE_0700_CST,
     freeze_business_clock as _freeze_business_clock,
 )
@@ -102,8 +104,10 @@ def _run_trigger(test_db, trigger, *, calendar, decisions, date_log=None):
     - SessionLocal 指向替身会话（与 test_db 绑同一连接，故落库可见）
     - execute 替身：GET_LOCK 按 decisions 作答、RELEASE_LOCK 恒成功，
       其余 SQL 原样委托真实 `Session.execute`（ORM 落库照常走真实现）
-    - query 替身：交易日历按 calendar 作答（None = 查不到当日）；传入 date_log
-      列表时记录闸门实际查询的 calendar_date（#746）
+    - query 替身：**只**拦截交易日历查询并按 calendar 作答（None = 查不到当日）；
+      其余模型查询（当日成功记录等）委托真实 Session.query——若对所有 query 都返回
+      日历替身，#747 的「当日快照已成功」判据会被静默短路成 AttributeError/假绿。
+      传入 date_log 列表时记录闸门实际查询的 calendar_date（#746）
 
     两处替身都走「子类覆写」，不改 `Session` 本身的属性——`Session.query` 是
     SQLAlchemy 的 `_query_cls` 描述符，patch 掉会破坏描述符协议并影响同进程后续用例。
@@ -116,7 +120,9 @@ def _run_trigger(test_db, trigger, *, calendar, decisions, date_log=None):
 
     class _FakeSession(type(test_db)):
         def query(self, *args, **kwargs):
-            return _FakeCalendarQuery(calendar, date_log=date_log)
+            if args and args[0] is TradingCalendar:
+                return _FakeCalendarQuery(calendar, date_log=date_log)
+            return Session.query(self, *args, **kwargs)
 
         def execute(self, *args, **kwargs):
             return handler(self, *args, **kwargs)
@@ -215,7 +221,7 @@ class TestBusinessClockGate:
         assert queried == [date(2026, 10, 17)]
 
     def test_trigger_body_gate_uses_business_day(self, test_db, monkeypatch):
-        """经真实触发体走一遍：冻结周二 07:00 CST，闸门查询日必须是业务周二"""
+        """经真实触发体走一遍：冻结周二 07:00 CST，#747 起 nav 闸门锚定业务昨天（周一）"""
         _freeze_business_clock(monkeypatch, TUE_0700_CST)
         monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
             "synced_count": 0, "products_count": 0, "failed_products": [],
@@ -224,7 +230,55 @@ class TestBusinessClockGate:
         _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
                      decisions=[1], calendar=MagicMock(is_open=True),
                      date_log=queried)
-        assert queried == [date(2026, 10, 20)]  # 不是 UTC 的 10-19
+        assert queried == [date(2026, 10, 19)]  # 业务昨天；进程 UTC 钟上是 10-18 周日
+
+
+class TestNavGateAnchorsYesterday:
+    """#747：nav_sync 的闸门锚定**业务昨天**（昨天收盘后是否有待同步的新净值）。
+
+    判据不是「今天是否交易日」：周六（昨天周五）要跑、周日/周一（昨天非交易日）不跑。
+    用例同时钉住被查询的日期——只断言「是否放行」的话，闸门退回 business_today()
+    在周日/周一同样是闭市、同样跳过，测试会假绿。
+    """
+
+    def _run_nav(self, test_db, monkeypatch, *, is_open: bool):
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 0, "new_nav_count": 0, "products_count": 0,
+            "failed_products": [],
+        })
+        queried = []
+        _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
+                     decisions=[1], calendar=MagicMock(is_open=is_open),
+                     date_log=queried)
+        return queried
+
+    def test_saturday_runs_with_friday_gate(self, test_db, monkeypatch):
+        """周六 07:00：昨天（周五）是交易日 → 放行"""
+        _freeze_business_clock(monkeypatch, SAT_0700_CST)
+        queried = self._run_nav(test_db, monkeypatch, is_open=True)
+        assert queried == [date(2026, 10, 16)]  # 业务周五，不是业务周六 10-17
+        assert test_db.query(TaskExecutionLog).one().trigger_type == TRIGGER_SCHEDULED
+
+    def test_sunday_blocks_with_saturday_gate(self, test_db, monkeypatch):
+        """周日 07:00：昨天（周六）闭市 → 跳过且不建记录"""
+        _freeze_business_clock(monkeypatch, SUN_0700_CST)
+        queried = self._run_nav(test_db, monkeypatch, is_open=False)
+        assert queried == [date(2026, 10, 17)]  # 业务周六，不是业务周日 10-18
+        assert test_db.query(TaskExecutionLog).count() == 0
+
+    def test_monday_blocks_with_sunday_gate(self, test_db, monkeypatch):
+        """周一 07:00：昨天（周日）闭市 → 跳过（旧「按今天判」会放行并白跑）"""
+        _freeze_business_clock(monkeypatch, MON_0700_CST)
+        queried = self._run_nav(test_db, monkeypatch, is_open=False)
+        assert queried == [date(2026, 10, 18)]  # 业务周日，不是业务周一 10-19
+        assert test_db.query(TaskExecutionLog).count() == 0
+
+    def test_weekday_runs_with_previous_trading_day_gate(self, test_db, monkeypatch):
+        """工作日行为不变：周二 07:00 查周一（交易日）→ 放行"""
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        queried = self._run_nav(test_db, monkeypatch, is_open=True)
+        assert queried == [date(2026, 10, 19)]
+        assert test_db.query(TaskExecutionLog).count() == 1
 
 
 class TestLockNames:
@@ -512,9 +566,41 @@ class TestFirstRunSchedulesRetry:
         assert test_db.query(TaskExecutionLog).one().status == "success"
         assert fake.jobs == []
 
+    def test_success_with_new_nav_cascades(self, test_db, monkeypatch):
+        """#747：终态 success 且有新增价格日 → 首跑也联动快照（不再只挂在重试成功上）"""
+        self._task(test_db, "nav_sync")
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", _FakeScheduler())
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 2, "new_nav_count": 2, "products_count": 2,
+            "failed_products": [], "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        cascade.assert_called_once()
+
+    def test_success_without_new_nav_does_not_cascade(self, test_db, monkeypatch):
+        """增量窗只重放回看段（new_nav_count=0）→ 不重算快照"""
+        self._task(test_db, "nav_sync")
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", _FakeScheduler())
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 2, "new_nav_count": 0, "products_count": 2,
+            "failed_products": [], "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, scheduler_service._trigger_daily_nav_sync,
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        cascade.assert_not_called()
+
 
 class TestRetryTriggerBody:
-    """重试触发体：success → 联动快照；非 success → 注册下一次；耗尽 → 停手"""
+    """重试触发体：success/partial_success 有新净值 → 联动快照；非 success → 注册下一次"""
 
     def _task(self, test_db, code):
         task = test_db.query(ScheduledTask).filter_by(code=code).first()
@@ -531,6 +617,7 @@ class TestRetryTriggerBody:
         monkeypatch.setattr(scheduler_service, "_scheduler", _FakeScheduler())
         monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
             "synced_count": 2, "products_count": 2, "failed_products": [],
+            "new_nav_count": 2,
             "target_date": date.today().isoformat(),
         })
 
@@ -541,7 +628,62 @@ class TestRetryTriggerBody:
         log = test_db.query(TaskExecutionLog).one()
         assert log.trigger_type == TRIGGER_RETRY == "retry"
         assert log.status == "success"
-        cascade.assert_called_once()  # 全量成功 → 检查快照联动
+        cascade.assert_called_once()  # 全量成功且有新增净值 → 检查快照联动
+
+    def test_retry_success_without_new_nav_does_not_cascade(self, test_db, monkeypatch):
+        """#747：success 但无新增价格日 → 不联动（且 success 不注册下一次重试）"""
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "new_nav_count": 0, "products_count": 1,
+            "failed_products": [], "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(1),
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        cascade.assert_not_called()
+        assert fake.jobs == []
+
+    def test_retry_partial_success_with_new_nav_cascades_and_reschedules(self, test_db, monkeypatch):
+        """#747：partial_success 有新增净值时既联动、也继续注册下一次重试"""
+        self._task(test_db, "nav_sync")
+        fake = _FakeScheduler()
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", fake)
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "new_nav_count": 1, "products_count": 2,
+            "failed_products": ["A.OF"], "target_date": date.today().isoformat(),
+        })
+
+        _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(1),
+                     decisions=[1], calendar=MagicMock(is_open=True))
+
+        cascade.assert_called_once()
+        assert len(fake.jobs) == 1
+        assert fake.jobs[0][1]["args"] == [2]
+
+    def test_retry_saturday_uses_same_yesterday_gate(self, test_db, monkeypatch):
+        """#747：周六重试与首跑同判据（业务昨天=周五）→ 放行并落 retry 记录"""
+        self._task(test_db, "nav_sync")
+        _freeze_business_clock(monkeypatch, SAT_0700_CST)
+        monkeypatch.setattr(scheduler_service, "_scheduler", _FakeScheduler())
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", MagicMock())
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 1, "new_nav_count": 0, "products_count": 1,
+            "failed_products": [], "target_date": "2026-10-16",
+        })
+
+        queried = []
+        _run_trigger(test_db, lambda: scheduler_service._trigger_nav_sync_retry(2),
+                     decisions=[1], calendar=MagicMock(is_open=True), date_log=queried)
+
+        assert queried == [date(2026, 10, 16)]
+        assert test_db.query(TaskExecutionLog).one().trigger_type == TRIGGER_RETRY
 
     def test_retry_partial_schedules_next_attempt(self, test_db, monkeypatch):
         self._task(test_db, "nav_sync")
@@ -922,6 +1064,79 @@ class TestManualRunDoesNotRetry:
 
         assert test_db.query(TaskExecutionLog).one().status == "partial_success"
         assert fake.jobs == []  # run_task 不挂重试逻辑
+
+
+class TestSnapshotGenerateFallbackSkip:
+    """#747：07:30 快照兜底——当日已成功（含 nav 联动）则跳过、不建第二条记录"""
+
+    def test_success_today_skips_scheduled_generate(self, test_db, monkeypatch):
+        seed = TaskExecutionLog(
+            task_code="snapshot_generate", trigger_type=TRIGGER_CASCADE,
+            status="success", started_at=datetime.now(),
+        )
+        test_db.add(seed)
+        test_db.commit()
+        ran = []
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate",
+                            lambda db, log_id: ran.append(1) or {})
+
+        counter = _run_trigger(
+            test_db, scheduler_service._trigger_daily_snapshot_generate,
+            decisions=[1], calendar=MagicMock(is_open=True),
+        )
+
+        assert counter == {"get": 1, "release": 1}
+        assert ran == []
+        assert test_db.query(TaskExecutionLog).count() == 1  # 只有种子行，未建第二条
+
+    def test_previous_business_day_success_does_not_skip(self, test_db, monkeypatch):
+        """窗口按业务日：前一业务日成功不算当日成功，定时快照照常执行"""
+        _freeze_business_clock(monkeypatch, TUE_0700_CST)
+        seed = TaskExecutionLog(
+            task_code="snapshot_generate", trigger_type=TRIGGER_SCHEDULED,
+            status="success", started_at=datetime(2026, 10, 19, 2, 0),
+        )
+        test_db.add(seed)
+        test_db.commit()
+        ran = []
+
+        def fake_dispatch(db, log_id):
+            ran.append(log_id)
+            return {
+                "snapshots_generated": 1, "portfolios_processed": 1,
+                "warnings": [], "auto_confirm_failed": [],
+            }
+
+        monkeypatch.setitem(_TASK_DISPATCH, "snapshot_generate", fake_dispatch)
+
+        _run_trigger(
+            test_db, scheduler_service._trigger_daily_snapshot_generate,
+            decisions=[1], calendar=MagicMock(is_open=True),
+        )
+
+        assert len(ran) == 1
+        assert test_db.query(TaskExecutionLog).count() == 2
+
+
+class TestManualNavNoCascade:
+    """#747：手动 nav_sync 不经调度触发体，因而不联动快照（无需新分支）"""
+
+    def test_manual_run_does_not_cascade_even_with_new_nav(self, test_db, monkeypatch):
+        task = test_db.query(ScheduledTask).filter_by(code="nav_sync").first()
+        if task is None:
+            test_db.add(ScheduledTask(code="nav_sync", name="nav_sync", is_enabled=True))
+            test_db.commit()
+        cascade = MagicMock()
+        monkeypatch.setattr(scheduler_service, "_maybe_cascade_snapshot", cascade)
+        monkeypatch.setattr(scheduler_service, "_scheduler", _FakeScheduler())
+        monkeypatch.setitem(_TASK_DISPATCH, "nav_sync", lambda db, log_id: {
+            "synced_count": 3, "new_nav_count": 3, "products_count": 3,
+            "failed_products": [], "target_date": date.today().isoformat(),
+        })
+
+        run_task(test_db, "nav_sync", trigger_type=TRIGGER_MANUAL)
+
+        cascade.assert_not_called()
 
 
 class TestRetryJobPersistence:

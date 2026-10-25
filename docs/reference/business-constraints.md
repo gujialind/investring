@@ -99,7 +99,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 - **严格取价**（#96/#178，#228 起泛化）：只由产品 nav_lag_days 决定取价日，0 取当日、N 取交易日历上前第 N 个交易日；缺指定日行情必须报 `MISSING_NAV`，不得回退。调仓确认始终取 T 日价格、按落库 confirm_days 决定间隔，与快照估值正交。**取价日历按产品市场解析（#777）**：港互认（HK_MUTUAL）的 T-N 在 HKEX 日历上解析——「A股开市、港股休市」日估值自动回落到最近一个港股交易日的已发布净值（休市日估值冻结）；其余市场仍在 SSE 日历解析，快照日序列本身恒为 SSE 口径。详见[交易日](#rule-trading-day)的双市场日历段。
 - **「缺价」只有一种形态**（#701）：`price_record.unit_price` 的写入判据在 #580 的可用性（None/空串/NaN/Inf/非数字）之上**还必须为正**（`quantize_nav` 收口后比较，落库会塌成 `0.0000` 的极小正值同样拒），非正单价与坏值同族：跳过整行 + WARNING 点名交易日，整批为空仍按「跳过而非失败」收口（#613）。理由是 0/负价一旦入库就是「有价的一天」而不是缺行——快照据此把市值算成 0（或负），`nav_coverage` 只按 `price_date` 计数、会把这天报成已覆盖，缺口从此无法从盘点定位；这与迁移 0017 对 NULL 行的判断是同一条错法。`accumulated_nav` 非正时**只丢这一列**、不连累已合格的价格：把一个派生口径的坏值升级成「这一天没有净值」属于过度处置。边界：`MISSING_NAV` 因此恒等于「该日无合格单价记录」，不存在「有行但算成 0 价」的第二种形态；判据分表与实现入口见[后端指南](../../backend/AGENTS.md#backend-models)。
 - **删除必级联**：删某日及以后全部快照。按数据依赖回退：apply_date 落在区间的 confirmed 申赎、entitlement_date 落在区间的 confirmed 事件退回 pending；配对 CASH 腿删除，基金级父事件的子记录物理删除。交易依赖产品行情而非组合快照，**不级联**。单日删除任一笔回退失败，该次调用整体回滚（#203）；批量删除从最新日倒序、逐日提交，失败日回滚，但此前已成功删除的日期保留，不要求整个批次无变化。
-- **重算为单一事务**：先对整区间做行情完整性预校验，再逐交易日删旧、级联回退、重建、auto_confirm，全程不 commit；任一天重建失败即停，对外完整成功或无变化。每日 auto_confirm 处理到期 pending 申赎、事件、跨天现金转移，**不含调仓**（#493/#471）；被级联回退的记录由此重确认，日期键见后端指南的 `auto_confirm_after_snapshot` 说明。允许的单笔失败记 auto_confirm_failed 并继续，不能与需要整体回滚的失败混同。
+- **重算为单一事务**：先对整区间做行情完整性预校验，再逐交易日删旧、级联回退、重建、auto_confirm，全程不 commit；任一天重建失败即停，对外完整成功或无变化。每日 auto_confirm 处理到期 pending 申赎、事件、跨天现金转移，**不含调仓**（#493/#471）；被级联回退的记录由此重确认，日期键见后端指南的 `auto_confirm_after_snapshot` 说明。允许的单笔失败记 auto_confirm_failed 并继续，不能与需要整体回滚的失败混同。**到期守卫（#747）**：跨天转移/事件两段仅在 `next_trading_day(D) <= business_today()` 时执行——周六提前生成周五快照不得把周一到期的事项提前确认；申赎段（`apply_date <= D`）与执行时刻无关，不受影响。守卫挡下的到期事项由下一次快照任务的**补确认**消化：`_generate_snapshots_for_date` 无日可补时仍对最新快照日调一次 `auto_confirm_after_snapshot`（结果并入既有 `auto_confirm_failed` / `warnings` 通道，不计快照生成数），周一 07:30 由此确认周末到期的记录。守卫命中时只记 INFO、不产生结果条目（手动重算 / 追平 / 生成次日同样适用），非自动快照组合须人工生成下一次快照后补确认。
 - **零快照但目标日前已有确认交易**（#180）：单日 generate 报 `SNAPSHOT_REQUIRES_RECALCULATE`，须从最早 confirm_date 逐日重建，避免首快照漏早期到账；目标日即最早到账日的真正首次生成不受影响。
 - **并发生成对外仍是完整成功或无变化**（#618）：单日 generate 走「先删后插」，两个不同组合的请求并发时可能在 MySQL 上互等而死锁（1213），由端点侧**有界重试**吸收——重放的是回滚后的整段重建，故不留半截快照、不改任何业务口径；预算耗尽才失败，错误码与响应契约不变（仍 `SNAPSHOT_GENERATION_FAILED`）。锁机制、为何按组合加锁无效、以及为何只有 CI 显形见[后端核心服务](../../backend/AGENTS.md#13-核心服务)。
 
@@ -398,7 +398,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | catch-up（追平） | 入口即无下一交易日 → 422；中途到头 → 干净 `break` | 逐日 checkpoint：已生成日保留，响应 200 + `warnings`（`calendar_exhausted`），消息不得称「追平完成」 |
 | generate-next（单日顺延） | 422 冒泡（该端点无 errors 契约） | 未生成任何快照 |
 | 调度回补 `daily_snapshot_generate` | 单组合到头 → 记 `outcome.warnings` 跳过该组合、继续其余组合；全任务无可补日 → warnings 后返回 | 执行记录 `success`（warnings 计入 error_message），不因单组合到头判 failed |
-| auto_confirm（跨天转移 / 份额事件两段） | D 之后无交易日 → 跳过这两段 | 申赎段（按 `apply_date <= D`）不受影响；抛错属可证明的 no-op（`confirm_date` / `ex_date` 创建期已校验为日历交易日） |
+| auto_confirm（跨天转移 / 份额事件两段） | D 之后无交易日 → 跳过这两段；`next_trading_day(D) > business_today()`（#747 到期守卫）→ 同样跳过 | 申赎段（按 `apply_date <= D`）不受影响；抛错属可证明的 no-op（`confirm_date` / `ex_date` 创建期已校验为日历交易日）；被守卫挡下的到期事项由后续快照任务的补确认（结果并入既有 `auto_confirm_failed` / `warnings` 通道）消化 |
 | `/api/trading-calendar/next`、`/prev` | 422 + `details`（由 helper 给出，取代旧 router 的 `result == from_date` 哨兵） | 只读，无写入 |
 | `/api/trading-calendar/is-open` | 无该日 calendar 行 → 422（区别于「非交易日」的 200） | 只读 |
 

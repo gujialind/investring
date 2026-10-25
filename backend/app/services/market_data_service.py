@@ -13,7 +13,7 @@ from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.trading_utils import SSE_EXCHANGE, exchange_for_market
 from app.services.tushare_client import get_fund_daily, get_fund_nav, TushareAPIError
-from app.utils.business_time import business_today
+from app.utils.business_time import business_today, business_yesterday
 from app.utils.quantize import quantize_nav
 
 logger = logging.getLogger(__name__)
@@ -453,8 +453,12 @@ def sync_product_prices(
     """
     单产品价格同步（改造版）。
     数据源路由 + 批量 upsert + 禁止硬编码 data_source + sync_error/source 回写。
-    返回 {success, synced_count, message, source}；真正写入价格的那条路径另带
+    返回 {success, synced_count, new_count, message, source}；真正写入价格的那条路径另带
     `accum_degraded`（#704），跳过/失败/无新数据的早退路径没有该键，调用方一律 `.get()`。
+
+    `new_count`（#747）是本次写入中**此前不存在的 `price_date`** 条数：增量窗会重放回看段，
+    `synced_count` 把幂等重写也算进去，不能用来判断「本次是否带来了新净值」。所有早退路径
+    恒为 0（没有写库就没有新增）。
 
     `accum_degraded` 为 True 表示 akshare 场外累计净值整段失效：同步本身成功（单位净值
     已落库、冲突行的既有 accumulated_nav 已保留），但本批没取到累计净值，任务终态据此
@@ -482,7 +486,7 @@ def sync_product_prices(
                 raw_data = get_fund_nav(product_code, start_str, end_str)
             elif market == "HK_MUTUAL":
                 _mark_skipped(db, product, "tushare 不支持 HK_MUTUAL")
-                return {"success": True, "synced_count": 0, "message": "跳过：tushare 不支持 HK_MUTUAL", "source": data_source}
+                return {"success": True, "synced_count": 0, "new_count": 0, "message": "跳过：tushare 不支持 HK_MUTUAL", "source": data_source}
             else:
                 raise ValueError(f"不支持的 market: {market}")
         elif data_source == "akshare":
@@ -498,13 +502,13 @@ def sync_product_prices(
                 raw_data = get_fund_hk_mutual(product_code, start_str, end_str)
             else:
                 _mark_skipped(db, product, f"akshare 不支持 market={market}")
-                return {"success": True, "synced_count": 0, "message": "跳过", "source": data_source}
+                return {"success": True, "synced_count": 0, "new_count": 0, "message": "跳过", "source": data_source}
         else:
             _mark_skipped(db, product, f"未实现的数据源: {data_source}")
-            return {"success": True, "synced_count": 0, "message": f"跳过：未实现 {data_source}", "source": data_source}
+            return {"success": True, "synced_count": 0, "new_count": 0, "message": f"跳过：未实现 {data_source}", "source": data_source}
     except (TushareAPIError, Exception) as e:
         _mark_failed(db, product, f"{type(e).__name__}: {e}")
-        return {"success": False, "message": str(e), "synced_count": 0, "source": data_source}
+        return {"success": False, "message": str(e), "synced_count": 0, "new_count": 0, "source": data_source}
 
     if not raw_data:
         # 空 raw_data 有两种含义，此处只该放行其中一种（#651）：
@@ -521,14 +525,16 @@ def sync_product_prices(
         product.last_sync_at = datetime.utcnow()
         product.sync_error = None
         db.flush()
-        return {"success": True, "message": "无新数据", "synced_count": 0, "source": data_source}
+        return {"success": True, "message": "无新数据", "synced_count": 0, "new_count": 0, "source": data_source}
 
     normalized = _normalize_raw(raw_data, market)
     if market == "CN_OTC" and data_source == "tushare":
         # 上游 fund_nav 无涨跌幅字段，只能就地推导；akshare 场外与港互认走上游透传，
         # 口径与限制见 _derive_otc_pct_change（#692）。
         _derive_otc_pct_change(db, product_code, market, normalized)
-    synced_count = _bulk_upsert_prices(db, product_code, market, normalized, data_source)
+    synced_count, new_count = _bulk_upsert_prices(
+        db, product_code, market, normalized, data_source
+    )
     accum_degraded = any(r.get("accum_degraded") for r in normalized)
 
     product.data_source_status = "success"
@@ -546,6 +552,7 @@ def sync_product_prices(
         "success": True,
         "message": message,
         "synced_count": synced_count,
+        "new_count": new_count,
         "source": data_source,
         "accum_degraded": accum_degraded,
     }
@@ -741,8 +748,13 @@ def _bulk_upsert_prices(
     market: str,
     rows: List[dict],
     source: str,
-) -> int:
+) -> Tuple[int, int]:
     """批量 upsert。MySQL 用 ON DUPLICATE KEY UPDATE，SQLite 用 ORM fallback（测试环境）。
+
+    返回 `(写入行数, 新增日期数)`（#747）。新增数用**写前差集**而不是驱动 rowcount：
+    MySQL `ON DUPLICATE` 的 rowcount 0/1/2 在 executemany 下被聚合、拆不出单行语义，
+    方言分叉只会再引入一条 SQLite 测不到的路径；差集法对「同一批重跑」天然返回 0，
+    与幂等重写的实际效果一致。
 
     `accum_degraded`（#704）是唯一一处「NULL 不覆盖既有值」：该批累计净值整段没取到时，
     冲突行保留库里已有的 `accumulated_nav`，只更新单价等其余列。范围刻意只到降级批次
@@ -752,7 +764,7 @@ def _bulk_upsert_prices(
     from sqlalchemy import text
 
     if not rows:
-        return 0
+        return 0, 0
 
     values, skipped, nav_dropped = [], [], []
     accum_degraded = False
@@ -804,7 +816,20 @@ def _bulk_upsert_prices(
         # for bind parameter …），让「跳过」被上层记成假失败——同步任务里该产品落成
         # failed、错误信息还是 SQLAlchemy 的内部文案；SQLite 分支遍历空列表恰好无感，
         # 所以这条方言分叉只有生产会踩到。
-        return 0
+        return 0, 0
+
+    # #747：写前记录窗口内已存在的日期，写后由差集得到「此前不存在的价格日」。
+    # 一次 IN 查询走 uix_price_record 前缀，与下方写入同一事务，不额外放大往返。
+    batch_dates = {v["price_date"] for v in values}
+    existing_dates = {
+        row[0]
+        for row in db.query(PriceRecord.price_date).filter(
+            PriceRecord.product_code == product_code,
+            PriceRecord.market == market,
+            PriceRecord.price_date.in_(batch_dates),
+        ).all()
+    }
+    new_count = len(batch_dates - existing_dates)
 
     if accum_degraded:
         logger.warning(
@@ -847,7 +872,7 @@ def _bulk_upsert_prices(
             else:
                 db.add(PriceRecord(**v))
 
-    return len(values)
+    return len(values), new_count
 
 
 # ==================== 后台任务编排（P3.1） ====================
@@ -980,7 +1005,7 @@ def _run_price_sync_job_impl(job_id: int):
                 if params.get("end_date"):
                     end_date = datetime.strptime(params["end_date"], "%Y-%m-%d").date()
                 else:
-                    end_date = business_today() - timedelta(days=1)
+                    end_date = business_yesterday()
 
                 result = sync_product_prices(
                     db=db,

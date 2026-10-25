@@ -12,9 +12,10 @@ daily_snapshot_generate（组合快照生成，仅处理开启 auto_snapshot_ena
 nav_sync 有界自动重试（#715）：**定时首跑**终态非全量成功（partial_success /
 failed）时向持久化 JobStore 注册一次性 date-trigger 重试 job（间隔 2 小时、
 上限 3 次，确定性 job id + replace_existing 去重），重试运行以 trigger_type=retry
-落执行记录；重试全量成功后若当日快照定时运行未成功，联动补跑一次快照
-（trigger_type=cascade），补跑自身失败不再追。手动触发（submit_task 路径）
-不挂重试检查。重试 job 与首跑共用 `_should_run_today` 闸门，多 worker 下仍由
+落执行记录；重试最终成功后若当日快照定时运行未成功，联动补跑一次快照
+（trigger_type=cascade），补跑自身失败不再追（#747 起首跑与 partial_success
+同样可能联动，见下）。手动触发（submit_task 路径）不挂重试检查也不联动。
+重试 job 与首跑共用 `_should_run_today` 闸门，多 worker 下仍由
 GET_LOCK 收敛为单执行；重启后 job 自 JobStore 重载（misfire_grace_time=None，
 长时间停机后的过期重试仍会补跑——nav_sync 是增量同步且有交易日闸门，补跑无害）。
 
@@ -29,6 +30,16 @@ job id + replace_existing，与重试 job 同手法），复查时重查当日�
 trigger_type=cascade 记录，不破坏账本）。
 默认 cron（07:00 / 07:30）下重试落在 09:00–13:00、复查落在其后 45 分钟内，不跨午夜。
 
+**nav_sync 的闸门锚定业务昨天**（#747）：净值同步的意义是「同步昨天收盘后的新净值」，
+故首跑与重试都以 `business_yesterday()` 判交易日——周六放行（昨天周五）、周日/周一
+拦截（昨天非交易日）。快照/cascade 复查仍以业务今天判定（快照日序列按交易日连续）。
+联动补跑（cascade）的触发条件由「重试全量成功」改为「终态 success/partial_success 且
+本次有新增价格日（new_nav_count > 0）」——增量窗重放回看段不产生新净值时没有必要
+重算快照；首跑 partial_success 也联动（与 #715「仅重试成功」口径的差异见任务规范）。
+
+**07:30 快照兜底去重**（#747）：若 nav 联动已在当日成功生成快照，定时快照任务跳过、
+不建第二条执行记录——否则同一份快照会被连续生成两次。
+
 **重试是全量 nav_sync 的取舍**（#715 复核 Suggestion）：每次重试都遍历全部产品并
 对同一 nav_date 再写一套 NavSyncDetail（该表无唯一约束，只堆行数不撞错），慢性
 部分失败（某产品长期取不到净值）下上游调用与明细行数最多放大到 4 倍（首跑 + 3 次
@@ -36,14 +47,20 @@ trigger_type=cascade 记录，不破坏账本）。
 当前接受该放大——它不破坏账本，且 nav_sync 增量窗口使重复同步的写放大有限。
 """
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
+from typing import Optional, Tuple
 
 from apscheduler.jobstores.base import BaseJobStore
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from sqlalchemy import inspect
 
 from app.config import get_settings
-from app.utils.business_time import business_day_start, business_now, business_today
+from app.utils.business_time import (
+    business_day_start,
+    business_now,
+    business_today,
+    business_yesterday,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +140,15 @@ def init_scheduler():
         logger.info(f"恢复 {recovered} 个孤儿 running/pending job -> interrupted")
 
 
-def _should_run_today(db, lock_name: str) -> bool:
+def _should_run_today(db, lock_name: str, *, gate_date: Optional[date] = None) -> bool:
     """执行前两道闸门：GET_LOCK 互斥 → 交易日判断。
 
-    True 表示本进程持有锁且今天是交易日，可以执行；False 表示应跳过
+    True 表示本进程持有锁且判定日为交易日，可以执行；False 表示应跳过
     （另一进程持有锁、或当日非交易日），调用方直接 return、**不建任务执行记录**。
+
+    `gate_date`（#747）：nav_sync 传业务昨天（「昨天收盘后是否有新净值待同步」），
+    缺省为 `business_today()`（快照触发的语义不变；cascade 复查不过本道闸门）。
+    判定日出错会直接翻转放行/拦截，故调用方只在需要非「今天」口径时显式传入。
 
     锁的获取与释放刻意分处两个函数（本函数取、触发体 finally 释放）：MySQL
     GET_LOCK 是连接级会话锁，同一连接重复释放无副作用，但提前释放会让互斥失效，
@@ -142,7 +163,7 @@ def _should_run_today(db, lock_name: str) -> bool:
         logger.info(f"另一个进程已持有 {lock_name}，跳过")
         return False
 
-    today = business_today()
+    today = gate_date or business_today()
     # 调度闸门是 SSE 快照日口径；双日历后同一日期有两行，必须显式过滤（#777）
     cal = db.query(TradingCalendar).filter(
         TradingCalendar.calendar_date == today,
@@ -168,17 +189,20 @@ def _release_lock(db, lock_name: str) -> None:
 def _trigger_daily_nav_sync():
     """APScheduler 触发体：互斥+交易日闸门 → run_task(trigger_type=scheduled)。
 
-    终态非全量成功时注册一次性重试 job（#715，`_maybe_schedule_nav_retry`）。
+    闸门锚定**业务昨天**（#747）：昨天收盘后无新净值（周日/周一）时不执行、不建记录。
+    终态非全量成功时注册一次性重试 job（#715，`_maybe_schedule_nav_retry`）；
+    终态可接受且有新增价格日时联动快照（#747）。
     """
     from app.database import SessionLocal
     from app.services.task_runner import TRIGGER_SCHEDULED
 
     db = SessionLocal()
     try:
-        if not _should_run_today(db, NAV_SYNC_LOCK):
+        if not _should_run_today(db, NAV_SYNC_LOCK, gate_date=business_yesterday()):
             return
-        status = _run_nav_sync_and_derive(db, TRIGGER_SCHEDULED)
+        status, result = _run_nav_sync_and_derive(db, TRIGGER_SCHEDULED)
         _maybe_schedule_nav_retry(status, attempt=1)
+        _cascade_snapshot_if_new_nav(db, status, result)
     except Exception as e:
         logger.error(f"每日净值同步触发体异常: {e}", exc_info=True)
     finally:
@@ -187,9 +211,10 @@ def _trigger_daily_nav_sync():
 
 
 def _trigger_nav_sync_retry(attempt: int):
-    """一次性重试触发体（#715）：与首跑共用闸门（GET_LOCK 互斥 + 交易日判断）。
+    """一次性重试触发体（#715）：与首跑共用闸门（GET_LOCK 互斥 + 业务昨天交易日判断）。
 
-    - 终态 success → 检查当日快照联动补跑（`_maybe_cascade_snapshot`），链条终止；
+    - 终态 success/partial_success 且有新增价格日 → 检查当日快照联动补跑
+      （`_cascade_snapshot_if_new_nav`，链条终止）；
     - 非 success 且序号未耗尽 → 注册下一次尝试（序号递增，天然有界）；
     - 序号耗尽 → 停手，执行记录已落库，交人工处置（CLI / 产品页批量同步）。
 
@@ -201,18 +226,16 @@ def _trigger_nav_sync_retry(attempt: int):
 
     db = SessionLocal()
     try:
-        if not _should_run_today(db, NAV_SYNC_LOCK):
+        if not _should_run_today(db, NAV_SYNC_LOCK, gate_date=business_yesterday()):
             # 闸门跳过对首跑是常态，但对重试意味着整条重试链在此终止且不再注册下一次；
             # 落 WARNING 让运维能区分「没注册重试」与「重试被跳过」（#715 复核 Suggestion）。
             logger.warning(
                 f"nav_sync 重试（第 {attempt} 次）被闸门跳过（锁被占或非交易日），重试链终止"
             )
             return
-        status = _run_nav_sync_and_derive(db, TRIGGER_RETRY)
-        if status == "success":
-            _maybe_cascade_snapshot(db)
-        else:
-            _maybe_schedule_nav_retry(status, attempt + 1)
+        status, result = _run_nav_sync_and_derive(db, TRIGGER_RETRY)
+        _maybe_schedule_nav_retry(status, attempt + 1)
+        _cascade_snapshot_if_new_nav(db, status, result)
     except Exception as e:
         logger.error(f"nav_sync 重试（第 {attempt} 次）触发体异常: {e}", exc_info=True)
     finally:
@@ -220,11 +243,11 @@ def _trigger_nav_sync_retry(attempt: int):
         db.close()
 
 
-def _run_nav_sync_and_derive(db, trigger_type: str) -> str:
-    """执行 nav_sync 并把终态归一为 status 字符串（#715 重试判定的单一口径）。
+def _run_nav_sync_and_derive(db, trigger_type: str) -> Tuple[str, dict]:
+    """执行 nav_sync 并返回 `(status, result)`（#715 重试判定 + #747 联动判据）。
 
     终态经 `_derive_log_fields` 派生（与 TaskExecutionLog 落库同一实现，不分叉）；
-    run_task 抛异常时返回 "failed"（failed 终态已由 run_task 落库并 re-raise，
+    run_task 抛异常时返回 `("failed", {})`（failed 终态已由 run_task 落库并 re-raise，
     此处吞掉异常保住调度线程，语义同既有触发体）。
     """
     from app.services.task_runner import _derive_log_fields, run_task
@@ -233,13 +256,29 @@ def _run_nav_sync_and_derive(db, trigger_type: str) -> str:
         result = run_task(db, "nav_sync", trigger_type=trigger_type)
     except Exception as e:
         logger.error(f"净值同步失败 (trigger_type={trigger_type}): {e}", exc_info=True)
-        return "failed"
+        return "failed", {}
     status = _derive_log_fields("nav_sync", result)[0]
     logger.info(
         f"净值同步完成 (trigger_type={trigger_type}): "
-        f"{result.get('synced_count', 0)} 条, status={status}"
+        f"{result.get('synced_count', 0)} 条（新增 {result.get('new_nav_count', 0)} 个价格日）, "
+        f"status={status}"
     )
-    return status
+    return status, result
+
+
+def _cascade_snapshot_if_new_nav(db, status: str, result: dict) -> None:
+    """新净值落库且终态可接受时才联动快照（#747）。
+
+    条件是「终态 success/partial_success」×「new_nav_count > 0」：增量窗重放回看段
+    不含新价格日时，快照重算不会得到新值，没必要跑；partial_success 也联动是刻意
+    取舍——已成功的产品确实带了新净值，快照缺价会被 fail-fast 记入 failed_portfolios，
+    与 #715「仅重试全量成功才联动」的差异已写入任务规范。
+    """
+    if status not in ("success", "partial_success"):
+        return
+    if (result.get("new_nav_count") or 0) <= 0:
+        return
+    _maybe_cascade_snapshot(db)
 
 
 def _maybe_schedule_nav_retry(status: str, attempt: int) -> bool:
@@ -279,26 +318,16 @@ def _maybe_schedule_nav_retry(status: str, attempt: int) -> bool:
     return True
 
 
-def _maybe_cascade_snapshot(db, recheck_attempt: int = 0) -> None:
-    """nav 重试全量成功后的快照联动补跑（#715）。
+def _snapshot_succeeded_today(db) -> bool:
+    """业务当日是否已有成功的 snapshot_generate 执行记录（任何触发方式，含 cascade）。
 
-    判据：当日 snapshot_generate 已存在 status=success 的执行记录（任何触发方式，
-    避免把人工已补好的快照再算一遍）→ 跳过；否则以 trigger_type=cascade 补跑一次。
-    补跑自身不成功不再追——快照任务维持既有「次日自愈」语义。
-
-    补跑前取 SNAPSHOT_GENERATE_LOCK：与定时快照 job 同一把进程间互斥锁，防止与
-    仍在运行的当日快照首跑并发。**锁被占不是联动终态**（#715 复核 Blocker）：登记
-    一次有界延迟复查（`_maybe_schedule_snapshot_cascade_recheck`），复查时重查当日
-    成功记录——持锁的定时快照最终成功则跳过、否则补跑，避免当日联动被永久丢弃。
-    `recheck_attempt` 是本次联动检查的复查序号（0=nav 重试成功后的首次同步检查）。
+    「当日」的窗口起点必须与 `TaskExecutionLog.started_at` 同钟：started_at 由进程
+    naive 钟写入，故用 `business_day_start()`（业务午夜换算进程墙钟），不得取进程日界。
     """
-    from sqlalchemy import text
-
     from app.models.task_execution_log import TaskExecutionLog
-    from app.services.task_runner import TRIGGER_CASCADE, run_task
 
     day_start = business_day_start()
-    succeeded = (
+    return bool(
         db.query(TaskExecutionLog)
         .filter(
             TaskExecutionLog.task_code == "snapshot_generate",
@@ -307,7 +336,29 @@ def _maybe_cascade_snapshot(db, recheck_attempt: int = 0) -> None:
         )
         .count()
     )
-    if succeeded:
+
+
+def _maybe_cascade_snapshot(db, recheck_attempt: int = 0) -> None:
+    """nav 同步带来新净值后的快照联动补跑（#715 链路，#747 起首跑也触发）。
+
+    判据：当日 snapshot_generate 已存在 status=success 的执行记录（任何触发方式，
+    避免把人工已补好的快照再算一遍）→ 跳过；否则以 trigger_type=cascade 补跑一次。
+    补跑自身不成功不再追——快照任务维持既有「次日自愈」语义。
+
+    联动执行体**不过交易日闸门**：周六由 nav 首跑联动生成周五快照是正常形态，
+    `_generate_snapshots_for_date` 对非交易日 target 的回退天然支持。
+
+    补跑前取 SNAPSHOT_GENERATE_LOCK：与定时快照 job 同一把进程间互斥锁，防止与
+    仍在运行的当日快照首跑并发。**锁被占不是联动终态**（#715 复核 Blocker）：登记
+    一次有界延迟复查（`_maybe_schedule_snapshot_cascade_recheck`），复查时重查当日
+    成功记录——持锁的定时快照最终成功则跳过、否则补跑，避免当日联动被永久丢弃。
+    `recheck_attempt` 是本次联动检查的复查序号（0=nav 侧触发后的首次同步检查）。
+    """
+    from sqlalchemy import text
+
+    from app.services.task_runner import TRIGGER_CASCADE, run_task
+
+    if _snapshot_succeeded_today(db):
         logger.info("当日快照已成功，跳过联动补跑")
         return
 
@@ -384,13 +435,20 @@ def _trigger_snapshot_cascade_recheck(attempt: int):
 
 
 def _trigger_daily_snapshot_generate():
-    """APScheduler 触发体：互斥+交易日闸门 → run_task(trigger_type=scheduled)。"""
+    """APScheduler 触发体：互斥+交易日闸门 → run_task(trigger_type=scheduled)。
+
+    若当日已有成功的快照执行记录（典型为 nav 首跑的 cascade 已生成），跳过且不建
+    第二条执行记录（#747）——同一份快照不重复生成。
+    """
     from app.database import SessionLocal
     from app.services.task_runner import TRIGGER_SCHEDULED, run_task
 
     db = SessionLocal()
     try:
         if not _should_run_today(db, SNAPSHOT_GENERATE_LOCK):
+            return
+        if _snapshot_succeeded_today(db):
+            logger.info("当日快照已成功（含联动补跑），跳过定时快照生成")
             return
         result = run_task(db, "snapshot_generate", trigger_type=TRIGGER_SCHEDULED)
         logger.info(f"每日快照生成完成: {result.get('snapshots_generated', 0)} 个")

@@ -12,6 +12,7 @@ from app.utils.business_time import (
     business_day_start,
     business_now,
     business_today,
+    business_yesterday,
 )
 from tests.unit.business_clock_helpers import (
     TUE_0700_CST,
@@ -41,6 +42,12 @@ class TestBusinessClock:
         assert business_today() == date(2026, 10, 19)
         _freeze(monkeypatch, datetime(2026, 10, 19, 16, 0, tzinfo=timezone.utc))
         assert business_today() == date(2026, 10, 20)
+
+    def test_business_yesterday_follows_business_clock(self, monkeypatch):
+        """业务昨天与 today 同源：07:00 CST 时 UTC 仍是前一日，但 yesterday 应取业务侧"""
+        _freeze(monkeypatch, TUE_0700_CST)
+        assert business_yesterday() == date(2026, 10, 19)
+        assert business_yesterday() != TUE_0700_CST.date() - timedelta(days=1)
 
     def test_timezone_is_settings_driven(self, monkeypatch):
         """helper 与调度器共用 settings.timezone 单一来源：改配置即换钟"""

@@ -5,13 +5,13 @@ APScheduler 按 `settings.timezone`（默认 Asia/Shanghai）触发 cron，而�
 前一日 23:00 UTC，目标日落到 T-2、交易日闸门方向反转（周一被当周日跳过、周六被当
 周五误跑）。业务日期计算一律经本模块取数，与调度触发共用同一时区设置。
 
-`_utcnow()` 是唯一测试冻结点：business_today / business_now / business_day_start
-全部由它派生，patch 一处即全链路同钟（只 patch business_today 会让 job_id、
-run_date 走真钟，验收形同虚设）。
+`_utcnow()` 是唯一测试冻结点：business_today / business_yesterday / business_now /
+business_day_start 全部由它派生，patch 一处即全链路同钟（只 patch business_today 会让
+job_id、run_date 走真钟，验收形同虚设）。
 
 进程瞬时戳（TaskExecutionLog.started_at、jwt exp 等）不属业务日语义，仍用原钟。
 """
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import get_settings
@@ -32,8 +32,17 @@ def business_now() -> datetime:
 
 
 def business_today() -> date:
-    """业务时区的「今天」。业务目标日惯例为 business_today() - 1。"""
+    """业务时区的「今天」。业务目标日惯例取 `business_yesterday()`。"""
     return business_now().date()
+
+
+def business_yesterday() -> date:
+    """业务昨天：nav 信号日、快照 target_date、增量同步上界的共同口径（#747）。
+
+    单点存在是为了让调度闸门与 `run_nav_sync` 的 target_date 结构上同日——
+    两处各写 `business_today() - timedelta(days=1)` 时，口径调整只会改到其中一处。
+    """
+    return business_today() - timedelta(days=1)
 
 
 def business_day_start() -> datetime:

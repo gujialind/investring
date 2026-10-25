@@ -44,6 +44,7 @@ from app.constants.share_change_events import (
     PENDING_DIVIDEND_TYPE,
 )
 from app.models.manual_market_value import ManualMarketValue
+from app.utils.business_time import business_today
 from app.utils.quantize import quantize_nav, quantize_shares
 
 logger = logging.getLogger(__name__)
@@ -2003,6 +2004,12 @@ def auto_confirm_after_snapshot(
     按 `share_effective_date` 精确匹配，重算/追平每经过该生效日窗口重试一次）；
     跳过不计入 auto_confirm_failed，由人工补录金额后再确认。
 
+    #747 到期守卫：`next_confirm_date > business_today()` 时直接返回（申赎段已跑完）。
+    周六提前生成周五快照时，下一交易日是周一而业务今天仍是周六——不挡住的话，
+    周一才到期的事件/跨天转移会在周六被提前确认。跨天/事件两段同用一个判据；
+    申赎段（`apply_date <= snapshot_date`）与执行时刻无关，不受守卫影响。
+    周一 07:30 的快照任务（target 周日回退周五）此时判据放行，承担补确认窗口。
+
     Args:
         db: 数据库会话
         portfolio_code: 组合代码
@@ -2070,6 +2077,14 @@ def auto_confirm_after_snapshot(
     # 仍比按伪造日期确认安全。申赎段（apply_date <= D）不依赖本值，照常执行。
     if next_confirm_date is None:
         return results
+    # #747 到期守卫：下一交易日尚未到来时，事件/跨天转移不得提前确认（理由见 docstring）。
+    today = business_today()
+    if next_confirm_date > today:
+        logger.info(
+            f"下一确认日 {next_confirm_date} 晚于业务今天 {today}，"
+            f"跳过跨天/事件自动确认: portfolio={portfolio_code}, snapshot={snapshot_date}"
+        )
+        return results
 
     # #493 决策 6（#471）：**调仓交易一律不参与 auto_confirm**——基金腿由用户手动
     # 确认（确认须取 T 日净值并录入卖出到账日），配对 CASH 腿随基金腿落定。
@@ -2096,8 +2111,10 @@ def auto_confirm_after_snapshot(
             continue
         processed_groups.add(trade.transfer_group)
         group = trade.transfer_group
-        # TRANSFER_NOT_READY 守卫
-        if trade.confirm_date and trade.confirm_date > date.today():
+        # TRANSFER_NOT_READY 守卫：查询已限定 confirm_date == next_confirm_date，
+        # #747 到期守卫又保证 next_confirm_date <= today，故当前恒假；保留作二次防线，
+        # 防后续改动查询条件时漏掉到期判断。
+        if trade.confirm_date and trade.confirm_date > today:
             logger.info(f"跨天转移 {group} 未到确认日，跳过")
             continue
         entry: Dict[str, Any] = {"transfer_group": group, "type": "cross_day_transfer"}
