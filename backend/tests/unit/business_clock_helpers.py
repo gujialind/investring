@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 # 是时区 bug 的显形窗口。三个常量分别对应周一/周六/周二早晨。
 MON_0700_CST = datetime(2026, 10, 18, 23, 0, tzinfo=timezone.utc)  # 业务 10-19 周一
 SAT_0700_CST = datetime(2026, 10, 16, 23, 0, tzinfo=timezone.utc)  # 业务 10-17 周六
+SUN_0700_CST = datetime(2026, 10, 17, 23, 0, tzinfo=timezone.utc)  # 业务 10-18 周日
 TUE_0700_CST = datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc)  # 业务 10-20 周二
 
 

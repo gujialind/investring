@@ -14,7 +14,7 @@
 # - #526：确认路径的验资平台与落账平台恒一致（含缺腿兜底与跨平台扣款两条路径）
 # ============================================================================
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 
@@ -1148,6 +1148,18 @@ class TestGroupLifecycle:
 # ============================================================================
 
 class TestRebalNotAutoConfirmed:
+    @pytest.fixture(autouse=True)
+    def _freeze_after_event_dates(self, monkeypatch):
+        """#747 到期守卫：本类事件日固定在 2025-06，冻结业务今天在其后。
+
+        否则守卫会把 next_confirm_date（T = 2025-06-09）判成未来、整段短路——断言
+        「未被确认/被拒绝」的用例会假绿，断言「已确认」的用例会误红。
+        """
+        from tests.unit.business_clock_helpers import freeze_business_clock
+        freeze_business_clock(
+            monkeypatch, datetime(2025, 6, 13, 4, 0, tzinfo=timezone.utc)
+        )
+
     def test_pending_rebal_trade_not_scanned_and_blocks_snapshot(
         self, client, admin_headers, test_db
     ):

@@ -62,6 +62,8 @@ def _session_on_mysql_dialect() -> MagicMock:
     """
     db = MagicMock()
     db.bind.dialect.name = "mysql"
+    # #747 的写前差集查询在假 session 上要返回空集合（否则迭代 MagicMock 会抛错）
+    db.query.return_value.filter.return_value.all.return_value = []
     return db
 
 
@@ -109,6 +111,71 @@ class TestBulkUpsertIdempotent:
             PriceRecord.price_date == date(2025, 1, 6),
         ).first()
         assert float(record.unit_price) == 4.0, "值应被更新为 4.0"
+
+
+class TestNewRowCount:
+    """#747：new_count 只计「此前不存在的价格日」，与含幂等重写的 synced_count 分工。
+
+    调度侧的快照联动判据用它：若 new_count 跟着 synced_count 走（增量窗永远重放回看段），
+    「是否有新净值」会天天为真，快照任务就退化回无条件的每日重算。
+    """
+
+    @patch("app.services.market_data_service.get_fund_daily")
+    def test_first_sync_counts_all_then_rerun_counts_zero(
+        self, mock_get, test_db: Session, sample_etf_product: Product
+    ):
+        rows = [
+            {"trade_date": "20250106", "close": 3.5},
+            {"trade_date": "20250107", "close": 3.6},
+        ]
+        mock_get.return_value = rows
+
+        first = sync_product_prices(
+            test_db, "510300.SH", "CN_EXCHANGE",
+            start_date=date(2025, 1, 6), end_date=date(2025, 1, 10),
+        )
+        test_db.commit()
+        assert (first["synced_count"], first["new_count"]) == (2, 2)
+
+        second = sync_product_prices(
+            test_db, "510300.SH", "CN_EXCHANGE",
+            start_date=date(2025, 1, 6), end_date=date(2025, 1, 10),
+        )
+        assert (second["synced_count"], second["new_count"]) == (2, 0)
+
+    @patch("app.services.market_data_service.get_fund_daily")
+    def test_only_unseen_dates_are_counted(
+        self, mock_get, test_db: Session, sample_etf_product: Product
+    ):
+        mock_get.return_value = [{"trade_date": "20250106", "close": 3.5}]
+        sync_product_prices(
+            test_db, "510300.SH", "CN_EXCHANGE",
+            start_date=date(2025, 1, 6), end_date=date(2025, 1, 10),
+        )
+        test_db.commit()
+
+        mock_get.return_value = [
+            {"trade_date": "20250106", "close": 3.5},   # 已有：只算重写
+            {"trade_date": "20250107", "close": 3.6},   # 新日期
+        ]
+        result = sync_product_prices(
+            test_db, "510300.SH", "CN_EXCHANGE",
+            start_date=date(2025, 1, 6), end_date=date(2025, 1, 10),
+        )
+
+        assert result["synced_count"] == 2
+        assert result["new_count"] == 1
+
+    @patch("app.services.market_data_service.get_fund_daily")
+    def test_no_data_early_exit_reports_zero_new(
+        self, mock_get, test_db: Session, sample_etf_product: Product
+    ):
+        mock_get.return_value = []
+        result = sync_product_prices(
+            test_db, "510300.SH", "CN_EXCHANGE",
+            start_date=date(2025, 1, 6), end_date=date(2025, 1, 10),
+        )
+        assert result["new_count"] == 0
 
 
 class TestDataSourceRouting:
@@ -282,10 +349,13 @@ class TestUnusablePriceFiltered:
             {"trade_date": "20250113", "unit_price": -1.5, "pre_close": 3.5},
         ]
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
-            count = _bulk_upsert_prices(test_db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
+            count, new_count = _bulk_upsert_prices(
+                test_db, "510300.SH", "CN_EXCHANGE", rows, "tushare"
+            )
         test_db.commit()
 
         assert count == 1, f"只应计入 1 条可价行，实际 {count}"
+        assert new_count == 1
         written = test_db.query(PriceRecord).filter(
             PriceRecord.product_code == "510300.SH",
             PriceRecord.market == "CN_EXCHANGE",
@@ -308,10 +378,13 @@ class TestUnusablePriceFiltered:
             {"trade_date": "20250108", "unit_price": 0.0},
         ]
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
-            count = _bulk_upsert_prices(test_db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
+            count, new_count = _bulk_upsert_prices(
+                test_db, "510300.SH", "CN_EXCHANGE", rows, "tushare"
+            )
         test_db.commit()
 
         assert count == 0
+        assert new_count == 0
         assert test_db.query(PriceRecord).filter(
             PriceRecord.product_code == "510300.SH",
             PriceRecord.market == "CN_EXCHANGE",
@@ -335,9 +408,12 @@ class TestUnusablePriceFiltered:
         ]
 
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
-            count = _bulk_upsert_prices(db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
+            count, new_count = _bulk_upsert_prices(
+                db, "510300.SH", "CN_EXCHANGE", rows, "tushare"
+            )
 
         assert count == 0
+        assert new_count == 0
         db.execute.assert_not_called()
         assert _skip_warnings(caplog), "整批 0 价也得留下 WARNING，不能静默计 0 条"
 
@@ -355,10 +431,11 @@ class TestUnusablePriceFiltered:
             {"trade_date": "20260917", "unit_price": 1.4, "accumulated_nav": 1.5},
         ]
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
-            count = _bulk_upsert_prices(test_db, OTC, "CN_OTC", rows, "tushare")
+            count, new_count = _bulk_upsert_prices(test_db, OTC, "CN_OTC", rows, "tushare")
         test_db.commit()
 
         assert count == 3, "单价合格的三行都得入库"
+        assert new_count == 3
         written = test_db.query(PriceRecord).filter(
             PriceRecord.product_code == OTC, PriceRecord.market == "CN_OTC"
         ).order_by(PriceRecord.price_date).all()
@@ -376,7 +453,7 @@ class TestUnusablePriceFiltered:
         """上游本来就没给累计净值（NULL）不算「丢弃」，不进 WARNING。"""
         rows = [{"trade_date": "20260915", "unit_price": 1.2, "accumulated_nav": None}]
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
-            assert _bulk_upsert_prices(test_db, OTC, "CN_OTC", rows, "tushare") == 1
+            assert _bulk_upsert_prices(test_db, OTC, "CN_OTC", rows, "tushare") == (1, 1)
 
         assert not _skip_warnings(caplog), "缺值是正常形态，别把每场外一天都记成一条告警"
 
@@ -386,9 +463,12 @@ class TestUnusablePriceFiltered:
         rows = [{"trade_date": "20250106", "unit_price": None}]
 
         with caplog.at_level(logging.WARNING, logger=MARKET_DATA_LOGGER):
-            count = _bulk_upsert_prices(db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
+            count, new_count = _bulk_upsert_prices(
+                db, "510300.SH", "CN_EXCHANGE", rows, "tushare"
+            )
 
         assert count == 0
+        assert new_count == 0
         db.execute.assert_not_called()
         assert _skip_warnings(caplog), "早退不该把 WARNING 一起省掉"
 
@@ -400,9 +480,12 @@ class TestUnusablePriceFiltered:
             {"trade_date": "20250107", "unit_price": None},
         ]
 
-        count = _bulk_upsert_prices(db, "510300.SH", "CN_EXCHANGE", rows, "tushare")
+        count, new_count = _bulk_upsert_prices(
+            db, "510300.SH", "CN_EXCHANGE", rows, "tushare"
+        )
 
         assert count == 1
+        assert new_count == 1
         assert db.execute.call_count == 1
         values = db.execute.call_args.args[1]
         assert [v["price_date"] for v in values] == [date(2025, 1, 6)]

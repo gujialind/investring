@@ -158,7 +158,7 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 | `manual` | 手动触发（`routers/tasks.py`） |
 | `scheduled` | 调度器每日定时首跑（`scheduler_service`） |
 | `retry` | 定时首跑终态非 success 后的自动重试（`scheduler_service`，#715） |
-| `cascade` | 重试成功后联动补跑的当日快照（`scheduler_service`，#715） |
+| `cascade` | 有新净值落库时的当日快照联动（`scheduler_service`，#715/#747） |
 
 **定时失败的有界自动重试（#715）**：`nav_sync` 每日 07:00 定时首跑（`scheduled`）终态
 为 `partial_success` / `failed` 时，`scheduler_service` 注册一个一次性 date job
@@ -169,12 +169,19 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 `misfire_grace_time=None`，故进程重启跨过触发时刻后重试仍会发生。序号耗尽即停手、留记录
 交人工处置。**手动触发（`manual`）不重试**：终态检查只挂在 scheduled/retry 触发体上。
 
-**重试成功后的快照联动补跑（#715）**：重试运行终态为 `success` 时，查当日
-`snapshot_generate` 是否已有任一触发来源的 `success` 记录——没有则持
-`SNAPSHOT_GENERATE_LOCK` 调 `run_task(..., TRIGGER_CASCADE)` 补跑一次当日快照
-（`trigger_type=cascade`），已成功则跳过。联动自身失败不再追（交次日自愈）。仅「重试成功」
-触发联动，首跑即成功不触发。之所以需要它：`nav_sync` 失败会让 07:30 的
-`snapshot_generate` 因缺净值 fail-fast，若不补跑则当日组合估值滞后一整天。
+**nav_sync 的闸门锚定业务昨天（#747）**：首跑与重试都以 `business_today() - 1` 判交易日
+（`_should_run_today(..., gate_date=...)`），语义是「昨天收盘后是否有待同步的新净值」——
+周六放行（昨天周五）、周日/周一拦截（昨天非交易日）且不建记录；快照与 cascade 复查
+仍按业务今天判定（快照日序列严格交易日连续）。
+
+**有新净值时的快照联动补跑（#715/#747）**：nav 终态为 `success` / `partial_success`
+**且** `new_nav_count > 0` 时，查当日 `snapshot_generate` 是否已有任一触发来源的
+`success` 记录——没有则持 `SNAPSHOT_GENERATE_LOCK` 调 `run_task(..., TRIGGER_CASCADE)`
+补跑一次当日快照（`trigger_type=cascade`），已成功则跳过。联动自身失败不再追（交次日自愈）。
+`new_nav_count` 是本次真正新增的 `price_record` 日期数（写前差集，不含回看段的幂等重写）——
+只看 `synced_count` 会让「是否有新净值」恒真、快照退化回无条件重算。**首跑与重试同一判据**：
+首跑 partial_success 也联动（与 #715「仅重试成功」的旧口径不同，维护者 #747 决策）；手动触发
+不经调度触发体，因而不联动。联动执行体不过交易日闸门：周六由 nav 首跑生成周五快照是正常形态。
 **锁被占不是联动终态**（#715 复核 Blocker）：补跑前 `SNAPSHOT_GENERATE_LOCK` 被别的进程
 （当日定时快照首跑）持有时，不当场丢弃联动，而是登记一次性有界延迟复查
 （`snapshot_cascade_recheck_<日期>_<序号>`，间隔 15 分钟、上限 3 次，`replace_existing` +
@@ -182,18 +189,31 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 持锁者最终成功则跳过、否则补跑。复查链由 `SNAPSHOT_GENERATE_LOCK` 跨进程互斥 + 当日成功
 记录判据收敛为**同日最多补跑一次**。
 
-**跳过不是执行**：GET_LOCK 被别的进程持有、当日非交易日这两类跳过**不建记录**——
-否则每个非交易日为每条 job 各积一行无信息量的「未执行」噪音。
+**07:30 快照兜底去重（#747）**：`snapshot_generate` 定时触发体在闸门后先查当日是否已有
+`success` 记录（含 nav 联动的 cascade），有则跳过且不建第二条记录——否则同一份快照会被
+连续生成两次。**到期补确认**：`_generate_snapshots_for_date` 无日可补（最新快照已追平
+目标日）时，仍对最新快照日调一次 `auto_confirm_after_snapshot`；结果经
+`_route_auto_confirm_results` 并入既有通道（与逐日路径同源）——失败进
+`auto_confirm_failed`（附组合身份、参与 `records_failed`），`auto_confirm_skipped`
+进 `warnings`，确认成功只落运行日志。有结果的组合计入 `portfolios_processed`（保证
+失败有同单位分母），补确认本身不计 `snapshots_generated`；单组合补确认抛错按
+`failed_portfolios` fail-fast 记录，不中断其余组合。周一 07:30（target 周日回退周五）
+由此完成周末到期事项的补确认。
+
+**跳过不是执行**：GET_LOCK 被别的进程持有、判定日非交易日、当日快照已成功（仅
+`snapshot_generate`）这几类跳过**不建记录**——否则每个非交易日为每条 job 各积一行
+无信息量的「未执行」噪音。
 
 **业务时钟（#746）**：调度触发时区与业务日期计算的单一来源是 `settings.timezone`
-（默认 Asia/Shanghai，APScheduler 与 `app/utils/business_time.py` 共用）。闸门判断日、
+（默认 Asia/Shanghai，APScheduler 与 `app/utils/business_time.py` 共用）。闸门判断日
+（快照按业务今天、nav 按业务昨天，#747；统一经 `business_today()` / `business_yesterday()`）、
 `nav_sync`/`snapshot_generate` 的「业务昨天」目标日、上表 job id 中的 `<日期>`、
-「当日成功记录」窗口全部按**业务日**（`business_today()`）计，与进程/容器时区解耦——
-生产容器为 UTC 时，07:00 CST 触发瞬间的进程日期仍是前一日，用 `date.today()` 算目标日
-会落 T-2、交易日闸门会方向反转（周一被当周日跳过、周六被当周五误跑）。「当日成功记录」
-窗口起点 `business_day_start()` 是业务午夜换算到**进程墙钟**的 naive 值：
-`TaskExecutionLog.started_at` 由进程 naive 钟写入，跨钟比较会把 07:00 CST 落库的当日
-记录判出窗外。测试冻结经唯一取数点 `business_time._utcnow`（不引 freezegun；
+「当日成功记录」窗口全部按**业务日**计，与进程/容器
+时区解耦——生产容器为 UTC 时，07:00 CST 触发瞬间的进程日期仍是前一日，用
+`date.today()` 算目标日会落 T-2、交易日闸门会方向反转（周一被当周日跳过、周六被当
+周五误跑）。「当日成功记录」窗口起点 `business_day_start()` 是业务午夜换算到**进程墙钟**
+的 naive 值：`TaskExecutionLog.started_at` 由进程 naive 钟写入，跨钟比较会把 07:00 CST
+落库的当日记录判出窗外。测试冻结经唯一取数点 `business_time._utcnow`（不引 freezegun；
 既有用例中「断言时重算 `date.today()`」的写法与被测代码同源、换钟不会翻红，须改冻结
 + 字面量）。`cron_expr` 列同理：生效源是 `scheduler_cron_*` 设置，DB 行仅展示、
 启动时由 `init_scheduled_tasks` 同步为生效值（无 settings 映射的任务不重置）。
@@ -222,7 +242,7 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 ### 执行与事务边界
 
 - run_task 先建 running 行并 commit，再经 `_TASK_DISPATCH` 执行，按 `_derive_log_fields` 落终态并 commit。复用调用方 session、不 close；异常路径不 rollback（running 已落库），任务未提交业务由自身编排收口：run_nav_sync 逐产品 checkpoint、`_generate_snapshots_for_date` 逐日 rollback/commit。
-- trigger_type 使用 `TRIGGER_MANUAL` / `TRIGGER_SCHEDULED` / `TRIGGER_RETRY` / `TRIGGER_CASCADE` 常量，不写字面量；跳过判定统一在 `scheduler_service._should_run_today`，两条 job 及重试触发体共用。重试参数（间隔 2h、上限 3 次）是 `scheduler_service` 模块常量，不做配置旋钮（#715）。
+- trigger_type 使用 `TRIGGER_MANUAL` / `TRIGGER_SCHEDULED` / `TRIGGER_RETRY` / `TRIGGER_CASCADE` 常量，不写字面量；跳过判定统一在 `scheduler_service._should_run_today`，两条 job 及重试触发体共用（`gate_date` 缺省业务今天，nav 传业务昨天，#747）。重试参数（间隔 2h、上限 3 次）是 `scheduler_service` 模块常量，不做配置旋钮（#715）。
 - 归一的输入分别为 products_count/failed_products、portfolios_processed/auto_confirm_failed、synced_count、删除行数求和。#305 的 warnings / auto_confirm_failed 归并及 1000 字符摘要不改变。
 - 任务异常写 failed、str(e) 摘要与 traceback 后**原样上抛**，HTTP 映射留给 router/global handler；未知 task_code 抛 NotFoundError，不建执行行。
 - `run_nav_sync(db, log_id)` 的 log_id 必填，逐产品 NavSyncDetail 要挂父行；`run_snapshot_generate(db)` 没有逐日明细表，不添加无消费者的 log_id。

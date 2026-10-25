@@ -63,6 +63,137 @@ class TestTargetDateYesterday:
         assert mock_sync.call_args_list[0].kwargs.get("end_date") == date(2026, 10, 19)
 
 
+class TestNewNavCount:
+    """#747：new_nav_count 汇总新增价格日（只计同步成功的产品）"""
+
+    @patch("app.services.market_data_service.sync_product_prices")
+    def test_sums_successful_products_only(self, mock_sync, test_db):
+        def fake_sync(*, db, product_code, market, start_date, end_date):
+            if product_code == "510300.SH":
+                return {"success": False, "synced_count": 0, "new_count": 99,
+                        "message": "上游超时", "source": "tushare"}
+            return {"success": True, "synced_count": 2, "new_count": 2, "source": "tushare"}
+
+        mock_sync.side_effect = fake_sync
+
+        result = run_nav_sync(test_db, _task_log_id(test_db))
+
+        assert result["new_nav_count"] == 2 * (result["products_count"] - 1), \
+            "失败产品不得贡献新增计数（即使打桩里带了 new_count）"
+
+    def test_empty_product_list_reports_zero(self, test_db):
+        """空产品早退路径同样带 new_nav_count=0（调度侧可直接 .get）"""
+        test_db.query(Product).delete(synchronize_session=False)
+
+        result = run_nav_sync(test_db, _task_log_id(test_db))
+
+        assert result["products_count"] == 0
+        assert result["new_nav_count"] == 0
+
+
+class TestAutoConfirmCatchup:
+    """#747：无日可补时对最新快照日补一次到期确认，结果并入既有终态通道"""
+
+    @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
+    @patch("app.services.snapshot_service.generate_daily_snapshots")
+    def test_results_merge_into_existing_channels(self, mock_gen, mock_auto, test_db):
+        from tests.factories import (
+            create_portfolio, create_value_snapshot, ensure_trading_day,
+        )
+
+        create_portfolio(test_db, code="CATCHUP_PORT", status="active",
+                         auto_snapshot_enabled=True)
+        ensure_trading_day(test_db, date(2025, 9, 1), is_open=True)
+        ensure_trading_day(test_db, date(2025, 9, 2), is_open=True)
+        create_value_snapshot(
+            test_db, portfolio_code="CATCHUP_PORT", snapshot_date=date(2025, 9, 1),
+            total_value=1.0, total_shares=1.0, unit_price=1.0,
+        )
+        mock_auto.return_value = [
+            {"id": 7, "type": "event", "action": "auto_confirmed"},
+            {"id": 8, "type": "event", "action": "auto_confirm_failed",
+             "code": "MISSING_NAV", "error": "缺净值"},
+            {"id": 9, "type": "event", "action": "auto_confirm_skipped",
+             "error": "金额待补", "hint": "请补录金额"},
+        ]
+
+        result = _generate_snapshots_for_date(test_db, date(2025, 9, 1))
+
+        mock_gen.assert_not_called()  # 起点 09-02 > end_date 09-01：循环不进入
+        assert result["generated"] == 0
+        # 有补确认结果才计入 records_total：否则失败的 records_failed 会被 min() 折成 0
+        assert result["portfolios_processed"] == 1
+        assert result["auto_confirm_failed"] == [{
+            "id": 8, "type": "event", "action": "auto_confirm_failed",
+            "code": "MISSING_NAV", "error": "缺净值",
+            "portfolio_code": "CATCHUP_PORT",
+        }]
+        assert result["warnings"] == [{
+            "type": "auto_confirm_skipped",
+            "date": "2025-09-01",
+            "portfolio_code": "CATCHUP_PORT",
+            "event_id": 9,
+            "message": "请补录金额",
+        }]
+        assert "auto_confirm_catchup" not in result
+        mock_auto.assert_called_once_with(
+            db=test_db, portfolio_code="CATCHUP_PORT", snapshot_date=date(2025, 9, 1)
+        )
+
+    @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
+    @patch("app.services.snapshot_service.generate_daily_snapshots")
+    def test_no_due_items_does_not_count_portfolio(self, mock_gen, mock_auto, test_db):
+        """补确认无结果（到期守卫挡下/无事可做）→ 不计处理组合，records 口径不变"""
+        from tests.factories import (
+            create_portfolio, create_value_snapshot, ensure_trading_day,
+        )
+
+        create_portfolio(test_db, code="CATCHUP_EMPTY", status="active",
+                         auto_snapshot_enabled=True)
+        ensure_trading_day(test_db, date(2025, 9, 1), is_open=True)
+        ensure_trading_day(test_db, date(2025, 9, 2), is_open=True)
+        create_value_snapshot(
+            test_db, portfolio_code="CATCHUP_EMPTY", snapshot_date=date(2025, 9, 1),
+            total_value=1.0, total_shares=1.0, unit_price=1.0,
+        )
+        mock_auto.return_value = []
+
+        result = _generate_snapshots_for_date(test_db, date(2025, 9, 1))
+
+        assert result["portfolios_processed"] == 0
+        assert result["auto_confirm_failed"] == []
+        assert result["warnings"] == []
+
+    @patch("app.services.snapshot_service.auto_confirm_after_snapshot")
+    @patch("app.services.snapshot_service.generate_daily_snapshots")
+    def test_failure_is_isolated_as_failed_portfolio(self, mock_gen, mock_auto, test_db):
+        """补确认抛错按单组合 fail-fast 记录，不让整轮快照任务失败"""
+        from tests.factories import (
+            create_portfolio, create_value_snapshot, ensure_trading_day,
+        )
+
+        create_portfolio(test_db, code="CATCHUP_FAIL", status="active",
+                         auto_snapshot_enabled=True)
+        ensure_trading_day(test_db, date(2025, 9, 1), is_open=True)
+        ensure_trading_day(test_db, date(2025, 9, 2), is_open=True)
+        create_value_snapshot(
+            test_db, portfolio_code="CATCHUP_FAIL", snapshot_date=date(2025, 9, 1),
+            total_value=1.0, total_shares=1.0, unit_price=1.0,
+        )
+        mock_auto.side_effect = ValueError("session 失效")
+
+        result = _generate_snapshots_for_date(test_db, date(2025, 9, 1))
+
+        assert result["portfolios_processed"] == 1
+        assert result["failed_portfolios"] == [{
+            "portfolio_code": "CATCHUP_FAIL",
+            "date": "2025-09-01",
+            "code": "ValueError",
+            "error": "session 失效",
+        }]
+        assert result["generated"] == 0
+
+
 class TestIncrementalStart:
     """增量起点 = resolve_incremental_start_date（#698：MAX+1 与回看日取早者）"""
 

@@ -15,14 +15,14 @@
 # ============================================================================
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, text
 from sqlalchemy.exc import DBAPIError, IntegrityError, PendingRollbackError
 from sqlalchemy.orm.session import SessionTransaction, SessionTransactionState
 
-from app.models import Portfolio, PortfolioValueSnapshot, Trade
+from app.models import Portfolio, PortfolioValueSnapshot, ShareChangeEvent, Trade
 from app.services import snapshot_service
 from app.services import subscription_service
 from app.services.exceptions import BusinessError
@@ -32,7 +32,7 @@ from app.services.share_change_event_service import (
     confirm_share_change_event,
 )
 from app.services.snapshot_service import auto_confirm_after_snapshot
-from app.services.task_runner import run_snapshot_generate
+from app.services.task_runner import _generate_snapshots_for_date, run_snapshot_generate
 from tests.factories import (
     create_portfolio,
     create_product,
@@ -43,8 +43,10 @@ from tests.factories import (
     create_trade,
     create_value_snapshot,
     create_investor_holding,
+    ensure_trading_day,
 )
 from tests.integration.snapshot_helpers import capture_portfolio_state
+from tests.unit.business_clock_helpers import freeze_business_clock
 from tests.integration.test_snapshot_forced_adjustment import (
     D0,
     EX_DAY,
@@ -643,3 +645,56 @@ class TestAvailableSharesBaseline:
         assert calculate_available_shares(
             test_db, "OBS_ASH", "LOF305", market="CN_EXCHANGE"
         ) == Decimal("100.00")
+
+
+class TestAutoConfirmExpiryGuard:
+    """#747：跨天转移/事件不得在下一交易日到来前被提前确认。
+
+    事故形态：周六 nav 联动提前生成周五快照，auto_confirm(周五) 的下一交易日是周一；
+    若按执行时刻直接推进，周一才到期的事项会在周六被确认（份额/现金提前一天入账）。
+    """
+
+    SAT_MORNING = datetime(2025, 6, 6, 23, 0, tzinfo=timezone.utc)   # 业务 06-07 周六
+    MON_MORNING = datetime(2025, 6, 8, 23, 0, tzinfo=timezone.utc)   # 业务 06-09 周一
+
+    def _pending_event(self, db, code: str):
+        _setup(db, code)
+        event = svc_create_event(
+            db, portfolio_code=code, event_type="forced_adjustment",
+            product_code=FUND, market="CN_OTC", platform_code="MYCF",
+            ex_date=EX_DAY, entitlement_date=D0,
+            shares_change=Decimal("1.00"),
+        )
+        db.flush()
+        return event
+
+    def test_saturday_does_not_confirm_monday_event(self, test_db, monkeypatch):
+        freeze_business_clock(monkeypatch, self.SAT_MORNING)
+        event = self._pending_event(test_db, "EXP_SAT")
+
+        results = auto_confirm_after_snapshot(test_db, "EXP_SAT", D0)
+
+        assert [r for r in results if r.get("id") == event.id] == []
+        test_db.expire_all()
+        assert test_db.get(ShareChangeEvent, event.id).status == "pending"
+
+    def test_monday_catchup_confirms_due_event(self, test_db, monkeypatch):
+        """周一 07:30（target 周日回退周五）：最新快照已存在 → 走补确认而非生成"""
+        freeze_business_clock(monkeypatch, self.MON_MORNING)
+        event = self._pending_event(test_db, "EXP_MON")
+        test_db.query(Portfolio).filter_by(code="EXP_MON").update(
+            {"auto_snapshot_enabled": True}, synchronize_session=False
+        )
+        ensure_trading_day(test_db, D0, is_open=True)
+        ensure_trading_day(test_db, date(2025, 6, 8), is_open=False)
+        ensure_trading_day(test_db, EX_DAY, is_open=True)
+        test_db.flush()
+
+        result = _generate_snapshots_for_date(test_db, date(2025, 6, 8))
+
+        assert result["generated"] == 0
+        # 补确认结果走既有通道：确认成功只在运行日志，失败/跳过才进终态
+        assert not [e for e in result["auto_confirm_failed"] if e.get("id") == event.id]
+        assert not [w for w in result["warnings"] if w.get("event_id") == event.id]
+        test_db.expire_all()
+        assert test_db.get(ShareChangeEvent, event.id).status == "confirmed"
