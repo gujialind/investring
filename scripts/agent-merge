@@ -4,11 +4,13 @@
 set -euo pipefail
 feature="${1:?usage: agent-merge <feature>}"
 root=$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")
-wt="$root/.qoder/worktrees/$feature"
+wt="$root/.worktrees/$feature"
 [ -d "$wt" ] || { echo "agent-merge: 没有 worktree $wt（先跑 agent-spin）" >&2; exit 1; }
 [ -z "$(git -C "$wt" status --porcelain)" ] || { echo "agent-merge: $wt 有未提交改动，先提交" >&2; exit 1; }
 git -C "$wt" fetch --quiet origin main
 git -C "$wt" merge --no-edit origin/main
+echo "待推送 agent/$feature（不在任何远程的提交）："
+git -C "$wt" log --oneline "agent/$feature" --not --remotes=origin
 git -C "$wt" push -u origin "agent/$feature"
 echo "已把 origin/main 并入 agent/$feature 并推送。"
 echo "下一步: gh pr create --base main --head agent/$feature（正文按 PR 模板附验证证据）"

@@ -45,6 +45,9 @@ yarn.lock
 .qoder/
 .claude/
 
+# Agent worktree lifecycle (scripts/agent-spin worktrees + port ledger)
+.worktrees/
+
 # AI Coding Assistants (multi-IDE)
 .hermes/
 .qwen/
