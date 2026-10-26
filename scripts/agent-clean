@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# agent-clean <feature> [--force]：回收 worktree + 本地分支 + 端口台账行。
+# 默认护栏：有未提交改动即拒绝；有「仅存在于本地」的提交即拒绝。--force 跳过护栏（等于确认丢弃这些工作）。
+set -euo pipefail
+feature="${1:?usage: agent-clean <feature> [--force]}"
+force="${2:-}"
+root=$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")
+wt="$root/.qoder/worktrees/$feature"
+[ -d "$wt" ] || { echo "agent-clean: 没有 worktree $wt" >&2; exit 1; }
+if [ "$force" != "--force" ]; then
+  [ -z "$(git -C "$wt" status --porcelain)" ] || { echo "agent-clean: $wt 有未提交改动（确认丢弃用 --force）" >&2; exit 1; }
+  ahead=$(git -C "$wt" rev-list --count "agent/$feature" --not --remotes=origin)
+  [ "$ahead" = 0 ] || { echo "agent-clean: agent/$feature 有 $ahead 个提交不在任何远程（确认丢弃用 --force）" >&2; exit 1; }
+fi
+git -C "$root" worktree remove --force "$wt"
+git -C "$root" branch -D "agent/$feature"
+reg="$root/.qoder/agent-ports"
+if [ -f "$reg" ]; then { grep -v " $wt\$" "$reg" || true; } > "$reg.tmp" && mv "$reg.tmp" "$reg"; fi
+git -C "$root" worktree prune
+echo "cleaned: $wt（分支 agent/$feature 已删除，端口已释放）"
