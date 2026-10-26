@@ -138,5 +138,8 @@ docs/previews/
 # Local planning docs (not version-controlled)
 docs/plans/
 
+# Local agent handoff notes (task-level transient state, not version-controlled)
+docs/handoffs/
+
 # DSH agent scratch space (env-specific ops artifacts, e.g. generated migration SQL)
 .dsh/
