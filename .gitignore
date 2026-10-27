@@ -45,6 +45,9 @@ yarn.lock
 .qoder/
 .claude/
 
+# Agent worktree lifecycle (scripts/agent-spin worktrees + port ledger)
+.worktrees/
+
 # AI Coding Assistants (multi-IDE)
 .hermes/
 .qwen/
@@ -137,6 +140,9 @@ docs/previews/
 
 # Local planning docs (not version-controlled)
 docs/plans/
+
+# Local agent handoff notes (task-level transient state, not version-controlled)
+docs/handoffs/
 
 # DSH agent scratch space (env-specific ops artifacts, e.g. generated migration SQL)
 .dsh/

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# agent-spin <feature>：为单个 Agent 建隔离 worktree + 分支 agent/<feature> + 独占端口/DB 分配。
+# 隔离契约（AGENTS.md §3.5.3 worktree 边界）：各 Agent 互不动 worktree，端口与 SQLite 互不冲突。
+# 状态落点：<repo>/.worktrees/<feature>（gitignored）；端口台账 .worktrees/.ports；分配详情 <worktree>/.cache/agent.env。
+set -euo pipefail
+feature="${1:?usage: agent-spin <feature>}"
+root=$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")
+wt="$root/.worktrees/$feature"
+reg="$root/.worktrees/.ports"
+git -C "$root" fetch --quiet origin main || echo "agent-spin: 无法 fetch，使用本地 origin/main" >&2
+base=$(git -C "$root" rev-parse --short origin/main)
+mkdir -p "$root/.worktrees"
+git -C "$root" worktree add -b "agent/$feature" "$wt" origin/main
+mkdir -p "$wt/.cache"; touch "$reg"
+busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+exec 9>"$reg.lock"; flock -x 9
+allocated=""
+for i in $(seq 0 49); do
+  backend=$((8100 + i)); frontend=$((8200 + i))
+  grep -q "^$backend " "$reg" && continue
+  busy "$backend" && continue
+  busy "$frontend" && continue
+  echo "$backend $frontend $wt" >> "$reg"; allocated=1; break
+done
+[ -n "$allocated" ] || { echo "agent-spin: 端口池 8100-8149/8200-8249 已用尽" >&2; echo "agent-spin: worktree 已建在 $wt，回收：scripts/agent-clean $feature" >&2; exit 1; }
+cat > "$wt/.cache/agent.env" <<EOF
+IR_WORKTREE="$wt"
+# 以下端口仅作提示，无程序消费；托管 E2E 走 scripts/verify.py run e2e -- --backend-port/--frontend-port 参数
+IR_BACKEND_PORT="$backend"
+IR_FRONTEND_PORT="$frontend"
+# 手动起后端 dev server 用；托管 E2E（scripts/local_stack.py）每次运行另建独占临时 SQLite，不用这个库
+DATABASE_URL="sqlite:///$wt/.cache/agent.db"
+EOF
+echo "spun: $wt"
+echo "branch=agent/$feature base=$base backend_port=$backend frontend_port=$frontend dev_db=$wt/.cache/agent.db"
+echo "进入: cd $wt && source .cache/agent.env"
+echo "E2E:  .venv/bin/python scripts/verify.py run e2e -- --backend-port $backend --frontend-port $frontend <specs>"
+echo "收尾: scripts/agent-merge $feature → 按 PR 模板开 PR；完成后 scripts/agent-clean $feature"

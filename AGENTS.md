@@ -66,7 +66,7 @@
 ### 3.1 分支模型（GitHub Flow，单长期分支，issue #211）
 
 - `main` 是唯一长期分支与生产交付线，受 ruleset 保护：禁删除/强推、require PR、required check `CI OK`。
-- 一切改动从最新 `origin/main` 拉短命分支，经 PR 合入 main；不从本地旧 ref 重建。命名用 `feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`；按下方 Issue 约定免开 issue 的小修可用 `hotfix/<简述>`。AI 可用 `trae/`、`codex/` 前缀。
+- 一切改动从最新 `origin/main` 拉短命分支，经 PR 合入 main；不从本地旧 ref 重建。命名用 `feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`；按下方 Issue 约定免开 issue 的小修可用 `hotfix/<简述>`。AI 可用 `trae/`、`codex/` 前缀；多 Agent 隔离并行开发用 `agent/<简述>`（由 `scripts/agent-spin` 建，worktree 落点 `<repo>/.worktrees/`，回收用 `scripts/agent-clean`，#793）。
 - 合入 main 触发 CI → CD 自动部署，**纯文档例外**（#456）：ci.yml 的 push 触发器忽略 `**/*.md` 与 `docs/**`，纯文档合入不重建镜像、不重部署。`deploy/YYYYMMDD-SHA` 标签因此不随每次文档合入推进，见版本规范。
 - **PR 触发器禁止添加 paths-ignore**：docs-only PR 仍须产出 CI OK，否则 required check 永久等待（#377）。路径模式只按后缀/目录精确匹配，不能扩大到漏掉代码；合入前验证不减，完整执行策略见 ci.yml 与[审查规范的合入条件](docs/reference/code-review.md#review-merge)。
 - 手动部署（deploy.yml workflow_dispatch）只对服务器已保留的发布（release-id）操作，显式区分 redeploy / rollback / migrate；migrate 须附服务器 `bootstrap status` 的 DB 状态指纹授权。
