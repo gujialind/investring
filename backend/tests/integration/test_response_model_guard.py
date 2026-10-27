@@ -88,6 +88,8 @@ WHITELIST: dict[tuple[str, str], str] = {
         "转移记录分页；元素已由 CashTransferListItem 收窄后 model_dump，但无分页集合 schema",
     ("POST", "/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/confirm"):
         "确认回执 dict（message + transfer_group/confirmed_count/ISO 日期）",
+    ("POST", "/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/cancel"):
+        "撤销回执 dict（message + transfer_group/双方平台/金额/两腿状态/ISO 日期，#788）",
     ("POST", "/api/snapshots/recalculate-async"):
         "异步受理回执（job_id/status/message），与 sync-jobs/price 同型",
     ("POST", "/api/sync-jobs/price"):
