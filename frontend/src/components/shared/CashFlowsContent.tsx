@@ -48,6 +48,8 @@ import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import CancelTransferDialog from "@/components/shared/dialogs/CancelTransferDialog";
+import { useRoleCheck } from "@/hooks/useAuth";
 import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
@@ -133,6 +135,9 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const [sameDayRow, setSameDayRow] = useState<CashFlowRow | null>(null);
   // 撤销重估二次确认目标（危险操作，visual-spec §13）
   const [revokeRow, setRevokeRow] = useState<CashFlowRow | null>(null);
+  // 撤销转移目标（#788：转移类流水详情弹窗危险操作区）
+  const [cancelTransferRow, setCancelTransferRow] = useState<CashFlowRow | null>(null);
+  const { isAdmin } = useRoleCheck();
 
   const listParams: CashFlowListParams = {
     from_date: range?.from ? toDateOnly(range.from) : undefined,
@@ -885,6 +890,24 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                   </div>
                 );
               })()}
+              {detailRow.flow_type === "transfer" && isAdmin && (
+                <div className="flex items-center justify-between rounded-md border border-destructive/30 p-3">
+                  <div className="text-sm">
+                    <div className="font-medium">撤销这笔转移</div>
+                    <div className="text-xs text-muted-foreground">
+                      两腿标记为「已取消」并保留记录，两平台可用现金回退到转移前
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive"
+                    onClick={() => setCancelTransferRow(detailRow)}
+                  >
+                    撤销转移
+                  </Button>
+                </div>
+              )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDetailRow(null)}>
                   关闭
@@ -894,6 +917,30 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           )}
         </DialogContent>
       </Dialog>
+
+      {/* 撤销转移二次确认（#788）：转移类流水详情弹窗的危险操作入口 */}
+      <CancelTransferDialog
+        portfolioCode={code}
+        target={
+          cancelTransferRow?.origin_ref.transfer_group
+            ? (() => {
+                const isOutflow = Number(cancelTransferRow.amount) < 0;
+                const other = cancelTransferRow.pair_ref?.platform_code ?? "";
+                return {
+                  transfer_group: cancelTransferRow.origin_ref.transfer_group,
+                  from_platform: isOutflow ? cancelTransferRow.platform_code : other,
+                  to_platform: isOutflow ? other : cancelTransferRow.platform_code,
+                  amount: Math.abs(Number(cancelTransferRow.amount)),
+                  transfer_date: cancelTransferRow.cash_date,
+                };
+              })()
+            : null
+        }
+        open={!!cancelTransferRow}
+        onOpenChange={(o) => {
+          if (!o) setCancelTransferRow(null);
+        }}
+      />
 
       {/* 当日该平台全部现金流水弹窗 */}
       <Dialog open={!!sameDayRow} onOpenChange={(o) => !o && setSameDayRow(null)}>

@@ -7453,6 +7453,61 @@
         }
       }
     },
+    "/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/cancel": {
+      "post": {
+        "tags": [
+          "现金转移"
+        ],
+        "summary": "Cancel Cash Transfer",
+        "description": "撤销平台间现金转移（#788）：两腿逻辑置 cancelled，保留 trade 行 + 审计。",
+        "operationId": "cancel_cash_transfer_api_portfolios__portfolio_code__cash_transfer__transfer_group__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "portfolio_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
+            }
+          },
+          {
+            "name": "transfer_group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Transfer Group"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/portfolios/{portfolio_code}/cash-transfers": {
       "get": {
         "tags": [

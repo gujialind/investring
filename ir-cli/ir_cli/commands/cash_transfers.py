@@ -62,3 +62,22 @@ def confirm(
     client = APIClient.from_config()
     result = client.post(f"/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/confirm")
     success(data=result["data"])
+
+
+@app.command("cancel")
+def cancel(
+    transfer_group: str = typer.Argument(..., help="转移组标识"),
+    portfolio_code: str = typer.Option(..., "--portfolio-code", help="组合代码"),
+):
+    """撤销平台间现金转移（#788：两腿逻辑置 cancelled，保留记录 + 审计）
+
+    转错平台/金额填错/重复转移的正式撤销通道；已确认转移受组级快照保护与
+    转入平台现金守卫（可用现金不足则拒绝）。
+
+    \b
+    示例:
+      ir cash-transfer cancel a1b2c3d4e5f6 --portfolio-code PORT001
+    """
+    client = APIClient.from_config()
+    result = client.post(f"/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/cancel")
+    success(data=result["data"])

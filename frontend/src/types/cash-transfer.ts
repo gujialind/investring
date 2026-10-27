@@ -20,6 +20,17 @@ export interface CashTransferResponse {
   transfer_date: string;
 }
 
+export interface CashTransferCancelResponse {
+  message: string;
+  transfer_group: string;
+  from_platform: string;
+  to_platform: string;
+  amount: number;
+  sell_status: string;
+  buy_status: string;
+  transfer_date: string;
+}
+
 export interface CashTransferListItem {
   transfer_group: string;
   from_platform: string;

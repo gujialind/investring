@@ -150,7 +150,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 调仓是组合内部资产互换，不改组合份额、可能改净值。每条基金腿最终都有等额 CASH 腿，金额恒等基金腿 actual_amount；#493 起状态与生效日可以不同，卖出确认前只有基金腿是刻意的半成品组，不是数据缺失。
 
-* **跨平台现金转移**复用 trade 表：当天完成时 sell/buy 两腿直接 confirmed、confirm_date=transfer_date；跨天时转出腿当日 confirmed，转入腿 pending 且 confirm_date=下一交易日。非对称状态保证转出当日净值不因在途虚跌；在途不计入目标平台可用现金。
+* **跨平台现金转移**复用 trade 表：当天完成时 sell/buy 两腿直接 confirmed、confirm_date=transfer_date；跨天时转出腿当日 confirmed，转入腿 pending 且 confirm_date=下一交易日。非对称状态保证转出当日净值不因在途虚跌；在途不计入目标平台可用现金。读侧 `cross_day` 派生（#787）按「buy 腿确认日 > 转移日」判定，与腿状态解耦——已取消的当天转移两腿 confirm_date=transfer_date，不再被误标「跨天到账」。**撤销**（#788）：走专用 `POST /{portfolio_code}/cash-transfer/{transfer_group}/cancel`（admin），两腿逻辑置 cancelled 保留行 + 审计；已取消组幂等拒绝（`TRANSFER_ALREADY_CANCELLED`），两腿状态混合保守拒绝（`INVALID_STATUS`），组级快照保护（`SNAPSHOT_DEPENDENCY`）与「买入腿 confirmed 时转入平台可用现金不足则 `INSUFFICIENT_CASH` 阻断」照旧生效。
 * **调仓不参与 auto_confirm**（#493 决策 6 / #471）：自动任务、追平和重算均不确认调仓基金腿，跨天转移自动确认排除 rebal_ 组；到期 pending 调仓阻断快照，须人工确认。申赎、事件和跨天现金转移的自动确认不变。
 
 * 金额：买入 `amount = actual_amount − fee`、`shares = amount/price`；卖出 `amount = actual_amount + fee`。**卖出金额为纯派生量**（#190）：有价格时 `amount = quantize(shares × price)`、`actual_amount = amount − fee`；创建时显式传入的 amount/actual\_amount（两参同义、`actual_amount` 优先）仅作一致性校验（差值超 0.01 报 `AMOUNT_MISMATCH`），落库恒用推导值——金额即 shares/price/fee 的「校验和」，用于对账；无价格（场外未传价）时创建期占位，确认按 T 日净值重算。
@@ -236,7 +236,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-lifecycle"></a>
 ## 生命周期通用错误码
 
-交易、申赎、事件共用 pending / confirmed / cancelled：confirm 计算待定量并生成配对记录；unconfirm 回到 pending；cancel 仅允许 pending，confirmed 不可直接改删、须先 unconfirm。
+交易、申赎、事件共用 pending / confirmed / cancelled：confirm 计算待定量并生成配对记录；unconfirm 回到 pending；cancel 仅允许 pending，confirmed 不可直接改删、须先 unconfirm。**唯一例外**（#788）：跨平台现金转移组经专用 `cancel_cash_transfer` 端点可撤销 confirmed 两腿——转错平台/金额填错/重复转移的正式撤销通道，逻辑取消（两腿置 cancelled、保留 trade 行、记审计）而非物理删除，组级快照保护与转入平台现金守卫（撤销后金额从转入平台可用现金减回，不足 `INSUFFICIENT_CASH` 阻断）照旧。
 
 - **配对腿并非无条件同状态或同 trade_date**（#493）；调仓组级操作矩阵、日期与备注例外见[调仓规则](#rule-trade)。申赎 unconfirm 物理删除配对 CASH 腿。
 - **净值稳定性**：申购、赎回、现金分红、份额拆分/合并不改变净值，调仓可能改变净值。
@@ -352,7 +352,8 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `TASK_ALREADY_RUNNING` | 409 | `POST /system/tasks/{code}/run`：`submit_task` 发现同一 `task_code` 已有 `status ∈ (pending, running)` 的执行记录（手动路径的单 active 锁，#714）抛 `ConflictError`，router 翻成 409。此前手动触发完全没有并发保护，连击会并发跑两份 nav_sync；调度侧 MySQL `GET_LOCK` 只挡调度不挡 HTTP | routers/tasks.py::run_task |
 | `TASK_NOT_FOUND` | 404 | `run_task` 的派发表守卫（#406）：`task_code` 不在 `_TASK_DISPATCH` 覆盖的四个任务码（`nav_sync` / `snapshot_generate` / `trading_calendar_sync` / `log_cleanup`）内，`details.available_tasks` 回传可选集；**不建执行记录**——没执行过的任务不该有执行历史。经 `POST /system/tasks/{code}/run` 时通常由 router 的前置校验（查 `scheduled_task`）先命中，本码覆盖「任务表有行但派发表未覆盖」的漂移；#714 起手动触发在 `submit_task` 提交侧同样先判一次（未知码不建 `pending` 行） | services/task_runner.py::run_task; ::submit_task |
 | `SYSTEM_PRODUCT_PROTECTED` | 422 | `update_product` 的身份字段守卫：产品 code ∈ (CASH, IN_TRANSIT_BUY, IN_TRANSIT_SELL, IN_TRANSIT_DIVIDEND)，且本次更新**实际改变** `product_type` 或 `market` 的值（显式传原值不进门禁）；这两个字段以外的编辑不受本码限制 | services/product_service.py::_validate_identity_change |
-| `TRANSFER_NOT_FOUND` | 404 | `confirm_cash_transfer`：按 (portfolio_code, transfer_group) 查不到 `product_code=CASH` 且 `status=pending` 的腿——组不存在或组内两腿已全部 confirmed（`NotFoundError` → 404） | services/cash_transfer_service.py::confirm_cash_transfer |
+| `TRANSFER_ALREADY_CANCELLED` | 422 | `cancel_cash_transfer`（#788）：转移组两腿均已 cancelled 时再调撤销——幂等拒绝、零写入、无第二次审计 | services/cash_transfer_service.py::cancel_cash_transfer |
+| `TRANSFER_NOT_FOUND` | 404 | `confirm_cash_transfer`：按 (portfolio_code, transfer_group) 查不到 `product_code=CASH` 且 `status=pending` 的腿——组不存在或组内两腿已全部 confirmed（`NotFoundError` → 404）；`cancel_cash_transfer`（#788）：组不存在、两腿结构异常、或 `transfer_group` 以 `rebal_`/`sub_` 开头（调仓/申赎组不走转移撤销端点） | services/cash_transfer_service.py::confirm_cash_transfer; ::cancel_cash_transfer |
 | `TRANSFER_NOT_READY` | 422 | `confirm_cash_transfer`：存在 pending CASH 腿，但其生效确认日（首条腿的 `confirm_date`，为空则取该腿 `trade_date` 的下一交易日）晚于今天——跨天转移尚未到账日，不允许提前确认（[现金转移的非对称状态](#rule-trade)） | services/cash_transfer_service.py::confirm_cash_transfer |
 | `VALIDATION_FAILED` | 422（router 包装 ValueError）；逐日条目形态为 200 | 两形态同名：① generate / recalculate / generate-next 端点把下游 ValueError 翻成 422——组合不存在或非 active（`_validate_portfolio`）、目标日非交易日、依赖校验有 failed 项（纯 price_data 缺失走 `MISSING_NAV`、不落本码）、重算整区间静态预校验失败；② recalculate 逐日循环里 `validate_snapshot_dependencies` 出现 failed 项时写入 `results[].errors` 的 code（响应 200，随后 break、整体 rollback） | routers/snapshots.py::generate_snapshot; services/snapshot_service.py::recalculate_snapshots |
 

@@ -35,6 +35,7 @@ ERROR_HINTS: dict = {
     "MISSING_OR_INVALID_PRICE": "场内交易必须传入有效 --price（成交价）",
     "CANNOT_CANCEL_EXCHANGE": "场内交易当天确认、不可 cancel；已确认的用 unconfirm 回退",
     "TRANSFER_NOT_READY": "转移未到确认日，到 confirm_date 当日再执行 ir cash-transfer confirm",
+    "TRANSFER_ALREADY_CANCELLED": "该转移已撤销，无需重复操作：ir cash-transfer list --portfolio-code <code> 查看当前状态",
     "MISSING_POSITION_SNAPSHOT": "权益登记日持仓快照缺失，先生成该日快照: ir snapshot generate",
     "DIVIDEND_METHOD_REQUIRED": "请先选择分红方式：ir share-event confirm <id> --event-type cash_dividend 或 ir share-event confirm <id> --event-type reinvest_dividend；可先用 ir share-event preview <id> 携带相同候选参数核对；适用日期省略默认除息日，保留原日期须显式传入",
     "MANUAL_OVERRIDE_NOT_FOUND": "未找到对应现金覆盖记录: ir position list-cash-overrides --portfolio-code <code> 核查后重试",

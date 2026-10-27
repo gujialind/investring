@@ -17,6 +17,7 @@ from app.dependencies import get_current_admin
 from app.services.cash_transfer_service import (
     create_cash_transfer as create_transfer_service,
     confirm_cash_transfer as confirm_transfer_service,
+    cancel_cash_transfer as cancel_transfer_service,
     list_cash_transfers as list_transfers_service,
 )
 
@@ -64,6 +65,31 @@ def confirm_cash_transfer(
         "transfer_group": result["transfer_group"],
         "confirmed_count": result["confirmed_count"],
         "confirm_date": confirm_date.isoformat() if confirm_date else None,
+    }
+
+
+@router.post("/{portfolio_code}/cash-transfer/{transfer_group}/cancel")
+def cancel_cash_transfer(
+    portfolio_code: str,
+    transfer_group: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_admin),
+):
+    """撤销平台间现金转移（#788）：两腿逻辑置 cancelled，保留 trade 行 + 审计。"""
+    result = cancel_transfer_service(
+        db, portfolio_code=portfolio_code, transfer_group=transfer_group
+    )
+    db.commit()
+    transfer_date = result["transfer_date"]
+    return {
+        "message": "现金转移已撤销",
+        "transfer_group": result["transfer_group"],
+        "from_platform": result["from_platform"],
+        "to_platform": result["to_platform"],
+        "amount": result["amount"],
+        "sell_status": result["sell_status"],
+        "buy_status": result["buy_status"],
+        "transfer_date": transfer_date.isoformat() if transfer_date else None,
     }
 
 

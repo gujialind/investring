@@ -1484,6 +1484,18 @@ ir cash-transfer list --portfolio-code <组合> [--page N] [--page-size N] [--al
 ir cash-transfer confirm --portfolio-code <组合> --group <transfer_group>
 ```
 
+#### `ir cash-transfer cancel`
+
+撤销平台间现金转移（#788）：两腿逻辑置 cancelled，保留 trade 行 + 审计；转错平台/金额填错/重复转移的正式撤销通道。
+
+```bash
+ir cash-transfer cancel <transfer_group> --portfolio-code <组合>
+```
+
+> - 已取消组幂等拒绝（`TRANSFER_ALREADY_CANCELLED`）；两腿状态混合保守拒绝（`INVALID_STATUS`）
+> - 组级快照保护（`SNAPSHOT_DEPENDENCY`）照旧；已确认（买入腿 confirmed）的转移撤销时校验转入平台可用现金，不足 `INSUFFICIENT_CASH` 阻断
+> - 调仓（`rebal_`）/申赎（`sub_`）组不受本命令影响，请走对应生命周期操作
+
 ---
 
 ### 4.16 `ir sync-job` — 同步任务管理

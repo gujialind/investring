@@ -26,6 +26,9 @@ import {
   formatProductName,
   formatProductDisplayCode,
   formatProductCodeLabel,
+  deriveTransferGroupStatus,
+  isTransferNotReady,
+  TRANSFER_GROUP_STATUS_META,
 } from "@/lib/utils";
 
 describe("formatNumber", () => {
@@ -235,6 +238,63 @@ describe("涨跌色与状态徽标", () => {
     // 字符串输入走 parseFloat；非正值不带 + 号
     expect(getSignedReturn("-1.5")).toEqual({ text: "-1.50%", colorClass: "text-loss" });
     expect(getSignedReturn(0)).toEqual({ text: "0.00%", colorClass: "text-muted-foreground" });
+  });
+});
+
+describe("现金转移组状态派生（#787/#788）", () => {
+  it("跨天在途：sell confirmed / buy pending → in_transit", () => {
+    expect(
+      deriveTransferGroupStatus({ sell_status: "confirmed", buy_status: "pending" })
+    ).toBe("in_transit");
+  });
+
+  it("旧模型两腿 pending → in_transit", () => {
+    expect(
+      deriveTransferGroupStatus({ sell_status: "pending", buy_status: "pending" })
+    ).toBe("in_transit");
+  });
+
+  it("当天完成：双 confirmed → completed", () => {
+    expect(
+      deriveTransferGroupStatus({ sell_status: "confirmed", buy_status: "confirmed" })
+    ).toBe("completed");
+  });
+
+  it("双 cancelled → cancelled", () => {
+    expect(
+      deriveTransferGroupStatus({ sell_status: "cancelled", buy_status: "cancelled" })
+    ).toBe("cancelled");
+  });
+
+  it("两腿状态混合 → abnormal（保守只读）", () => {
+    expect(
+      deriveTransferGroupStatus({ sell_status: "cancelled", buy_status: "confirmed" })
+    ).toBe("abnormal");
+    expect(
+      deriveTransferGroupStatus({ sell_status: "confirmed", buy_status: "cancelled" })
+    ).toBe("abnormal");
+  });
+
+  it("非 cancelled 且非 pending 也非双 confirmed 的异常组 → abnormal（fallback）", () => {
+    expect(
+      deriveTransferGroupStatus({ sell_status: "pending", buy_status: "confirmed" })
+    ).toBe("abnormal");
+  });
+
+  it("状态徽标文案与 variant", () => {
+    expect(TRANSFER_GROUP_STATUS_META.in_transit).toEqual({ label: "在途", variant: "warning" });
+    expect(TRANSFER_GROUP_STATUS_META.completed).toEqual({ label: "已完成", variant: "success" });
+    expect(TRANSFER_GROUP_STATUS_META.cancelled).toEqual({ label: "已取消", variant: "neutral" });
+    expect(TRANSFER_GROUP_STATUS_META.abnormal).toEqual({ label: "状态异常", variant: "destructive" });
+  });
+
+  it("isTransferNotReady：未到确认日禁用确认按钮", () => {
+    const future = new Date(Date.now() + 3 * 86400000).toLocaleDateString("sv-SE");
+    const past = new Date(Date.now() - 3 * 86400000).toLocaleDateString("sv-SE");
+    expect(isTransferNotReady(future)).toBe(true);
+    expect(isTransferNotReady(past)).toBe(false);
+    expect(isTransferNotReady(null)).toBe(false);
+    expect(isTransferNotReady(undefined)).toBe(false);
   });
 });
 
