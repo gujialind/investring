@@ -4,7 +4,7 @@
 # - 不受列表 status/platform/products/日期筛选影响：对手腿被筛掉时仍回填
 # - 不补行：total 与分页口径恒按真实行数，派生只挂在既有行上
 # - 边界：`sub_` 申赎单腿无对手 trade 行 → null；组内行数 ≠ 2 时整体跳过（宁可不补也不猜）
-# - 契约时机：仅 list 端点填充，单对象端点恒 null；#493 的两个平铺字段行为不变
+# - 契约时机：list 与单对象 GET 同形填充（#789）；preview 恒 null；#493 平铺字段行为不变
 
 from datetime import date
 from decimal import Decimal
@@ -275,15 +275,42 @@ class TestPairedLegBoundaries:
 class TestPairedLegContractTiming:
     """填充时机与 #175/#705 的派生字段完全一致"""
 
-    def test_single_object_endpoint_leaves_it_null(self, client, admin_headers, test_db):
+    def test_single_object_endpoint_fills_derived_fields(self, client, admin_headers, test_db):
+        """#789 起单对象 GET 与 list 同形：paired_leg/product_name/display_code 均填充"""
         _seed(test_db, "PL719_O")
-        fund, _cash = _rebal_pair(test_db, "PL719_O", "rebal_719o0001")
+        fund, cash = _rebal_pair(test_db, "PL719_O", "rebal_719o0001")
 
-        resp = client.get(f"/api/trades/{fund.id}", headers=admin_headers)
+        resp = client.get(
+            f"/api/trades/{fund.id}",
+            params={"portfolio_code": "PL719_O"},
+            headers=admin_headers,
+        )
         assert resp.status_code == 200, resp.json()
         body = resp.json()
         assert body["id"] == fund.id
-        assert body["paired_leg"] is None
-        # 同端点的 product_name/display_code 也恒 None（#175/#705 既有口径），
-        # paired_leg 不例外，避免消费方误以为单对象端点能拿到对手腿
-        assert body["product_name"] is None
+        paired = body["paired_leg"]
+        assert paired["id"] == cash.id
+        assert paired["product_code"] == "CASH"
+        # 产品名/显示码随 #789 扩到单对象端点，与 list 同批同形（#175/#705 口径）
+        assert body["product_name"] == FUND_NAME
+        assert body["display_code"] == FUND
+
+    def test_single_object_endpoint_rejects_cross_portfolio(self, client, admin_headers, test_db):
+        """#789 决策 3：按 (id, portfolio_code) 归属校验收口全局按 id 查询。
+
+        跨组合与不存在的 id 同返 404，不泄露其它组合内存在该交易。
+        """
+        _seed(test_db, "PL719_P")
+        _seed(test_db, "PL719_Q")
+        fund_p, _cash_p = _rebal_pair(test_db, "PL719_P", "rebal_719p0001")
+
+        resp = client.get(
+            f"/api/trades/{fund_p.id}",
+            params={"portfolio_code": "PL719_Q"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 404
+
+        # portfolio_code 为必填查询参数：缺省 422
+        missing = client.get(f"/api/trades/{fund_p.id}", headers=admin_headers)
+        assert missing.status_code == 422

@@ -83,6 +83,39 @@ def _build_paired_leg(
     )
 
 
+def _enrich_trade_responses(db: Session, items: list[Trade]) -> list[TradeResponse]:
+    """读侧派生四组字段同批填充（#175/#705/#719/#493），list 与单对象端点共用。
+
+    issue #789 起单对象 `GET /{id}` 与列表**同形**：`product_name` /
+    `display_code` / `paired_leg` 此前仅 list 填充，单对象恒 null，详情弹窗
+    （TradeDetailDialog）拿不到产品名与对手腿。对手腿的产品并入同一批
+    `(code, market)` 键，前端渲染派生子行不必再发一次产品查询。
+    """
+    paired_legs = build_paired_cash_leg_map(db, items)
+    paired_map = build_paired_leg_map(db, items)
+    pairs = {(t.product_code, t.market) for t in items}
+    pairs.update(
+        (leg.product_code, leg.market) for leg in paired_map.values()
+    )
+    name_map, display_map = build_product_label_maps(db, pairs)
+    return [
+        _fill_derived_cash_fields(
+            TradeResponse.model_validate(t).model_copy(
+                update={
+                    "product_name": name_map.get((t.product_code, t.market)),
+                    "display_code": display_map.get((t.product_code, t.market)),
+                    "paired_leg": _build_paired_leg(
+                        paired_map.get(t.id), name_map, display_map
+                    ),
+                }
+            ),
+            t,
+            paired_legs,
+        )
+        for t in items
+    ]
+
+
 @router.get("", response_model=PaginatedTradeResponse)
 def get_trades(
     portfolio_code: Optional[str] = None,
@@ -117,34 +150,7 @@ def get_trades(
         page=page,
         page_size=page_size,
     )
-    # #493 派生现金信息：一次批量查询（不受本页 status/platform 筛选截断）
-    paired_legs = build_paired_cash_leg_map(db, items)
-    # #719 双向对手腿：同样整页一次批量查询，不随行数产生 N+1
-    paired_map = build_paired_leg_map(db, items)
-    # 读侧派生 product_name（#175）与显示码（#705）：(code, market) 双键天然覆盖 LOF
-    # 与 CASH 虚拟产品；两者同批同键，单次查询内一起取。对手腿的产品并入同一批，
-    # 前端渲染派生子行时不必再发一次产品查询
-    pairs = {(t.product_code, t.market) for t in items}
-    pairs.update(
-        (leg.product_code, leg.market) for leg in paired_map.values()
-    )
-    name_map, display_map = build_product_label_maps(db, pairs)
-    enriched = [
-        _fill_derived_cash_fields(
-            TradeResponse.model_validate(t).model_copy(
-                update={
-                    "product_name": name_map.get((t.product_code, t.market)),
-                    "display_code": display_map.get((t.product_code, t.market)),
-                    "paired_leg": _build_paired_leg(
-                        paired_map.get(t.id), name_map, display_map
-                    ),
-                }
-            ),
-            t,
-            paired_legs,
-        )
-        for t in items
-    ]
+    enriched = _enrich_trade_responses(db, items)
     return PaginatedTradeResponse(
         items=enriched,
         total=total,
@@ -244,16 +250,24 @@ def preview_trade_confirm(
 @router.get("/{id}", response_model=TradeResponse)
 def get_trade(
     id: int,
+    portfolio_code: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    trade = db.query(Trade).filter(Trade.id == id).first()
+    """单对象详情：派生字段与 list 同形（#789），须携带 portfolio_code 归属校验。
+
+    id 全局自增，此前按 id 全局查询可越权读到其它组合的交易（issue #789
+    决策 3 收口）；现按 `(id, portfolio_code)` 查询，不匹配与不存在同返
+    404，不泄露跨组合存在性。
+    """
+    trade = (
+        db.query(Trade)
+        .filter(Trade.id == id, Trade.portfolio_code == portfolio_code)
+        .first()
+    )
     if not trade:
         raise HTTPException(status_code=404, detail="交易不存在")
-    return _fill_derived_cash_fields(
-        TradeResponse.model_validate(trade), trade,
-        build_paired_cash_leg_map(db, [trade]),
-    )
+    return _enrich_trade_responses(db, [trade])[0]
 
 
 @router.post("/{id}/confirm")

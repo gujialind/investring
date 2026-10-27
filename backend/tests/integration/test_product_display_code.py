@@ -97,7 +97,7 @@ class TestKeywordHitsSaleCode:
 
 
 class TestRowLevelDisplayCode:
-    """行级读模型与 product_name 同批填充（仅 list 端点）"""
+    """行级读模型与 product_name 同批填充（list + 单对象 GET，#789 起同形）"""
 
     def test_trade_list_carries_display_code(self, client, admin_headers, test_db):
         _hk_product(test_db)
@@ -115,9 +115,10 @@ class TestRowLevelDisplayCode:
         assert items and items[0]["product_code"] == HK
         assert items[0]["display_code"] == HK6
 
-    def test_single_trade_display_code_stays_null(
+    def test_single_trade_display_code_filled(
         self, client, admin_headers, test_db
     ):
+        """#789 起单对象端点与 list 同形：display_code/product_name 一并填充"""
         _hk_product(test_db)
         portfolio = create_portfolio(test_db, code="PF705B")
         trade = create_trade(
@@ -126,9 +127,12 @@ class TestRowLevelDisplayCode:
             product_code=HK,
             market="HK_MUTUAL",
         )
-        resp = client.get(f"/api/trades/{trade.id}", headers=admin_headers)
-        # 单对象端点不 join 产品表（同 product_name 口径）：消费方回退本地格式化
-        assert resp.json()["display_code"] is None
+        resp = client.get(
+            f"/api/trades/{trade.id}",
+            params={"portfolio_code": portfolio.code},
+            headers=admin_headers,
+        )
+        assert resp.json()["display_code"] == HK6
 
 
 class TestHkCreateNormalization:

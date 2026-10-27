@@ -70,12 +70,12 @@ export function useTradeList(params?: TradeListParams) {
   });
 }
 
-// 单个交易详情 Hook
-export function useTrade(id: number) {
+// 单个交易详情 Hook（#789：portfolioCode 必填，后端按 (id, portfolio_code) 归属校验）
+export function useTrade(id: number, portfolioCode: string) {
   return useQuery({
-    queryKey: [TRADE_QUERY_KEY, id],
-    queryFn: () => tradeApi.get(id),
-    enabled: !!id && id > 0,
+    queryKey: [TRADE_QUERY_KEY, id, portfolioCode],
+    queryFn: () => tradeApi.get(id, portfolioCode),
+    enabled: !!id && id > 0 && !!portfolioCode,
     staleTime: 30 * 1000,
   });
 }

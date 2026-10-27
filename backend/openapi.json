@@ -4072,6 +4072,7 @@
           "调仓交易"
         ],
         "summary": "Get Trade",
+        "description": "单对象详情：派生字段与 list 同形（#789），须携带 portfolio_code 归属校验。\n\nid 全局自增，此前按 id 全局查询可越权读到其它组合的交易（issue #789\n决策 3 收口）；现按 `(id, portfolio_code)` 查询，不匹配与不存在同返\n404，不泄露跨组合存在性。",
         "operationId": "get_trade_api_trades__id__get",
         "security": [
           {
@@ -4086,6 +4087,15 @@
             "schema": {
               "type": "integer",
               "title": "Id"
+            }
+          },
+          {
+            "name": "portfolio_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
             }
           }
         ],
@@ -10373,7 +10383,7 @@
           "total_pages"
         ],
         "title": "PaginatedTradeResponse",
-        "description": "交易列表分页响应（issue #183）。items 元素复用 TradeResponse：\nproduct_name 仅 list 端点填充，单对象端点恒为 None（见 TradeResponse 注释）。\n\n#752 起分页按组边界切分（同组两腿恒同页）：`total` 仍是**行数**、`page_size` 仍是\n每页行数上限，但一页可能多带同组剩余腿（最多 `page_size + 组大小 - 1` 行），故总页数\n不再等于 `ceil(total / page_size)`，由后端按组边界折算后以 `total_pages` 给出；\n`total_groups` 是过滤后的组数（`transfer_group` 为空串的行各自独立成组）。"
+        "description": "交易列表分页响应（issue #183）。items 元素复用 TradeResponse：\nproduct_name 等派生字段的填充时机见 TradeResponse 注释（list 与单对象\nGET 同形，#789）。\n\n#752 起分页按组边界切分（同组两腿恒同页）：`total` 仍是**行数**、`page_size` 仍是\n每页行数上限，但一页可能多带同组剩余腿（最多 `page_size + 组大小 - 1` 行），故总页数\n不再等于 `ceil(total / page_size)`，由后端按组边界折算后以 `total_pages` 给出；\n`total_groups` 是过滤后的组数（`transfer_group` 为空串的行各自独立成组）。"
       },
       "PlatformCashFlowBreakdown": {
         "properties": {

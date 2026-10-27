@@ -682,10 +682,10 @@ ir trade create --portfolio-code <组合> --product-code <产品> [--market <市
 查看交易详情。
 
 ```bash
-ir trade get <ID>
+ir trade get <ID> --portfolio-code <组合>
 ```
 
-> 基金腿响应含只读派生 `cash_platform_code`（买入=扣款平台、卖出=到账平台）与 `cash_confirm_date`（买入=扣款日 T、卖出=到账日 A）；无配对现金腿时为 `null`。详情端点**不含** `paired_leg`（该字段只在 `ir trade list` 填充，见上）——需要对手腿时用 `ir trade list --product-code <产品>` 取，别在 `get` 上等一个恒 `null` 的字段。
+> 须带 `--portfolio-code` 做归属校验（#789）：按 `(id, portfolio_code)` 查询，跨组合与不存在的 id 同返 404。响应与 `ir trade list` 同形——含只读派生 `product_name` / `display_code` / `paired_leg`（#719 对手腿只读快照）与基金腿的 `cash_platform_code` / `cash_confirm_date`；无配对现金腿或无对手 trade 行（`sub_` 申赎腿等）时相应字段为 `null`。
 
 #### `ir trade preview`
 

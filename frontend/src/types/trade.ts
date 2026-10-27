@@ -18,9 +18,9 @@ export interface Trade {
   notes?: string;
   created_at?: string;
   updated_at?: string;
-  /** 读侧派生（#175）：仅 list 响应有值；create/get/update 恒为 undefined */
+  /** 读侧派生（#175）：list 与单对象 GET 有值（#789 起同形）；create/update/preview 恒为 undefined */
   product_name?: string;
-  /** 读侧派生显示码（#705）：仅 list 响应有值；标识符用途仍用 product_code */
+  /** 读侧派生显示码（#705）：填充时机同 product_name；标识符用途仍用 product_code */
   display_code?: string | null;
   /**
    * 读侧派生现金信息（#493）：**只读、不落库、仅基金腿填充**——后端按
@@ -35,8 +35,8 @@ export interface Trade {
   cash_confirm_date?: string | null;
   /**
    * 读侧派生**对手腿**（#719）：同一 `transfer_group` 内的另一条腿，方向不限
-   * （基金腿↔现金腿、平台间转移的两条现金腿互指）。只读、不落库、**仅 list 响应
-   * 填充**（时机同 `product_name`/`display_code`），单对象与 preview 端点恒为 null。
+   * （基金腿↔现金腿、平台间转移的两条现金腿互指）。只读、不落库；填充时机同
+   * `product_name`/`display_code`（#789 起单对象 GET 与 list 同形，preview 恒为 null）。
    *
    * 用途是「只补信息、不补行」：对手腿被产品/状态/平台筛选或分页挡在结果集外时，
    * 前端据此合成配对子行。`total`、分页与排序口径都不受影响。

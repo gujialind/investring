@@ -51,10 +51,11 @@ import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
+import TradeDetailDialog from "@/components/shared/dialogs/TradeDetailDialog";
 
 import { cn, formatNumber, formatSignedCurrency, getNumberCellClass, toDateOnly } from "@/lib/utils";
 import { getErrorMessage, type CashFlowListParams } from "@/lib/api";
-import type { CashFlowRow, CashFlowStatusFilter, CashFlowType } from "@/types/cash-flow";
+import type { CashFlowPairRef, CashFlowRow, CashFlowStatusFilter, CashFlowType } from "@/types/cash-flow";
 import {
   amountNote,
   balanceSpans,
@@ -126,6 +127,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   // 页头三入口（复用既有现金弹窗）+ 构成弹窗 + 行级详情/当日弹窗
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferListOpen, setTransferListOpen] = useState(false);
+  // #789 关联业务 fund_leg → 只读交易详情弹窗（嵌套在本页弹窗之上打开）
+  const [pairTradeId, setPairTradeId] = useState<number | null>(null);
   const [marketValueOpen, setMarketValueOpen] = useState(false);
   const [marketValuePlatform, setMarketValuePlatform] = useState<string | undefined>(undefined);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
@@ -838,7 +841,54 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                 </DetailRow>
                 {detailRow.pair_ref && (
                   <DetailRow k="关联业务">
-                    <div>{detailRow.pair_ref.label}</div>
+                    {/* #789 按 pair_ref.kind 三分流可点：fund_leg → 只读交易详情弹窗（嵌套）；
+                        transfer_leg → 定位转移记录组（关本弹窗、开转移记录弹窗）；
+                        subscription → 跳申赎页（id 不参与 GET /trades/{id}，仅导航）。
+                        未知 kind 保持纯文本，不静默伪装可点 */}
+                    {(() => {
+                      const pairRef: CashFlowPairRef = detailRow.pair_ref!;
+                      const linkCls =
+                        "font-medium text-primary underline-offset-2 hover:underline";
+                      if (pairRef.kind === "fund_leg") {
+                        return (
+                          <button
+                            type="button"
+                            className={linkCls}
+                            data-testid="pair-ref-fund-leg"
+                            onClick={() => setPairTradeId(pairRef.id)}
+                          >
+                            {pairRef.label}
+                          </button>
+                        );
+                      }
+                      if (pairRef.kind === "transfer_leg") {
+                        return (
+                          <button
+                            type="button"
+                            className={linkCls}
+                            data-testid="pair-ref-transfer-leg"
+                            onClick={() => {
+                              setDetailRow(null);
+                              setTransferListOpen(true);
+                            }}
+                          >
+                            {pairRef.label}
+                          </button>
+                        );
+                      }
+                      if (pairRef.kind === "subscription") {
+                        return (
+                          <Link
+                            href={`${basePath}/portfolio/${code}/subscriptions`}
+                            className={linkCls}
+                            data-testid="pair-ref-subscription"
+                          >
+                            {pairRef.label}
+                          </Link>
+                        );
+                      }
+                      return <div>{pairRef.label}</div>;
+                    })()}
                     <div className="text-xs text-muted-foreground">
                       {detailRow.pair_ref.platform_name ?? pname(detailRow.pair_ref.platform_code)}
                       {detailRow.pair_ref.ref_date ? ` · ${detailRow.pair_ref.ref_date}` : ""}
@@ -894,6 +944,15 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           )}
         </DialogContent>
       </Dialog>
+
+      {/* #789 关联业务 fund_leg → 只读交易详情弹窗（与调仓交易页行内入口共用组件；
+          Portal 渲染在本页弹窗之上，流水详情保持打开、关闭后回到原状） */}
+      <TradeDetailDialog
+        portfolioCode={code}
+        tradeId={pairTradeId}
+        open={pairTradeId !== null}
+        onOpenChange={(o) => !o && setPairTradeId(null)}
+      />
 
       {/* 当日该平台全部现金流水弹窗 */}
       <Dialog open={!!sameDayRow} onOpenChange={(o) => !o && setSameDayRow(null)}>

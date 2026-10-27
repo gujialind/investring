@@ -164,10 +164,16 @@ def create(
 
 
 @app.command("get")
-def get(id: int = typer.Argument(..., help="交易ID")):
-    """获取交易详情"""
+def get(
+    id: int = typer.Argument(..., help="交易ID"),
+    portfolio_code: str = typer.Option(..., "--portfolio-code", help="组合代码（归属校验）"),
+):
+    """获取交易详情（派生字段与 list 同形，#789）
+
+    单对象端点按 (id, portfolio_code) 归属校验：跨组合与不存在的 id 同返 404。
+    """
     client = APIClient.from_config()
-    result = client.get(f"/api/trades/{id}")
+    result = client.get(f"/api/trades/{id}", params={"portfolio_code": portfolio_code})
     success(data=result["data"])
 
 

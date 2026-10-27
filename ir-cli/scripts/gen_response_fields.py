@@ -72,7 +72,7 @@ NOTES_OVERRIDES = {
     "share-event.list.product_name": "读侧派生：仅 list 端点 join 产品表填充，产品缺失为null；get/单对象端点恒为null",
     "trade.list.cash_platform_code": "读侧派生（按配对CASH腿）：买入=扣款平台、卖出=到账平台；null=无配对现金腿（如待确认卖出，到账信息在确认时录入），CASH腿自身恒为null",
     "trade.list.cash_confirm_date": "读侧派生（按配对CASH腿）：买入=扣款日T、卖出=到账日A（缺省A=C）；null=无配对现金腿，CASH腿自身恒为null",
-    "trade.list.paired_leg": "读侧派生（#719）：同 transfer_group 内的对手腿只读快照（基金腿↔现金腿双向、不受状态/分页筛选影响）；仅 list 端点填充，单对象/preview 恒为null；无对手 trade 行（sub_申赎腿、未建出现金腿的待确认卖出）亦为null。与上面两个 cash_* 字段并存不互写",
+    "trade.list.paired_leg": "读侧派生（#719）：同 transfer_group 内的对手腿只读快照（基金腿↔现金腿双向、不受状态/分页筛选影响）；#789 起单对象 ir trade get 与 list 同形填充（须 --portfolio-code 归属校验），preview 恒为null；无对手 trade 行（sub_申赎腿、未建出现金腿的待确认卖出）亦为null。与上面两个 cash_* 字段并存不互写",
     "task.run": "提交即返的受理回执（#714）：status 恒为 pending，任务在服务端后台跑，不代表已执行完；进度与结果看 ir task execution <execution_id>",
     "task.execution.status": "pending/running=进行中；success/failed/partial_success/interrupted=终态（interrupted=进程重启导致未完成，可重新触发）",
     "task.execution.trigger_type": "manual=手动；scheduled=定时首跑；retry=定时失败后自动重试（间隔2h、上限3次，#715）；cascade=重试成功后联动补跑当日快照（#715）",
