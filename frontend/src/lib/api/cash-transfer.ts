@@ -16,7 +16,7 @@ export const cashTransferApi = {
       url: `/portfolios/${portfolioCode}/cash-transfer/${transferGroup}/confirm`,
     }),
 
-  list: (portfolioCode: string, params?: { page?: number; page_size?: number }) =>
+  list: (portfolioCode: string, params?: { page?: number; page_size?: number; transfer_group?: string }) =>
     request<PaginatedResponse<CashTransferListItem>>({
       method: "GET",
       url: `/portfolios/${portfolioCode}/cash-transfers`,

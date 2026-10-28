@@ -127,6 +127,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   // 页头三入口（复用既有现金弹窗）+ 构成弹窗 + 行级详情/当日弹窗
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferListOpen, setTransferListOpen] = useState(false);
+  const [transferGroup, setTransferGroup] = useState<string | undefined>(undefined);
   // #789 关联业务 fund_leg → 只读交易详情弹窗（嵌套在本页弹窗之上打开）
   const [pairTradeId, setPairTradeId] = useState<number | null>(null);
   const [marketValueOpen, setMarketValueOpen] = useState(false);
@@ -513,7 +514,10 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
         size={isMobile ? "sm" : "default"}
         data-testid="btn-transfer-list"
         className={cn(isMobile && "flex-1")}
-        onClick={() => setTransferListOpen(true)}
+        onClick={() => {
+          setTransferGroup(undefined);
+          setTransferListOpen(true);
+        }}
       >
         {isMobile ? <List className="mr-2 h-4 w-4" /> : null}
         转移记录
@@ -793,7 +797,15 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
 
       {/* 页头三入口弹窗（复用既有组件） */}
       <CashTransferDialog portfolioCode={code} open={transferOpen} onOpenChange={setTransferOpen} />
-      <CashTransferListDialog portfolioCode={code} open={transferListOpen} onOpenChange={setTransferListOpen} />
+      <CashTransferListDialog
+        portfolioCode={code}
+        open={transferListOpen}
+        transferGroup={transferGroup}
+        onOpenChange={(open) => {
+          setTransferListOpen(open);
+          if (!open) setTransferGroup(undefined);
+        }}
+      />
       <CashMarketValueUpdateDialog
         portfolioCode={code}
         open={marketValueOpen}
@@ -868,6 +880,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                             className={linkCls}
                             data-testid="pair-ref-transfer-leg"
                             onClick={() => {
+                              setTransferGroup(detailRow.origin_ref.transfer_group ?? undefined);
                               setDetailRow(null);
                               setTransferListOpen(true);
                             }}

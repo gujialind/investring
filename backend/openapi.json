@@ -7519,6 +7519,22 @@
               "default": 20,
               "title": "Page Size"
             }
+          },
+          {
+            "name": "transfer_group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Transfer Group"
+            }
           }
         ],
         "responses": {

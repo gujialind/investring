@@ -68,7 +68,7 @@ export default function TradeDetailDialog({
         <DialogHeader>
           <DialogTitle>交易详情</DialogTitle>
           <DialogDescription>
-            只读视图 · 写操作请回调仓交易页
+            只读视图 · 写操作请前往调仓交易页
           </DialogDescription>
         </DialogHeader>
         {isLoading ? (

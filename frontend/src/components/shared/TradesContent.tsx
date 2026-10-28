@@ -75,6 +75,7 @@ import {
   useUnconfirmTrade,
   useDeleteTrade,
 } from "@/hooks/useTrade";
+import { useRoleCheck } from "@/hooks/useAuth";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { useUIStore } from "@/stores/uiStore";
 import LoadingState from "@/components/shared/LoadingState";
@@ -165,6 +166,7 @@ export default function TradesContent({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { isAdmin } = useRoleCheck();
 
   // #789 只读详情深链：URL 为事实源（`?trade=<id>`），行内按钮 = push 带参（保留其他
   // 筛选），弹窗关闭 = replace 清 trade 参（不新增历史条目）。trade **不进**上方
@@ -687,7 +689,7 @@ export default function TradesContent({
             与后端 cancel_trade 的 CANNOT_CANCEL_EXCHANGE 一致）；confirmed=取消确认/修改引导，无删除。
             #493：调仓 CASH 腿（含孤儿行）不露出任何生命周期按钮——后端对其
             confirm/unconfirm/cancel/delete 一律 CASH_TRADE_FORBIDDEN，唯一驱动入口是基金腿 */}
-        {isRebalCashLeg(trade) ? null : (
+        {isAdmin && !isRebalCashLeg(trade) && (
           <>
             {trade.status === "pending" && (
               <>
@@ -878,7 +880,7 @@ export default function TradesContent({
             <p className="text-muted-foreground">组合代码: {code}</p>
           </div>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
+        {isAdmin && <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -1109,7 +1111,7 @@ export default function TradesContent({
               </DialogFooter>
             </form>
           </DialogContent>
-        </Dialog>
+        </Dialog>}
       </div>
 
       <Card>

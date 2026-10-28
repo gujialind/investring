@@ -157,6 +157,36 @@ def _runner() -> CliRunner:
         return CliRunner()
 
 
+class TestTradeGetPortfolioScope:
+    def test_missing_portfolio_code_is_usage_error_without_request(self, stub_client):
+        result = _runner().invoke(app, ["trade", "get", "42"])
+        assert result.exit_code == 64
+        doc = json.loads(result.stdout)
+        assert doc["ok"] is False
+        assert doc["error"]["code"] == "USAGE_ERROR"
+        assert "--portfolio-code" in doc["error"]["message"]
+        assert stub_client.calls == []
+        assert stub_client.writes == []
+
+    def test_portfolio_code_sent_with_full_response(self, stub_client):
+        stub_client.response_data = {
+            "id": 42,
+            "portfolio_code": "PORT001",
+            "product_code": "510300.SH",
+            "product_name": "测试基金",
+            "display_code": "510300",
+            "status": "confirmed",
+            "amount": 1234.56,
+            "notes": "保留详情字段",
+            "paired_leg": {"id": 43, "product_code": "CASH", "status": "confirmed"},
+        }
+        result = _runner().invoke(app, ["trade", "get", "42", "--portfolio-code=PORT001"])
+        assert result.exit_code == 0, result.stdout
+        assert stub_client.calls == [("/api/trades/42", {"portfolio_code": "PORT001"})]
+        assert stub_client.writes == []
+        assert json.loads(result.stdout) == {"ok": True, "data": stub_client.response_data}
+
+
 class TestAvailableCashDualChannel:
     """available-cash 双通道参数（issue #81）"""
 
