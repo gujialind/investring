@@ -32,14 +32,23 @@ def _read_stdout_json(capsys):
     return json.loads(captured.out), captured
 
 
+def _patch_getproxies(monkeypatch, proxies: dict):
+    """同时 patch urllib.request.getproxies 与 httpx._utils.getproxies。
+
+    httpx/_utils.py 用 `from urllib.request import getproxies` 直接绑定函数对象，
+    只 patch urllib.request 模块属性对 httpx 无效；issue 验收第 5 条要求经
+    getproxies 注入敌意 no_proxy，须 patch httpx 实际调用的引用。
+    """
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: proxies)
+    monkeypatch.setattr("httpx._utils.getproxies", lambda: proxies)
+
+
 class TestTrustEnvDisabled:
     """A：不读环境代理，任意 no_proxy/proxy 取值不影响构造与请求"""
 
     def test_acceptance5_monkeypatched_getproxies_no_raise(self, monkeypatch):
         """issue 验收第 5 条原文直译用例"""
-        monkeypatch.setattr(
-            urllib.request, "getproxies", lambda: {"no": "localhost,[::1],::1"}
-        )
+        _patch_getproxies(monkeypatch, {"no": "localhost,[::1],::1"})
         client = APIClient("https://example.com")  # 不抛即通过
         assert client._client is not None
 
@@ -51,7 +60,7 @@ class TestTrustEnvDisabled:
         """验收第 3 条（A 语义收窄版）：任意 no_proxy 取值不影响构造与请求"""
         monkeypatch.setenv("NO_PROXY", no_proxy_value)
         monkeypatch.setenv("no_proxy", no_proxy_value)
-        monkeypatch.setattr(urllib.request, "getproxies", lambda: {"no": no_proxy_value})
+        _patch_getproxies(monkeypatch, {"no": no_proxy_value})
         client = APIClient("http://test")
         # 请求成功（MockTransport 替换底层 client，与既有 test_client_errors.py 同法）
         client._client = httpx.Client(
@@ -76,9 +85,7 @@ class TestTrustEnvDisabled:
         """验收第 4 条（A 口径）：显式设置 HTTP(S)_PROXY 也不生效（不产生代理 mounts）"""
         monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8080")
         monkeypatch.setenv("https_proxy", "http://proxy.example:8080")
-        monkeypatch.setattr(
-            urllib.request, "getproxies", lambda: {"https": "http://proxy.example:8080"}
-        )
+        _patch_getproxies(monkeypatch, {"https": "http://proxy.example:8080"})
         client = APIClient("https://example.com")
         assert client._client._mounts == {}
 
