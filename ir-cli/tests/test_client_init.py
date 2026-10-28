@@ -62,7 +62,10 @@ class TestTrustEnvDisabled:
         monkeypatch.setenv("no_proxy", no_proxy_value)
         _patch_getproxies(monkeypatch, {"no": no_proxy_value})
         client = APIClient("http://test")
-        # 请求成功（MockTransport 替换底层 client，与既有 test_client_errors.py 同法）
+        # 覆盖面说明（#799 评审 N1）：本条钉的是「敌意 no_proxy 下构造不抛」；
+        # 下面的请求段用自造 MockTransport client 替换 _client（与 test_client_errors.py 同法），
+        # 只证明替换后的传输链路可用，**不**证明 APIClient 产出的 client 的 trust_env——
+        # 后者由 test_trust_env_flag_is_false / test_env_proxy_not_mounted 单独钉住。
         client._client = httpx.Client(
             base_url="http://test",
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"id": 1})),
@@ -113,6 +116,7 @@ class TestInternalError:
     """C2：命令体未预期异常 → INTERNAL_ERROR JSON + exit 1，不漏 Traceback"""
 
     def test_unexpected_exception_outputs_json_exit_1(self, monkeypatch, capsys):
+        monkeypatch.delenv("IR_DEBUG", raising=False)  # 默认路径：stderr 无栈（下方用例覆盖 IR_DEBUG=1）
         cli = typer.main.get_command(app)
 
         def boom(cls, require_auth=True):
@@ -127,3 +131,22 @@ class TestInternalError:
         assert doc["error"]["code"] == "INTERNAL_ERROR"
         assert "RuntimeError" in doc["error"]["message"]
         assert doc["error"]["hints"]
+
+    def test_internal_error_ir_debug_prints_traceback_to_stderr(self, monkeypatch, capsys):
+        """S1（#799 评审）：IR_DEBUG=1 时未预期异常的完整栈写 stderr，stdout 仍单 JSON、exit 1"""
+        monkeypatch.setenv("IR_DEBUG", "1")
+        cli = typer.main.get_command(app)
+
+        def boom(cls, require_auth=True):
+            raise RuntimeError("debug traceback failure")
+
+        monkeypatch.setattr(APIClient, "from_config", classmethod(boom))
+        with pytest.raises(SystemExit) as ei:
+            cli.main(["portfolio", "get", "P1"], standalone_mode=False)
+        assert ei.value.code == 1
+        captured = capsys.readouterr()
+        assert "Traceback" in captured.err, "IR_DEBUG=1 时 stderr 应有异常栈"
+        assert "debug traceback failure" in captured.err
+        assert "Traceback" not in captured.out, "stdout 不得漏出 Traceback"
+        doc = json.loads(captured.out)  # stdout 仍是单个合法 JSON 文档
+        assert doc["error"]["code"] == "INTERNAL_ERROR"

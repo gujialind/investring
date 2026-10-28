@@ -86,6 +86,8 @@ class TestNetworkErrors:
         assert ei.value.code == 3
         doc, _ = _read_stdout_json(capsys)
         assert doc["error"]["code"] == "CONNECTION_ERROR"
+        # S3（#799 评审）：文案须提示「不读代理环境变量」，避免依赖代理的环境误查 IR_BASE_URL
+        assert "代理" in doc["error"]["message"]
 
 
 class TestRetrySemantics:

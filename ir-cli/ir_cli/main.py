@@ -6,11 +6,14 @@ InvestRing CLI - HTTP Client 入口
 """
 import importlib
 import sys
+import traceback
 from typing import Optional
 
 import typer
 import typer.core
 
+# _debug_enabled 是 IR_DEBUG 语义的单一事实源（client.py），此处复用不另造判断
+from ir_cli.client import _debug_enabled
 from ir_cli.output import EXIT_BUSINESS, EXIT_USAGE, error
 
 
@@ -79,6 +82,10 @@ class IrTyperGroup(typer.core.TyperGroup):
             # stdout 恒 JSON、不漏 raw traceback（#798 C2）。error() 抛 SystemExit
             # （BaseException），不会被本 handler 自吞；专用出口（USAGE_ERROR/
             # CLIENT_INIT_ERROR/网络类等）在前序分支或命令体内已先行收敛。
+            # IR_DEBUG=1 时把完整栈写到 stderr（stdout 单 JSON 契约不变），
+            # 供维护者定位未预期异常（#799 评审 S1）；默认不打，报障需复现时加 IR_DEBUG=1。
+            if _debug_enabled():
+                traceback.print_exc()
             error(
                 "INTERNAL_ERROR",
                 f"未预期错误: {type(exc).__name__}: {exc}",
@@ -94,7 +101,7 @@ _PROTOCOL_HELP = """InvestRing CLI - HTTP Client
 
 输出协议: 成功 {"ok":true,"data":...,"meta"?,"hints"?} / 失败 {"ok":false,"error":{"code","message","hints"?}}
 
-退出码: 0=成功 1=业务错误(可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在，命令未执行)
+退出码: 0=成功 1=业务错误或未预期内部错误(见 error.code，业务错误可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在，命令未执行)
 
 诊断信息输出至 stderr，脚本/Agent 解析请只读取 stdout
 
