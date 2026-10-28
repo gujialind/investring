@@ -72,3 +72,27 @@ export function useConfirmCashTransfer(portfolioCode: string) {
     },
   });
 }
+
+// 撤销现金转移 Hook（#788）
+// 错误不在此弹 toast：调用方（CancelTransferDialog）在弹窗内 inline 展示，
+// 避免「弹窗 Alert + 全局 toast」双提示。
+export function useCancelCashTransfer(portfolioCode: string) {
+  const queryClient = useQueryClient();
+  const addToast = useUIStore((state) => state.addToast);
+
+  return useMutation({
+    mutationFn: (transferGroup: string) => cashTransferApi.cancel(portfolioCode, transferGroup),
+    onSuccess: () => {
+      // 两腿是 trade 行：转移列表 / 持仓 / 现金流水 / 调仓交易全部失效
+      queryClient.invalidateQueries({ queryKey: [CASH_TRANSFER_QUERY_KEY, "list", portfolioCode] });
+      queryClient.invalidateQueries({ queryKey: ["positions", portfolioCode] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
+      queryClient.invalidateQueries({ queryKey: queryKeys.trades.root });
+      addToast({
+        type: "success",
+        title: "撤销成功",
+        message: "现金转移已撤销",
+      });
+    },
+  });
+}

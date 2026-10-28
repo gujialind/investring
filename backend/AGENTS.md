@@ -58,7 +58,7 @@
   - `sync_transfer_group` 是同步单点；编辑日期 `propagate_dates=True` 时买入扣款跟随 T，不传播 confirm_date、不制造 pending 调仓 CASH 腿。组号须在 flush 前分配；确认的 `validate_confirm_cash_leg` 在 setattr 前只读校验，实际写腿由 `_apply_confirm_cash_leg` 执行。
   - `compute_confirm_plan` 组合 `calculate_confirm_preview` 与 `resolve_cash_leg_plan`，preview/confirm 共用；`validate_group_snapshot_free(extra_dates=...)` 供改删回退复用，现金加回由 `validate_buy_cash_with_addback` 单点处理。
   - `build_paired_cash_leg_map` 按组合/组号批量取反向 CASH 腿，不得受列表 status/platform/分页筛选截断，`cash_platform_code` / `cash_confirm_date` 由它派生。#719 的 `build_paired_leg_map` 是它的**双向推广**（键 = 锚点行 `trade.id`，返回同组另一条腿，方向不限）：只读、不并行进 `items`，故 `total`/分页/排序键不变；组内行数 ≠ 2 整体跳过（宁可不补也不猜），`sub_` 申赎腿天然落在该分支返回 None。两者并存不互写，接线在 `routers/trades.py`（list 与单对象 GET 同形填充，#789；preview 恒 null），守门 [test_trades_paired_leg.py](tests/integration/test_trades_paired_leg.py)。
-  - `list_cash_transfers` 的跨天判据以 buy 腿为准（未 confirmed 或 confirm_date > trade_date）；`confirm_cash_transfer` 确认组内仍 pending 的 CASH 腿，验资时点取 transfer_date。
+  - `list_cash_transfers` 的跨天判据为 buy 腿 `confirm_date > sell 腿 trade_date`（#787：与腿状态解耦，已取消的当天转移两腿 confirm_date=transfer_date，不再被旧「未 confirmed」判据误标跨天）；`confirm_cash_transfer` 确认组内仍 pending 的 CASH 腿，验资时点取 transfer_date；`cancel_cash_transfer` 整组撤销，两腿先 `with_for_update()` 行锁再校验（与 `routers/trades.py` 生命周期端点同口径，#788 评审）——否则并发双撤销可各自通过状态校验而落重复审计。
 
 * **`subscription_service.py`**：定价见[申赎](../docs/reference/business-constraints.md#rule-subscription)，激活见[组合管理](../docs/reference/business-constraints.md#rule-portfolio)。unconfirm 重算期望 confirm_date 而非置 None，防 SQL NULL 比较漏过 pending 检查。
   - 不恢复申购 unconfirm 前的现金守卫（#203：曾阻断快照级联产生孤儿），消费点防线见[生命周期](../docs/reference/business-constraints.md#rule-lifecycle)；存量负现金经 status 的 negative_cash_platforms 暴露。

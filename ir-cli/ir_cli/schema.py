@@ -100,9 +100,10 @@ WORKFLOWS = {
         "steps": [
             "ir cash-transfer create --portfolio-code X --from P1 --to P2 --amount N --date D [--cross-day]",
             "ir cash-transfer confirm <transfer_group> --portfolio-code X（仅跨天：到账日执行）",
+            "ir cash-transfer cancel <transfer_group> --portfolio-code X（转错平台/金额/重复转移的撤销）",
             "ir snapshot generate ...",
         ],
-        "notes": "当天到账两腿立即 confirmed；跨天两腿均 pending，在途期间不计入任何平台可用现金",
+        "notes": "当天到账两腿立即 confirmed；跨天转出腿当日 confirmed、转入腿 pending（#93 非对称，在途不计入目标平台可用现金）；撤销为逻辑取消（两腿 cancelled 保留行+审计），已确认组受快照保护与转入平台现金守卫",
     },
     "份额变动事件": {
         "steps": [

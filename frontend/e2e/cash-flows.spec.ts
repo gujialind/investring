@@ -9,6 +9,10 @@
  * 投影金额断言、写入口（现金转移）提交成功后读侧免刷新自动更新、对账块不被状态筛选污染。
  * #727 第二轮 L2 补充：存量档金额的负向断言（子串匹配区分不了 `¥x` 与 `+¥x`）、「当日
  * 另有 N 笔」N=0 不渲染、当日弹窗「当前筛选命中」标注、同日查询失败态优先于在屏行。
+ * #788：现金转移撤销——当天完成转移经流水详情危险操作区撤销（行消失 + 平台构成回退）、
+ * 跨天在途经转移记录弹窗「确认到账 → 已完成 → 撤销 → 已取消」完整生命周期（同时钉
+ * #787 修复后确认按钮按 buy_confirm_date 启用）、重复撤销 422 TRANSFER_ALREADY_CANCELLED、
+ * viewer 会话无撤销入口（转移列表 admin-only 呈空态；流水详情无危险操作区，后端 403 由 pytest 守）。
  *
  * 数据红线（M11 / helpers 种子契约）：**自建隔离组合**造数，绝不对 E2E_ACTIVE 做
  * recalculate/generate-next；导航用例（无写操作）才复用 E2E_ACTIVE 详情页只读点击。
@@ -82,6 +86,17 @@ async function prevTradingDay(
     if (open.length > 0) return open[open.length - 1];
   }
   throw new Error(`交易日历中找不到 ${d} 之前最近一个交易日`);
+}
+
+/** dashboard 首屏四查询（page_size=100）落定等待：换登录/换页前若还在途，
+ * 清 auth 或导航会把 fetch 中止成「access control checks」未捕获异常（webkit 必现） */
+function dashboardBatch(page: Page): Promise<void> {
+  return Promise.all([
+    page.waitForResponse(/\/api\/portfolios\?/),
+    page.waitForResponse(/\/api\/subscriptions\?/),
+    page.waitForResponse(/\/api\/trades\?/),
+    page.waitForResponse(/\/api\/investors\?/),
+  ]).then(() => undefined);
 }
 
 /** 首购注资：申购（申请日=d 前一工作日 → 确认日=d）+ 确认 → sub_buy 已生效现金流入 @ (PLATFORM, d) */
@@ -703,6 +718,256 @@ test.describe('现金流水页（#725，双端）', () => {
       expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
     });
   }
+});
+
+test.describe('现金转移撤销（#788，双端）', () => {
+  // #788：当天完成转移经流水详情弹窗的危险操作区撤销。覆盖 CashFlowsContent 侧
+  // 的 pair_ref 解析（sell/buy 腿 from/to 分流）→ 确认弹窗 → 撤销后两腿 cancelled、
+  // 流水行消失、平台构成回退（组合口径可用现金不变——内部搬运互相抵消，区分度在
+  // 按平台构成的 HBZQ 35,000 → 40,000）。数据准备走 API（页面未提前打开，无缓存旧数据）。
+  test('当天完成转移可从流水详情撤销（#788）', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const headers = await openAppAndAuth(page);
+    const d = await nearestTradingDay(page, headers);
+    const code = isolatedPortfolioCode('E2E788', testInfo, 'A');
+
+    await post(page, headers, '/api/portfolios', { code, name: `撤销当天 ${code}` });
+    await seedSubscription(page, headers, code, d);
+    await post(page, headers, `/api/portfolios/${code}/cash-transfer`, {
+      from_platform: PLATFORM,
+      to_platform: ARRIVAL,
+      amount: TRANSFER_AMOUNT,
+      transfer_date: d,
+      cross_day: false,
+    });
+
+    await gotoPortfolioSubpage(page, code as PortfolioCode, 'cash-flows');
+    // 组合口径可用现金**不变**（转移是内部搬运：sell −5,000 / buy +5,000 互相抵消）；
+    // 区分度在平台分布：HBZQ 35,000 / TTJJ 5,000 → 撤销后回退 40,000 / 0
+    await expect(page.getByTestId('stat-available')).toContainText('¥40,000.00');
+    await expect(
+      page.getByTestId('cash-flow-row').filter({ hasText: '平台间转移' }),
+    ).toHaveCount(2);
+
+    // 撤销前：按平台构成里华宝证券可用 ¥35,000.00
+    await page.getByTestId('open-breakdown').click();
+    const breakdown = dialogByTitle(page, '按平台现金构成');
+    await breakdown.waitFor({ timeout: 10_000 });
+    await expect(breakdown.getByTestId('breakdown-row').filter({ hasText: '华宝证券' }))
+      .toContainText('¥35,000.00');
+    await breakdown.getByRole('button', { name: 'Close' }).click();
+    await expect(breakdown).toBeHidden({ timeout: 15_000 });
+
+    // 详情弹窗危险操作区 → 撤销（confirmed 行的详情入口是 row-action，
+    // row-detail 按钮只在「确认到账」类 pending 行渲染）
+    const row = page.getByTestId('cash-flow-row').filter({ hasText: '平台间转移' }).first();
+    await row.getByTestId('row-action').click();
+    const detail = dialogByTitle(page, '流水详情');
+    await detail.waitFor({ timeout: 10_000 });
+    await expect(detail.getByText('撤销这笔转移')).toBeVisible();
+    await detail.getByRole('button', { name: '撤销转移' }).click();
+
+    const cancel = dialogByTitle(page, '撤销现金转移');
+    await cancel.waitFor({ timeout: 10_000 });
+    await expect(cancel).toContainText(`${PLATFORM} → ${ARRIVAL}`);
+    await expect(cancel).toContainText('¥5,000.00');
+    await expect(cancel).toContainText(d);
+    await cancel.getByRole('button', { name: '确认撤销' }).click();
+
+    // modal Dialog 开着时 role 口径取不到 toast，走 DOM testid（e2e/AGENTS.md §1）
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '撤销成功' }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(cancel).toBeHidden({ timeout: 15_000 });
+    await detail.getByRole('button', { name: '关闭' }).click();
+    await expect(detail).toBeHidden({ timeout: 15_000 });
+
+    // 两腿 cancelled 后流水行消失（cancelled 不计流量），平台分布回退到转移前
+    await expect(
+      page.getByTestId('cash-flow-row').filter({ hasText: '平台间转移' }),
+    ).toHaveCount(0, { timeout: 15_000 });
+    await page.getByTestId('open-breakdown').click();
+    await breakdown.waitFor({ timeout: 10_000 });
+    await expect(breakdown.getByTestId('breakdown-row').filter({ hasText: '华宝证券' }))
+      .toContainText('¥40,000.00');
+    await breakdown.getByRole('button', { name: 'Close' }).click();
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  // #788 + #787：跨天在途转移在转移记录弹窗先「确认到账」（#787 修复后组状态看两腿，
+  // 在途行出现确认按钮；buy_confirm_date = d ≤ today 故可用）→ 已完成 → 已完成仍可
+  // 撤销（#788 生命周期例外）→ 已取消且操作列清空。
+  test('跨天在途：确认到账转完成、完成仍可撤销（#788/#787）', async ({ page }, testInfo) => {
+    test.setTimeout(120_000);
+    const errors = collectPageErrors(page);
+    const headers = await openAppAndAuth(page);
+    const d = await nearestTradingDay(page, headers);
+    const p = await prevTradingDay(page, headers, d);
+    const code = isolatedPortfolioCode('E2E788', testInfo, 'B');
+
+    await post(page, headers, '/api/portfolios', { code, name: `撤销跨天 ${code}` });
+    await seedSubscription(page, headers, code, p); // (HBZQ, p) +40,000 已生效
+    // 同日转移给 TTJJ 备现金（跨天转回的转出平台须有可用现金闸门）
+    await post(page, headers, `/api/portfolios/${code}/cash-transfer`, {
+      from_platform: PLATFORM,
+      to_platform: ARRIVAL,
+      amount: 20000,
+      transfer_date: p,
+      cross_day: false,
+    });
+    // 跨天转回：sell (TTJJ, p) 已生效，buy (HBZQ, d) pending、预计到账日 = d
+    await post(page, headers, `/api/portfolios/${code}/cash-transfer`, {
+      from_platform: ARRIVAL,
+      to_platform: PLATFORM,
+      amount: TRANSFER_AMOUNT,
+      transfer_date: p,
+      cross_day: true,
+    });
+
+    await gotoPortfolioSubpage(page, code as PortfolioCode, 'cash-flows');
+    await expect(page.getByTestId('stat-available')).toContainText('¥35,000.00');
+    await expect(page.getByTestId('stat-in_transit')).toContainText('¥5,000.00');
+
+    await page.getByTestId('btn-transfer-list').click();
+    const list = dialogByTitle(page, '现金转移记录');
+    await list.waitFor({ timeout: 10_000 });
+    const crossRow = list.getByRole('row').filter({ hasText: '跨天到账' });
+    await expect(crossRow.getByText('在途')).toBeVisible();
+    // #787：修复前跨天在途恒显「已完成」、确认按钮从不出现
+    const confirmBtn = crossRow.getByRole('button', { name: '确认到账' });
+    await expect(confirmBtn).toBeEnabled();
+    await confirmBtn.click();
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '确认成功' }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(crossRow.getByText('已完成')).toBeVisible({ timeout: 15_000 });
+
+    // 已完成仍可撤销（生命周期总纲 confirmed 不可直接改删的唯一登记例外）
+    await crossRow.getByRole('button', { name: '撤销转移' }).click();
+    const cancel = dialogByTitle(page, '撤销现金转移');
+    await cancel.waitFor({ timeout: 10_000 });
+    await cancel.getByRole('button', { name: '确认撤销' }).click();
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '撤销成功' }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(crossRow.getByText('已取消')).toBeVisible({ timeout: 15_000 });
+    // 已取消组操作列清空（无确认/撤销按钮）
+    await expect(crossRow.getByRole('button')).toHaveCount(0);
+
+    // 关闭弹窗看四卡：确认后 5,000 计入可用（40,000）；撤销后两平台回退、合计不变
+    await list.getByRole('button', { name: 'Close' }).click();
+    await expect(list).toBeHidden({ timeout: 15_000 });
+    await expect(page.getByTestId('stat-available')).toContainText('¥40,000.00');
+    await expect(page.getByTestId('stat-in_transit')).toContainText('¥0.00');
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  // #788：幂等拒绝是 wire 行为——UI 撤销后按钮即消失、无从触发二次撤销，
+  // 故直接打 API：首次 200、二次 422 TRANSFER_ALREADY_CANCELLED。
+  test('重复撤销被幂等拒绝（#788）', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const headers = await openAppAndAuth(page);
+    const d = await nearestTradingDay(page, headers);
+    const code = isolatedPortfolioCode('E2E788', testInfo, 'C');
+
+    await post(page, headers, '/api/portfolios', { code, name: `撤销幂等 ${code}` });
+    await seedSubscription(page, headers, code, d);
+    const created = await post<{ transfer_group: string }>(
+      page,
+      headers,
+      `/api/portfolios/${code}/cash-transfer`,
+      {
+        from_platform: PLATFORM,
+        to_platform: ARRIVAL,
+        amount: TRANSFER_AMOUNT,
+        transfer_date: d,
+        cross_day: false,
+      },
+    );
+
+    const url = `/api/portfolios/${code}/cash-transfer/${created.transfer_group}/cancel`;
+    const first = await page.request.post(url, { headers });
+    expect(
+      first.status(),
+      `首次撤销应 200，实得 ${first.status()} ${await first.text()}`,
+    ).toBe(200);
+    const again = await page.request.post(url, { headers });
+    expect(again.status(), '重复撤销应 422').toBe(422);
+    const body = (await again.json()) as { detail: { error: string } };
+    expect(body.detail.error).toBe('TRANSFER_ALREADY_CANCELLED');
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  // #788：viewer 无撤销入口——转移记录弹窗无「撤销转移」按钮、流水详情无危险操作区。
+  // 后端 403 由 backend/tests/integration/test_cash_transfer_cancel.py 守；这里钉前端
+  // isAdmin 门控的真实渲染（E2E 有 viewer 种子账号 VIEWER/viewer123，seed_base.py §7）。
+  test('viewer 无撤销入口（#788）', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    const settled1 = dashboardBatch(page);
+    const headers = await openAppAndAuth(page);
+    await settled1;
+    const d = await nearestTradingDay(page, headers);
+    const code = isolatedPortfolioCode('E2E788', testInfo, 'D');
+
+    await post(page, headers, '/api/portfolios', { code, name: `撤销权限 ${code}` });
+    await seedSubscription(page, headers, code, d);
+    await post(page, headers, `/api/portfolios/${code}/cash-transfer`, {
+      from_platform: PLATFORM,
+      to_platform: ARRIVAL,
+      amount: TRANSFER_AMOUNT,
+      transfer_date: d,
+      cross_day: false,
+    });
+
+    // 换 viewer 会话：清掉 admin 的 cookie/localStorage 后走真实登录流
+    await page.context().clearCookies();
+    await page.evaluate(() => window.localStorage.clear());
+    await page.goto('/login');
+    await page.waitForFunction(() => {
+      const form = document.querySelector('form');
+      return form && Object.keys(form).some((k) => k.startsWith('__reactProps'));
+    });
+    await page.getByLabel('用户名').fill('VIEWER');
+    await page.getByLabel('密码').fill('viewer123');
+    // 登录后 dashboard 还会再发一轮首屏查询，等它们落定再导航，避免在途 fetch 被中止
+    const settled2 = dashboardBatch(page);
+    await page.getByRole('button', { name: '登录' }).click();
+    await page.waitForURL(/\/(m\/)?dashboard/, { waitUntil: 'domcontentloaded' });
+    await settled2;
+
+    await gotoPortfolioSubpage(page, code as PortfolioCode, 'cash-flows');
+    // sanity：流水数据对 viewer 可读（GET /cash-flows 是 get_current_user），
+    // 后面「无撤销入口」的断言才有「是门控挡住、不是没数据」的区分度
+    await expect(
+      page.getByTestId('cash-flow-row').filter({ hasText: '平台间转移' }),
+    ).toHaveCount(2, { timeout: 15_000 });
+
+    await page.getByTestId('btn-transfer-list').click();
+    const list = dialogByTitle(page, '现金转移记录');
+    await list.waitFor({ timeout: 10_000 });
+    // 转移列表端点（GET /cash-transfers）本就 admin-only（#788 未改此门禁）：
+    // viewer 拿不到列表、弹窗呈空态，无「撤销转移」按钮
+    await expect(list.getByRole('button', { name: '撤销转移' })).toHaveCount(0);
+    await list.getByRole('button', { name: 'Close' }).click();
+    await expect(list).toBeHidden({ timeout: 15_000 });
+
+    // 流水详情弹窗同样无危险操作区（这里数据可读，isAdmin 门控是真实区分度）
+    const flowRow = page.getByTestId('cash-flow-row').filter({ hasText: '平台间转移' }).first();
+    await flowRow.getByTestId('row-action').click();
+    const detail = dialogByTitle(page, '流水详情');
+    await detail.waitFor({ timeout: 10_000 });
+    await expect(detail.getByText('撤销这笔转移')).toHaveCount(0);
+    await detail.getByRole('button', { name: '关闭' }).click();
+    await expect(detail).toBeHidden({ timeout: 15_000 });
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
 });
 
 /**
