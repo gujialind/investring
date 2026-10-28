@@ -275,11 +275,14 @@ def cancel_cash_transfer(
             "（调仓/申赎组请走对应生命周期操作）",
         )
 
+    # 行锁后校验（与 routers/trades.py 生命周期端点同口径，#788 评审）：
+    # 并发双撤销时第二笔在锁上读到 cancelled → 走 TRANSFER_ALREADY_CANCELLED 幂等拒绝，
+    # 不会重复写状态或落第二条审计。populate_existing 确保拿到锁定后的最新值。
     legs = db.query(Trade).filter(
         Trade.portfolio_code == portfolio_code,
         Trade.transfer_group == transfer_group,
         Trade.product_code == "CASH",
-    ).all()
+    ).populate_existing().order_by(Trade.id).with_for_update().all()
 
     if len(legs) != 2:
         raise NotFoundError("TRANSFER_NOT_FOUND", f"未找到转移记录 {transfer_group}")
@@ -335,7 +338,7 @@ def cancel_cash_transfer(
         new_value={
             "sell_status": "cancelled",
             "buy_status": "cancelled",
-            "amount": float(amt),
+            "amount": amt,  # 审计载荷不经 float()（code-review §Q1 / #428 #421）
         },
     )
 

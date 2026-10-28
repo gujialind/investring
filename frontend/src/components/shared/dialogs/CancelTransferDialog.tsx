@@ -91,7 +91,7 @@ export default function CancelTransferDialog({
                 ? `转移日已被快照覆盖（${errorDetails?.from_date ?? "起始日"} 及之后），` +
                   "请先在快照页删除/重算该日期及之后的快照，再回来撤销。"
                 : errorCode === "TRANSFER_ALREADY_CANCELLED"
-                  ? "该转移已被撤销，列表即将刷新。"
+                  ? "该转移已被撤销，请关闭后刷新列表查看。"
                   : (errorMessage ?? "撤销失败，请稍后重试")}
             </AlertDescription>
           </Alert>
