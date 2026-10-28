@@ -369,7 +369,10 @@ test.describe('只读交易详情弹窗与深链（#789，双端）', () => {
 
   test('viewer：基金与 CASH 详情可读，行内和录入深链均无写入口', async ({ page }, testInfo) => {
     test.setTimeout(testInfo.project.name === 'mobile' ? 120_000 : 90_000);
-    const errors = collectPageErrors(page);
+    // 本用例中段做真实 UI 登录（清 cookie → 登录页 → dashboard 硬导航）：webkit 在该
+    // 竞态窗口里会丢弃 dashboard 聚合查询的同源 XHR，属引擎噪音而非崩溃，豁免口径见
+    // helpers.collectPageErrors；若同源 API 真接错，下面的行/详情断言会先红。
+    const errors = collectPageErrors(page, { tolerateLoginRaceNoise: true });
     const headers = await openAppAndAuth(page);
     const d = await nearestTradingDay(page, headers);
     const code = isolatedPortfolioCode('E2E789', testInfo, 'V');
