@@ -55,6 +55,8 @@ ir config set base_url https://ir.example.com
 export IR_BASE_URL=https://ir.example.com
 ```
 
+**代理与 TLS 环境变量**：CLI **不读取任何代理环境变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及其小写形式均被忽略），始终直连 `base_url`（#798，与 #661 CD 探活"关键出站路径不继承主机代理环境"口径一致）。httpx 的 `trust_env` 整体关闭，因此 `.netrc`、`SSL_CERT_FILE`、`REQUESTS_CA_BUNDLE` 亦不生效；确需经代理或自定义 CA 访问服务端时，请在系统/网络层（如透明代理）解决或向维护者反馈需求。
+
 ### 2.3 获取帮助
 
 ```bash
@@ -125,6 +127,8 @@ ir schema trade              # 仅输出指定命令组
 | `CONNECTION_ERROR` / `TIMEOUT_ERROR` / `NETWORK_ERROR` | 网络层失败：连接失败 / 超时 / 传输中断 |
 | `INVALID_JSON` | 本地校验：`--json` 不是合法 JSON 对象 |
 | `USAGE_ERROR` | Click 层用法错误：未知选项 / 未知子命令 / 缺必填参数。由入口统一收敛（`ir_cli/main.py::IrTyperGroup`），**exit 64**、命令未执行（#520） |
+| `CLIENT_INIT_ERROR` | HTTP 客户端构造失败（构造期异常，含第三方库内部错误），**exit 3**；CLI 不读取代理环境变量（见 §2.2），排查方向为 `IR_BASE_URL` 合法性（#798） |
+| `INTERNAL_ERROR` | 未预期异常的全局兜底：任何未经专用错误出口收敛的异常由入口转为此码，**exit 1**，stdout 恒 JSON、不漏 raw traceback（#798） |
 
 **常见后端码摘选**（完整清单与触发条件见总表）：
 

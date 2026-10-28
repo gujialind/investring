@@ -11,7 +11,7 @@ from typing import Optional
 import typer
 import typer.core
 
-from ir_cli.output import EXIT_USAGE, error
+from ir_cli.output import EXIT_BUSINESS, EXIT_USAGE, error
 
 
 def _click_exc_class(name: str) -> Optional[type]:
@@ -74,6 +74,16 @@ class IrTyperGroup(typer.core.TyperGroup):
             # Ctrl-C / 交互中断：与 Click standalone 行为一致
             typer.echo("Aborted!", err=True)
             sys.exit(1)
+        except Exception as exc:
+            # 全局兜底：任何未预期异常（含第三方库构造期）转 JSON 错误出口，
+            # stdout 恒 JSON、不漏 raw traceback（#798 C2）。error() 抛 SystemExit
+            # （BaseException），不会被本 handler 自吞；专用出口（USAGE_ERROR/
+            # CLIENT_INIT_ERROR/网络类等）在前序分支或命令体内已先行收敛。
+            error(
+                "INTERNAL_ERROR",
+                f"未预期错误: {type(exc).__name__}: {exc}",
+                exit_code=EXIT_BUSINESS,
+            )
         if not standalone_mode:
             return result
         # standalone_mode=False 下 --help 等路径由 Click 返回退出码，而不是自行 sys.exit

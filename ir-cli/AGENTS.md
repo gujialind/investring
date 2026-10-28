@@ -32,3 +32,7 @@ CI 的 `cli-contract-check` job 还校验 `backend/openapi.json` 本身无漂移
 ## 4. 版本
 
 `pyproject.toml` 的 version（`ir --version` 经 `importlib.metadata` 读取）由发布流程从仓库根 `VERSION` 同步，勿手改（见 `docs/reference/versioning.md`）。
+
+## 5. 错误出口契约（#798）
+
+任何异常（**含第三方库构造期异常**，如 `httpx.Client()`）都必须走 JSON 错误出口：stdout 恒为单个 JSON 文档（`error.code` + `hints`）+ 约定退出码，禁止漏出 raw traceback。分层：构造期 `CLIENT_INIT_ERROR`（exit 3，`client.py`）→ 全局兜底 `INTERNAL_ERROR`（exit 1，`main.py::IrTyperGroup`）。CLI 不读取代理环境变量（`trust_env=False`，口径与 #661 一致），见[手册](CLI_MANUAL.md) §2.2；改这层行为前先读 [tests/test_client_init.py](tests/test_client_init.py)。
