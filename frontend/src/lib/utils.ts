@@ -330,6 +330,49 @@ export function getStatusBadgeVariant(status: string | undefined | null): Status
 }
 
 /**
+ * 现金转移组状态派生（issue #787/#788）。
+ * 后端非对称两腿模型：跨天转移 sell 恒 confirmed、buy  pending 至到账日，
+ * 单看 sell_status 会把在途误判成「已完成」。按组两腿状态派生：
+ * - 任一腿 cancelled 且另一腿非 cancelled → abnormal（存量异常组，保守只读）
+ * - 两腿均 cancelled → cancelled
+ * - buy pending → in_transit（含跨天在途与旧模型两腿 pending）
+ * - 双 confirmed → completed
+ */
+export type TransferGroupStatus = "in_transit" | "completed" | "cancelled" | "abnormal";
+
+export function deriveTransferGroupStatus(t: {
+  sell_status: string;
+  buy_status: string;
+}): TransferGroupStatus {
+  const { sell_status, buy_status } = t;
+  if (sell_status === "cancelled" || buy_status === "cancelled") {
+    return sell_status === "cancelled" && buy_status === "cancelled"
+      ? "cancelled"
+      : "abnormal";
+  }
+  if (buy_status === "pending") return "in_transit";
+  if (sell_status === "confirmed" && buy_status === "confirmed") return "completed";
+  return "abnormal";
+}
+
+export const TRANSFER_GROUP_STATUS_META: Record<
+  TransferGroupStatus,
+  { label: string; variant: StatusBadgeVariant }
+> = {
+  in_transit: { label: "在途", variant: "warning" },
+  completed: { label: "已完成", variant: "success" },
+  cancelled: { label: "已取消", variant: "neutral" },
+  abnormal: { label: "状态异常", variant: "destructive" },
+};
+
+/** 「确认到账」未到确认日（buy_confirm_date > 今天）时应禁用（issue #787） */
+export function isTransferNotReady(buyConfirmDate: string | undefined | null): boolean {
+  if (!buyConfirmDate) return false;
+  const todayStr = new Date().toLocaleDateString("sv-SE");
+  return buyConfirmDate > todayStr;
+}
+
+/**
  * 获取带符号的收益率字符串（自动着色）
  * 用于需要同时显示符号和颜色的场景
  */

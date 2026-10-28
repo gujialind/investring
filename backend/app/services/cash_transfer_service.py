@@ -23,10 +23,11 @@ from app.services.trading_utils import (
     get_latest_snapshot_date,
 )
 from app.services.position_service import calculate_available_cash
+from app.services.trade_service import validate_group_snapshot_free
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.audit_service import record_audit
 from app.constants.audit_actions import (
-    ACTION_CREATE, ACTION_CONFIRM, RESOURCE_CASH_TRANSFER,
+    ACTION_CREATE, ACTION_CONFIRM, ACTION_CANCEL, RESOURCE_CASH_TRANSFER,
 )
 from app.utils.quantize import quantize_amount
 
@@ -234,8 +235,10 @@ def list_cash_transfers(db: Session, portfolio_code: str) -> List[dict]:
             "from_platform": sell.platform_code or "",
             "to_platform": buy.platform_code or "",
             "amount": float(sell.amount or 0),
-            # #93: 跨天判断依据 buy 腿状态（非对称：sell 当日确认，buy 延后）
-            "cross_day": buy.status != "confirmed" or (buy.confirm_date is not None and buy.confirm_date > buy.trade_date),
+            # #93: 跨天判定按「buy 腿确认日 > 转移日」（sell 当日确认，buy 延后）；
+            # #787: 与 buy 腿状态解耦——已取消的当天转移两腿 confirm_date=transfer_date，
+            # 不再被误标「跨天到账」
+            "cross_day": buy.confirm_date is not None and buy.confirm_date > sell.trade_date,
             "sell_status": sell.status,
             "buy_status": buy.status,
             "transfer_date": sell.trade_date,
@@ -244,3 +247,107 @@ def list_cash_transfers(db: Session, portfolio_code: str) -> List[dict]:
             "notes": sell.notes,
         })
     return items
+
+
+def cancel_cash_transfer(
+    db: Session,
+    *,
+    portfolio_code: str,
+    transfer_group: str,
+) -> dict:
+    """撤销平台间现金转移（#788）：两腿逻辑置 cancelled，保留 trade 行 + 审计。不 commit。
+
+    生命周期总纲「confirmed 不可直接 cancel」的转移组例外（business-constraints.md
+    生命周期章）：转错平台/金额填错/重复转移时的正式撤销通道，逻辑取消而非物理删除。
+
+    - 已取消组幂等拒绝（TRANSFER_ALREADY_CANCELLED，零写入）；
+    - 两腿状态混合（一条已 cancelled）保守拒绝（INVALID_STATUS），不猜语义；
+    - 组级快照保护（与 cancel_trade 同口径）：组内非 cancelled 腿确认日及之后
+      已有快照 → SNAPSHOT_DEPENDENCY；
+    - 转入平台现金守卫（#788 决策：阻断）：买入腿 confirmed（资金已入账）时，
+      撤销会把转移金额从转入平台可用现金减回，不足则 INSUFFICIENT_CASH 拒绝，
+      避免负余额；买入腿 pending（跨天在途未入账）时无此守卫。
+    """
+    if transfer_group.startswith(("rebal_", "sub_")):
+        raise NotFoundError(
+            "TRANSFER_NOT_FOUND",
+            f"{transfer_group} 不是平台间现金转移组"
+            "（调仓/申赎组请走对应生命周期操作）",
+        )
+
+    # 行锁后校验（与 routers/trades.py 生命周期端点同口径，#788 评审）：
+    # 并发双撤销时第二笔在锁上读到 cancelled → 走 TRANSFER_ALREADY_CANCELLED 幂等拒绝，
+    # 不会重复写状态或落第二条审计。populate_existing 确保拿到锁定后的最新值。
+    legs = db.query(Trade).filter(
+        Trade.portfolio_code == portfolio_code,
+        Trade.transfer_group == transfer_group,
+        Trade.product_code == "CASH",
+    ).populate_existing().order_by(Trade.id).with_for_update().all()
+
+    if len(legs) != 2:
+        raise NotFoundError("TRANSFER_NOT_FOUND", f"未找到转移记录 {transfer_group}")
+
+    sell = next((leg for leg in legs if leg.trade_type == "sell"), None)
+    buy = next((leg for leg in legs if leg.trade_type == "buy"), None)
+    if sell is None or buy is None:
+        raise NotFoundError(
+            "TRANSFER_NOT_FOUND", f"转移组 {transfer_group} 两腿结构异常，无法撤销"
+        )
+
+    if sell.status == "cancelled" and buy.status == "cancelled":
+        raise BusinessError("TRANSFER_ALREADY_CANCELLED", "该转移已撤销，请勿重复操作")
+    if sell.status == "cancelled" or buy.status == "cancelled":
+        raise BusinessError(
+            "INVALID_STATUS",
+            f"转移组 {transfer_group} 两腿状态不一致"
+            f"（sell={sell.status}, buy={buy.status}），请先处理异常腿后再撤销",
+        )
+
+    # 组级快照保护（#493 决策 4 同口径）：组内非 cancelled 腿确认日及之后有快照即拒绝
+    validate_group_snapshot_free(db, sell)
+
+    # 转入平台现金守卫：买入腿已入账时，撤销后其金额从转入平台可用现金减回
+    amt = quantize_amount(sell.amount or 0)
+    if buy.status == "confirmed" and buy.platform_code:
+        available = calculate_available_cash(db, portfolio_code, buy.platform_code)
+        if amt > available:
+            raise BusinessError(
+                "INSUFFICIENT_CASH",
+                f"转入平台 {buy.platform_code} 的可用现金不足"
+                f"（当前 {float(available)}，撤销需减回 {float(amt)}），"
+                "请先处理该平台的持仓/现金后再撤销",
+                details={
+                    "platform_code": buy.platform_code,
+                    "required": float(amt),
+                    "available": float(available),
+                    "deficit": float(amt - available),
+                },
+            )
+
+    old_status = {"sell_status": sell.status, "buy_status": buy.status}
+    sell.status = "cancelled"
+    buy.status = "cancelled"
+
+    record_audit(
+        db,
+        action=ACTION_CANCEL,
+        resource_type=RESOURCE_CASH_TRANSFER,
+        resource_id=transfer_group,
+        resource_name=f"{portfolio_code}/{sell.platform_code}→{buy.platform_code}",
+        old_value=old_status,
+        new_value={
+            "sell_status": "cancelled",
+            "buy_status": "cancelled",
+            "amount": amt,  # 审计载荷不经 float()（code-review §Q1 / #428 #421）
+        },
+    )
+
+    return {
+        "transfer_group": transfer_group,
+        "from_platform": sell.platform_code,
+        "to_platform": buy.platform_code,
+        "amount": float(amt),
+        "sell_status": sell.status,
+        "buy_status": buy.status,
+        "transfer_date": sell.trade_date,
+    }
