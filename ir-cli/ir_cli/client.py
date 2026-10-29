@@ -105,6 +105,10 @@ class APIClient:
                 config.clear_token(expected_token=self.token)
             except OSError:
                 print("[警告] 失效凭证无法从本地清除；业务请求尚未发送", file=sys.stderr)
+        elif response.status_code >= 400:
+            # 意外 4xx（如新旧版本错位的 404）不判死仍有效的凭证：与 5xx 同样降级。
+            print(f"[警告] 续期返回 HTTP {response.status_code}，本次尝试使用原凭证", file=sys.stderr)
+            return
         renewed = self._handle_response(response, raise_errors=True)["data"]
         try:
             valid = (

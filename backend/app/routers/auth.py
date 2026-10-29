@@ -77,6 +77,8 @@ def login(request: Request, response: Response, body: LoginRequest, db: Session 
     investor.last_login_at = auth_service.utcnow()
     result = auth_service.create_session(db, investor)
     record_login_log(db, body.code, "login", "success", ip_address, user_agent)
+    # 事务边界归 router 显式持有：凭证与会话必须一起落库，不依赖日志 helper 的 commit 副作用。
+    db.commit()
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -93,6 +95,7 @@ def logout(
     ip_address = get_client_ip(request)
     user_agent = get_user_agent(request)
     record_login_log(db, current_user.code, "logout", "success", ip_address, user_agent)
+    db.commit()
 
     return {"message": "登出成功"}
 
@@ -150,6 +153,7 @@ def change_password(
     investor.password_hash = get_password_hash(body.new_password)
     auth_service.revoke_user_sessions(db, target_code)
     record_login_log(db, target_code, "password_changed", "success", ip_address, user_agent)
+    db.commit()
 
     return {"message": "密码修改成功，请重新登录"}
 

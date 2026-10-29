@@ -2,12 +2,18 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { LoginResponse, UserInfo } from "@/types/auth";
 
+// cookie 属性写删共用：删除缺 Secure 在当前浏览器仍生效，但属性不对称
+// 在改名 __Host- 前缀（强制 Secure）时会踩坑。
+function cookieAttributes(): string {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  return `path=/; SameSite=Lax${secure}`;
+}
+
 function persistCredential(token: string, expiresAt: string) {
   if (typeof window === "undefined") return;
   localStorage.setItem("token", token);
   localStorage.setItem("token-expires-at", expiresAt);
-  const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `token=${encodeURIComponent(token)}; expires=${new Date(expiresAt).toUTCString()}; path=/; SameSite=Lax${secure}`;
+  document.cookie = `token=${encodeURIComponent(token)}; expires=${new Date(expiresAt).toUTCString()}; ${cookieAttributes()}`;
 }
 
 interface AuthState {
@@ -49,7 +55,7 @@ export const useAuthStore = create<AuthState>()(
         if (typeof window !== "undefined") {
           localStorage.removeItem("token");
           localStorage.removeItem("token-expires-at");
-          document.cookie = "token=; Max-Age=0; path=/; SameSite=Lax";
+          document.cookie = `token=; Max-Age=0; ${cookieAttributes()}`;
         }
         set({ token: null, expiresAt: null, user: null, isAuthenticated: false, isLoading: false });
       },

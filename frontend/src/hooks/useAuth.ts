@@ -4,7 +4,7 @@ import { useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
-import { authApi, getErrorMessage } from "@/lib/api";
+import { authApi, getErrorMessage, loginRedirectPath } from "@/lib/api";
 import { LoginRequest, ChangePasswordRequest } from "@/types/auth";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -36,6 +36,9 @@ export function useLogin() {
 }
 
 // 登出时立即清本地状态，阻止在途续期恢复凭证；服务端撤销使用捕获的 token。
+// 撤销请求先发起、最后 await：SPA 导航本身不会销毁 JS 上下文，但关 tab /
+// 页面崩溃竞态下若等导航后才调用，撤销可能永远发不出去，凭证在服务端
+// 整个 TOKEN_EXPIRE_DAYS 窗口内仍有效——恰是登出要关闭的盗用窗口。
 export function useLogout() {
   const router = useRouter();
   const logout = useAuthStore((state) => state.logout);
@@ -44,18 +47,17 @@ export function useLogout() {
 
   return useCallback(async () => {
     const token = localStorage.getItem("token");
+    const revocation = token
+      ? authApi.logout(token).catch(() => undefined)
+      : undefined;
     logout();
     queryClient.clear();
     addToast({
       type: "info",
       title: "已退出登录",
     });
-    router.push(window.location.pathname.startsWith("/m/") ? "/m/login" : "/login");
-    try {
-      await authApi.logout(token);
-    } catch {
-      // Local logout remains effective when the server cannot be reached.
-    }
+    router.push(loginRedirectPath());
+    await revocation;
   }, [logout, queryClient, router, addToast]);
 }
 
@@ -85,16 +87,19 @@ export function useChangePassword() {
   return useMutation({
     mutationFn: async (data: ChangePasswordRequest) => {
       const token = localStorage.getItem("token");
+      // 捕获身份而非原始 token：改密期间并发续期会合法换 token（同 sid 同身份），
+      // 比 token 会假阴性，把持死凭证的用户留在页面上。
+      const actor = useAuthStore.getState().user?.code ?? null;
       await authApi.changePassword(data, token);
-      return token;
+      return actor;
     },
-    onSuccess: (token, data) => {
+    onSuccess: (actor, data) => {
       const state = useAuthStore.getState();
-      if (localStorage.getItem("token") === token
-          && (!data.target_code || data.target_code === state.user?.code)) {
+      if (actor !== null && state.isAuthenticated && state.user?.code === actor
+          && (!data.target_code || data.target_code === actor)) {
         state.logout();
         queryClient.clear();
-        router.push(window.location.pathname.startsWith("/m/") ? "/m/login" : "/login");
+        router.push(loginRedirectPath());
       }
       addToast({
         type: "success",

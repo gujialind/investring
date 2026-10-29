@@ -68,7 +68,14 @@ class ApiKeyInfo(BaseModel):
     expires_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
 
-    @field_serializer("created_at", "expires_at", "revoked_at")
+    # created_at 非空且必填：serializer 返回注解决定 OpenAPI 的 anyOf/required，
+    # 与可空字段混用一个 Optional 注解会让 openapi.json 出现
+    # "required 但 nullable" 的自相矛盾契约，并泄进 CLI 生成契约（str?）。
+    @field_serializer("created_at")
+    def created_at_iso(self, value: datetime) -> str:
+        return value.replace(tzinfo=timezone.utc).isoformat()
+
+    @field_serializer("expires_at", "revoked_at")
     def utc_timestamp(self, value: Optional[datetime]) -> Optional[str]:
         return value.replace(tzinfo=timezone.utc).isoformat() if value else None
 

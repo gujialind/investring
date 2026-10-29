@@ -8183,14 +8183,7 @@
             "title": "Scopes"
           },
           "created_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Created At"
           },
           "expires_at": {

@@ -18,11 +18,11 @@ RESPONSE_FIELDS: dict = {
         },
         "key-list": {
             "shape": "list",
-            "fields": "id:str,investor_code:str,label:str,scopes:list,created_at:str?,expires_at:str?,revoked_at:str?"
+            "fields": "id:str,investor_code:str,label:str,scopes:list,created_at:str,expires_at:str?,revoked_at:str?"
         },
         "key-revoke": {
             "shape": "object",
-            "fields": "id:str,investor_code:str,label:str,scopes:list,created_at:str?,expires_at:str?,revoked_at:str?"
+            "fields": "id:str,investor_code:str,label:str,scopes:list,created_at:str,expires_at:str?,revoked_at:str?"
         }
     },
     "position": {

@@ -1,5 +1,6 @@
 """#797：凭证迁移往返、幂等与使用后零写入拒绝降级。"""
 import importlib.util
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -40,6 +41,12 @@ def conn(test_engine, _seed_base_data):
         connection.execute(AuditLog.__table__.delete().where(AuditLog.credential_id == key))
 
 
+def _type_str(value: object) -> str:
+    """MySQL inspector 会把 CHARACTER SET/COLLATE 拼进列类型串（SQLite 不会），
+    与模型声明比较前统一剥离，只比对裸类型。"""
+    return re.sub(r"\s+(?:CHARACTER SET|CHARSET|COLLATE)\s+\S+", "", str(value), flags=re.IGNORECASE)
+
+
 def test_upgrade_is_idempotent_and_matches_models(conn):
     run(migration.upgrade, conn)
     run(migration.upgrade, conn)
@@ -49,7 +56,7 @@ def test_upgrade_is_idempotent_and_matches_models(conn):
         assert set(actual) == set(model.__table__.columns.keys())
         for col in model.__table__.columns:
             assert actual[col.name]["nullable"] == col.nullable
-            assert str(actual[col.name]["type"]) == str(col.type)
+            assert _type_str(actual[col.name]["type"]) == str(col.type)
         fk = inspector.get_foreign_keys(model.__tablename__)
         expected_fk = next(iter(model.__table__.foreign_key_constraints))
         assert len(fk) == 1 and fk[0]["options"]["ondelete"] == "RESTRICT"
@@ -63,7 +70,7 @@ def test_upgrade_is_idempotent_and_matches_models(conn):
     for name in ("credential_id", "credential_label"):
         expected = AuditLog.__table__.c[name]
         assert audit[name]["nullable"] == expected.nullable
-        assert str(audit[name]["type"]) == str(expected.type)
+        assert _type_str(audit[name]["type"]) == str(expected.type)
 
 
 def test_unused_schema_roundtrip(conn):

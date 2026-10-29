@@ -40,8 +40,11 @@ def create_access_token(
 def decode_token(token: str):
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"], options={
-            "require_exp": True, "require_iat": True, "require_jti": True,
+            "require_exp": True, "require_iat": True,
         })
+        # python-jose 不认识 require_jti（未知 option 被静默丢弃），jti 存在性在此显式校验。
+        if not isinstance(payload.get("jti"), str):
+            return None
         return payload
     except JWTError:
         return None

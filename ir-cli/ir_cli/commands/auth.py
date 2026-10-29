@@ -44,7 +44,9 @@ def login(
             and isinstance(data.get("expires_at"), str)
             and (config.token_remaining(data) or 0) > 0
             and isinstance(data.get("user"), dict)
-            and data["user"].get("code") == code
+            # MySQL utf8mb4_general_ci 下登录大小写不敏感，服务端返回库中原值；
+            # 校验防的是响应身份被替换，用大小写无关比较，避免合法登录被误拒。
+            and str(data["user"].get("code", "")).casefold() == str(code).casefold()
         )
     except (ValueError, TypeError):
         valid = False
