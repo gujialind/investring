@@ -37,6 +37,8 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from app.models.auth import ApiKey
+from app.schemas.auth import ApiKeyInfo, AuthStatus
 from app.models.asset_classification import AssetClassification
 from app.models.audit_log import AuditLog
 from app.models.investor import Investor
@@ -82,6 +84,8 @@ from app.schemas.trade import TradeResponse
 
 # ORM 模型 ↔ 响应 schema 直配对（同一实体在 REST 出口的收窄口径）
 ORM_SCHEMA_PAIRS: list[tuple[type, type]] = [
+    (ApiKey, ApiKeyInfo),
+    (ApiKey, AuthStatus),
     # #573 纳入：PUT /api/asset-classifications/{code} 的 sort_order 同属「可空列 +
     # 响应字段不接受 None」形态（此前未配对，缺口未被扫描覆盖）
     (AssetClassification, AssetClassificationDetail),

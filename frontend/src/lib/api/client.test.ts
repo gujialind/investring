@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
-import type { AxiosError } from "axios";
-import { ApiException, getErrorMessage, handleApiError } from "./client";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { AxiosError, type InternalAxiosRequestConfig } from "axios";
+import api, { ApiException, getErrorMessage, handleApiError, request } from "./client";
+import { useAuthStore } from "@/stores/authStore";
 
 // #643：client.ts 的 detail 三分支解析（string / 结构化对象 / FastAPI 校验数组）。
 // 本文件在覆盖率分母外（vitest.config.ts 显式排除 src/lib/api/**），测试会执行但不计阈值。
@@ -127,5 +128,102 @@ describe("ApiException", () => {
     expect(e).toBeInstanceOf(Error);
     expect(e.code).toBe("INVALID_AMOUNT");
     expect(e.status).toBe(422);
+  });
+});
+
+describe("凭证续期与财务写入传输", () => {
+  const originalAdapter = api.defaults.adapter;
+  const user = { code: "ADMIN", name: "Admin", role: "admin" as const };
+  const credential = () => ({ token: "fresh", expires_at: new Date(Date.now() + 7 * 86400000).toISOString(), user });
+
+  beforeEach(() => {
+    const values = new Map<string, string>([
+      ["token", "old"],
+      ["token-expires-at", new Date(Date.now() + 3600000).toISOString()],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+    vi.stubGlobal("window", { location: { pathname: "/dashboard", href: "" } });
+    vi.spyOn(useAuthStore, "getState").mockReturnValue({
+      ...useAuthStore.getState(), user,
+      renew: (expected, data) => {
+        if (localStorage.getItem("token") !== expected) return false;
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("token-expires-at", data.expires_at);
+        return true;
+      },
+      logout: () => localStorage.removeItem("token"),
+    });
+  });
+
+  afterEach(() => {
+    api.defaults.adapter = originalAdapter;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function response(config: InternalAxiosRequestConfig, data: unknown, status = 200) {
+    return { config, data, status, statusText: String(status), headers: {} };
+  }
+
+  function fail(config: InternalAxiosRequestConfig, status: number | "network"): never {
+    throw new AxiosError("传输失败", undefined, config, undefined,
+      status === "network" ? undefined : response(config, { detail: "传输失败" }, status));
+  }
+
+  it.each([200, 401, 503, "network"] as const)("续期在先，写入结果 %s 均只发送一次", async (status) => {
+    const calls: string[] = [];
+    api.defaults.adapter = async (config) => {
+      calls.push(`${config.method} ${config.url}`);
+      if (config.url === "/auth/renew") return response(config, credential());
+      expect(config.headers.Authorization).toBe("Bearer fresh");
+      if (status !== 200) fail(config, status);
+      return response(config, { id: 42 });
+    };
+    const pending = request({ method: "POST", url: "/trades", data: { amount: 100 } });
+    if (status === 200) await expect(pending).resolves.toEqual({ id: 42 });
+    else await expect(pending).rejects.toBeInstanceOf(ApiException);
+    expect(calls).toEqual(["post /auth/renew", "post /trades"]);
+  });
+
+  it.each([503, "network"] as const)("续期 %s 后用旧凭证，写入断网不重放", async (status) => {
+    const calls: string[] = [];
+    api.defaults.adapter = async (config) => {
+      calls.push(config.url!);
+      if (config.url === "/auth/renew") fail(config, status);
+      expect(config.headers.Authorization).toBe("Bearer old");
+      fail(config, "network");
+    };
+    await expect(request({ method: "POST", url: "/trades/42/confirm" })).rejects.toBeInstanceOf(ApiException);
+    expect(calls).toEqual(["/auth/renew", "/trades/42/confirm"]);
+    expect(localStorage.getItem("token")).toBe("old");
+  });
+
+  it("续期 401 在财务请求发送前终止", async () => {
+    const calls: string[] = [];
+    api.defaults.adapter = async (config) => {
+      calls.push(config.url!);
+      fail(config, 401);
+    };
+    await expect(request({ method: "POST", url: "/trades" })).rejects.toMatchObject({ status: 401 });
+    expect(calls).toEqual(["/auth/renew"]);
+    expect(localStorage.getItem("token")).toBeNull();
+  });
+
+  it.each(["missing", "expired", "other-owner"])("拒绝 %s 续期响应且不写入", async (kind) => {
+    const calls: string[] = [];
+    const data = credential();
+    if (kind === "expired") data.expires_at = new Date(Date.now() - 1000).toISOString();
+    if (kind === "other-owner") data.user = { ...user, code: "OTHER" };
+    api.defaults.adapter = async (config) => {
+      calls.push(config.url!);
+      return response(config, kind === "missing" ? {} : data);
+    };
+    await expect(request({ method: "POST", url: "/trades" })).rejects.toMatchObject({ message: "续期响应无效，原凭证未替换" });
+    expect(calls).toEqual(["/auth/renew"]);
+    expect(localStorage.getItem("token")).toBe("old");
   });
 });

@@ -191,22 +191,24 @@ ir schema trade              # 仅输出指定命令组
 
 #### `ir auth login`
 
-登录获取 token（存储到 `~/.ir/token.json`）。
+登录获取 token（存储到 `~/.ir/token.json`，0600 权限）。
 
 ```bash
-ir auth login --code <用户代码> --password <密码>
+ir auth login --code <用户代码>
 ```
 
 | 参数 | 必填 | 说明 |
 |------|:----:|------|
 | `--code` | 是 | 用户代码（管理员或投资人） |
-| `--password` | 是 | 登录密码 |
+| `--password-stdin` | 否 | 从标准输入读取一行密码，否则读取安全注入的 IR_PASSWORD 或隐藏交互输入 |
 
-> 登录成功后 token 自动存储，后续命令自动携带。token 过期前 24 小时会在 stderr 打印警告。
+不再接受明文 `--password` 参数。不要将密码写入命令历史；自动化应由密钥管理器注入环境变量或管道。登录成功不向 stdout 输出 token。
+
+本地密码会话在剩余不足 24 小时时，于业务请求前自动续期；无 30 天总寿命上限。续期诊断只写 stderr，不污染 JSON stdout。网络/5xx 续期失败可用尚未到期的 token 继续本次请求，401 则停止；金融写入绝不自动重发。未续期直至 token 到期仍需重新登录。
 
 #### `ir auth logout`
 
-登出并清理本地 token。
+撤销当前密码会话的全部续期 token 并清理本地凭证，不影响其他登录会话或代理 Key。
 
 ```bash
 ir auth logout
@@ -214,23 +216,58 @@ ir auth logout
 
 #### `ir auth change-password`
 
-修改密码。
-
 ```bash
-ir auth change-password --old-password <旧密码> --new-password <新密码>
+ir auth change-password
 ```
 
-> 修改密码后服务端会使旧 token 失效，需重新登录。
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `--password-stdin` | 否 | 从标准输入依次读取旧密码、新密码两行 |
+
+缺省隐藏输入，或读取安全注入的 IR_OLD_PASSWORD / IR_NEW_PASSWORD；不再接受明文旧/新密码参数。改密撤销本账户的全部密码会话，需重登录，但代理 Key 不受影响。
 
 #### `ir auth status`
 
-显示当前用户和 token 状态（本地操作，不请求服务端）。
+向服务端验证当前凭证，返回用户、凭证 ID、类型、标签、权限范围及实际到期时间；不返回秘密。
 
 ```bash
 ir auth status
 ```
 
-> 未登录时返回 `AUTH_REQUIRED`（exit code 2）。
+IR_TOKEN 优先于本地文件。它由外部管理，CLI 不自动续期、不覆盖环境变量或本地文件。Key 无到期日时 expires_at 为 null；无效/过期/撤销返回 `AUTH_REQUIRED`（exit code 2），服务不可达不是“已登录”。
+
+#### `ir auth key-create`
+
+管理员创建代理 Key，默认永不过期，秘密仅本次返回。将输出直接交给密钥管理器，禁止进入共享日志、Git 或普通聊天记录。
+
+```bash
+ir auth key-create --label Analyst --scope ledger:write
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `--label` | 是 | 凭证标签 |
+| `--scope` | 否 | 默认 ledger:read；ledger:write 包含白名单读操作及账务写操作，可重复 |
+| `--investor` | 否 | 所属用户，默认当前管理员；仍受该用户角色与资源权限约束 |
+| `--expires-at` | 否 | 含时区的 ISO 时间；省略即无到期日 |
+
+代理通过安全注入 IR_TOKEN 使用 Key。读权限包含确认预览；写权限覆盖申赎、调仓、份额事件及现金转移生命周期，不含删除、快照修改、系统管理或凭证管理。完整白名单见 [api_key_scopes.py](../backend/app/constants/api_key_scopes.py)，工作流中的快照/行情管理步骤仍需管理员会话。
+
+#### `ir auth key-list`
+
+```bash
+ir auth key-list
+```
+
+管理员查看全部 Key 元数据（包括已撤销记录），不返回秘密或摘要。
+
+#### `ir auth key-revoke`
+
+```bash
+ir auth key-revoke <KEY_ID>
+```
+
+管理员持久化撤销指定 Key；已撤销 Key 再撤销不重复记审计。代理 Key 自身不能管理凭证。
 
 ---
 
@@ -1654,7 +1691,7 @@ ir schema trade
 ir config set base_url http://localhost:8000
 
 # 1. 登录（管理员账户需通过 REST API 或初始化脚本创建）
-ir auth login --code ADMIN --password "pass123"
+ir auth login --code ADMIN
 
 # 2. 创建投资人
 ir investor create --code INV001 --name "张三" --password "pass123"
@@ -1850,4 +1887,4 @@ ir schema
 
 6. **数据精度**：内部使用 Python `Decimal` 进行运算，输出时金额保留 2 位小数，份额统一 2 位小数，净值保留 4 位小数。
 
-7. **认证与 token**：登录后 token 存储在 `~/.ir/token.json`（权限 0600），过期前 24 小时会在 stderr 打印警告。token 过期后需重新 `ir auth login`。修改密码后旧 token 会失效。
+7. **认证与 token**：本地密码凭证按 [认证管理](#41-ir-auth--认证管理) 自动续期；长期无人值守代理使用独立 Key，通过 IR_TOKEN 安全注入。Key 默认无到期日，可单独撤销，不受改密/登出影响。

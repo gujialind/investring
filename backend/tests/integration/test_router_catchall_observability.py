@@ -188,7 +188,7 @@ class TestSnapshotCatchAllOutlets:
         assert line["snap_date"] == SNAP_DATE.isoformat()
         _assert_error_record(spy, path=url, method="DELETE")
 
-    def test_real_system_error_log_row(self, client, admin_headers, monkeypatch, purge_system_error_rows):
+    def test_real_system_error_log_row(self, client, monkeypatch, purge_system_error_rows):
         """不替换落库函数：system_error_log 真新增一行（验收断言「至少快照侧」的那条）
 
         读数的两个坑都踩过，都写在这里：
@@ -200,8 +200,17 @@ class TestSnapshotCatchAllOutlets:
            水位就 commit 结束事务，让后面的查询另起快照；SQLite 下不需要，但两边同款。
         """
         from app.database import SessionLocal
+        from app.models.auth import AuthSession
+        from app.models.investor import Investor
+        from app.services.auth_service import create_session
+        from app.utils.security import decode_token
 
         probe = SessionLocal()
+        # 认证行先独立提交，不能由 test_db 的外层事务持有 SQLite 写锁。
+        credential = create_session(probe, probe.get(Investor, "ADMIN"))
+        session_id = decode_token(credential["token"])["sid"]
+        probe.commit()
+        admin_headers = {"Authorization": f'Bearer {credential["token"]}'}
         try:
             watermark = probe.query(func.max(SystemErrorLog.id)).scalar() or 0
             probe.commit()
@@ -223,6 +232,9 @@ class TestSnapshotCatchAllOutlets:
             assert row.request_path == "/api/snapshots/generate"
             assert row.request_method == "POST"
         finally:
+            probe.rollback()
+            probe.query(AuthSession).filter(AuthSession.id == session_id).delete()
+            probe.commit()
             probe.close()
 
 

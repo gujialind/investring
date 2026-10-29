@@ -153,7 +153,10 @@ def record_audit(
     actor = context.get_actor() or SYSTEM_ACTOR
     ip_address = context.get_client_ip()
 
+    ctx = context.get_request_context()
     values = {
+        "credential_id": ctx.credential_id if ctx else None,
+        "credential_label": ctx.credential_label if ctx else None,
         "investor_code": actor,
         "action": action,
         "resource_type": resource_type,

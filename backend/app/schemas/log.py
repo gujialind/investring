@@ -26,6 +26,8 @@ class AuditLogResponse(BaseModel):
     resource_name: Optional[str] = None
     old_value: Optional[str] = None
     new_value: Optional[str] = None
+    credential_id: Optional[str] = None
+    credential_label: Optional[str] = None
     ip_address: Optional[str] = None
     created_at: Optional[datetime] = None
 

@@ -7,6 +7,24 @@ fields 编码：`*`前缀=默认摘要字段（见 utils.SUMMARY_FIELDS），`?`
 """
 
 RESPONSE_FIELDS: dict = {
+    "auth": {
+        "status": {
+            "shape": "object",
+            "fields": "user:obj,credential_type:str,credential_id:str,label:str?,expires_at:str?,scopes:list?,base_url:str"
+        },
+        "key-create": {
+            "shape": "object",
+            "fields": "key:obj,token:str"
+        },
+        "key-list": {
+            "shape": "list",
+            "fields": "id:str,investor_code:str,label:str,scopes:list,created_at:str?,expires_at:str?,revoked_at:str?"
+        },
+        "key-revoke": {
+            "shape": "object",
+            "fields": "id:str,investor_code:str,label:str,scopes:list,created_at:str?,expires_at:str?,revoked_at:str?"
+        }
+    },
     "position": {
         "list": {
             "shape": "list",

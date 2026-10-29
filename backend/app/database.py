@@ -9,6 +9,7 @@ engine = create_engine(
     settings.database_url,
     connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
     echo=settings.debug,
+    hide_parameters=True,  # 密码与 API Key 摘要不能进入 SQL 日志或异常文本。
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,

@@ -8,7 +8,9 @@ from app.database import get_db
 from app.models.investor import Investor
 from app.models.login_log import LoginLog
 from app.request_context import SCOPE_ACTOR_KEY, SCOPE_CLIENT_IP_KEY
-from app.utils.security import decode_token, is_token_blacklisted, is_account_locked
+from app.utils.security import is_account_locked
+from app.services.auth_service import API_KEY_PREFIX, authenticate_api_key, authenticate_session
+from app.constants.api_key_scopes import key_allows
 
 security = HTTPBearer(auto_error=False)
 
@@ -55,7 +57,7 @@ def get_current_user(
 ) -> Investor:
     """
     获取当前登录用户。
-    验证 Token 有效性、黑名单、以及账户锁定状态。
+    验证持久化会话或代理凭证、权限范围及账户锁定状态。
     """
     if not credentials:
         raise HTTPException(
@@ -65,30 +67,16 @@ def get_current_user(
         )
 
     token = credentials.credentials
-
-    # 检查 Token 是否在黑名单中
-    if is_token_blacklisted(token):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录状态已失效，请重新登录",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录凭证无效或已过期，请重新登录",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    investor_code: Optional[str] = payload.get("sub")
-    if not investor_code:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录凭证内容异常，请重新登录",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if token.startswith(API_KEY_PREFIX):
+        credential = authenticate_api_key(db, token)
+        investor_code = credential.investor_code
+        request.state.credential_type = "api_key"
+    else:
+        credential, payload = authenticate_session(db, token)
+        investor_code = credential.investor_code
+        request.state.credential_type = "session"
+        request.state.token_expires_at = payload["exp"]
+    request.state.credential = credential
 
     # 检查账户是否被锁定
     locked, locked_until = is_account_locked(investor_code)
@@ -121,6 +109,19 @@ def get_current_user(
     request.scope[SCOPE_ACTOR_KEY] = investor.code
     request.scope[SCOPE_CLIENT_IP_KEY] = client_ip
 
+    ctx = context.get_request_context()
+    if ctx is not None:
+        ctx.credential_id = credential.id
+        ctx.credential_label = getattr(credential, "label", None)
+
+    if request.state.credential_type == "api_key":
+        # Included routers retain a local APIRoute.path; use the resolved full template.
+        effective = request.scope.get("fastapi", {}).get("effective_route_context")
+        route_path = (effective or request.scope["route"]).path
+        if not key_allows(credential.scopes, request.method, route_path):
+            raise HTTPException(status_code=403, detail={
+                "error": "FORBIDDEN", "message": "代理凭证无权执行此操作",
+            })
     return investor
 
 

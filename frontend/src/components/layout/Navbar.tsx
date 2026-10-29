@@ -33,7 +33,7 @@ export default function Navbar() {
           <NotificationBell />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+              <Button variant="ghost" aria-label="用户菜单" className="relative h-8 w-8 rounded-full">
                 <User className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>

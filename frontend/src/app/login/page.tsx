@@ -29,7 +29,7 @@ export default function LoginPage() {
         setError("登录响应无效，请检查后端服务是否可达");
         return;
       }
-      login(token, user);
+      login(token, user, response.expires_at);
       // 使用完整路径跳转，兼容 ModelScope Studio 等子路径部署
       window.location.href = `${getBasePath()}/dashboard`;
     } catch (err) {

@@ -46,6 +46,9 @@ def _load_migration():
 
 migration = _load_migration()
 
+# 后续迁移新增的列不属于 0013 的历史结构；0025 的模型一致性另有专测。
+LATER_COLUMNS = {"audit_log": {"credential_id", "credential_label"}}
+
 
 def _run(fn, connection):
     """在给定连接上执行程序化迁移（alembic.op 代理需 Operations.context 安装）。"""
@@ -91,8 +94,9 @@ class TestUpgrade:
             for name, model in MODELS.items():
                 reflected = _reflect(conn, name)
                 expected = model.__table__
-                assert set(reflected.c.keys()) == set(expected.c.keys()), name
-                for column in expected.columns:
+                columns = set(expected.c.keys()) - LATER_COLUMNS.get(name, set())
+                assert set(reflected.c.keys()) == columns, name
+                for column in (expected.c[key] for key in columns):
                     actual = reflected.c[column.name]
                     assert str(actual.type) == str(column.type), (
                         f"{name}.{column.name}: {actual.type} != {column.type}"
@@ -173,5 +177,5 @@ class TestDowngrade:
             _run(migration.upgrade, conn)
             for name, model in MODELS.items():
                 reflected = _reflect(conn, name)
-                assert set(reflected.c.keys()) == set(model.__table__.c.keys()), name
+                assert set(reflected.c.keys()) == set(model.__table__.c.keys()) - LATER_COLUMNS.get(name, set()), name
             conn.commit()

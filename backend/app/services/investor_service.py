@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
+from app.models.auth import AuthSession, ApiKey
+from app.services.auth_service import revoke_user_sessions
 from app.utils.security import get_password_hash
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.null_guard import reject_explicit_nulls
@@ -43,7 +45,7 @@ def update_investor(db: Session, *, code: str, updates: dict) -> Investor:
     显式 null 收口（issue #573）：role/name 落 NULL 会让 InvestorResponse 校验 500
     且此后该行 GET 恒 500；phone/email 列可空且响应 Optional，null = 清除。
     """
-    investor = db.query(Investor).filter(Investor.code == code).first()
+    investor = db.query(Investor).filter(Investor.code == code).populate_existing().with_for_update().first()
     if not investor:
         raise NotFoundError("NOT_FOUND", f"投资人 {code} 不存在")
 
@@ -51,6 +53,7 @@ def update_investor(db: Session, *, code: str, updates: dict) -> Investor:
     reject_explicit_nulls(updates, allow={"phone", "email"})
     if "password" in updates:
         updates["password_hash"] = get_password_hash(updates.pop("password"))
+        revoke_user_sessions(db, code)
 
     for field, value in updates.items():
         setattr(investor, field, value)
@@ -59,7 +62,7 @@ def update_investor(db: Session, *, code: str, updates: dict) -> Investor:
 
 def delete_investor(db: Session, code: str) -> None:
     """删除投资人（仍持有份额则拒绝）。不 commit。"""
-    investor = db.query(Investor).filter(Investor.code == code).first()
+    investor = db.query(Investor).filter(Investor.code == code).populate_existing().with_for_update().first()
     if not investor:
         raise NotFoundError("NOT_FOUND", f"投资人 {code} 不存在")
 
@@ -69,4 +72,7 @@ def delete_investor(db: Session, code: str) -> None:
     if holding and holding.shares and holding.shares > 0:
         raise BusinessError("INVESTOR_HAS_SHARES", "投资人仍持有份额，需先全部赎回")
 
+    # 删除账户时一并销毁凭证，避免同 code 重建账户后旧凭证复活；审计身份仍保留。
+    db.query(AuthSession).filter(AuthSession.investor_code == code).delete(synchronize_session=False)
+    db.query(ApiKey).filter(ApiKey.investor_code == code).delete(synchronize_session=False)
     db.delete(investor)

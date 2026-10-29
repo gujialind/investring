@@ -29,7 +29,7 @@ AUTH_DEPS = {get_current_user, get_current_admin}
 # 取 fastapi 0.136.1 与 0.141.1 双版本实测的相同值（85 个 distinct path、112 个操作）；
 # #424 新增 GET /api/share-change-events/{id}/preview → 86 distinct path / 113 操作。
 # #725 新增 GET /api/portfolios/{code}/cash-flows → 87 distinct path / 114 操作。
-EXPECTED_API_OPERATIONS = 114
+EXPECTED_API_OPERATIONS = 119  # #797：续期、状态与三项 Key 管理操作
 
 
 class TestRouteAuthCoverage:

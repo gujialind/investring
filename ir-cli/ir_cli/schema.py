@@ -33,7 +33,7 @@ CONVENTIONS = {
     "--quiet": "trade/sub 的 create/confirm 仅输出 {id,status,confirm_date}；cancel/unconfirm 后端只回 {message}，--quiet 即输出 {message}（无 id/status 可给，#520）",
     "output.fields": "命令条目 output.fields 为响应字段契约：`*`前缀=默认摘要字段，`?`后缀=可空；notes 含字段级警示（如恒为null的字段）",
     "--index": "ir schema --index 输出极简命令索引（<1KB），再按 ir schema <group> 精确加载，较全量省约59% token",
-    "env": ["IR_BASE_URL", "IR_TOKEN", "IR_CONNECT_TIMEOUT", "IR_HTTP_TIMEOUT", "IR_RETRY", "IR_DEBUG"],
+    "env": ["IR_BASE_URL", "IR_TOKEN", "IR_PASSWORD", "IR_OLD_PASSWORD", "IR_NEW_PASSWORD", "IR_CONNECT_TIMEOUT", "IR_HTTP_TIMEOUT", "IR_RETRY", "IR_DEBUG"],
 }
 
 # 端到端业务配方：多步命令序列 + 关键前置条件，补充 error_hints 无法覆盖的流程知识

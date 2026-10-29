@@ -17,7 +17,7 @@ export function useLogin() {
   return useMutation({
     mutationFn: (data: LoginRequest) => authApi.login(data),
     onSuccess: (data) => {
-      login(data.token, data.user);
+      login(data.token, data.user, data.expires_at);
       addToast({
         type: "success",
         title: "登录成功",
@@ -35,8 +35,7 @@ export function useLogin() {
   });
 }
 
-// 登出 Hook：通知后端（token 黑名单 + 登出日志）→ 清本地三处存储 → 清 react-query 缓存，
-// 避免换账号登录后看到上个账号的缓存数据
+// 登出时立即清本地状态，阻止在途续期恢复凭证；服务端撤销使用捕获的 token。
 export function useLogout() {
   const router = useRouter();
   const logout = useAuthStore((state) => state.logout);
@@ -44,19 +43,19 @@ export function useLogout() {
   const addToast = useUIStore((state) => state.addToast);
 
   return useCallback(async () => {
-    try {
-      // 须在本地清理 token 前调用；后端失败不阻断本地登出
-      await authApi.logout();
-    } catch {
-      // ignore
-    }
+    const token = localStorage.getItem("token");
     logout();
     queryClient.clear();
     addToast({
       type: "info",
       title: "已退出登录",
     });
-    router.push("/login");
+    router.push(window.location.pathname.startsWith("/m/") ? "/m/login" : "/login");
+    try {
+      await authApi.logout(token);
+    } catch {
+      // Local logout remains effective when the server cannot be reached.
+    }
   }, [logout, queryClient, router, addToast]);
 }
 
@@ -80,10 +79,23 @@ export function useCurrentUser() {
 // 修改密码 Hook
 export function useChangePassword() {
   const addToast = useUIStore((state) => state.addToast);
+  const queryClient = useQueryClient();
+  const router = useRouter();
 
   return useMutation({
-    mutationFn: (data: ChangePasswordRequest) => authApi.changePassword(data),
-    onSuccess: () => {
+    mutationFn: async (data: ChangePasswordRequest) => {
+      const token = localStorage.getItem("token");
+      await authApi.changePassword(data, token);
+      return token;
+    },
+    onSuccess: (token, data) => {
+      const state = useAuthStore.getState();
+      if (localStorage.getItem("token") === token
+          && (!data.target_code || data.target_code === state.user?.code)) {
+        state.logout();
+        queryClient.clear();
+        router.push(window.location.pathname.startsWith("/m/") ? "/m/login" : "/login");
+      }
       addToast({
         type: "success",
         title: "密码修改成功",

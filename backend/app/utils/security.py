@@ -1,13 +1,12 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import uuid4
 
 import bcrypt
 from jose import JWTError, jwt
 from app.config import get_settings
 
 settings = get_settings()
-
-token_blacklist: set[str] = set()
 
 login_failure_tracker: dict[str, dict] = {}
 
@@ -26,32 +25,26 @@ def get_password_hash(password: str) -> str:
     ).decode("utf-8")
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=settings.token_expire_days)
-
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm="HS256")
-    return encoded_jwt
+def create_access_token(
+    data: dict, expires_delta: Optional[timedelta] = None, *,
+    expires_at: Optional[datetime] = None,
+):
+    now = datetime.now(timezone.utc)
+    expire = expires_at or now + (
+        expires_delta if expires_delta is not None else timedelta(days=settings.token_expire_days)
+    )
+    to_encode = {**data, "exp": expire, "iat": now, "jti": uuid4().hex}
+    return jwt.encode(to_encode, settings.secret_key, algorithm="HS256")
 
 
 def decode_token(token: str):
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+        payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"], options={
+            "require_exp": True, "require_iat": True, "require_jti": True,
+        })
         return payload
     except JWTError:
         return None
-
-
-def is_token_blacklisted(token: str) -> bool:
-    return token in token_blacklist
-
-
-def blacklist_token(token: str) -> None:
-    token_blacklist.add(token)
 
 
 def record_login_failure(investor_code: str) -> tuple[bool, Optional[datetime]]:
