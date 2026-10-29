@@ -60,8 +60,17 @@ export const tradeApi = {
   list: (params?: TradeListParams) =>
     request<TradeListResponse>({ method: "GET", url: "/trades", params }),
 
-  get: (id: number) =>
-    request<Trade>({ method: "GET", url: `/trades/${id}` }),
+  /**
+   * 单对象详情（#789）：派生字段与 list 同形（product_name/display_code/
+   * paired_leg/cash_* 都有值）。`portfolioCode` 必填——后端按
+   * `(id, portfolio_code)` 归属校验，跨组合与不存在的 id 同返 404。
+   */
+  get: (id: number, portfolioCode: string) =>
+    request<Trade>({
+      method: "GET",
+      url: `/trades/${id}`,
+      params: { portfolio_code: portfolioCode },
+    }),
 
   create: (data: TradeCreate) =>
     request<Trade>({ method: "POST", url: "/trades", data }),

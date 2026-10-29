@@ -131,7 +131,11 @@ class TestUpdateTradeValidation:
         assert upd.json()["detail"]["error"] == "INSUFFICIENT_CASH"
 
         # 零部分写入：金额/手续费与配对 CASH 腿均保持原值
-        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        got = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "U182_P1"},
+            headers=admin_headers,
+        )
         assert got.status_code == 200
         data = got.json()
         assert float(data["actual_amount"]) == 1000.0
@@ -233,7 +237,11 @@ class TestUpdateTradeValidation:
         assert upd.status_code == 422
         assert upd.json()["detail"]["error"] == "INSUFFICIENT_SHARES"
 
-        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        got = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "U182_P4"},
+            headers=admin_headers,
+        )
         assert float(got.json()["shares"]) == 500.0
 
     def test_update_sell_shares_reduce_with_self_addback(self, client, admin_headers, test_db):
@@ -266,7 +274,11 @@ class TestUpdateTradeValidation:
         assert upd.json()["detail"]["error"] == "NON_TRADING_DAY"
 
         # confirm_date 不被静默重算，trade_date 保持原值
-        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        got = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "U182_P6"},
+            headers=admin_headers,
+        )
         assert got.json()["trade_date"] == "2025-10-06"
         assert got.json()["confirm_date"] == "2025-10-06"
 
@@ -326,7 +338,11 @@ class TestUpdateTradeValidation:
         self._setup(test_db, code="U182_P14", cash=5000.0)
         trade_id = self._create_buy(client, admin_headers, code="U182_P14", amount=5000.0)
         # 创建口径：shares = 5000/1.5 = 3333.33
-        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        got = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "U182_P14"},
+            headers=admin_headers,
+        )
         assert float(got.json()["shares"]) == 3333.33
 
         upd = client.put(
@@ -545,7 +561,11 @@ class TestUpdateTradeValidation:
         assert conf.status_code == 422
         assert conf.json()["detail"]["error"] == "INSUFFICIENT_SHARES"
         # 交易保持 pending
-        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        got = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "U182_P13"},
+            headers=admin_headers,
+        )
         assert got.json()["status"] == "pending"
 
 
@@ -705,7 +725,11 @@ class TestUpdateTradeNullGuard:
         test_db.expire_all()
         row = test_db.query(Trade).get(trade_id)
         assert float(row.fee) == 5.0
-        assert client.get(f"/api/trades/{trade_id}", headers=admin_headers).status_code == 200
+        assert client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "UNG_FEE"},
+            headers=admin_headers,
+        ).status_code == 200
 
     def test_update_fee_zero_still_clears(self, client, admin_headers, test_db):
         """清零走显式 0（修复前后均合法）：fee null 被拒后的正确姿势"""

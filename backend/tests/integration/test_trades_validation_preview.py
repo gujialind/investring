@@ -443,7 +443,11 @@ class TestTradePreview:
         assert prev.status_code == 200
 
         # 重新 GET trade：零副作用
-        got = client.get(f"/api/trades/{trade_id}", headers=admin_headers)
+        got = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": "PRV_Z1"},
+            headers=admin_headers,
+        )
         assert got.status_code == 200
         assert got.json()["status"] == "pending"
         assert got.json()["price"] is None

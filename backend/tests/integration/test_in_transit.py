@@ -10,7 +10,7 @@
 # ============================================================================
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -604,3 +604,118 @@ class TestCrossDayCashTransfer:
         snap = _get_value_snapshot(test_db, port, T1)
         assert Decimal(str(snap.total_value)) == Decimal(str(self.INITIAL_CASH))
         assert Decimal(str(snap.in_transit_total)) == Decimal("0")
+
+
+class TestCashTransferListFiltering:
+    PORTFOLIO = "IT_CT_LIST"
+    OTHER_PORTFOLIO = "IT_CT_LIST_OTHER"
+    PLATFORM_A = "IT_CT_LIST_A"
+    PLATFORM_B = "IT_CT_LIST_B"
+    TRANSFER_AMOUNT = 1234.56
+
+    @pytest.fixture(scope="function")
+    def cash_transfer_groups(self, test_db):
+        create_portfolio(test_db, code=self.PORTFOLIO, status="active")
+        create_portfolio(test_db, code=self.OTHER_PORTFOLIO, status="active")
+        create_platform(test_db, code=self.PLATFORM_A)
+        create_platform(test_db, code=self.PLATFORM_B)
+        groups = [uuid.uuid4().hex[:12] for _ in range(51)]
+        for index, group in enumerate(groups):
+            created_at = datetime(2025, 6, 9, 9) + timedelta(minutes=index)
+            for trade_type, platform, status, confirm_date in (
+                ("sell", self.PLATFORM_A, "confirmed", T),
+                ("buy", self.PLATFORM_B, "pending", T1),
+            ):
+                trade = create_trade(
+                    test_db, self.PORTFOLIO, "CASH", "",
+                    trade_type=trade_type, platform_code=platform,
+                    amount=self.TRANSFER_AMOUNT, actual_amount=self.TRANSFER_AMOUNT,
+                    price=1.0, fee=0.0, trade_date=T, confirm_date=confirm_date,
+                    status=status, transfer_group=group,
+                )
+                trade.created_at = created_at
+        test_db.flush()
+        return groups
+
+    def test_group_filter_precedes_pagination(self, client, admin_headers, cash_transfer_groups):
+        url = f"/api/portfolios/{self.PORTFOLIO}/cash-transfers"
+        target = cash_transfer_groups[0]
+        first = client.get(url, params={"page": 1, "page_size": 50}, headers=admin_headers)
+        assert first.status_code == 200, first.text
+        first_data = first.json()
+        assert first_data["total"] == 51
+        assert first_data["page"] == 1
+        assert first_data["page_size"] == 50
+        assert len(first_data["items"]) == 50
+        assert [item["transfer_group"] for item in first_data["items"]] == list(
+            reversed(cash_transfer_groups[1:])
+        )
+        assert target not in {item["transfer_group"] for item in first_data["items"]}
+
+        second = client.get(url, params={"page": 2, "page_size": 50}, headers=admin_headers)
+        assert second.status_code == 200, second.text
+        second_data = second.json()
+        assert second_data["total"] == 51
+        assert second_data["page"] == 2
+        assert second_data["page_size"] == 50
+        assert [item["transfer_group"] for item in second_data["items"]] == [target]
+
+        filtered = client.get(
+            url, params={"page": 1, "page_size": 50, "transfer_group": target},
+            headers=admin_headers,
+        )
+        assert filtered.status_code == 200, filtered.text
+        expected_item = {
+            "transfer_group": target,
+            "from_platform": self.PLATFORM_A,
+            "to_platform": self.PLATFORM_B,
+            "amount": self.TRANSFER_AMOUNT,
+            "cross_day": True,
+            "sell_status": "confirmed",
+            "buy_status": "pending",
+            "transfer_date": T.isoformat(),
+            "sell_confirm_date": T.isoformat(),
+            "buy_confirm_date": T1.isoformat(),
+            "notes": None,
+        }
+        assert filtered.json() == {
+            "items": [expected_item], "total": 1, "page": 1, "page_size": 50,
+        }
+        assert second_data["items"] == [expected_item]
+
+    def test_default_page_size_unchanged(self, client, admin_headers, cash_transfer_groups):
+        response = client.get(
+            f"/api/portfolios/{self.PORTFOLIO}/cash-transfers", headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == 51
+        assert data["page"] == 1
+        assert data["page_size"] == 20
+        assert len(data["items"]) == 20
+        assert [item["transfer_group"] for item in data["items"]] == list(
+            reversed(cash_transfer_groups)
+        )[:20]
+
+    @pytest.mark.parametrize("other_portfolio", [False, True])
+    def test_unknown_or_other_portfolio_group_returns_empty(
+        self, client, admin_headers, cash_transfer_groups, other_portfolio,
+    ):
+        portfolio = self.OTHER_PORTFOLIO if other_portfolio else self.PORTFOLIO
+        group = cash_transfer_groups[0] if other_portfolio else "unknown_transfer_group"
+        response = client.get(
+            f"/api/portfolios/{portfolio}/cash-transfers",
+            params={"transfer_group": group}, headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"items": [], "total": 0, "page": 1, "page_size": 20}
+
+    @pytest.mark.parametrize("filtered", [False, True])
+    def test_viewer_still_forbidden(self, client, viewer_headers, cash_transfer_groups, filtered):
+        params = {"transfer_group": cash_transfer_groups[0]} if filtered else {}
+        response = client.get(
+            f"/api/portfolios/{self.PORTFOLIO}/cash-transfers",
+            params=params, headers=viewer_headers,
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"] == "FORBIDDEN"

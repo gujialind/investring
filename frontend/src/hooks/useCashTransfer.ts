@@ -9,7 +9,7 @@ import { useUIStore } from "@/stores/uiStore";
 const CASH_TRANSFER_QUERY_KEY = "cash-transfers";
 
 // 现金转移列表 Hook
-export function useCashTransferList(portfolioCode: string, params?: { page?: number; page_size?: number }) {
+export function useCashTransferList(portfolioCode: string, params?: { page?: number; page_size?: number; transfer_group?: string }) {
   return useQuery({
     queryKey: [CASH_TRANSFER_QUERY_KEY, "list", portfolioCode, params],
     queryFn: () => cashTransferApi.list(portfolioCode, params),

@@ -98,11 +98,12 @@ def list_cash_transfers(
     portfolio_code: str,
     page: Optional[int] = 1,
     page_size: Optional[int] = 20,
+    transfer_group: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
     """查询平台间现金转移记录（按 transfer_group 分组，分页）。"""
-    items = list_transfers_service(db, portfolio_code)
+    items = list_transfers_service(db, portfolio_code, transfer_group=transfer_group)
     total = len(items)
     start = (page - 1) * page_size
     end = start + page_size

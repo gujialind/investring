@@ -204,13 +204,18 @@ def confirm_cash_transfer(
     }
 
 
-def list_cash_transfers(db: Session, portfolio_code: str) -> List[dict]:
+def list_cash_transfers(
+    db: Session, portfolio_code: str, *, transfer_group: Optional[str] = None,
+) -> List[dict]:
     """按 transfer_group 分组返回现金转移记录（未分页）。供 REST 与 CLI 共用。"""
-    trades = db.query(Trade).filter(
+    query = db.query(Trade).filter(
         Trade.portfolio_code == portfolio_code,
         Trade.transfer_group.isnot(None),
         Trade.product_code == "CASH",
-    ).order_by(Trade.created_at.desc()).all()
+    )
+    if transfer_group is not None:
+        query = query.filter(Trade.transfer_group == transfer_group)
+    trades = query.order_by(Trade.created_at.desc()).all()
 
     groups: dict = {}
     order: List[str] = []

@@ -17,13 +17,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertCircle, Loader2 } from "lucide-react";
 import {
   deriveTransferGroupStatus,
   formatCurrency,
   isTransferNotReady,
   TRANSFER_GROUP_STATUS_META,
 } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { useCashTransferList, useConfirmCashTransfer } from "@/hooks/useCashTransfer";
 import { useRoleCheck } from "@/hooks/useAuth";
@@ -34,6 +36,7 @@ interface CashTransferListDialogProps {
   portfolioCode: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  transferGroup?: string;
 }
 
 /**
@@ -46,8 +49,12 @@ export default function CashTransferListDialog({
   portfolioCode,
   open,
   onOpenChange,
+  transferGroup,
 }: CashTransferListDialogProps) {
-  const { data, isLoading } = useCashTransferList(portfolioCode, { page_size: 50 });
+  const { data, isLoading, isError, error, refetch, isFetching } = useCashTransferList(
+    portfolioCode,
+    { page_size: 50, transfer_group: transferGroup }
+  );
   const confirmTransfer = useConfirmCashTransfer(portfolioCode);
   const { isAdmin } = useRoleCheck();
   const [cancelTarget, setCancelTarget] = useState<CashTransferListItem | null>(null);
@@ -60,7 +67,9 @@ export default function CashTransferListDialog({
         <DialogHeader>
           <DialogTitle>现金转移记录</DialogTitle>
           <DialogDescription>
-            平台间现金转移历史；跨天转移需在到账后手动确认
+            {transferGroup
+              ? "仅显示当前流水关联的转移记录"
+              : "平台间现金转移历史；跨天转移需在到账后手动确认"}
           </DialogDescription>
         </DialogHeader>
         {isLoading ? (
@@ -68,8 +77,22 @@ export default function CashTransferListDialog({
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             加载中...
           </div>
+        ) : isError ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>转移记录加载失败</AlertTitle>
+            <AlertDescription className="flex items-center gap-3">
+              <span className="min-w-0 break-all">{getErrorMessage(error)}</span>
+              <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+                {isFetching && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                重试
+              </Button>
+            </AlertDescription>
+          </Alert>
         ) : transfers.length === 0 ? (
-          <div className="text-center text-muted-foreground py-8">暂无转移记录</div>
+          <div className="text-center text-muted-foreground py-8">
+            {transferGroup ? "未找到关联转移记录" : "暂无转移记录"}
+          </div>
         ) : (
           // 窄视口（移动 390px）6 列装不下，横向滚动承接，操作列按钮才可点
           // （模式同 ProductsContent/SnapshotsContent 的表容器 overflow-x-auto）
@@ -93,7 +116,12 @@ export default function CashTransferListDialog({
                   const statusMeta = TRANSFER_GROUP_STATUS_META[groupStatus];
                   const notReady = isTransferNotReady(t.buy_confirm_date);
                   return (
-                    <TableRow key={t.transfer_group}>
+                    <TableRow
+                      key={t.transfer_group}
+                      data-transfer-group={t.transfer_group}
+                      data-state={t.transfer_group === transferGroup ? "selected" : undefined}
+                      aria-current={t.transfer_group === transferGroup ? "true" : undefined}
+                    >
                       <TableCell className="whitespace-nowrap">{t.transfer_date}</TableCell>
                       <TableCell className="whitespace-nowrap">
                         {t.from_platform} → {t.to_platform}

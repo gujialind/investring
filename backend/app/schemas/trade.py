@@ -85,18 +85,20 @@ class TradeResponse(TradeBase):
     id: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    # product_name 读侧派生（非 DB 列）：仅 list 端点批量 join 产品表填充，
-    # create/get/update/preview 响应恒为 None；同 positions 模式（#175）
+    # product_name 读侧派生（非 DB 列）：list 与单对象 GET 批量 join 产品表
+    # 填充（#789 起单对象与 list 同形）；create/update/confirm/preview 响应恒为 None。
+    # 同 positions 模式（#175）
     product_name: Optional[str] = None
     # 显示码读侧派生（#705，非 DB 列）：填充时机与 product_name 完全同批
-    # （仅 list 端点）；单对象端点恒为 None，消费方回退本地格式化
+    # （list + 单对象 GET）；create/update/confirm/preview 恒为 None，消费方回退本地格式化
     display_code: Optional[str] = None
     # #493 只读派生（非 DB 列，不落库）：仅**基金腿**从实际配对 CASH 腿读取；
     # 无现金腿（如待确认卖出）时为 null，CASH 腿自身不回填。批量来源见
     # trade_service.build_paired_cash_leg_map
     cash_platform_code: Optional[str] = None
     cash_confirm_date: Optional[date] = None
-    # #719 只读派生（非 DB 列）：**双向**对手腿，填充时机同 product_name（仅 list 端点）。
+    # #719 只读派生（非 DB 列）：**双向**对手腿，填充时机同 product_name
+    # （list + 单对象 GET，#789 起同形）。
     # 与上面两个平铺字段的关系：cash_* 是 #493 的历史契约（CLI 在读），只覆盖
     # 基金腿→现金腿这一个方向；paired_leg 覆盖三个方向并带金额/份额/状态，
     # 供前端在对手腿被筛掉时合成子行。两者并存不互写。
@@ -109,7 +111,8 @@ class TradeResponse(TradeBase):
 
 class PaginatedTradeResponse(BaseModel):
     """交易列表分页响应（issue #183）。items 元素复用 TradeResponse：
-    product_name 仅 list 端点填充，单对象端点恒为 None（见 TradeResponse 注释）。
+    product_name 等派生字段的填充时机见 TradeResponse 注释（list 与单对象
+    GET 同形，#789）。
 
     #752 起分页按组边界切分（同组两腿恒同页）：`total` 仍是**行数**、`page_size` 仍是
     每页行数上限，但一页可能多带同组剩余腿（最多 `page_size + 组大小 - 1` 行），故总页数

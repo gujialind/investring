@@ -116,15 +116,34 @@ export function toastByTitle(page: Page, title: string | RegExp): Locator {
 
 /**
  * 收集页面未捕获异常（客户端崩溃防线），用例末尾断言为空。
- * 豁免 Next.js standalone/mobile 的 RSC `_rsc` prefetch 被重定向层拦下的框架级
- * `access control` 噪音（`/m/...?_rsc=... due to access control checks`）：移动端
- * 导航至组合页时必然出现，页面功能与渲染均正常，非产品 bug；其余错误照常严格断言。
+ * 豁免两类 webkit/Next.js 框架级 `access control` 噪音（均非产品 bug，页面功能与
+ * 渲染正常，其余错误照常严格断言）：
+ * 1. RSC `_rsc` prefetch 被重定向层拦下：`/m/...?_rsc=... due to access control checks`，
+ *    移动端导航至组合页时必然出现。
+ * 2. `tolerateLoginRaceNoise`（仅显式传入时生效）：webkit 在**UI 登录→dashboard 硬导航
+ *    窗口期**丢弃指向本机 E2E 栈的同源 `/api/` XHR（#789 实测：mobile=webkit 6 次
+ *    viewer 登录压测 6/6 触发；同一消息有两种形态——
+ *    `XMLHttpRequest cannot load http://127.0.0.1:<port>/api/...` 与
+ *    `/127.0.0.1:<port>/api/... due to access control checks`；被拦的恰是 dashboard
+ *    聚合查询 useDashboardStats 的 4 个 GET）。请求未达后端、react-query 下一次重试即
+ *    恢复，数据与 UI 断言照常通过——是引擎在导航竞态里抛的 rejection，不是应用崩溃。
+ *    只有真的做 UI 登录的用例才该声明它；同源 API 真接错时，该用例的数据断言会先红。
  */
-export function collectPageErrors(page: Page): string[] {
+export function collectPageErrors(page: Page, options?: { tolerateLoginRaceNoise?: boolean }): string[] {
   const errors: string[] = [];
   page.on('pageerror', (e) => {
     const msg = e.message;
-    if (/access control checks/.test(msg) && /_rsc=/.test(msg)) return;
+    if (!/access control checks/.test(msg)) {
+      errors.push(msg);
+      return;
+    }
+    if (/_rsc=/.test(msg)) return;
+    if (
+      options?.tolerateLoginRaceNoise &&
+      /(?:^|[\s/])(?:https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?|127\.0\.0\.1(?::\d+)?|localhost(?::\d+)?)\/api\/\S+ due to access control checks/.test(msg)
+    ) {
+      return;
+    }
     errors.push(msg);
   });
   return errors;

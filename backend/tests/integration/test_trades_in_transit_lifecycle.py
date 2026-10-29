@@ -1386,7 +1386,11 @@ class TestReadSideAndPreview:
         assert by_id[cash_leg_id]["cash_platform_code"] is None
         assert by_id[cash_leg_id]["cash_confirm_date"] is None
 
-        single = client.get(f"/api/trades/{trade_id}", headers=admin_headers).json()
+        single = client.get(
+            f"/api/trades/{trade_id}",
+            params={"portfolio_code": code},
+            headers=admin_headers,
+        ).json()
         assert single["cash_platform_code"] == PLAT
         assert single["cash_confirm_date"] == T.isoformat()
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -75,6 +75,7 @@ import {
   useUnconfirmTrade,
   useDeleteTrade,
 } from "@/hooks/useTrade";
+import { useRoleCheck } from "@/hooks/useAuth";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { useUIStore } from "@/stores/uiStore";
 import LoadingState from "@/components/shared/LoadingState";
@@ -90,6 +91,7 @@ import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSele
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import { ProductSelection } from "@/components/shared/ProductFilterDialog";
 import { TradeConfirmDialog } from "@/components/shared/TradeConfirmDialog";
+import TradeDetailDialog from "@/components/shared/dialogs/TradeDetailDialog";
 
 interface TradesContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
@@ -161,6 +163,28 @@ export default function TradesContent({
 }: TradesContentProps) {
   const params = useParams();
   const code = params.code as string;
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { isAdmin } = useRoleCheck();
+
+  // #789 只读详情深链：URL 为事实源（`?trade=<id>`），行内按钮 = push 带参（保留其他
+  // 筛选），弹窗关闭 = replace 清 trade 参（不新增历史条目）。trade **不进**上方
+  // TradesContent 的 key 重挂载机制——初值一次性契约只管预填筛选，详情开关联动重挂载
+  // 会丢用户已改的筛选/翻页。直达深链即使交易不在当前筛选内也成立：弹窗数据走
+  // useTrade(id) 独立取数，不依赖列表行。后退 = URL 参数没了 → 弹窗随事实源关闭。
+  const detailTradeId = Number(searchParams.get("trade")) || null;
+  const openTradeDetail = (id: number) => {
+    const qs = new URLSearchParams(searchParams.toString());
+    qs.set("trade", String(id));
+    router.push(`${pathname}?${qs.toString()}`);
+  };
+  const closeTradeDetail = () => {
+    const qs = new URLSearchParams(searchParams.toString());
+    qs.delete("trade");
+    const s = qs.toString();
+    router.replace(s ? `${pathname}?${s}` : pathname);
+  };
 
   // #638 L2 S6 预填归一：products 参数是 (code, market) 精确匹配，缺 market 段宁可不筛
   //（空串段 = 要求 market == ""，静默空列表）；trade_type 只认 Select 实际提供的 buy/sell。
@@ -651,11 +675,21 @@ export default function TradesContent({
         </Badge>
       </TableCell>
       <TableCell className="text-right">
+        {/* #789 只读详情入口：**每一行**都有（含 CASH 腿——移出下方 isRebalCashLeg
+            的 null 分支）；详情弹窗无任何写操作，不触碰本列生命周期按钮矩阵 */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => openTradeDetail(trade.id)}
+          title="详情"
+        >
+          <Info className="h-4 w-4" />
+        </Button>
         {/* 操作按钮对齐后端允许矩阵（#176）：pending=确认/删除（场内无取消，
             与后端 cancel_trade 的 CANNOT_CANCEL_EXCHANGE 一致）；confirmed=取消确认/修改引导，无删除。
             #493：调仓 CASH 腿（含孤儿行）不露出任何生命周期按钮——后端对其
             confirm/unconfirm/cancel/delete 一律 CASH_TRADE_FORBIDDEN，唯一驱动入口是基金腿 */}
-        {isRebalCashLeg(trade) ? null : (
+        {isAdmin && !isRebalCashLeg(trade) && (
           <>
             {trade.status === "pending" && (
               <>
@@ -846,7 +880,7 @@ export default function TradesContent({
             <p className="text-muted-foreground">组合代码: {code}</p>
           </div>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
+        {isAdmin && <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -1077,7 +1111,7 @@ export default function TradesContent({
               </DialogFooter>
             </form>
           </DialogContent>
-        </Dialog>
+        </Dialog>}
       </div>
 
       <Card>
@@ -1426,6 +1460,14 @@ export default function TradesContent({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* #789 只读交易详情弹窗：开关事实源是 URL `?trade=`（见组件头注释） */}
+      <TradeDetailDialog
+        portfolioCode={code}
+        tradeId={detailTradeId}
+        open={detailTradeId !== null}
+        onOpenChange={(open) => !open && closeTradeDetail()}
+      />
 
       {/* #248：确认动作改为信息核对弹窗（完整记录 + 后端预览值），弹窗内二次确认才发起请求。
           #493：到账日期/到账平台在弹窗内录入，由弹窗回传有效选项（缺省不传 → 后端取 A=C、同基金平台） */}
