@@ -6,7 +6,8 @@
  *   关闭后列表状态不变
  * - 断言 3：confirmed reinvest_dividend 全字段回查——解析净值 1.6000、红利金额
  *   ¥500.00（= quantize(1000 份 × 0.5)，与后端计算单点同源）、确认时间非 --
- * - 断言 4：confirmed cash_dividend 红利金额 == 现金变化；到账日 null 注「默认除息日」
+ * - 断言 4：confirmed cash_dividend 红利金额 == 现金变化；到账日 null 值 --、
+ *   注「默认除息日 {除息日}」带生效日（与列表列/确认弹窗口径对齐，#804 复审）
  * - 断言 5：pending 自动计算型全 --（不出现误导性 0.00）；reinvest_nav null 注
  *   「确认时取除息日净值」（存量 0 值形态后端拒绝经 API 造出，照实显示由
  *   formatNav 的 0 值不 fallback 保证，utils 单测覆盖）
@@ -140,6 +141,8 @@ test.describe('份额变动事件详情弹窗（#754，双端）', () => {
     const event = await createEvent(page, s, { event_type: 'reinvest_dividend', div_cash: 0.5 });
 
     await gotoEvents(page, s);
+    // count() 不自动重试：先等目标行渲染，避免列表首帧读到 0（竞态 flake）
+    await expect(page.getByTestId(`share-event-${event.id}`)).toBeVisible({ timeout: 10_000 });
     const rowCount = await page.locator('table tbody tr').count();
     expect(rowCount).toBeGreaterThan(0);
     const row = page.getByTestId(`share-event-${event.id}`);
@@ -223,7 +226,7 @@ test.describe('份额变动事件详情弹窗（#754，双端）', () => {
     await expect(dlg.getByTestId('detail-dividend-amount')).toHaveText('¥500.00');
     await expect(dlg.getByTestId('detail-cash-change')).toHaveText('¥500.00');
     await expect(dlg.getByTestId('detail-cash-pay-date')).toContainText('--');
-    await expect(dlg.getByText('（默认除息日）')).toBeVisible();
+    await expect(dlg.getByText(`（默认除息日 ${s.ex}）`)).toBeVisible();
     // 类型显隐：现金分红无再投资净值/份额确认日行
     await expect(dlg.getByTestId('detail-reinvest-nav')).toHaveCount(0);
     await expect(dlg.getByTestId('detail-share-confirm-date')).toHaveCount(0);

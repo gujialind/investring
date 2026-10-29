@@ -73,10 +73,12 @@ class ShareChangeEventResponse(ShareChangeEventBase):
     confirmed_at: Optional[datetime] = None
     # 红利金额（#754）：读侧派生（非 DB 列），口径与确认/预览同一单点
     # reinvest_receivable.reinvest_dividend_amount（= quantize_amount(基数份额 ×
-    # 每份分红)）。confirmed cash_dividend 取落库 cash_change（确认时即同式量化，
-    # 恒等且天然覆盖存量行）；confirmed reinvest_dividend 现算；其余状态/类型
-    # （pending、cancelled、非分红类、confirmed 但 es 或 div_cash 为 null 的存量
-    # 脏行）为 null——前端显示 --，不折 0
+    # 每份分红)）。confirmed cash_dividend 恒取落库 cash_change（确认时即同式
+    # 量化，恒等且天然覆盖存量行；div_cash 为 null 的存量 confirmed 现金分红
+    # 也照实回 cash_change，即 #764 放行的 0.00 形态，不因输入缺失折 null）；
+    # confirmed reinvest_dividend 以 es × div_cash 现算，es 或 div_cash 为 null
+    # 的存量脏行为 null；其余状态/类型（pending、cancelled、非分红类）为
+    # null——前端显示 --，不折 0
     dividend_amount: Optional[float] = None
 
     class Config:

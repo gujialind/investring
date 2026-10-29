@@ -150,7 +150,10 @@ export function EventDetailDialog({ open, onOpenChange, event, platformNameMap }
                   <span data-testid="detail-cash-pay-date">
                     <span className="whitespace-nowrap">{formatDate(event.cash_pay_date ?? "")}</span>
                     {event.cash_pay_date == null && (
-                      <span className="ml-1 text-xs text-muted-foreground">（默认除息日）</span>
+                      // 值保持 --，注记带生效日：与列表列/确认弹窗展示的具体生效日对齐（#804 复审）
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        （默认除息日 {formatDate(event.ex_date)}）
+                      </span>
                     )}
                   </span>
                 }
@@ -163,7 +166,9 @@ export function EventDetailDialog({ open, onOpenChange, event, platformNameMap }
                   <span data-testid="detail-share-confirm-date">
                     <span className="whitespace-nowrap">{formatDate(event.share_confirm_date ?? "")}</span>
                     {event.share_confirm_date == null && (
-                      <span className="ml-1 text-xs text-muted-foreground">（默认除息日）</span>
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        （默认除息日 {formatDate(event.ex_date)}）
+                      </span>
                     )}
                   </span>
                 }
