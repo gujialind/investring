@@ -117,7 +117,14 @@ test.describe('凭证生命周期', () => {
       const completed = page.waitForResponse('**/api/auth/renew');
       release();
       await completed;
-      await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
+      if (replacement) {
+        await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
+      } else {
+        // 退出变体的收口语义：本 tab 内存仍认为已登录而本地凭证已被另一 tab 清除，
+        // 后续无凭证请求的 401 触发会话僵死清理并回到登录页（与「已撤销会话续期失败后
+        // 返回登录页」同一性质）；核心断言不变——迟到续期依然不得写回任何凭证。
+        await page.waitForURL(/\/(m\/)?login/);
+      }
       expect(await page.evaluate(() => localStorage.getItem('token'))).toBe(replacement?.token ?? null);
       expect(await page.evaluate(() => JSON.parse(localStorage.getItem('auth-storage')!).state.token)).toBe(replacement?.token ?? null);
     });

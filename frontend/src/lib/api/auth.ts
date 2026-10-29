@@ -18,8 +18,11 @@ export const authApi = {
       ? request<{ message: string }>({ method: "POST", url: "/auth/logout", headers: { Authorization: `Bearer ${token}` } })
       : Promise.resolve({ message: "已退出登录" }),
 
+  // 与 logout 同款短路：无凭证不发 "Bearer null"（服务端必 401，白跑一轮）。
   changePassword: (data: ChangePasswordRequest, token: string | null) =>
-    request<{ message: string }>({ method: "PUT", url: "/auth/password", data, headers: { Authorization: `Bearer ${token}` } }),
+    token
+      ? request<{ message: string }>({ method: "PUT", url: "/auth/password", data, headers: { Authorization: `Bearer ${token}` } })
+      : Promise.reject(new Error("登录状态已失效，请重新登录")),
 
   // 防御非 JSON 响应（反向代理 200 回 HTML 等）：user 缺失会让 setUser(undefined)
   // 使续期 owner 校验永久失败，必须在入口抛错而不是把坏数据交给 store。
