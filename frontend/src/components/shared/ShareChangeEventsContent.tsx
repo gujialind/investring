@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
-import { Plus, ArrowLeft, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil } from "lucide-react";
+import { Plus, ArrowLeft, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Eye } from "lucide-react";
 import Link from "next/link";
 import { ShareChangeEventCreate, ApiException } from "@/lib/api";
 import { platformApi } from "@/lib/api";
@@ -69,6 +69,7 @@ import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSele
 import SearchableProductSelect from "@/components/shared/SearchableProductSelect";
 import { CREATABLE_EVENT_TYPES, EVENT_TYPE_LABELS, EventConfirmDialog } from "@/components/shared/event-confirm-dialog";
 import { EventEditDialog } from "@/components/shared/event-edit-dialog";
+import { EVENT_STATUS_LABELS, EventDetailDialog } from "@/components/shared/event-detail-dialog";
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import ProductCell from "@/components/shared/ProductCell";
 import DatePairCell from "@/components/shared/DatePairCell";
@@ -90,12 +91,8 @@ interface ShareChangeEventsContentProps {
 
 const PLATFORM_LEVEL_TYPES: EventType[] = ["cash_dividend", "reinvest_dividend", "forced_adjustment"];
 
-// 状态徽标统一走 Badge variant 语义映射（#127，visual-spec §1.3）
-const STATUS_LABELS: Record<string, string> = {
-  pending: "待确认",
-  confirmed: "已确认",
-  cancelled: "已取消",
-};
+// 状态徽标统一走 Badge variant 语义映射（#127，visual-spec §1.3）；
+// 文案单点迁至 event-detail-dialog 的 EVENT_STATUS_LABELS（#754，列表列与详情弹窗共用）
 
 /**
  * 份额变动事件页内容（桌面/移动共用，#276）。
@@ -230,6 +227,10 @@ export default function ShareChangeEventsContent({
   const updateEvent = useUpdateShareChangeEvent(code, editingEvent?.id ?? 0);
   // 取消确认二次确认弹窗（#274；后端保护：SNAPSHOT_DEPENDENCY / CANNOT_UNCONFIRM_CHILD）
   const [unconfirmEventId, setUnconfirmEventId] = useState<number | null>(null);
+  // 查看详情（#754）：按 id 从当前行集派生——确认/取消确认等 mutation 经 invalidate
+  // 刷新列表后，打开中的弹窗数据随之新鲜（spec §3.1）；行消失（筛选变化）即关闭
+  const [detailEventId, setDetailEventId] = useState<number | null>(null);
+  const detailEvent = events.find((e) => e.id === detailEventId) ?? null;
   // 命中 PLATFORM_NOT_COVERED 时暂存待强制提交的数据，由确认框引导 force_cover 重试
   const [forceCoverData, setForceCoverData] = useState<ShareChangeEventCreate | null>(null);
   const [forceCoverMessage, setForceCoverMessage] = useState("");
@@ -796,11 +797,21 @@ export default function ShareChangeEventsContent({
                         </TableCell>
                         <TableCell>
                           <Badge variant={getStatusBadgeVariant(event.status)}>
-                            {STATUS_LABELS[event.status] || event.status}
+                            {EVENT_STATUS_LABELS[event.status] || event.status}
                           </Badge>
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-2">
+                            {/* 查看详情（#754）：全状态、父/子记录一律可读 */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="查看详情"
+                              data-testid={`event-detail-open-${event.id}`}
+                              onClick={() => setDetailEventId(event.id)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
                             {event.status === "pending" && (
                               <>
                                 {/* 编辑（#342）：仅 pending 父记录；子记录恒为 confirmed，parent 守卫为防御性 */}
@@ -904,6 +915,14 @@ export default function ShareChangeEventsContent({
         onSubmit={(payload) =>
           updateEvent.mutate(payload, { onSuccess: () => setEditingEvent(null) })
         }
+      />
+
+      {/* #754：只读详情弹窗（走行数据、零新请求；全状态、父/子记录均可查） */}
+      <EventDetailDialog
+        open={detailEvent !== null}
+        onOpenChange={(open) => !open && setDetailEventId(null)}
+        event={detailEvent}
+        platformNameMap={platformNameMap}
       />
 
       {/* PLATFORM_NOT_COVERED 强制提交确认 */}
