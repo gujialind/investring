@@ -55,6 +55,8 @@ ir config set base_url https://ir.example.com
 export IR_BASE_URL=https://ir.example.com
 ```
 
+**代理与 TLS 环境变量**：CLI **不读取任何代理环境变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及其小写形式均被忽略），始终直连 `base_url`（#798，与 #661 CD 探活"关键出站路径不继承主机代理环境"口径一致）。httpx 的 `trust_env` 整体关闭，因此 `.netrc`、`SSL_CERT_FILE`、`REQUESTS_CA_BUNDLE` 亦不生效；确需经代理或自定义 CA 访问服务端时，请在系统/网络层（如透明代理）解决或向维护者反馈需求。
+
 ### 2.3 获取帮助
 
 ```bash
@@ -91,7 +93,7 @@ ir schema trade              # 仅输出指定命令组
   收尾条件仍按每页 `total`（行数）判，语义未变。详见 [`ir trade list`](#ir-trade-list)
 - `hints`：可选的顶层提示数组（如 create 返回 pending 时提示 confirm）
 
-### 3.2 错误响应（exit code 1=业务错误 / 2=认证错误 / 3=连接错误 / 64=用法错误）
+### 3.2 错误响应（exit code 1=业务错误或未预期内部错误 / 2=认证错误 / 3=连接错误 / 64=用法错误）
 
 未知选项、未知子命令、缺必填参数也走同一份 JSON（`code="USAGE_ERROR"`，exit 64），
 不再只往 stderr 打一行人读文本——脚本与 agent 只需读 stdout 即可判定全部失败类别。
@@ -125,6 +127,8 @@ ir schema trade              # 仅输出指定命令组
 | `CONNECTION_ERROR` / `TIMEOUT_ERROR` / `NETWORK_ERROR` | 网络层失败：连接失败 / 超时 / 传输中断 |
 | `INVALID_JSON` | 本地校验：`--json` 不是合法 JSON 对象 |
 | `USAGE_ERROR` | Click 层用法错误：未知选项 / 未知子命令 / 缺必填参数。由入口统一收敛（`ir_cli/main.py::IrTyperGroup`），**exit 64**、命令未执行（#520） |
+| `CLIENT_INIT_ERROR` | HTTP 客户端构造失败（构造期异常，含第三方库内部错误），**exit 3**；CLI 不读取代理环境变量（见 §2.2），排查方向为 `IR_BASE_URL` 合法性（#798） |
+| `INTERNAL_ERROR` | 未预期异常的全局兜底：任何未经专用错误出口收敛的异常由入口转为此码，**exit 1**，stdout 恒 JSON、不漏 raw traceback（#798）；设 `IR_DEBUG=1` 时完整异常栈写入 stderr（stdout 契约不变），报障复现时建议带上 |
 
 **常见后端码摘选**（完整清单与触发条件见总表）：
 
@@ -1805,9 +1809,9 @@ if [ $exit_code -ne 0 ]; then
 fi
 ```
 
-**退出码：** 0=成功 / 1=业务错误(可换参重试) / 2=认证错误(需 `ir auth login`) / 3=连接/超时 / 64=用法错误(选项/参数不存在，看 `ir schema --index` 与 `--help` 换参数，**不要**重跑 `ir auth login`)
+**退出码：** 0=成功 / 1=业务错误或未预期内部错误(见 error.code) / 2=认证错误(需 `ir auth login`) / 3=连接/超时 / 64=用法错误(选项/参数不存在，看 `ir schema --index` 与 `--help` 换参数，**不要**重跑 `ir auth login`)
 
-> 1 与 64 的处置不同：1 表示命令跑到后端并被业务规则拒绝（换参数值可能成功），64 表示命令根本没执行（参数名本身不对，重试同一串参数必然再错）。
+> 1 与 64 的处置不同：1 表示命令已执行但失败——多数是跑到后端被业务规则拒绝（换参数值可能成功），也可能是未预期内部错误（`error.code` 为 `INTERNAL_ERROR`，重试同样参数通常无效，请按 hints 附 JSON 反馈维护者，复现时加 `IR_DEBUG=1` 取 stderr 异常栈）；64 表示命令根本没执行（参数名本身不对，重试同一串参数必然再错）。
 
 ### 6.3 链式操作
 

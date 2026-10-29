@@ -7,7 +7,10 @@ HTTP 客户端封装
 - IR_TOKEN: 直接指定 token（优先于 ~/.ir/token.json，适合 CI/一次性调用）
 - IR_CONNECT_TIMEOUT / IR_HTTP_TIMEOUT: 连接/读取超时
 - IR_RETRY: GET 请求失败重试次数（默认 2，仅幂等 GET 重试网络异常/5xx）
-- IR_DEBUG: 设为 1 时向 stderr 输出请求耗时与状态码
+- IR_DEBUG: 设为 1 时向 stderr 输出请求耗时、状态码与未预期异常的完整栈（stdout 恒单 JSON，#799 评审 S1）
+
+代理口径：不读取任何代理环境变量（trust_env=False，#798/#661），始终直连 base_url，
+见 CLI_MANUAL.md §2.2。
 """
 import os
 import sys
@@ -58,11 +61,26 @@ class APIClient:
             write=30.0,
             pool=5.0,
         )
-        self._client = httpx.Client(
-            base_url=self.base_url,
-            headers=headers,
-            timeout=timeout,
-        )
+        # trust_env=False：不读取代理环境变量（HTTP_PROXY/HTTPS_PROXY/NO_PROXY 及小写形式），
+        # 也不读取 .netrc / SSL_CERT_FILE / REQUESTS_CA_BUNDLE，始终直连 base_url。
+        # 根因：no_proxy 含带方括号 IPv6（如 [::1]，curl 语义合法）时 httpx 0.28 生成非法
+        # pattern `all://*[::1]`，构造期抛 InvalidURL 漏出 raw traceback（#798）。
+        # 口径与 #661（CD 探活不继承主机代理环境）一致，见 CLI_MANUAL.md §2.2。
+        try:
+            self._client = httpx.Client(
+                base_url=self.base_url,
+                headers=headers,
+                timeout=timeout,
+                trust_env=False,
+            )
+        except Exception as e:
+            # 构造期异常同样必须走 JSON 错误出口（#798 C1），归连通性类 exit 3
+            error(
+                "CLIENT_INIT_ERROR",
+                f"HTTP 客户端初始化失败: {type(e).__name__}: {e}",
+                details={"base_url": self.base_url},
+                exit_code=EXIT_CONNECTION,
+            )
 
     @classmethod
     def from_config(cls, require_auth: bool = True) -> "APIClient":
@@ -223,7 +241,14 @@ class APIClient:
                 exit_code=EXIT_CONNECTION,
             )
         if isinstance(last_exc, httpx.ConnectError):
-            error("CONNECTION_ERROR", f"无法连接到 {self.base_url}，请检查 IR_BASE_URL 配置", exit_code=EXIT_CONNECTION)
+            # 文案含代理口径提示：trust_env=False 后「只能经代理出站」的机器会落到本分支，
+            # 真因不在 IR_BASE_URL，避免排查方向被误导（#799 评审 S3）
+            error(
+                "CONNECTION_ERROR",
+                f"无法连接到 {self.base_url}，请检查 IR_BASE_URL 配置；"
+                "本 CLI 不读取代理环境变量（见手册 §2.2），依赖代理出站的环境请在系统/网络层解决",
+                exit_code=EXIT_CONNECTION,
+            )
         error(
             "NETWORK_ERROR",
             f"网络传输中断: {type(last_exc).__name__}: {last_exc}；服务端可能仍在执行，请先回查结果再决定是否重发",

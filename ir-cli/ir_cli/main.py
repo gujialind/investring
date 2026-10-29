@@ -6,12 +6,15 @@ InvestRing CLI - HTTP Client 入口
 """
 import importlib
 import sys
+import traceback
 from typing import Optional
 
 import typer
 import typer.core
 
-from ir_cli.output import EXIT_USAGE, error
+# _debug_enabled 是 IR_DEBUG 语义的单一事实源（client.py），此处复用不另造判断
+from ir_cli.client import _debug_enabled
+from ir_cli.output import EXIT_BUSINESS, EXIT_USAGE, error
 
 
 def _click_exc_class(name: str) -> Optional[type]:
@@ -74,6 +77,20 @@ class IrTyperGroup(typer.core.TyperGroup):
             # Ctrl-C / 交互中断：与 Click standalone 行为一致
             typer.echo("Aborted!", err=True)
             sys.exit(1)
+        except Exception as exc:
+            # 全局兜底：任何未预期异常（含第三方库构造期）转 JSON 错误出口，
+            # stdout 恒 JSON、不漏 raw traceback（#798 C2）。error() 抛 SystemExit
+            # （BaseException），不会被本 handler 自吞；专用出口（USAGE_ERROR/
+            # CLIENT_INIT_ERROR/网络类等）在前序分支或命令体内已先行收敛。
+            # IR_DEBUG=1 时把完整栈写到 stderr（stdout 单 JSON 契约不变），
+            # 供维护者定位未预期异常（#799 评审 S1）；默认不打，报障需复现时加 IR_DEBUG=1。
+            if _debug_enabled():
+                traceback.print_exc()
+            error(
+                "INTERNAL_ERROR",
+                f"未预期错误: {type(exc).__name__}: {exc}",
+                exit_code=EXIT_BUSINESS,
+            )
         if not standalone_mode:
             return result
         # standalone_mode=False 下 --help 等路径由 Click 返回退出码，而不是自行 sys.exit
@@ -84,7 +101,7 @@ _PROTOCOL_HELP = """InvestRing CLI - HTTP Client
 
 输出协议: 成功 {"ok":true,"data":...,"meta"?,"hints"?} / 失败 {"ok":false,"error":{"code","message","hints"?}}
 
-退出码: 0=成功 1=业务错误(可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在，命令未执行)
+退出码: 0=成功 1=业务错误或未预期内部错误(见 error.code，业务错误可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在，命令未执行)
 
 诊断信息输出至 stderr，脚本/Agent 解析请只读取 stdout
 

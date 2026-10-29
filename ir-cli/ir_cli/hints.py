@@ -54,6 +54,9 @@ ERROR_HINTS: dict = {
     "CONFIRM_REQUIRED": "破坏性操作未确认已被拒绝：先用命令给出的 get/status 目标核实影响面，确认无误后追加 --yes 重跑",
     # CLI 侧错误码（后端不产出）：#520 用法错误改由入口统一收敛为 JSON + exit 64
     "USAGE_ERROR": "选项/参数不存在或必填缺失，命令未执行：先 ir schema --index 定位命令，再 ir <组> <子命令> --help 看该命令全部选项",
+    # #798：构造期异常（exit 3）与全局兜底（exit 1），保证任何异常路径都走 JSON 错误出口
+    "CLIENT_INIT_ERROR": "HTTP 客户端初始化失败：检查 IR_BASE_URL 是否为合法 URL（含 http(s):// 协议头）；本 CLI 不读取代理环境变量，无需排查 no_proxy/http_proxy；仍失败请附本条 JSON 与 ir --version 输出反馈维护者",
+    "INTERNAL_ERROR": "未预期内部错误：请附本条 JSON、完整命令行与 ir --version 输出反馈维护者；可先用 ir schema --index 核对命令用法后重试",
 }
 
 
