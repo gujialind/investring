@@ -117,6 +117,7 @@ def test_confirmed_at_null_for_pending_and_cancelled(base, client, admin_headers
     cancelled = _get(client, admin_headers, pending["id"])
     assert cancelled["status"] == "cancelled"
     assert cancelled["confirmed_at"] is None
+    assert cancelled["dividend_amount"] is None
 
 
 # ---------------- dividend_amount 派生矩阵 ----------------
@@ -233,3 +234,52 @@ def test_orm_row_serializes_without_api_touch(base, test_db):
     assert "dividend_amount" not in columns  # 读侧派生、不落库
     assert "confirmed_at" in columns          # DB 列已存在（#754 仅暴露到响应）
     assert event.confirmed_at is None
+
+
+def test_cancelled_row_with_stored_values_dividend_null(base, test_db, client, admin_headers):
+    """cancelled 携存量计算值：派生恒 null（状态门优先于落库值）。"""
+    event = create_share_change_event(
+        test_db, PORT, FUND, "CN_OTC", event_type="cash_dividend",
+        ex_date=EX, entitlement_date=ENT, platform_code=PLAT, div_cash=DIV_CASH,
+        entitlement_shares=SHARES, cash_change=Decimal("100.00"), status="cancelled",
+    )
+    got = _get(client, admin_headers, event.id)
+    assert got["status"] == "cancelled"
+    assert got["dividend_amount"] is None
+    assert got["confirmed_at"] is None
+
+
+def test_fund_level_parent_and_children_dividend_amount(base, test_db, client, admin_headers):
+    """基金级确认拆子记录：父与各子的 dividend_amount 分别等于自身 cash_change。
+
+    子行的 entitlement_shares / cash_change 由平台自身份额算出（_confirm_fund_level_event），
+    派生若误取父记录口径本用例会红（L2 评审 Suggestion-2）。
+    """
+    plat2 = "PL754B"
+    create_platform(test_db, code=plat2)
+    create_position_snapshot(
+        test_db, PORT, FUND, "CN_OTC", snapshot_date=ENT, shares=400.0,
+        unit_price=1.2, cost_price=1.2, market_value=480.0, platform_code=plat2,
+    )
+    test_db.commit()
+    # 基金级事件不传 platform_code（REST 显式 null 会被 null_guard 拒，ORM 直造）
+    parent_event = create_share_change_event(
+        test_db, PORT, FUND, "CN_OTC", event_type="cash_dividend",
+        ex_date=EX, entitlement_date=ENT, div_cash=DIV_CASH,
+    )
+    confirmed = _confirm(client, admin_headers, parent_event.id)
+    assert confirmed["dividend_amount"] == confirmed["cash_change"]  # 父 = 全平台合计
+
+    listed = client.get(f"/api/share-change-events?portfolio_code={PORT}", headers=admin_headers)
+    items = listed.json()["items"]
+    children = [row for row in items if row.get("parent_event_id") == parent_event.id]
+    assert len(children) == 2  # 两平台各拆一条子记录
+    child_amounts = sorted(row["cash_change"] for row in children)
+    assert child_amounts == [50.0, 125.0]  # 400×0.125 / 1000×0.125，与父合计 175 区分
+    for row in children + [confirmed]:
+        assert row["dividend_amount"] == row["cash_change"]
+        assert row["dividend_amount"] is not None
+    # 子记录单条 GET 同口径（不依赖 list 接线）
+    for row in children:
+        single = _get(client, admin_headers, row["id"])
+        assert single["dividend_amount"] == single["cash_change"]

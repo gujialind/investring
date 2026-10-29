@@ -847,7 +847,7 @@ ir share-event create \
 
 #### `ir share-event get`
 
-查看事件详情，原样输出 `cash_pay_date` 与 `share_confirm_date`；未设置时保留 `null`，不将默认除息日填回响应字段。`confirmed_at`（确认时间）与 `dividend_amount`（红利金额）为读侧派生字段（#754）：未确认 / 已取消的事件 `confirmed_at` 为 `null`；`dividend_amount` 仅 confirmed 的现金分红 / 红利再投资有值，其余（未确认、非分红类）为 `null`。
+查看事件详情，原样输出 `cash_pay_date` 与 `share_confirm_date`；未设置时保留 `null`，不将默认除息日填回响应字段。`confirmed_at`（确认时间）为已存在的 DB 列（#754 仅首次暴露到响应；未确认 / 已取消的事件为 `null`）；`dividend_amount`（红利金额）为读侧派生字段（非 DB 列）：仅 confirmed 的现金分红 / 红利再投资有值，其余（未确认、非分红类）为 `null`。
 
 ```bash
 ir share-event get <ID>
