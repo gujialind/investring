@@ -245,7 +245,9 @@ test.describe('现金分红到账日（#522，双端）', () => {
   });
 
   test('默认到账日创建及非现金类型显隐、切换后不提交遗留日期', async ({ page }, testInfo) => {
-    test.setTimeout(90_000);
+    // #754：操作列 +1 按钮加重移动端长链路（5 次类型切换 + 弹层开合）负担，
+    // 2 核机 --workers=2 下按 #763 口径仅对 mobile 放宽预算（等待条件与断言不动）
+    test.setTimeout(testInfo.project.name === 'mobile' ? 120_000 : 90_000);
     const s = await setupPortfolio(page, testInfo, 'B');
     const create = await openCreate(page, s);
     const createdIds: number[] = [];

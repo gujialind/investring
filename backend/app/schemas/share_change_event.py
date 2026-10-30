@@ -1,6 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import List, Literal, Optional
 from datetime import date, datetime
+
+from app.services.reinvest_receivable import reinvest_dividend_amount
 
 
 class ShareChangeEventBase(BaseModel):
@@ -66,9 +68,39 @@ class ShareChangeEventResponse(ShareChangeEventBase):
     product_name: Optional[str] = None
     # 显示码读侧派生（#705，非 DB 列）：与 product_name 同批填充（仅 list 端点）
     display_code: Optional[str] = None
+    # 确认时间（#754）：DB 列已存在（确认写入、取消确认清空），from_attributes
+    # 下全端点自动填充；pending/cancelled 为 null
+    confirmed_at: Optional[datetime] = None
+    # 红利金额（#754）：读侧派生（非 DB 列），口径与确认/预览同一单点
+    # reinvest_receivable.reinvest_dividend_amount（= quantize_amount(基数份额 ×
+    # 每份分红)）。confirmed cash_dividend 恒取落库 cash_change（确认时即同式
+    # 量化，恒等且天然覆盖存量行；div_cash 为 null 的存量 confirmed 现金分红
+    # 也照实回 cash_change，即 #764 放行的 0.00 形态，不因输入缺失折 null）；
+    # confirmed reinvest_dividend 以 es × div_cash 现算，es 或 div_cash 为 null
+    # 的存量脏行为 null；其余状态/类型（pending、cancelled、非分红类）为
+    # null——前端显示 --，不折 0
+    dividend_amount: Optional[float] = None
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def _derive_dividend_amount(self):
+        if self.status != "confirmed":
+            return self
+        if self.event_type == "cash_dividend":
+            self.dividend_amount = self.cash_change
+        elif (
+            self.event_type == "reinvest_dividend"
+            and self.entitlement_shares is not None
+            and self.div_cash is not None
+        ):
+            self.dividend_amount = float(
+                reinvest_dividend_amount(
+                    self.entitlement_shares, self.div_cash
+                )
+            )
+        return self
 
 
 class ShareChangeEventPreviewResult(BaseModel):
