@@ -22,6 +22,7 @@ ACTION_DELETE = "delete"
 ACTION_GENERATE = "generate"
 ACTION_RECALCULATE = "recalculate"
 ACTION_CASCADE_UNCONFIRM = "cascade_unconfirm"
+ACTION_REVOKE = "revoke"
 
 # ---- resource types (≤50 chars) ----
 
@@ -31,6 +32,7 @@ RESOURCE_CASH_TRANSFER = "cash_transfer"
 RESOURCE_SHARE_CHANGE_EVENT = "share_change_event"
 RESOURCE_SNAPSHOT = "snapshot"
 RESOURCE_MANUAL_MARKET_VALUE = "manual_market_value"
+RESOURCE_API_KEY = "api_key"
 
 # ---- sentinel ----
 

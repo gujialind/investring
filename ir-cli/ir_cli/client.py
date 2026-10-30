@@ -51,6 +51,8 @@ class APIClient:
 
     def __init__(self, base_url: str, token: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
+        self.token = token
+        self._managed_token = False
         headers = {"Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -92,7 +94,64 @@ class APIClient:
             token = token_data["token"] if token_data else None
         if require_auth and not token:
             error("AUTH_REQUIRED", "未登录或 token 已过期，请执行: ir auth login", exit_code=EXIT_AUTH)
-        return cls(base_url, token)
+        client = cls(base_url, token)
+        client._managed_token = bool(token) and not bool(os.environ.get("IR_TOKEN"))
+        return client
+
+    def _renew_if_needed(self) -> None:
+        # IR_TOKEN / API Keys belong to their external credential manager.
+        if not self._managed_token or not self.token or self.token.startswith("ir_key_"):
+            return
+        data = config.load_token(include_expired=True)
+        if not data or data["token"] != self.token:
+            raise ApiError("AUTH_REQUIRED", "本地凭证已改变，请重新执行命令", {"http_status": 401})
+        remaining = config.token_remaining(data)
+        if remaining is not None and remaining <= 0:
+            raise ApiError("AUTH_REQUIRED", "登录已过期，请执行: ir auth login", {"http_status": 401})
+        if remaining is None or remaining > 86400:
+            return
+        try:
+            response = self._client.post("/api/auth/renew")
+        except httpx.HTTPError:
+            print("[警告] 续期连接失败，本次尝试使用原凭证；未重试业务写入", file=sys.stderr)
+            return
+        if response.status_code >= 500:
+            print("[警告] 服务端暂时无法续期，本次尝试使用原凭证", file=sys.stderr)
+            return
+        if response.status_code == 401:
+            try:
+                config.clear_token(expected_token=self.token)
+            except OSError:
+                print("[警告] 失效凭证无法从本地清除；业务请求尚未发送", file=sys.stderr)
+        elif response.status_code >= 400:
+            # 意外 4xx（如新旧版本错位的 404）不判死仍有效的凭证：与 5xx 同样降级。
+            print(f"[警告] 续期返回 HTTP {response.status_code}，本次尝试使用原凭证", file=sys.stderr)
+            return
+        renewed = self._handle_response(response, raise_errors=True)["data"]
+        try:
+            valid = (
+                isinstance(renewed, dict)
+                and isinstance(renewed.get("token"), str) and bool(renewed["token"])
+                and isinstance(renewed.get("expires_at"), str)
+                and (config.token_remaining(renewed) or 0) > 0
+                and isinstance(renewed.get("user"), dict)
+                and isinstance(data.get("user"), dict)
+                and isinstance(data["user"].get("code"), str)
+                and renewed["user"].get("code") == data["user"]["code"]
+            )
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise ApiError("INVALID_RESPONSE", "续期响应无效，原凭证未替换，业务请求尚未发送")
+        try:
+            saved = config.save_token(renewed, expected_token=self.token)
+        except OSError:
+            raise ApiError("CREDENTIAL_STORE_ERROR", "续期凭证无法安全保存，业务请求尚未发送") from None
+        if not saved:
+            raise ApiError("AUTH_REQUIRED", "续期期间本地凭证已改变，业务请求尚未发送", {"http_status": 401})
+        self.token = renewed["token"]
+        self._client.headers["Authorization"] = f"Bearer {self.token}"
+        print("[认证] 登录凭证已自动续期", file=sys.stderr)
 
     def _handle_response(self, resp: httpx.Response, raise_errors: bool = False) -> dict:
         """统一处理 HTTP 响应（raise_errors=True 时 HTTP >=400 抛 ApiError 而非直接退出）"""
@@ -204,6 +263,15 @@ class APIClient:
     ) -> dict:
         """统一请求入口：幂等请求（GET）在网络异常/5xx 时按 IR_RETRY 重试；
         非幂等请求任何网络异常直接进入循环外错误处理（不重试）"""
+        if path not in {"/api/auth/login", "/api/auth/logout", "/api/auth/password", "/api/auth/status"}:
+            try:
+                self._renew_if_needed()
+            except ApiError as exc:
+                if raise_errors:
+                    raise
+                status = (exc.details or {}).get("http_status")
+                error(exc.code, exc.message, details=exc.details,
+                      exit_code=EXIT_AUTH if status == 401 else (1 if status else EXIT_CONNECTION))
         max_retries = 0
         if retryable:
             try:

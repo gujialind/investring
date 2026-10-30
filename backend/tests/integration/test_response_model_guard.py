@@ -37,8 +37,6 @@ WHITELIST: dict[tuple[str, str], str] = {
     ("GET", "/"): "应用欢迎语，固定 {'message'}；非业务数据",
     ("GET", "/health"): "健康检查，固定 {'status': 'healthy'}；Docker/CI 探针契约",
     # ---- 纯消息确认型：动作回执，无业务数据体 ----
-    ("POST", "/api/auth/logout"): "登出回执，仅 {'message'}",
-    ("PUT", "/api/auth/password"): "改密回执，仅 {'message'}",
     ("DELETE", "/api/investors/{code}"): "删除回执，仅 {'message'}",
     ("POST", "/api/portfolios/{code}/close"): "关闭回执，仅 {'message'}",
     ("POST", "/api/portfolios/{code}/reactivate"): "重开回执，仅 {'message'}",

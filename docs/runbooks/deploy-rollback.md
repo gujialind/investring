@@ -126,8 +126,13 @@ commit）。
 | 0022 | `share_change_event.share_confirm_date`（#743 再投资份额确认日，可空新列，无数据回填） | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提（与 0019 同族）：downgrade 先探测「存在非空 `share_confirm_date`」，命中即 `RuntimeError` 且拒绝发生在任何 DDL 之前——该列一旦被使用即承载「份额在哪一天到账」的记账事实，删列等于销毁，只能走前滚（§4.1）或 RDS 快照恢复；未使用的库（含 CI 空库往返）完整可逆，列不存在时空转 |
 | 0023 | `trading_calendar` 单列唯一 → `(calendar_date, exchange)` 联合唯一 + `exchange` NOT NULL/server_default 'SSE'（#777 双市场日历）；upgrade 含一步参考数据 UPDATE（NULL/空串 exchange 归一为 SSE） | 已实现，**有条件拒绝（探测先行、零写入中止）** | 无损：downgrade 删除非 SSE 行——日历是可经 `calendar_sync` 重新同步的参考数据，无账务后果；恢复单列唯一前先探测 SSE 行同日重复，命中即 `RuntimeError` 且发生在任何删改之前。回退后需重跑同步才能再拿回 HKEX 行；SSE 原始行全程不动。升级/回退两端幂等（已是目标态空转，仿 0016 三分支） |
 | 0024 | 自动分红存量改为 `event_type="dividend_pending"`（#775，接 0023，纯数据迁移，无列结构变化） | **有条件拒绝（零写入整体中止）**；没有新类型时 no-op | 只要存在任何 `dividend_pending`（包括 cancelled、任何来源），downgrade 即列 ID 并在任何 DML 前拒绝；未知方式不能逆推成再投资。完全没有该类型时可安全空转回退；存在时走前滚（§4.1）或另行授权的数据处置，禁止批量猜方式或 stamp 旧 revision |
+| 0025 | 持久化密码会话、代理 API Key 与审计凭证身份（#797） | 已实现，**有条件拒绝（零写入整体中止）** | 会话/Key 表存在任一记录，或审计凭证身份列存在非空值，即在任何写入前拒绝；已撤销记录也不能删除。仅从未使用的空凭证结构允许降级 |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
+
+**0025 认证切换与回滚边界**（[迁移实现](../../backend/alembic/versions/0025_persistent_credentials.py)）：经目标库及发布动作授权后，先备份并按状态指纹执行显式 migrate，再将所有服务实例切换到兼容持久化认证的版本；切换窗口停止旧实例接收认证/业务写入，不混跑新旧认证实现。旧版无 `sid` 的 Token 上线后失效，用户须登录一次；代理随后创建独立 Key，生命周期见[认证规则](../reference/business-constraints.md#rule-auth)。验收须覆盖跨实例撤销、续期、Key 财务预览/写入与访问/审计身份。
+
+回到旧版无状态认证可能重新接受已经撤销的 JWT，**保留数据库表也不能使旧代码安全**。功能使用后优先前滚修复，不回退至忽略持久化撤销的版本。禁止删除会话/Key/撤销记录、清除审计身份或 stamp 旧 revision 来绕过拒绝；备份恢复也须另行授权并评估撤销状态倒退，必要时轮换签名密钥并撤销受影响凭证。上述步骤是操作要求，不表示本次已执行生产迁移或部署。
 
 **0024 存量升级与拒绝处置**（[迁移实现](../../backend/alembic/versions/0024_pending_dividend_method.py)）：先读取全部 `event_source=tushare/status=pending/event_type=reinvest_dividend` 候选，只转换原检测器形态（CN_OTC、除息日晚于登记日、平台明确、无父/子记录、无确认派生值或方式专属字段），并要求同组合除息日起没有市值快照。仅改类型，身份、公告、金额、备注及时间原样保留；旧 `div_cash` 缺失或非法也不改值，留待新版本补录后选择方式。manual、confirmed、cancelled 及其他类型不动，重复升级空转。
 

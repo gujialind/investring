@@ -1,4 +1,5 @@
 from app.models.investor import Investor
+from app.models.auth import AuthSession, ApiKey
 from app.models.portfolio import Portfolio
 from app.models.investor_holding import InvestorHolding
 from app.models.platform import Platform
@@ -28,6 +29,8 @@ from app.models.manual_market_value import ManualMarketValue
 
 __all__ = [
     "Investor",
+    "AuthSession",
+    "ApiKey",
     "Portfolio", 
     "InvestorHolding",
     "Platform",

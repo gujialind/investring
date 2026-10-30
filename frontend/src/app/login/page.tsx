@@ -25,11 +25,13 @@ export default function LoginPage() {
     try {
       const response = await authApi.login({ code, password });
       const { token, user } = response;
-      if (!token) {
+      // expires_at 与 token 同批校验：缺失/畸形会让 persistCredential 写入字面量
+      // "undefined"，activeToken 里 Date.parse 得 NaN，导致每个请求都触发续期。
+      if (!token || Number.isNaN(Date.parse(response.expires_at))) {
         setError("登录响应无效，请检查后端服务是否可达");
         return;
       }
-      login(token, user);
+      login(token, user, response.expires_at);
       // 使用完整路径跳转，兼容 ModelScope Studio 等子路径部署
       window.location.href = `${getBasePath()}/dashboard`;
     } catch (err) {

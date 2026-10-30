@@ -32,6 +32,10 @@ REGEN_CMD = "python ir-cli/scripts/gen_response_fields.py"
 
 # (命令组, 子命令, openapi schema 名, 响应形状 list/object, SUMMARY_FIELDS 资源键或 None)
 COMMAND_SCHEMA_MAP = [
+    ("auth", "status", "AuthStatus", "object", None),
+    ("auth", "key-create", "ApiKeyCreated", "object", None),
+    ("auth", "key-list", "ApiKeyInfo", "list", None),
+    ("auth", "key-revoke", "ApiKeyInfo", "object", None),
     ("position", "list", "PositionResponse", "list", "position"),
     ("portfolio", "create", "PortfolioResponse", "object", None),
     ("portfolio", "get", "PortfolioResponse", "object", None),
@@ -167,6 +171,8 @@ def build_response_fields() -> dict:
             _field_spec(name, prop, required, summary, cmd_key)
             for name, prop in props.items()
         )
+        if cmd_key == "auth.status":
+            fields += ",base_url:str"  # CLI 当前服务地址，不属于服务端响应。
         entry: dict = {"shape": shape, "fields": fields}
         notes: dict = {}
         if cmd_key in NOTES_OVERRIDES:

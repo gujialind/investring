@@ -58,7 +58,7 @@ from app.models import (
     Subscription, Trade, ShareChangeEvent,
     SyncJob, ManualMarketValue, Notification, IdempotencyCache,
 )
-from app.utils.security import create_access_token
+from app.services.auth_service import create_session
 
 
 # ============================================================================
@@ -149,14 +149,8 @@ def _seed_base_data(test_engine):
 
 @pytest.fixture(autouse=True)
 def _clear_auth_global_state():
-    """每个测试前清空进程级认证全局状态，避免跨测试污染。
-
-    token_blacklist 为模块级内存集合：改密/登出测试会将当前 token 拉黑，
-    而同一秒内生成的同 sub/role token 字节完全一致，导致后续无关测试
-    随机 401（detail 为「登录状态已失效，请重新登录」）。login_failure_tracker 同理。
-    """
-    from app.utils.security import token_blacklist, login_failure_tracker
-    token_blacklist.clear()
+    """隔离仍为进程级的登录失败计数；会话撤销由 test_db 事务隔离。"""
+    from app.utils.security import login_failure_tracker
     login_failure_tracker.clear()
     yield
 
@@ -238,13 +232,13 @@ def client(test_db: Session) -> Generator[TestClient, None, None]:
 @pytest.fixture
 def admin_token(test_db: Session) -> str:
     """生成管理员用户的 JWT Token"""
-    return create_access_token({"sub": "ADMIN", "role": "admin"})
+    return create_session(test_db, test_db.get(Investor, "ADMIN"))["token"]
 
 
 @pytest.fixture
 def viewer_token(test_db: Session) -> str:
     """生成普通用户（viewer）的 JWT Token"""
-    return create_access_token({"sub": "VIEWER", "role": "viewer"})
+    return create_session(test_db, test_db.get(Investor, "VIEWER"))["token"]
 
 
 @pytest.fixture

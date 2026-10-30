@@ -5,8 +5,9 @@
 """
 import json
 import os
-import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -38,68 +39,83 @@ def get_base_url() -> str:
     return "http://localhost:8000"
 
 
-def save_token(data: dict) -> None:
-    """写入 token.json，创建时即为 0600（无权限窗口）"""
-    token_file = get_ir_dir() / "token.json"
-    content = json.dumps(data, ensure_ascii=False)
-    # 先创建 0600 的临时文件再原子 rename，避免默认 umask 下短暂可读窗口
-    tmp_file = token_file.with_suffix(".json.tmp")
-    fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp_file, token_file)
-    except OSError:
-        # 降级：直接写入后补 chmod（Windows 等不支持的平台）
-        token_file.write_text(content, encoding="utf-8")
+@contextmanager
+def token_lock():
+    """稳定锁文件保护原子替换；锁文件不能随 token 删除。"""
+    fd = os.open(get_ir_dir() / "token.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "r+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+            lock.write(b"\0")
+            lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            os.chmod(token_file, 0o600)
-        except OSError:
-            pass
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def load_token() -> Optional[dict]:
-    """
-    读取 token.json。
-    过期返回 None；临近过期（<24h）打印 stderr 警告。
-    """
-    token_file = get_ir_dir() / "token.json"
-    if not token_file.exists():
-        return None
+def save_token(data: dict, *, expected_token: Optional[str] = None) -> bool:
+    """锁内比较再替换，防续期覆盖并发登出/新登录；临时文件从创建即为 0600。"""
+    with token_lock():
+        if expected_token is not None:
+            current = load_token(include_expired=True)
+            if not current or current["token"] != expected_token:
+                return False
+        token_file = get_ir_dir() / "token.json"
+        fd, temporary = tempfile.mkstemp(prefix=".token-", dir=token_file.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, token_file)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    return True
 
-    try:
-        data = json.loads(token_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-        return None
 
+def token_remaining(data: dict) -> Optional[float]:
     expires_at = data.get("expires_at")
-    if expires_at:
-        try:
-            exp_dt = datetime.fromisoformat(expires_at)
-            # 如果没有时区信息，假设为 UTC
-            if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-            now = datetime.now(timezone.utc)
-            if exp_dt <= now:
-                return None  # 已过期
-            remaining = (exp_dt - now).total_seconds()
-            if remaining < 86400:  # < 24h
-                hours = remaining / 3600
-                print(
-                    f"[警告] token 将在 {hours:.1f} 小时后过期，建议重新登录: ir auth login",
-                    file=sys.stderr,
-                )
-        except (ValueError, TypeError):
-            pass
-
-    return data
+    if not expires_at:
+        return None
+    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return (exp - datetime.now(timezone.utc)).total_seconds()
 
 
-def clear_token() -> None:
-    """删除 token.json"""
-    token_file = get_ir_dir() / "token.json"
-    if token_file.exists():
-        token_file.unlink()
+def load_token(*, include_expired: bool = False) -> Optional[dict]:
+    """仅读本地文件，无网络/诊断副作用。"""
+    try:
+        data = json.loads((get_ir_dir() / "token.json").read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("token"), str) or not data["token"]:
+            return None
+        remaining = token_remaining(data)
+        if not include_expired and remaining is not None and remaining <= 0:
+            return None
+        return data
+    except (ValueError, TypeError, AttributeError, OSError):
+        return None
+
+
+def clear_token(*, expected_token: Optional[str] = None) -> None:
+    """仅清除调用方使用的凭证，不误删并发新登录。"""
+    with token_lock():
+        if expected_token is not None:
+            current = load_token(include_expired=True)
+            if not current or current["token"] != expected_token:
+                return
+        (get_ir_dir() / "token.json").unlink(missing_ok=True)
 
 
 def load_config() -> dict:

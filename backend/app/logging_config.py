@@ -11,7 +11,7 @@ import logging.config
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.context import get_actor, get_request_id
+from app.context import get_actor, get_request_id, get_request_context
 
 _VALID_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
@@ -50,6 +50,10 @@ class JsonFormatter(logging.Formatter):
             actor = get_actor()
             if actor:
                 payload["actor"] = actor
+        ctx = get_request_context()
+        if ctx and ctx.credential_id:
+            payload["credential_id"] = ctx.credential_id
+            payload["credential_label"] = ctx.credential_label
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         if record.stack_info:

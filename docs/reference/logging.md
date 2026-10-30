@@ -80,7 +80,7 @@ client_ip 由 `get_current_user` 在认证成功后写入。排查时先按 `req
 ERROR 并落一条 `system_error_log`，绝不静默）。
 
 **audit_log 的必埋范围**（高风险子集，非全量）：申赎、调仓、跨平台现金转移、份额变动
-事件、快照 generate / recalculate / delete（含级联回退）、现金手动重估。产品 / 平台 /
+事件、快照 generate / recalculate / delete（含级联回退）、现金手动重估，以及代理 API Key 创建/撤销（#797）。成功预览只记访问日志，不产生业务审计或业务写入。产品 / 平台 /
 投资人 / 组合 CRUD 与任务手动触发**不埋**（YAGNI，需要时另开 issue）。
 
 **action / resource_type 取值**以 `app/constants/audit_actions.py` 为单一事实来源，埋点
@@ -88,7 +88,7 @@ ERROR 并落一条 `system_error_log`，绝不静默）。
 由 `tests/unit/test_audit_service.py` 守门。
 
 **actor 口径**：取请求上下文，**无请求上下文时落 `SYSTEM` 哨兵**——`investor_code` 是
-NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不进去。
+NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不进去。认证请求额外记录 `credential_id` / `credential_label`（会话标签为空，Key 标签用于区分代理），访问日志与业务审计共用请求上下文；不以代理标签替代账户 actor。密码、Token、Key 明文及摘要不得写入日志或审计载荷。数据库引擎启用 `hide_parameters=True`（`backend/app/database.py`），调试 SQL 与 SQL 异常也不输出绑定参数，避免泄露凭证摘要和密码哈希。
 
 **载荷口径**：diff-only（无变化则两侧皆 None，原样重提交不留痕）、`ensure_ascii=False`、
 数值统一转 Decimal 再比（避免 `Decimal("1234.5600") != 1234.56` 恒真的假变更）。

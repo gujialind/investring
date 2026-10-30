@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import { ApiError, ApiValidationError } from "@/types/common";
 import { useAuthStore } from "@/stores/authStore";
+import { LoginResponse } from "@/types/auth";
 
 /**
  * 检测运行时基础路径（用于 ModelScope Studio 等子路径部署场景）。
@@ -14,6 +15,17 @@ export function getBasePath(): string {
   return match ? match[1] : "";
 }
 
+/**
+ * 登录页路由：401 拦截器与 useLogout / useChangePassword 共用，统一移动端判定，
+ * 避免三处复制漂移（子路径部署先剥离 basePath 再判定 /m 前缀）。
+ */
+export function loginRedirectPath(): string {
+  const base = getBasePath();
+  const { pathname } = window.location;
+  const path = base && pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
+  return path === "/m" || path.startsWith("/m/") ? "/m/login" : "/login";
+}
+
 // 创建 axios 实例
 const api: AxiosInstance = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || `${getBasePath()}/api`,
@@ -23,21 +35,69 @@ const api: AxiosInstance = axios.create({
   timeout: 30000,
 });
 
-// 请求拦截器：自动附加 Token
+let renewal: { token: string; promise: Promise<string> } | null = null;
+
+/**
+ * 续期窗口：剩余有效期不足 24h 才续期。与后端 TOKEN_EXPIRE_DAYS（默认 7 天，可配）耦合——
+ * 若运维把凭证寿命配到 ≤24h，此条件在续期成功后立即不再满足，每个业务请求都会多打一次
+ * POST /auth/renew（流量与 DB 写入翻倍）；调整凭证寿命时须同步评估该窗口。
+ */
+const RENEW_WINDOW_MS = 86_400_000;
+
+async function activeToken(token: string): Promise<string> {
+  const expiresAt = localStorage.getItem("token-expires-at");
+  if (expiresAt && Date.parse(expiresAt) - Date.now() > RENEW_WINDOW_MS) return token;
+  if (renewal?.token === token) return renewal.promise;
+  const ownerCode = useAuthStore.getState().user?.code;
+  const promise = (async () => {
+    try {
+      const response = await api.post<LoginResponse>("/auth/renew", undefined, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = response.data;
+      if (!data || typeof data.token !== "string" || !data.token
+          || typeof data.expires_at !== "string" || !(Date.parse(data.expires_at) > Date.now())
+          || !data.user || typeof data.user.code !== "string" || data.user.code !== ownerCode) {
+        throw new Error("续期响应无效，原凭证未替换");
+      }
+      if (!useAuthStore.getState().renew(token, data)) {
+        throw new Error("登录状态已改变，请重新操作");
+      }
+      return response.data.token;
+    } catch (error) {
+      // A transient renewal failure can use the still-valid token, never replay a write.
+      if (axios.isAxiosError(error) && (!error.response || error.response.status >= 500)
+          && expiresAt && Date.parse(expiresAt) > Date.now()
+          && localStorage.getItem("token") === token) return token;
+      throw error;
+    }
+  })();
+  renewal = { token, promise };
+  try {
+    return await promise;
+  } finally {
+    if (renewal?.promise === promise) renewal = null;
+  }
+}
+
+// Renew before sending the business request; a financial write is sent at most once.
 api.interceptors.request.use(
-  (config) => {
-    // 仅在客户端环境读取 token
-    if (typeof window !== "undefined") {
+  async (config) => {
+    if (typeof window !== "undefined" && !config.headers.Authorization && config.url !== "/auth/login") {
       const token = localStorage.getItem("token");
-      if (token && config.headers) {
-        config.headers.Authorization = `Bearer ${token}`;
+      if (token) {
+        // 防御性冗余：这三个 URL 目前只由显式携带 Authorization 的调用点发出，
+        // 上方 !config.headers.Authorization 已短路，本行实际不会命中；
+        // 保留以防未来出现无头调用点触发递归续期。
+        const skipRenewal = ["/auth/renew", "/auth/logout", "/auth/password"].includes(config.url || "");
+        const current = skipRenewal ? token : await activeToken(token);
+        if (localStorage.getItem("token") !== current) throw new Error("登录状态已改变，请重新操作");
+        config.headers.Authorization = `Bearer ${current}`;
       }
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
 // 响应拦截器：统一错误处理 + 401 跳转
@@ -45,12 +105,22 @@ api.interceptors.response.use(
   (response: AxiosResponse) => response,
   (error: AxiosError<ApiError>) => {
     if (typeof window !== "undefined") {
-      if (error.response?.status === 401) {
+      const sentToken = error.config?.headers?.Authorization;
+      const currentToken = localStorage.getItem("token");
+      // 会话僵死：本地凭证已消失（另 tab 登出、清缓存）但 zustand 仍认为已登录，
+      // 请求根本没带 Authorization，其 401 也必须清理，否则回到本处理器注释
+      // 声称要防的"页面认为已登录但所有请求 401"僵死态。
+      // 未登录场景（如登录页密码错误的 401）不清理也不跳转，交给页面自己展示错误。
+      const sessionDead = !currentToken && !sentToken
+        && useAuthStore.getState().isAuthenticated;
+      if (error.response?.status === 401
+          && (sessionDead
+              || (sentToken && currentToken && sentToken === `Bearer ${currentToken}`))) {
         // 统一走 authStore.logout()：同时清理 localStorage / cookie / zustand，
-        // 避免三处存储状态不一致导致"页面认为已登录但所有请求 401"的僵死态
+        // 避免三处存储状态不一致导致"页面认为已登录但所有请求 401"的僵死态。
+        // 携带过期 sentToken 的迟到回执（续期/重新登录之后才 401）仍被豁免，不打断新登录。
         useAuthStore.getState().logout();
-        const loginPath = window.location.pathname.startsWith("/m") ? "/m/login" : "/login";
-        window.location.href = `${getBasePath()}${loginPath}`;
+        window.location.href = `${getBasePath()}${loginRedirectPath()}`;
       }
     }
     return Promise.reject(error);

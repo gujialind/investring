@@ -4,7 +4,7 @@
 # 覆盖 app/utils/security.py 中的核心函数：
 # - 密码哈希与验证
 # - JWT Token 生成与解码
-# - Token 黑名单
+# - 持久化会话撤销
 # - 登录失败追踪与账户锁定
 # ============================================================================
 
@@ -105,31 +105,33 @@ class TestJWTToken:
         assert decode_token(token) is None
 
 
-class TestTokenBlacklist:
-    """Token 黑名单测试"""
+class TestSessionRevocation:
+    def test_revoke_persists_across_sessions(self, test_db):
+        from sqlalchemy.orm import Session
+        from app.models.investor import Investor
+        from app.services.auth_service import create_session, authenticate_session, revoke_session
+        from app.services.exceptions import BusinessError
 
-    def test_token_not_blacklisted_initially(self):
-        """新生成的 Token 不在黑名单中"""
-        from app.utils.security import create_access_token, is_token_blacklisted
-        token = create_access_token({"sub": "TEST"})
-        assert is_token_blacklisted(token) is False
+        token = create_session(test_db, test_db.get(Investor, "ADMIN"))["token"]
+        session, _ = authenticate_session(test_db, token)
+        revoke_session(test_db, session.id)
+        test_db.flush()
+        with Session(bind=test_db.connection()) as other:
+            with pytest.raises(BusinessError) as exc:
+                authenticate_session(other, token)
+            assert exc.value.http_status == 401
 
-    def test_blacklist_token(self):
-        """加入黑名单后应返回 True"""
-        from app.utils.security import create_access_token, blacklist_token, is_token_blacklisted
-        token = create_access_token({"sub": "TEST_BLACKLIST"})
-        assert is_token_blacklisted(token) is False
-        blacklist_token(token)
-        assert is_token_blacklisted(token) is True
+    def test_revoke_does_not_affect_other_session(self, test_db):
+        from app.models.investor import Investor
+        from app.services.auth_service import create_session, authenticate_session, revoke_session
 
-    def test_blacklist_does_not_affect_other_tokens(self):
-        """将一个 Token 加入黑名单不影响其他 Token"""
-        from app.utils.security import create_access_token, blacklist_token, is_token_blacklisted
-        token1 = create_access_token({"sub": "T1"})
-        token2 = create_access_token({"sub": "T2"})
-        blacklist_token(token1)
-        assert is_token_blacklisted(token1) is True
-        assert is_token_blacklisted(token2) is False
+        investor = test_db.get(Investor, "ADMIN")
+        first = create_session(test_db, investor)["token"]
+        second = create_session(test_db, investor)["token"]
+        assert first != second
+        session, _ = authenticate_session(test_db, first)
+        revoke_session(test_db, session.id)
+        assert authenticate_session(test_db, second)[0].revoked_at is None
 
 
 class TestLoginFailureTracking:

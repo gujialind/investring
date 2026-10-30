@@ -20,5 +20,7 @@ class AuditLog(Base):
     resource_name = Column(String(100))
     old_value = Column(Text)
     new_value = Column(Text)
+    credential_id = Column(String(32))
+    credential_label = Column(String(100))
     ip_address = Column(String(50))
     created_at = Column(DateTime, server_default=func.now())

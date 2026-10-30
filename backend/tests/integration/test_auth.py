@@ -10,7 +10,8 @@ import pytest
 from datetime import datetime, timedelta
 from unittest import mock
 
-from app.utils.security import create_access_token, get_password_hash
+from app.services.auth_service import create_session
+from app.utils.security import create_access_token
 from tests.factories import create_investor
 
 
@@ -76,8 +77,8 @@ class TestChangePassword:
 
     def test_change_own_password_with_old(self, client, test_db):
         """用户修改自己密码需提供旧密码"""
-        create_investor(test_db, code="CHG_PW", password="old_pass")
-        token = create_access_token({"sub": "CHG_PW", "role": "viewer"})
+        investor = create_investor(test_db, code="CHG_PW", password="old_pass")
+        token = create_session(test_db, investor)["token"]
         headers = {"Authorization": f"Bearer {token}"}
 
         resp = client.put(
@@ -90,8 +91,8 @@ class TestChangePassword:
 
     def test_change_own_password_without_old_fails(self, client, test_db):
         """不传旧密码应被拒绝"""
-        create_investor(test_db, code="CHG_NO_OLD", password="old_pass")
-        token = create_access_token({"sub": "CHG_NO_OLD", "role": "viewer"})
+        investor = create_investor(test_db, code="CHG_NO_OLD", password="old_pass")
+        token = create_session(test_db, investor)["token"]
         headers = {"Authorization": f"Bearer {token}"}
 
         resp = client.put(

@@ -1,7 +1,7 @@
 // API barrel —— 保持 `@/lib/api` 导入路径向后兼容。
 // 各模块按业务域拆分，类型统一来自 @/types/*。
 export { default } from "./client";
-export { ApiException, handleApiError, getErrorMessage, getBasePath } from "./client";
+export { ApiException, handleApiError, getErrorMessage, getBasePath, loginRedirectPath } from "./client";
 
 export { authApi } from "./auth";
 export { investorApi } from "./investor";
