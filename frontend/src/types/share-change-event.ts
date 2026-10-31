@@ -32,7 +32,6 @@ export interface ShareChangeEvent {
   tushare_event_id?: string;
   notes?: string;
   created_at?: string;
-  updated_at?: string;
   /** 确认时间（#754）：DB 列，确认写入、取消确认清空；pending/cancelled 为 null */
   confirmed_at?: string | null;
   /** 红利金额（#754）：读侧派生（非 DB 列），口径同确认/预览单点 quantize(es×div_cash)；

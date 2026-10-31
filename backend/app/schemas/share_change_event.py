@@ -62,7 +62,6 @@ class ShareChangeEventUpdate(BaseModel):
 class ShareChangeEventResponse(ShareChangeEventBase):
     id: int
     created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
     # product_name 读侧派生（非 DB 列）：仅 list 端点批量 join 产品表填充，
     # create/get/update/confirm/unconfirm 响应恒为 None；同 positions 模式（#175/#342）
     product_name: Optional[str] = None
