@@ -64,7 +64,8 @@ class APIClient:
             pool=5.0,
         )
         # trust_env=False：不读取代理环境变量（HTTP_PROXY/HTTPS_PROXY/NO_PROXY 及小写形式），
-        # 也不读取 .netrc / SSL_CERT_FILE / REQUESTS_CA_BUNDLE，始终直连 base_url。
+        # 也不读取 SSL_CERT_FILE / REQUESTS_CA_BUNDLE，始终直连 base_url。
+        # （.netrc 与 trust_env 无关：httpx 仅在使用方显式传 NetRCAuth 时才读取，本 CLI 从不传 auth。）
         # 根因：no_proxy 含带方括号 IPv6（如 [::1]，curl 语义合法）时 httpx 0.28 生成非法
         # pattern `all://*[::1]`，构造期抛 InvalidURL 漏出 raw traceback（#798）。
         # 口径与 #661（CD 探活不继承主机代理环境）一致，见 CLI_MANUAL.md §2.2。
