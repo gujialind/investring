@@ -854,10 +854,10 @@ ir share-event create \
 | `--product-code` | 是 | 产品代码 |
 | `--market` | 是 | 市场类型 |
 | `--event-type` | 是 | 事件类型（见下表） |
-| `--ex-date` | 是 | 除息日（**必须是交易日**，默认须 > 权益登记日；`reinvest_dividend` 设了 `--share-confirm-date` 时允许等于权益登记日）。不再兼任再投资份额应用日：份额按 `share_effective_date`（设了确认日取确认日，否则取除息日）应用 |
-| `--entitlement-date` | 是 | 权益登记日（基数日，**必须是交易日**） |
+| `--ex-date` | 是 | 除息日（**必须是产品市场日历的交易日**：HK_MUTUAL 按 HKEX，其余按 SSE，#784；默认须 > 权益登记日；`reinvest_dividend` 设了 `--share-confirm-date` 时允许等于权益登记日）。不再兼任再投资份额应用日：份额按 `share_effective_date`（设了确认日取确认日，否则取除息日）应用 |
+| `--entitlement-date` | 是 | 权益登记日（基数日，**必须是产品市场日历的交易日**：HK_MUTUAL 按 HKEX，其余按 SSE，#784） |
 | `--cash-pay-date` | 否 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend` 可设；须不早于除息日，允许非交易日；省略或 JSON `null` 时按除息日到账 |
-| `--share-confirm-date` | 否 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend` 可设（其他类型传入报 `INVALID_PARAM`）；**必须是交易日**（否则 `INVALID_SHARE_CONFIRM_DATE`）且**晚于除息日**（否则 `INVALID_DATE_ORDER`）；设置后才允许权益登记日 = 除息日（同日登记/除息），ex_date 起至确认日前一交易日的快照计该笔再投资应收（IN_TRANSIT_DIVIDEND 在途，不计可用现金）；未设时份额仍在除息日应用 |
+| `--share-confirm-date` | 否 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend` 可设（其他类型传入报 `INVALID_PARAM`）；**必须是产品市场日历的交易日**（HK_MUTUAL 按 HKEX，其余按 SSE，#784；否则 `INVALID_SHARE_CONFIRM_DATE`）且**晚于除息日**（否则 `INVALID_DATE_ORDER`）；设置后才允许权益登记日 = 除息日（同日登记/除息），ex_date 起至确认日前一交易日的快照计该笔再投资应收（IN_TRANSIT_DIVIDEND 在途，不计可用现金）；未设时份额仍在除息日应用 |
 | `--platform-code` | 视类型 | 平台级事件（cash_dividend/reinvest_dividend/forced_adjustment）必填 |
 | `--entitlement-shares` | 否 | 权益登记日份额 |
 | `--shares-before` | 否 | 变动前份额 |
@@ -912,7 +912,7 @@ ir share-event update <ID> --json '{"reinvest_nav":null}'
 ir share-event update <ID> --json '{"div_cash":null}'
 ```
 
-> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。`--share-confirm-date` 仅用于红利再投资，**必须为交易日**且晚于除息日，设置后才允许权益登记日 = 除息日；省略不修改原值，清空同样走 `--json` 显式 `null`，没有专用清空选项。`--div-cash` 省略不修改原值，按**合并后值**校验（> 0，仅 `cash_dividend` / `reinvest_dividend`），清空同样只能走 `--json` 显式 `null`；清空后确认会折出「0 现金 / 0 份额」的空事件，NULL 放行的后果边界见[业务规则](../docs/reference/business-constraints.md#rule-event)。pending 事件的再投资应收若已计入 ex_date 及之后的快照，修改（仅改备注除外）、取消、删除会被拒绝（`SNAPSHOT_DEPENDENCY`，须先删除该日及之后快照）。两者均无逐命令清空参数；已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
+> `--cash-pay-date` 仅用于现金分红，允许非交易日，须不早于除息日；省略不修改原值。`--share-confirm-date` 仅用于红利再投资，**必须为产品市场日历的交易日**（HK_MUTUAL 按 HKEX，其余按 SSE，#784）且晚于除息日，设置后才允许权益登记日 = 除息日；省略不修改原值，清空同样走 `--json` 显式 `null`，没有专用清空选项。`--div-cash` 省略不修改原值，按**合并后值**校验（> 0，仅 `cash_dividend` / `reinvest_dividend`），清空同样只能走 `--json` 显式 `null`；清空后确认会折出「0 现金 / 0 份额」的空事件，NULL 放行的后果边界见[业务规则](../docs/reference/business-constraints.md#rule-event)。pending 事件的再投资应收若已计入 ex_date 及之后的快照，修改（仅改备注除外）、取消、删除会被拒绝（`SNAPSHOT_DEPENDENCY`，须先删除该日及之后快照）。两者均无逐命令清空参数；已确认事件仍禁止直接修改，须先按原有快照保护规则取消确认。完整日期与现金生效规则见[业务规则](../docs/reference/business-constraints.md#rule-event)。
 
 #### `ir share-event delete`
 
@@ -1879,7 +1879,7 @@ ir schema
 
 ## 7. 注意事项
 
-1. **交易日历依赖**：申购、赎回、交易及份额事件的权益登记日/除息日必须是交易日。**现金分红的 `--cash-pay-date` 是例外**：允许非交易日，周末/节假日到账在下一交易日快照窗口消费，不为到账日生成非交易日快照；调仓到账日仍须为交易日。请先确保已通过 `ir system calendar-sync` 同步了当年的交易日历。
+1. **交易日历依赖**：申购、赎回、交易及份额事件的权益登记日/除息日必须是交易日——份额事件按**产品市场日历**判定（HK_MUTUAL 走 HKEX，其余走 SSE，#784；`ir system trading-day is-open` 查询按 SSE 口径，HKEX 需看 `GET /api/trading-calendar?exchange=HKEX`）。**现金分红的 `--cash-pay-date` 是例外**：允许非交易日，周末/节假日到账在下一交易日快照窗口消费，不为到账日生成非交易日快照；调仓到账日仍须为交易日。请先确保已通过 `ir system calendar-sync` 同步了当年的交易日历（港互认事件另需 HKEX 日历已同步，缺行按非交易日拒绝）。
 
 2. **净值数据依赖**：交易确认和快照生成依赖 `PriceRecord` 中的净值数据。请先通过 `ir market sync` 或 `ir market sync-history` 同步产品净值。
 

@@ -20,7 +20,12 @@ from app.models.platform import Platform
 from app.models.product import Product
 from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
-from app.services.trading_utils import is_trading_day, get_latest_snapshot_date
+from app.services.trading_utils import (
+    is_trading_day,
+    get_latest_snapshot_date,
+    exchange_for_market,
+    SSE_EXCHANGE,
+)
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.nav_lookup import get_exact_unit_price
 from app.services.null_guard import reject_explicit_nulls
@@ -406,11 +411,16 @@ def _prepare_confirmation_event(
         if changes:
             _require_receivable_not_snapshotted(db, event)
         _validate_cash_pay_date(selection.event_type, event.ex_date, selection.cash_pay_date)
-        _validate_share_confirm_date(db, selection.event_type, event.ex_date, selection.share_confirm_date)
+        # #784：确认/预览候选的日期校验按事件落库市场日历（HK_MUTUAL→HKEX，其余→SSE）
+        _validate_share_confirm_date(
+            db, selection.event_type, event.ex_date, selection.share_confirm_date,
+            exchange=exchange_for_market(event.market),
+        )
         if set(changes) & {"event_type", "cash_pay_date", "share_confirm_date"}:
             _validate_event_dates(
                 db, event.portfolio_code, event.ex_date, event.entitlement_date,
                 selection.share_confirm_date,
+                exchange=exchange_for_market(event.market),
             )
         for field, value in updates.items():
             setattr(candidate, field, value)
@@ -732,21 +742,27 @@ def _validate_event_dates(
     ex_date: date,
     entitlement_date: date,
     share_confirm_date: Optional[date] = None,
+    *,
+    exchange: str = SSE_EXCHANGE,
 ) -> None:
     """校验事件日期：均为交易日、除息日不早于权益登记日、晚于最新快照日。
 
     创建与更新（pending 改日期）共用，保证两条路径校验一致。
+
+    #784：交易日判定按**产品市场日历**——HK_MUTUAL 事件经调用方传
+    `exchange_for_market(market)` 走 HKEX，其余市场（含缺省）走 SSE，与
+    #777 单点映射及 trade_service 同构。「晚于最新快照日」与日历无关，不动。
 
     #743：设了 `share_confirm_date`（再投资份额确认日）时允许
     `entitlement_date == ex_date`——场外分红普遍「权益登记日 = 除息日」，份额在
     确认日才到账，除息日只记应收。未设时保持严格 `>` 与原文案（拆分/合并/送股/
     现金分红的份额与现金都按 `ex_date` 生效，同日会造成基数与生效互相打架）。
     """
-    # 权益登记日必须是交易日
-    if not is_trading_day(db, entitlement_date):
+    # 权益登记日必须是交易日（exchange 日历）
+    if not is_trading_day(db, entitlement_date, exchange=exchange):
         raise BusinessError("INVALID_ENTITLEMENT_DATE", "权益登记日不是交易日")
-    # 除息日必须是交易日
-    if not is_trading_day(db, ex_date):
+    # 除息日必须是交易日（exchange 日历）
+    if not is_trading_day(db, ex_date, exchange=exchange):
         raise BusinessError("INVALID_EX_DATE", "除息日不是交易日")
     if share_confirm_date is not None:
         if ex_date < entitlement_date:
@@ -769,19 +785,27 @@ def _validate_event_dates(
 
 
 def _validate_share_confirm_date(
-    db: Session, event_type: str, ex_date: date, share_confirm_date: Optional[date]
+    db: Session,
+    event_type: str,
+    ex_date: date,
+    share_confirm_date: Optional[date],
+    *,
+    exchange: str = SSE_EXCHANGE,
 ) -> None:
     """#743：再投资份额确认日只允许 reinvest_dividend，须为交易日且晚于除息日。
 
     与 `_validate_cash_pay_date` 同族（一个是现金到账日、一个是份额到账日）；
     区别在于确认日**必须是交易日**——份额到账日同时是快照的份额应用日与
     auto_confirm 的判键，落在非交易日会让份额永远等不到那张快照。
+
+    #784：交易日判定按**产品市场日历**（exchange 由调用方经
+    `exchange_for_market` 传入，缺省 SSE），与双日期校验链同口径。
     """
     if share_confirm_date is None:
         return
     if event_type != "reinvest_dividend":
         raise BusinessError("INVALID_PARAM", "仅红利再投资可设置 share_confirm_date")
-    if not is_trading_day(db, share_confirm_date):
+    if not is_trading_day(db, share_confirm_date, exchange=exchange):
         raise BusinessError("INVALID_SHARE_CONFIRM_DATE", "再投资份额确认日不是交易日")
     if share_confirm_date <= ex_date:
         raise BusinessError("INVALID_DATE_ORDER", "再投资份额确认日必须晚于除息日")
@@ -856,20 +880,32 @@ def create_share_change_event(
     platform_code = platform_code or None
     if not product_code:
         raise BusinessError("PRODUCT_REQUIRED", "份额变动事件必须指定 product_code")
-    _validate_event_dates(
-        db, portfolio_code, ex_date, entitlement_date, share_confirm_date
-    )
-    _validate_cash_pay_date(event_type, ex_date, cash_pay_date)
-    _validate_share_confirm_date(db, event_type, ex_date, share_confirm_date)
 
+    # #784（口径同 trade_service create_trade #83/#777，见其 :1155-1158 注释）：
+    # 组合存在性与 market 解析提前到日期校验之前——HK_MUTUAL 的日期须在 HKEX
+    # 日历上校验，校验需要先知道 market。错误优先级相应变化：组合不存在 /
+    # market 省略时产品不存在或歧义 先于 INVALID_*_DATE；(code, market) 行精查
+    # 保留在日期校验之后（与 trade_service :1164 位置同构，market 显式+行缺失
+    # 仍日期错误先报）。T6 逐条钉住。
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
         raise NotFoundError("NOT_FOUND", "组合不存在")
 
     # issue #258（口径同 #83 调仓创建）：market 省略/空串时按产品唯一市场补全；
-    # 一码多市场（LOF）报 MARKET_AMBIGUOUS；产品不存在报 PRODUCT_NOT_FOUND；
-    # 显式 (code, market) 组合不存在报 NOT_FOUND——杜绝复合外键违约 500
+    # 一码多市场（LOF）报 MARKET_AMBIGUOUS；产品不存在报 PRODUCT_NOT_FOUND
     product_code, market = resolve_product_market(db, product_code, market)
+
+    _validate_event_dates(
+        db, portfolio_code, ex_date, entitlement_date, share_confirm_date,
+        exchange=exchange_for_market(market),
+    )
+    _validate_cash_pay_date(event_type, ex_date, cash_pay_date)
+    _validate_share_confirm_date(
+        db, event_type, ex_date, share_confirm_date,
+        exchange=exchange_for_market(market),
+    )
+
+    # 显式 (code, market) 组合不存在报 NOT_FOUND——杜绝复合外键违约 500
     if not db.query(Product).filter(
         Product.code == product_code, Product.market == market
     ).first():
@@ -1033,12 +1069,14 @@ def update_share_change_event(
         _validate_event_dates(
             db, event.portfolio_code, effective_ex_date, effective_entitlement_date,
             effective_share_confirm_date,
+            exchange=exchange_for_market(event.market),
         )
     _validate_cash_pay_date(
         event.event_type, effective_ex_date, updates.get("cash_pay_date", event.cash_pay_date)
     )
     _validate_share_confirm_date(
-        db, event.event_type, effective_ex_date, effective_share_confirm_date
+        db, event.event_type, effective_ex_date, effective_share_confirm_date,
+        exchange=exchange_for_market(event.market),
     )
 
     # issue #279：按合并后值校验（event_type/product_code 不可改，恒取事件现值），
