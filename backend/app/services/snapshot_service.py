@@ -2069,9 +2069,13 @@ def auto_confirm_after_snapshot(
     # 配合逐日循环生成快照，使 confirm_date==C 的记录在快照 C 中体现。
     next_confirm_date = try_get_next_trading_day(db, snapshot_date, days=1)
     # 日历到头（D 之后无交易日）：跳过下面的跨天/事件两段。这是**演绎**不是降级——
-    # Trade.confirm_date 与 ShareChangeEvent.ex_date 创建期均被校验为日历交易日
-    # （NON_TRADING_DAY / INVALID_EX_DATE，is_trading_day 对覆盖外日期返回 False），
-    # 故「D 之后无交易日」⟹ 不存在 confirm_date/ex_date 等于该日的记录。
+    # Trade.confirm_date 与 ShareChangeEvent 日期创建期均被校验为日历交易日
+    # （NON_TRADING_DAY / INVALID_EX_DATE，is_trading_day 对覆盖外日期返回 False）。
+    # #784 后 HK_MUTUAL 事件按 HKEX 日历校验，其 share_effective_date 可能落在
+    # SSE 日序列外：这类事件本就永不匹配下面的 SSE 精确匹配（匹配键是 SSE 下一
+    # 交易日），由 pending 闸门（share_effective_date <= target_date）阻断快照
+    # 生成、经人工确认消化——「跳过」与其行为一致，不构成静默丢失。A 股口径的
+    # 「D 之后无交易日 ⟹ 无记录等于该日」演绎照旧成立。
     # 旧回退把 next_confirm_date 设成 snapshot_date 本身，会造成**错日匹配**（不是 no-op）。
     # 残留风险（须记）：若日后日历行被删/is_open 被翻，曾经合法的 ex_date 会被静默跳过——
     # 仍比按伪造日期确认安全。申赎段（apply_date <= D）不依赖本值，照常执行。
