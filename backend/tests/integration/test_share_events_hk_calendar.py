@@ -13,6 +13,11 @@
   钉 Q2=改 A 决策口径：不得改为创建期拒绝或权益日自动回退。
 - T6 创建路径优先序（A-1a，顾佳林 2026-10-31 Q3）：组合存在性 / market 解析先于
   日期校验；(code, market) 行精查保留在日期校验之后（与 trade_service 同构）。
+- T7-T9 更新路径（PUT）按产品市场日历重校验（#806 评审 Suggestion 2 补齐，
+  CodeBuddy head 37bd51d 后维护者授权）：T7 改到「HKEX 开、SSE 无行」日通过、
+  CN 同日拒；T8 改到「SSE 开、HKEX 休」日 HK 拒 INVALID_EX_DATE、CN 同日期通过；
+  T9 钉住 Suggestion 1 当前行为——确认日为「SSE 开、HKEX 休」存量形态的 reinvest
+  事件，PUT 仅改 notes 也被无条件的确认日校验 422 拒（CN 对照放行）。
 
 HKEX 行一律用 ensure_trading_day / mirror 构造并**用后删除**（calendar_helpers
 共享库契约）；SSE 行只读不改动。
@@ -36,6 +41,9 @@ from tests.factories import (
     create_investor_holding, create_portfolio, create_position_snapshot,
     create_price_record, create_product, create_value_snapshot, ensure_trading_day,
 )
+from tests.integration.calendar_helpers import (
+    mirror_hkex_calendar, remove_hkex_calendar,
+)
 
 HK = "HK_MUTUAL"
 SEED_PLAT = "MYCF"  # tests/seed_base.py 平台种子
@@ -46,6 +54,8 @@ D_HK_ONLY = business_today() + timedelta(days=400)          # SSE 无行、HKEX 
 D_HK_ONLY_2 = business_today() + timedelta(days=401)
 D_HK_SHUT = business_today() + timedelta(days=405)          # HKEX 显式休市行（T3）
 D_HK_OPEN_LATE = business_today() + timedelta(days=406)     # HKEX 开市（T3 通过侧）
+D_HK_UPD_1 = business_today() + timedelta(days=410)         # SSE 无行、HKEX 开市（T7 PUT 目标）
+D_HK_UPD_2 = business_today() + timedelta(days=411)
 
 
 def _sse_open_days(db, start, count=2):
@@ -363,3 +373,177 @@ class TestHkHalfOpenStates:
             ).one() is not None
         finally:
             _remove_hkex(test_db, ent, target)
+
+
+class TestHkEventUpdatePathValidation:
+    """T7/T8/T9：更新路径（PUT）重校验按产品市场日历（#806 评审 Suggestion 2）。
+
+    三条用例的断言都依赖 exchange 传参：若把 update_share_change_event 中
+    :1069-1073 / :1077-1080 的 `exchange=exchange_for_market(...)` 删除（修复前
+    形态，恒走 SSE），三条均翻红——以此区分修复前后行为。
+    """
+
+    def test_t7_put_to_hkex_only_day_hk_allowed_cn_rejected(
+        self, client, admin_headers, test_db
+    ):
+        """T7：HK 事件 PUT 改期到「HKEX 开、SSE 无行」日应通过；CN 同目标日期仍拒。"""
+        create_portfolio(test_db, code="HK784_U1", status="active")
+        create_product(test_db, code="HK784_U1H", market=HK, product_type="OEF")
+        create_product(test_db, code="HK784_U1C", market="CN_OTC", product_type="OEF")
+        try:
+            for d in (D_HK_ONLY, D_HK_ONLY_2, D_HK_UPD_1, D_HK_UPD_2):
+                ensure_trading_day(test_db, d, is_open=True, exchange="HKEX")
+
+            resp = client.post(
+                "/api/share-change-events",
+                json=_body("HK784_U1", "HK784_U1H", D_HK_ONLY, D_HK_ONLY_2, market=HK),
+                headers=admin_headers,
+            )
+            assert resp.status_code in (200, 201), resp.text
+            hk_id = resp.json()["id"]
+
+            resp = client.put(
+                f"/api/share-change-events/{hk_id}",
+                json={
+                    "entitlement_date": D_HK_UPD_1.isoformat(),
+                    "ex_date": D_HK_UPD_2.isoformat(),
+                },
+                headers=admin_headers,
+            )
+            assert resp.status_code == 200, resp.text
+
+            # CN 对照：目标日期 SSE 无行 → 更新路径仍按 SSE 拒（边界不变）
+            ent, ex = _sse_open_days(test_db, business_today() + timedelta(days=1), 2)
+            resp = client.post(
+                "/api/share-change-events",
+                json=_body("HK784_U1", "HK784_U1C", ent, ex, market="CN_OTC"),
+                headers=admin_headers,
+            )
+            assert resp.status_code in (200, 201), resp.text
+            cn_id = resp.json()["id"]
+
+            resp = client.put(
+                f"/api/share-change-events/{cn_id}",
+                json={
+                    "entitlement_date": D_HK_UPD_1.isoformat(),
+                    "ex_date": D_HK_UPD_2.isoformat(),
+                },
+                headers=admin_headers,
+            )
+            assert resp.status_code == 422
+            assert resp.json()["detail"]["error"] == "INVALID_ENTITLEMENT_DATE"
+        finally:
+            _remove_hkex(test_db, D_HK_ONLY, D_HK_UPD_2)
+
+    def test_t8_put_to_sse_open_hkex_shut_hk_rejected_cn_allowed(
+        self, client, admin_headers, test_db
+    ):
+        """T8：HK 事件 PUT 改 ex_date 到「SSE 开、HKEX 休」日应 422 INVALID_EX_DATE；
+        CN 同目标日期应通过（SSE 判据不受 HKEX 休市行影响）。"""
+        create_portfolio(test_db, code="HK784_U2", status="active")
+        create_product(test_db, code="HK784_U2H", market=HK, product_type="OEF")
+        create_product(test_db, code="HK784_U2C", market="CN_OTC", product_type="OEF")
+        s1, s2, s3, s4 = _sse_open_days(test_db, business_today() + timedelta(days=1), 4)
+        try:
+            ensure_trading_day(test_db, D_HK_ONLY, is_open=True, exchange="HKEX")
+            ensure_trading_day(test_db, D_HK_ONLY_2, is_open=True, exchange="HKEX")
+            ensure_trading_day(test_db, s4, is_open=False, exchange="HKEX")
+
+            # HK：登记日保持 HKEX 开市（先过 ent 检查），ex 改到 HKEX 休市日 → 判在 ex
+            resp = client.post(
+                "/api/share-change-events",
+                json=_body("HK784_U2", "HK784_U2H", D_HK_ONLY, D_HK_ONLY_2, market=HK),
+                headers=admin_headers,
+            )
+            assert resp.status_code in (200, 201), resp.text
+            hk_id = resp.json()["id"]
+
+            resp = client.put(
+                f"/api/share-change-events/{hk_id}",
+                json={"ex_date": s4.isoformat()},
+                headers=admin_headers,
+            )
+            assert resp.status_code == 422
+            assert resp.json()["detail"]["error"] == "INVALID_EX_DATE"
+
+            # CN 对照：同目标日期 SSE 开市 → 通过
+            resp = client.post(
+                "/api/share-change-events",
+                json=_body("HK784_U2", "HK784_U2C", s1, s2, market="CN_OTC"),
+                headers=admin_headers,
+            )
+            assert resp.status_code in (200, 201), resp.text
+            cn_id = resp.json()["id"]
+
+            resp = client.put(
+                f"/api/share-change-events/{cn_id}",
+                json={"ex_date": s4.isoformat()},
+                headers=admin_headers,
+            )
+            assert resp.status_code == 200, resp.text
+        finally:
+            _remove_hkex(test_db, D_HK_ONLY, D_HK_ONLY_2)
+            _remove_hkex(test_db, s4, s4)
+
+    def test_t9_reinvest_legacy_sse_only_confirm_date_notes_put_pinned(
+        self, client, admin_headers, test_db
+    ):
+        """T9（钉 Suggestion 1 当前行为）：确认日 =「SSE 开、HKEX 休」存量形态的
+        HK reinvest 事件，PUT 仅改 notes 也被**无条件**执行的
+        `_validate_share_confirm_date`（update_share_change_event :1077-1080）422 拒；
+        CN 对照同日放行。删除 exchange 传参后 HK 侧变 200、本断言翻红。
+
+        存量形态用镜像日历构造：mirror 期创建放行（确认日 HKEX 开），随后把该日
+        HKEX 行翻成休市（SSE 行不动），复现「确认日曾是市场交易日、按 HKEX 判非」
+        的生产数据。此处断言的是**当前实现行为**，不代表该行为已定案为长期口径
+        （处置归 issue #784 遗留跟进项，由维护者裁决）。
+        """
+        create_portfolio(test_db, code="HK784_U3", status="active")
+        create_product(test_db, code="HK784_U3H", market=HK, product_type="OEF")
+        create_product(test_db, code="HK784_U3C", market="CN_OTC", product_type="OEF")
+        e1, e2, e3 = _sse_open_days(test_db, business_today() + timedelta(days=1), 3)
+        win_start, win_end = business_today(), business_today() + timedelta(days=30)
+        try:
+            mirror_hkex_calendar(test_db, win_start, win_end)
+
+            def _create_reinvest(port, prod, market):
+                resp = client.post(
+                    "/api/share-change-events",
+                    json=_body(
+                        port, prod, e1, e2, market=market,
+                        event_type="reinvest_dividend", shares_change=None,
+                        div_cash=0.1, share_confirm_date=e3,
+                    ),
+                    headers=admin_headers,
+                )
+                assert resp.status_code in (200, 201), resp.text
+                return resp.json()["id"]
+
+            hk_id = _create_reinvest("HK784_U3", "HK784_U3H", HK)
+            cn_id = _create_reinvest("HK784_U3", "HK784_U3C", "CN_OTC")
+
+            # 模拟存量形态：e3 翻为 HKEX 休市（仅动本用例经 mirror 自建的 HKEX 行）
+            row = test_db.query(TradingCalendar).filter_by(
+                calendar_date=e3, exchange="HKEX",
+            ).one()
+            row.is_open = False
+            test_db.commit()
+
+            # HK：PUT 只改 notes（不改任何日期）→ 仍 422，钉住无条件确认日校验
+            resp = client.put(
+                f"/api/share-change-events/{hk_id}",
+                json={"notes": "legacy confirm date on SSE-only trading day"},
+                headers=admin_headers,
+            )
+            assert resp.status_code == 422
+            assert resp.json()["detail"]["error"] == "INVALID_SHARE_CONFIRM_DATE"
+
+            # CN 对照：e3 仍是 SSE 开市日 → 同形 PUT 放行
+            resp = client.put(
+                f"/api/share-change-events/{cn_id}",
+                json={"notes": "cn unaffected"},
+                headers=admin_headers,
+            )
+            assert resp.status_code == 200, resp.text
+        finally:
+            remove_hkex_calendar(test_db, win_start, win_end)
