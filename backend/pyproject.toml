@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=84.0.0"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -18,7 +18,7 @@ dependencies = [
     "pymysql>=1.2.3",
     "pandas>=3.1.0",
     "numpy>=2.5.4",
-    "python-dateutil>=2.8.2",
+    "python-dateutil>=3.0.0",
     "httpx>=0.28.1",
     "requests>=2.34.2",
     "apscheduler>=3.10.4",
@@ -39,7 +39,7 @@ dev = [
     "pytest-mock>=3.17.0",
     "factory-boy>=3.3.0",
     # 增量覆盖率门禁（issue #464）；安装来源仍是 requirements.txt，此处仅登记
-    "diff-cover>=10.6.0",
+    "diff-cover>=11.0.0",
 ]
 
 [tool.setuptools.packages.find]

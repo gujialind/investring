@@ -39,6 +39,7 @@ from tests.factories import (
     create_price_record, create_product, create_share_change_event as create_raw_event,
     create_subscription, create_trade, create_value_snapshot,
 )
+from tests.integration.calendar_helpers import mirror_hkex_calendar, remove_hkex_calendar
 
 BASE = date(2025, 6, 5)
 ENT = date(2025, 6, 6)
@@ -530,21 +531,29 @@ def test_selection_respects_market(test_db, base, market, method):
             shares=1000, unit_price=2.1, cost_price=2.1, market_value=2100,
         )
         create_price_record(test_db, base.fund, market, EX, 2)
-    event = _event(test_db, base, market=market)
-    before = _state(event)
-    selection = service.DividendSelection(method)
-    if market == "CN_EXCHANGE" and method == REINVEST:
-        for call in (service.compute_share_change_event_preview, service.confirm_share_change_event):
-            with pytest.raises(BusinessError) as exc:
-                call(test_db, event, selection=selection)
-            assert exc.value.code == "INVALID_PARAM"
-            assert "场内" in exc.value.message
-        assert _state(event) == before
-    else:
-        preview = service.compute_share_change_event_preview(test_db, event, selection=selection)
-        service.confirm_share_change_event(test_db, event, selection=selection)
-        assert preview["entitlement_shares"] == event.entitlement_shares == 1000
-        assert event.shares_change == (0 if method == CASH else 50)
+    # #784：HK_MUTUAL 的日期校验走产品市场日历（HKEX）——镜像 ENT..APPLY 的
+    # SSE 开闭形态生成 HKEX 行，**用后必须删除**（calendar_helpers 共享库契约）。
+    if market == "HK_MUTUAL":
+        mirror_hkex_calendar(test_db, ENT, APPLY)
+    try:
+        event = _event(test_db, base, market=market)
+        before = _state(event)
+        selection = service.DividendSelection(method)
+        if market == "CN_EXCHANGE" and method == REINVEST:
+            for call in (service.compute_share_change_event_preview, service.confirm_share_change_event):
+                with pytest.raises(BusinessError) as exc:
+                    call(test_db, event, selection=selection)
+                assert exc.value.code == "INVALID_PARAM"
+                assert "场内" in exc.value.message
+            assert _state(event) == before
+        else:
+            preview = service.compute_share_change_event_preview(test_db, event, selection=selection)
+            service.confirm_share_change_event(test_db, event, selection=selection)
+            assert preview["entitlement_shares"] == event.entitlement_shares == 1000
+            assert event.shares_change == (0 if method == CASH else 50)
+    finally:
+        if market == "HK_MUTUAL":
+            remove_hkex_calendar(test_db, ENT, APPLY)
 
 
 @pytest.mark.parametrize("operation", ["preview", "confirm"])
