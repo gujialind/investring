@@ -1,4 +1,5 @@
 """市场数据命令组"""
+import sys
 import typer
 from typing import Optional
 from ir_cli.client import APIClient
@@ -94,7 +95,11 @@ def sync_all(
         parsed = []
         for p in products.split(","):
             if "|" not in p:
-                print(f"warning: 跳过格式错误的产品条目 '{p.strip()}'（需 code|market 格式）", flush=True)
+                print(
+                    f"warning: 跳过格式错误的产品条目 '{p.strip()}'（需 code|market 格式）",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 continue
             parsed.append(p.split("|"))
         body["products"] = parsed

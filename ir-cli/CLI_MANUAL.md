@@ -55,7 +55,7 @@ ir config set base_url https://ir.example.com
 export IR_BASE_URL=https://ir.example.com
 ```
 
-**代理与 TLS 环境变量**：CLI **不读取任何代理环境变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及其小写形式均被忽略），始终直连 `base_url`（#798，与 #661 CD 探活"关键出站路径不继承主机代理环境"口径一致）。httpx 的 `trust_env` 整体关闭，因此 `.netrc`、`SSL_CERT_FILE`、`REQUESTS_CA_BUNDLE` 亦不生效；确需经代理或自定义 CA 访问服务端时，请在系统/网络层（如透明代理）解决或向维护者反馈需求。
+**代理与 TLS 环境变量**：CLI **不读取任何代理环境变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及其小写形式均被忽略），始终直连 `base_url`（#798，与 #661 CD 探活"关键出站路径不继承主机代理环境"口径一致）。httpx 的 `trust_env` 关闭，其门控的 `SSL_CERT_FILE` / `SSL_CERT_DIR` 等不再生效（`REQUESTS_CA_BUNDLE` 本就不在 httpx 读取范围，与 `trust_env` 无关）；确需经代理或自定义 CA 访问服务端时，请在系统/网络层（如透明代理）解决或向维护者反馈需求。
 
 ### 2.3 获取帮助
 
@@ -1849,6 +1849,8 @@ fi
 **退出码：** 0=成功 / 1=业务错误或未预期内部错误(见 error.code) / 2=认证错误(需 `ir auth login`) / 3=连接/超时 / 64=用法错误(选项/参数不存在，看 `ir schema --index` 与 `--help` 换参数，**不要**重跑 `ir auth login`)
 
 > 1 与 64 的处置不同：1 表示命令已执行但失败——多数是跑到后端被业务规则拒绝（换参数值可能成功），也可能是未预期内部错误（`error.code` 为 `INTERNAL_ERROR`，重试同样参数通常无效，请按 hints 附 JSON 反馈维护者，复现时加 `IR_DEBUG=1` 取 stderr 异常栈）；64 表示命令根本没执行（参数名本身不对，重试同一串参数必然再错）。
+
+> 其中 `CLIENT_INIT_ERROR` 的处置需单独注意：它多由 `IR_BASE_URL` 非法引起（完整触发条件与排查方向见 §3.3），属配置错误，**原样重试必然再失败**，应按 hints 修正 `IR_BASE_URL` 后重试；其余连接/超时类错误才可按“原样重试或检查服务”处置。
 
 ### 6.3 链式操作
 
