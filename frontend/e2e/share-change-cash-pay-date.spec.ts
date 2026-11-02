@@ -1,6 +1,8 @@
 /**
  * #522：双端现金分红到账日录入、编辑与回显；#744：红利再投资净值留空与确认预览明细；
- * #743：红利再投资份额确认日（仅再投资可见、晚于除息日、同日登记）与编辑清空。
+ * #743：红利再投资份额确认日（仅再投资可见、晚于除息日、同日登记）与编辑清空；
+ * #765：同日登记/除息的现金分红（到账日必填且严格晚于除息日、pending 期快照放行
+ * 与派生在途、确认与到账全流程）。
  * 自建组合按 project/retry/场景区分；每轮使用新种子库，不推进共享 E2E_ACTIVE。
  * 预览夹具复用种子 000300.OF 的 D/D+1 净值，仅在自有组合生成两日快照；
  * #744/#743 场景的除息日 = D+2，取种子净值 1.6000（与 seed_e2e_active 的窗口一一对应）。
@@ -518,6 +520,118 @@ test.describe('红利再投资份额确认日（#743，双端）', () => {
         await expect(response).toBeOK();
       }
     }
+  });
+});
+
+test.describe('同日现金分红（#765，双端）', () => {
+  test('同日创建须晚于除息日的到账日、pending 期快照放行、确认与到账全流程', async ({ page }, testInfo) => {
+    test.setTimeout(120_000);
+    const errors = collectPageErrors(page);
+    const s = await setupPortfolio(page, testInfo, 'G');
+    await seedHolding(page, s);
+
+    // ① 创建：登记日改到与除息日同日 → 到账日字段切换为必填形态
+    const create = await openCreate(page, s);
+    await pickDay(page, create.getByLabel('权益登记日', { exact: true }), s.ex);
+    await expect(create.getByLabel('现金到账日（必填）')).toBeVisible();
+    await expect(create.getByTestId('cash-pay-date-field')).toContainText(
+      '同日登记/除息：到账日必须晚于除息日'
+    );
+
+    // ② 未填到账日：客户端拦截（后端同口径 422），不发 POST
+    let writes = trackEventWrites(page);
+    await create.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '同日登记/除息的现金分红，现金到账日必须晚于除息日' }).first()
+    ).toBeVisible();
+    writes.stop();
+    expect(writes.sent).toEqual([]);
+
+    // ③ 到账日 == 除息日：仍拦截（须严格晚于）
+    await pickDay(page, create.getByLabel('现金到账日（必填）'), s.ex);
+    writes = trackEventWrites(page);
+    await create.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '同日登记/除息的现金分红，现金到账日必须晚于除息日' }).first()
+    ).toBeVisible();
+    writes.stop();
+    expect(writes.sent).toEqual([]);
+
+    // ④ 到账日 > 除息日：创建成功并落库
+    await pickDay(page, create.getByLabel('现金到账日（必填）'), s.confirmDay);
+    const created = await submitEvent(page, create);
+    const storedEvent = await getStored(page, s.headers, created.event.id);
+    expect(storedEvent).toMatchObject({
+      event_type: 'cash_dividend', status: 'pending',
+      entitlement_date: s.ex, ex_date: s.ex, cash_pay_date: s.confirmDay,
+    });
+
+    const row = page.locator('table tbody tr').filter({ hasText: '现金分红' });
+    await expect(row.getByTestId('event-cash-pay-date')).toHaveText(s.confirmDay);
+
+    // ⑤ pending 期除息日快照放行（统一前会被闸门阻断）：事件仍未确认也能生成
+    const generated = await post<{ success: boolean }>(page, s.headers, '/api/snapshots/generate', {
+      portfolio_code: s.code,
+      target_date: s.ex,
+    });
+    expect(generated.success).toBe(true);
+    expect((await getStored(page, s.headers, created.event.id)).status).toBe('pending');
+
+    // ⑥ 编辑弹窗同日拦截：清空到账日后保存被客户端挡住、不发 PUT
+    await row.getByTitle('编辑', { exact: true }).click();
+    const edit = dialogByTitle(page, '编辑份额变动事件');
+    await expect(edit.getByLabel('现金到账日（必填）')).toHaveText(s.confirmDay);
+    await edit.getByTestId('cash-pay-date-field').getByRole('button', { name: '清除日期' }).click();
+    writes = trackEventWrites(page, created.event.id);
+    await edit.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(
+      edit.getByText('同日登记/除息的现金分红，到账日必须晚于除息日', { exact: true })
+    ).toBeVisible();
+    writes.stop();
+    expect(writes.sent).toEqual([]);
+    await edit.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(edit).toBeHidden();
+
+    // ⑦ 确认弹窗：预览按除息日快照基数计算（1000 份 × 0.5 = ¥500.00），
+    //    到账日候选回显必填形态，确认后落库 confirmed
+    const [preview] = await Promise.all([
+      page.waitForResponse((r) => new URL(r.url()).pathname === `/api/share-change-events/${created.event.id}/preview`),
+      row.getByTitle('确认', { exact: true }).click(),
+    ]);
+    expect(preview.ok(), await preview.text()).toBeTruthy();
+    expect((await preview.json()).preview).toMatchObject({
+      event_type: 'cash_dividend', entitlement_shares: 1000,
+      cash_change: 500, cash_effective_date: s.confirmDay,
+    });
+    const confirmDlg = dialogByTitle(page, '确认份额变动事件');
+    await expect(confirmDlg.getByLabel('现金到账日（必填）')).toBeVisible();
+    await expect(confirmDlg.locator('button#confirm_cash_pay_date')).toHaveText(s.confirmDay);
+    await expect(confirmDlg.getByTestId('confirm-cash-pay-date-field')).toContainText(
+      '同日登记/除息：到账日必须晚于除息日'
+    );
+    const confirmPath = `/api/share-change-events/${created.event.id}/confirm`;
+    const [confirmReq] = await Promise.all([
+      page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === confirmPath),
+      confirmDlg.getByRole('button', { name: '确认', exact: true }).click(),
+    ]);
+    expect(confirmReq.postDataJSON()).toEqual({
+      event_type: 'cash_dividend', cash_pay_date: s.confirmDay,
+    });
+    const confirmResp = await page.waitForResponse((r) => new URL(r.url()).pathname === confirmPath);
+    expect(confirmResp.ok(), await confirmResp.text()).toBeTruthy();
+    await expect(confirmDlg).toBeHidden();
+    expect(await getStored(page, s.headers, created.event.id)).toMatchObject({
+      status: 'confirmed', cash_change: 500,
+    });
+    await expect(row).toContainText('已确认');
+
+    // ⑧ 到账日快照：现金入账日可正常生成（在途窗口关闭的账务由后端集成测试钉住）
+    const arrival = await post<{ success: boolean }>(page, s.headers, '/api/snapshots/generate', {
+      portfolio_code: s.code,
+      target_date: s.confirmDay,
+    });
+    expect(arrival.success).toBe(true);
+    expect(errors).toEqual([]);
   });
 });
 
