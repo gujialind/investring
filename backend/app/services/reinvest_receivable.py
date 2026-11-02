@@ -1,4 +1,4 @@
-"""红利再投资应收（#743）。
+"""分红在途/应收的派生口径单点（#743 再投资应收；#765 扩展到现金分红在途）。
 
 场外分红普遍「权益登记日 = 除息日」：红利按除息日净值折算份额，到红利发放日
 （`share_confirm_date`）才到账。除息日到到账日之间这笔红利既不是现金也不是份额，
@@ -10,6 +10,15 @@
 `share_confirm_date` 落地、应收窗口自然关闭，重建/级联天然幂等（无需重算或
 `requires_snapshot_regen`）。事后改 `div_cash`/日期会让派生值与已生成快照漂移，
 由 `share_change_event_service._require_receivable_not_snapshotted` 收口。
+
+**#765 现金分红在途同口径**：现金分红的在途窗口是 `ex_date <= D < cash_pay_date`，
+统一形态下 pending 与 confirmed 都计——pending 用「基数份额 × div_cash」现算
+（`list_cash_dividend_in_transit`），confirmed 用落库的 `cash_change`。两者公式同源
+（`compute_event_fields` 的 cash 分支同为 `quantize_amount(es × div_cash)`），故
+pending → confirmed 的确认时点不影响任何已生成快照的数值，闸门得以按
+`cash_effective_date` 放行 pending 期的快照生成。窗口要求 `cash_pay_date` 非空：
+NULL 回退 ex_date 的形态没有在途区间（与 #522 现状一致），由 pending 闸门按
+ex_date 阻断、先确认后生成。
 
 独立模块的理由：快照生成与读侧收益连续要同一口径，而 `snapshot_service` 与
 `position_service` 互不依赖——放任一侧都会造成反向 import。本模块只依赖 models
@@ -217,3 +226,139 @@ def aggregate_receivable_flows(
         flows.setdefault(key, []).append((row.ex_date, value))
         flows.setdefault(key, []).append((row.share_confirm_date, -value))
     return flows
+
+
+# ==================== 现金分红在途（#765） ====================
+#
+# 与再投资应收同一派生机制、独立入口：现金分红的金额在 confirmed 后以落库
+# `cash_change` 为准（用户可见的记账事实），pending 期按「基数 × div_cash」现算。
+# 刻意不做进 `aggregate_receivable_flows`：现金分红的读侧收益加回走
+# `cumulative_profit_service` 的既有事件现金腿（confirmed + cash_change），
+# 在途只影响快照市值行，不需要产品维度成对流水。
+
+
+class CashDividendInTransit(NamedTuple):
+    """一条现金分红在途（`ex_date <= D < cash_pay_date`）。"""
+
+    event_id: int
+    portfolio_code: str
+    product_code: str
+    market: str
+    platform_code: str
+    ex_date: date
+    cash_pay_date: date
+    amount: Decimal
+
+
+class _CashRow(NamedTuple):
+    """现金分红事件 + 权益登记日持仓的左连结果（字段名与 `_Row` 对齐，
+    供 `_resolve_base` 鸭子类型复用）。"""
+
+    event_id: int
+    portfolio_code: str
+    product_code: str
+    market: str
+    platform_code: str
+    ex_date: date
+    cash_pay_date: date
+    entitlement_date: date
+    status: str
+    entitlement_shares: Optional[Decimal]
+    div_cash: Optional[Decimal]
+    cash_change: Optional[Decimal]
+    position_shares: Optional[Decimal]
+
+
+def _query_cash_rows(
+    db: Session, portfolio_codes: Sequence[str], upper_date: date
+) -> List[_CashRow]:
+    """取可能产生在途的现金分红行及其权益登记日持仓份额（恒一次批量 SELECT）。
+
+    `cash_pay_date` 为空的事件不产生在途区间（现金按 ex_date 当日生效），不入查询；
+    pending 与 confirmed 都取——pending 期派生金额、confirmed 用落库 cash_change。
+    """
+    codes = tuple(portfolio_codes)
+    rows = db.query(
+        ShareChangeEvent.id,
+        ShareChangeEvent.portfolio_code,
+        ShareChangeEvent.product_code,
+        ShareChangeEvent.market,
+        ShareChangeEvent.platform_code,
+        ShareChangeEvent.ex_date,
+        ShareChangeEvent.cash_pay_date,
+        ShareChangeEvent.entitlement_date,
+        ShareChangeEvent.status,
+        ShareChangeEvent.entitlement_shares,
+        ShareChangeEvent.div_cash,
+        ShareChangeEvent.cash_change,
+        PortfolioPosition.shares.label("position_shares"),
+    ).outerjoin(
+        PortfolioPosition,
+        and_(
+            PortfolioPosition.portfolio_code == ShareChangeEvent.portfolio_code,
+            PortfolioPosition.product_code == ShareChangeEvent.product_code,
+            PortfolioPosition.market == ShareChangeEvent.market,
+            PortfolioPosition.platform_code == ShareChangeEvent.platform_code,
+            PortfolioPosition.snapshot_date == ShareChangeEvent.entitlement_date,
+        ),
+    ).filter(
+        ShareChangeEvent.portfolio_code.in_(codes),
+        ShareChangeEvent.event_type == "cash_dividend",
+        ShareChangeEvent.status.in_(RECEIVABLE_STATUSES),
+        ShareChangeEvent.cash_pay_date.isnot(None),
+        ShareChangeEvent.platform_code.isnot(None),
+        ShareChangeEvent.ex_date <= upper_date,
+    ).all()
+    return [_CashRow(*row) for row in rows]
+
+
+def _cash_row_amount(
+    row: _CashRow, target_date: date, live_positions: Optional[Dict[tuple, dict]]
+) -> Decimal:
+    """confirmed 用落库 `cash_change`；pending 按「基数 × div_cash」现算。
+
+    pending 基数与再投资应收同一取法（`_resolve_base`：同日形态优先内存
+    live_positions，否则权益登记日持仓快照）。NULL cash_change（绕过服务层的
+    脏行）按 0 处理并被 `<= 0` 跳过，与既有 SQL SUM 忽略 NULL 的口径一致。
+    """
+    if row.status == "confirmed":
+        value = Decimal(str(row.cash_change or 0))
+        return value if value > 0 else Decimal("0")
+    return reinvest_dividend_amount(
+        _resolve_base(row, target_date, live_positions), row.div_cash
+    )
+
+
+def list_cash_dividend_in_transit(
+    db: Session,
+    portfolio_code: str,
+    target_date: date,
+    *,
+    live_positions: Optional[Dict[tuple, dict]] = None,
+) -> List[CashDividendInTransit]:
+    """列出 `target_date` 当日的现金分红在途（`ex_date <= D < cash_pay_date`）。
+
+    金额 <= 0 一律跳过（与 `list_reinvest_receivables` 同判据）：0 不落空在途行，
+    负值只可能来自脏行、不落负向在途。`live_positions` 语义与再投资应收相同：
+    仅在生成 `D == entitlement_date`（同日登记/除息形态）的快照时提供。
+    """
+    result = []
+    for row in _query_cash_rows(db, [portfolio_code], target_date):
+        if not (row.ex_date <= target_date < row.cash_pay_date):
+            continue
+        amount = _cash_row_amount(row, target_date, live_positions)
+        if amount <= 0:
+            continue
+        result.append(
+            CashDividendInTransit(
+                event_id=row.event_id,
+                portfolio_code=row.portfolio_code,
+                product_code=row.product_code,
+                market=row.market,
+                platform_code=row.platform_code,
+                ex_date=row.ex_date,
+                cash_pay_date=row.cash_pay_date,
+                amount=amount,
+            )
+        )
+    return result

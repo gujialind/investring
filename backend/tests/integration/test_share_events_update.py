@@ -68,14 +68,52 @@ class TestUpdateShareChangeEvent:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_EX_DATE"
 
-        # 除息日 <= 权益登记日
+        # #765：除息日改到与权益登记日同日——现金分红必须同时携带严格晚于
+        # 除息日的到账日，缺失报 INVALID_PARAM（原「同日一律 INVALID_DATE_ORDER」
+        # 已随同日形态放开而改变）
         resp = client.put(
             f"/api/share-change-events/{event.id}",
             json={"ex_date": "2025-11-10"},
             headers=admin_headers,
         )
         assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+        assert "现金到账日" in resp.json()["detail"]["message"]
+
+        # 同日 + 到账日 == 除息日：严格晚于约束
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"ex_date": "2025-11-10", "cash_pay_date": "2025-11-10"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_DATE_ORDER"
+
+        # 同日 + 严格晚于除息日的到账日：合法
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"ex_date": "2025-11-10", "cash_pay_date": "2025-11-11"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+
+        # 恢复非同日形态（到账日显式 null 清空），供后续断言沿用原事件日期语义
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"ex_date": "2025-11-12", "cash_pay_date": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+
+        # 先把除息日推到晚于即将创建的快照日——#765 守卫扩展后，pending 现金
+        # 分红在 `ex_date <= 最新快照日` 时改日期会先触发 SNAPSHOT_DEPENDENCY
+        # （生产路径该状态被闸门排除，本测试用直写快照 helper 造出人工态）
+        resp = client.put(
+            f"/api/share-change-events/{event.id}",
+            json={"ex_date": "2025-11-17"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
 
         # 除息日 <= 最新快照日
         create_value_snapshot(test_db, "UPE_P2", date(2025, 11, 14),
@@ -91,13 +129,13 @@ class TestUpdateShareChangeEvent:
         # 合法新日期（交易日、晚于登记日与最新快照日）可正常更新
         resp = client.put(
             f"/api/share-change-events/{event.id}",
-            json={"ex_date": "2025-11-17"},
+            json={"ex_date": "2025-11-18"},
             headers=admin_headers,
         )
         assert resp.status_code == 200
         test_db.expire_all()
         updated = test_db.query(ShareChangeEvent).get(event.id)
-        assert updated.ex_date == date(2025, 11, 17)
+        assert updated.ex_date == date(2025, 11, 18)
 
     def test_update_status_field_ignored(self, client, admin_headers, test_db):
         """PUT 传 status 被忽略（状态流转只走 confirm/cancel/unconfirm 端点）"""
