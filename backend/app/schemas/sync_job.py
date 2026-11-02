@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime
+
+VALID_SCOPES = ("all", "by_product")
 
 
 class PriceSyncRequest(BaseModel):
@@ -9,6 +11,25 @@ class PriceSyncRequest(BaseModel):
     scope: str = "all"
     products: Optional[List[List[str]]] = None
     data_source: Optional[str] = None
+
+    @field_validator("scope")
+    @classmethod
+    def _normalize_scope(cls, v: str) -> str:
+        # #808：CLI 帮助历史写法 by-product 与后端匹配值 by_product 归一；
+        # 未知值此前静默落入全量分支，改为 422 拒绝并给出可用值
+        normalized = (v or "all").replace("-", "_")
+        if normalized not in VALID_SCOPES:
+            raise ValueError(
+                f"scope 可用值: {list(VALID_SCOPES)}（by-product 自动归一），收到: {v!r}"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _by_product_requires_products(self):
+        # #808 Q3：scope=by_product 空清单会在 worker 静默跑成 0 产品任务，投递前拒绝
+        if self.scope == "by_product" and not self.products:
+            raise ValueError("scope=by_product 时 products 不能为空")
+        return self
 
 
 class SyncJobResponse(BaseModel):

@@ -1052,6 +1052,22 @@ ir market sync <PRODUCT_CODE> <MARKET> [--start-date YYYY-MM-DD] [--end-date YYY
 ir market sync-history <PRODUCT_CODE> <MARKET>
 ```
 
+#### `ir market sync-all`
+
+批量同步价格数据（异步任务，POST `/api/sync-jobs/price`；单 active 任务锁，已有 pending/running 任务时 409）。**#808 起 `--products` 真正限定范围**：此前缺省 scope 或按旧帮助写 `by-product` 都静默退化为全量同步。
+
+```bash
+ir market sync-all [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--scope all|by_product] [--products code|market,...] [--data-source tushare|akshare]
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `--start-date` | 否 | 开始日期；不传为增量同步（回看最近 10 个交易日，#698） |
+| `--end-date` | 否 | 结束日期 |
+| `--scope` | 否 | 范围 `all` / `by_product`（旧写法 `by-product` 后端自动归一，未知值 422）；传 `--products` 且缺省时自动 `by_product`；显式 `--scope all` 与 `--products` 冲突，报 `USAGE_ERROR`（exit 64） |
+| `--products` | 否 | 产品清单 `code|market,code|market`；非法条目逐个 warning（stderr）跳过，**全部非法时报 `USAGE_ERROR`（exit 64）且不下发任务**；`scope=by_product` 时后端要求 products 非空（否则 422） |
+| `--data-source` | 否 | 数据源过滤（`tushare`/`akshare`，仅 `scope=all` 生效） |
+
 ---
 
 ### 4.9 `ir product` — 产品管理
