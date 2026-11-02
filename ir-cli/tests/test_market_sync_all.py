@@ -16,6 +16,7 @@
 """
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from ir_cli.client import APIClient
@@ -124,6 +125,54 @@ def test_scope_all_with_products_conflict(monkeypatch):
     client = _patch_client(monkeypatch)
     result = _invoke(["market", "sync-all", "--scope", "all",
                       "--products", "022959.OF|CN_OTC"])
+    assert result.exit_code == 64
+    doc = json.loads(result.stdout)
+    assert doc["ok"] is False
+    assert doc["error"]["code"] == "USAGE_ERROR"
+    assert not client.calls
+
+
+def test_malformed_entries_all_skipped_usage_error(monkeypatch):
+    """T7a：#808 S1——空段/多余段按非法条目跳过；全部非法 → USAGE_ERROR，不发 POST"""
+    client = _patch_client(monkeypatch)
+    result = _invoke(["market", "sync-all", "--products",
+                      "022959.OF|,|CN_OTC,a|b|c, | "])
+    assert result.exit_code == 64
+    doc = json.loads(result.stdout)
+    assert doc["ok"] is False
+    assert doc["error"]["code"] == "USAGE_ERROR"
+    assert WARNING_MARK in result.stderr
+    assert not client.calls
+
+
+def test_malformed_entry_skipped_valid_still_submitted(monkeypatch):
+    """T7b：#808 S1——混合输入只下发合法条目，空段不进入 body"""
+    client = _patch_client(monkeypatch)
+    result = _invoke(["market", "sync-all", "--products",
+                      "022959.OF|,510300.SH|CN_EXCHANGE"])
+    assert result.exit_code == 0
+    json.loads(result.stdout)
+    assert WARNING_MARK in result.stderr
+    post = _price_post(client)
+    assert post["json"]["products"] == [["510300.SH", "CN_EXCHANGE"]]
+    assert post["json"]["scope"] == "by_product"
+
+
+def test_products_segments_stripped(monkeypatch):
+    """T7c：#808 S1——段内空格去净，避免 (code, market) 精确匹配静默落空"""
+    client = _patch_client(monkeypatch)
+    result = _invoke(["market", "sync-all", "--products", " 022959.OF | CN_OTC "])
+    assert result.exit_code == 0
+    post = _price_post(client)
+    assert post["json"]["products"] == [["022959.OF", "CN_OTC"]]
+    assert post["json"]["scope"] == "by_product"
+
+
+@pytest.mark.parametrize("scope_value", ["by_product", "by-product"])
+def test_by_product_scope_without_products_usage_error(monkeypatch, scope_value):
+    """T8：#808 S2——显式 by_product 缺清单在 CLI 侧 exit 64，不再落到后端 422（exit 1）"""
+    client = _patch_client(monkeypatch)
+    result = _invoke(["market", "sync-all", "--scope", scope_value])
     assert result.exit_code == 64
     doc = json.loads(result.stdout)
     assert doc["ok"] is False

@@ -126,7 +126,7 @@ ir schema trade              # 仅输出指定命令组
 | `HTTP_ERROR` | 其余非 2xx 兜底 |
 | `CONNECTION_ERROR` / `TIMEOUT_ERROR` / `NETWORK_ERROR` | 网络层失败：连接失败 / 超时 / 传输中断 |
 | `INVALID_JSON` | 本地校验：`--json` 不是合法 JSON 对象 |
-| `USAGE_ERROR` | Click 层用法错误：未知选项 / 未知子命令 / 缺必填参数。由入口统一收敛（`ir_cli/main.py::IrTyperGroup`），**exit 64**、命令未执行（#520） |
+| `USAGE_ERROR` | Click 层用法错误：未知选项 / 未知子命令 / 缺必填参数。由入口统一收敛（`ir_cli/main.py::IrTyperGroup`），**exit 64**、命令未执行（#520）；#808 起命令内参数语义冲突（`--scope all` 与 `--products` 并存、`--scope by_product` 缺 `--products`、`--products` 条目全部非法）同样收敛为此码，均为 exit 64 且不下发任务 |
 | `CLIENT_INIT_ERROR` | HTTP 客户端构造失败（构造期异常，含第三方库内部错误），**exit 3**；CLI 不读取代理环境变量（见 §2.2），排查方向为 `IR_BASE_URL` 合法性（#798） |
 | `INTERNAL_ERROR` | 未预期异常的全局兜底：任何未经专用错误出口收敛的异常由入口转为此码，**exit 1**，stdout 恒 JSON、不漏 raw traceback（#798）；设 `IR_DEBUG=1` 时完整异常栈写入 stderr（stdout 契约不变），报障复现时建议带上 |
 
@@ -1064,8 +1064,8 @@ ir market sync-all [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--scope al
 |------|:----:|------|
 | `--start-date` | 否 | 开始日期；不传为增量同步（回看最近 10 个交易日，#698） |
 | `--end-date` | 否 | 结束日期 |
-| `--scope` | 否 | 范围 `all` / `by_product`（旧写法 `by-product` 后端自动归一，未知值 422）；传 `--products` 且缺省时自动 `by_product`；显式 `--scope all` 与 `--products` 冲突，报 `USAGE_ERROR`（exit 64） |
-| `--products` | 否 | 产品清单 `code|market,code|market`；非法条目逐个 warning（stderr）跳过，**全部非法时报 `USAGE_ERROR`（exit 64）且不下发任务**；`scope=by_product` 时后端要求 products 非空（否则 422） |
+| `--scope` | 否 | 范围 `all` / `by_product`（旧写法 `by-product` 后端自动归一，未知值 422）；传 `--products` 且缺省时自动 `by_product`；显式 `--scope all` 与 `--products` 冲突、或显式 `by_product` 未带有效 `--products`，均报 `USAGE_ERROR`（exit 64） |
+| `--products` | 否 | 产品清单 `code|market,code|market`；条目须恰为两段且 code/market 去空格后非空，非法条目逐个 warning（stderr）跳过，**全部非法时报 `USAGE_ERROR`（exit 64）且不下发任务**；直连 API 时后端同样要求条目格式合法、`scope=by_product` 的 products 非空（否则 422） |
 | `--data-source` | 否 | 数据源过滤（`tushare`/`akshare`，仅 `scope=all` 生效） |
 
 ---

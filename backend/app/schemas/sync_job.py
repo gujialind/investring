@@ -12,6 +12,24 @@ class PriceSyncRequest(BaseModel):
     products: Optional[List[List[str]]] = None
     data_source: Optional[str] = None
 
+    @field_validator("products")
+    @classmethod
+    def _validate_products(cls, v):
+        # #808：条目须恰好两段非空 code/market；去空格避免精确匹配静默落空（0 产品成功）
+        if v is None:
+            return v
+        cleaned: List[List[str]] = []
+        for entry in v:
+            if len(entry) != 2:
+                raise ValueError(
+                    f"products 每个条目须为 [code, market] 两段，收到: {entry!r}"
+                )
+            code, market = (part.strip() for part in entry)
+            if not code or not market:
+                raise ValueError(f"products 条目的 code/market 不能为空，收到: {entry!r}")
+            cleaned.append([code, market])
+        return cleaned
+
     @field_validator("scope")
     @classmethod
     def _normalize_scope(cls, v: str) -> str:
