@@ -925,6 +925,60 @@ test.describe("现金市值更新 Dialog", () => {
     // 不再断成功 toast：它是无条件出口，已由上面「表单校验、成功反馈…」那条钉住
     //（R-3 口径），且本用例提交过两次，同文案 toast 会有两条同时存活。
   });
+
+  test("跨月连续选日翻页方向按控件当前值而非 today（#818 回归）", async ({ page }) => {
+    // 钉死 helpers.pickCalendarDay 的翻页基准（控件当前值，空值回退 today）：把 fromISO
+    // 改回 toISODate(new Date())（修复前逻辑）时本用例必须超时判红。已提交的 #660 用例
+    // 只在 CI 恰处跨月窗口才走到翻页分支（d3/d4 同月时日历直接命中、整段不执行），
+    // 本用例强制跨月、任何运行日都判别。
+    //
+    // 判别构造：第二次选日时「展示月 = 首选日的月」，目标日必须严格落在 today 与控件
+    // 当前值之间（且不在展示月网格里，网格外的相邻月日最多 6 天——react-day-picker
+    // showOutsideDays 只补首尾周）。按运行日取两种形态，覆盖所有日期、无 skip 窗口：
+    //   A. today 日号 ≥ 7：先选上月 15 → 再选 today。展示月=上月，today 不在上月网格
+    //      尾 outside 日（≤6 号）内；新基准 today > 控件值(上月15) → next 命中本月；
+    //      旧基准 today 不> today → previous 翻到上上月超时。
+    //   B. today 日号 ≤ 6：先选下月 15 → 再选明天（必仍在本月，日号 ≤ 7）。展示月=下月，
+    //      明天不在下月网格头 outside 日（≥22 号）内；新基准 明天 < 控件值(下月15) →
+    //      previous 命中本月；旧基准 明天 > today → next 翻到下下月超时。
+    //
+    // 载体复用「更新现金市值」弹窗：DatePicker 未传 dayDisabled（见上方非交易日用例
+    // 注释），任意日可点；全程只选日不提交、零后端写入，可在共享 E2E_ACTIVE 上跑。
+    // 60s：两次开弹层 + 两次翻页链路，mobile/webkit 帧计费放宽（#763 口径）
+    test.setTimeout(60_000);
+    await page.goto(CASH_PRODUCT_PATH);
+    await page
+      .getByTestId("platform-product-action-row")
+      .getByRole("button", { name: "市值更新" })
+      .click();
+    const dlg = dialogByTitle(page, "更新现金市值");
+    await expect(dlg).toBeVisible();
+    const trigger = dialogDateTrigger(dlg);
+
+    const now = new Date();
+    // 邻月 15 日：日号居中，任何月都存在，且必不在本月网格的 outside 补日（≤6 天）内
+    const neighborMid = (monthDelta: number) =>
+      toISODate(new Date(now.getFullYear(), now.getMonth() + monthDelta, 15));
+    let firstDay: string;
+    let secondDay: string;
+    if (now.getDate() >= 0) { // TEMP-FORCE-BRANCH-A 反向验证用，验证后恢复为 >= 7
+      firstDay = neighborMid(-1);
+      secondDay = toISODate(now);
+    } else {
+      firstDay = neighborMid(1);
+      secondDay = toISODate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+    }
+
+    // 数据前提先钉住：两日跨月且第二次目标严格晚于/早于构造所需方向，
+    // 形态假设破了就红在这里，而不是烧满翻页超时后指向错误原因
+    expect(firstDay.slice(0, 7) !== secondDay.slice(0, 7), "两目标日必须跨月").toBe(true);
+    expect(secondDay > toISODate(new Date(now.getFullYear(), now.getMonth(), 1))).toBe(true);
+    expect(secondDay < toISODate(new Date(now.getFullYear(), now.getMonth() + 1, 1))).toBe(true);
+
+    await pickCalendarDay(page, trigger, firstDay);
+    await pickCalendarDay(page, trigger, secondDay);
+    await expect(trigger).toHaveText(secondDay);
+  });
 });
 
 // #683 D-2 的另一页：两页共用 useNavAnalysis 却各写一份判序，缺一条就等于那一页没有网
