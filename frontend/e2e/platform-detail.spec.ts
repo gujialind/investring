@@ -961,7 +961,7 @@ test.describe("现金市值更新 Dialog", () => {
       toISODate(new Date(now.getFullYear(), now.getMonth() + monthDelta, 15));
     let firstDay: string;
     let secondDay: string;
-    if (now.getDate() >= 0) { // TEMP-FORCE-BRANCH-A 反向验证用，验证后恢复为 >= 7
+    if (now.getDate() >= 7) {
       firstDay = neighborMid(-1);
       secondDay = toISODate(now);
     } else {
