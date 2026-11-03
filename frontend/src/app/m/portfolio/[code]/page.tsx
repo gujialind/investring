@@ -155,18 +155,17 @@ function MobilePortfolioDetailInner() {
             </div>
           )}
 
-          {/* 高频操作：申购赎回 / 调仓（2 列网格；draft/closed 由 ActionButtons 内部处理） */}
+          {/* 高频操作 + #786 上移入口：单层 2 列网格由组件内部控制（draft/closed 整行），
+              外层不再嵌套 grid（#786 收敛既有双层 grid 挤压） */}
           {isAdmin && (
-            <div className="grid grid-cols-2 gap-2">
-              <PortfolioActionButtons
-                portfolioCode={code}
-                status={portfolio.status as "draft" | "active" | "closed"}
-                basePath="/m/portfolio"
-                variant="mobile"
-                onActivateClick={() => activatePortfolio.mutate(code)}
-                isActivatePending={activatePortfolio.isPending}
-              />
-            </div>
+            <PortfolioActionButtons
+              portfolioCode={code}
+              status={portfolio.status as "draft" | "active" | "closed"}
+              basePath="/m/portfolio"
+              variant="mobile"
+              onActivateClick={() => activatePortfolio.mutate(code)}
+              isActivatePending={activatePortfolio.isPending}
+            />
           )}
 
           {!isDraft && (
@@ -218,8 +217,12 @@ function MobilePortfolioDetailInner() {
             </>
           )}
 
-          {/* 页尾「管理」列表（#595 抽取共享卡，桌面端同卡） */}
-          <ManageLinksCard basePath="/m/portfolio" code={code} />
+          {/* 页尾「管理」列表（#595 抽取共享卡，桌面端同卡；#786 按场景去重） */}
+          <ManageLinksCard
+            basePath="/m/portfolio"
+            code={code}
+            status={portfolio.status as "draft" | "active" | "closed"}
+          />
         </>
       )}
     </div>

@@ -289,13 +289,28 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await expect(page.getByTestId('holding-product-card').first()).toBeVisible();
   });
 
-  test('管理入口列表渲染（桌面端 #595 新增、移动端原有，双端共享卡）', async ({ page }) => {
+  test('管理入口渲染（#786：页头 4 入口 + 管理卡场景去重，双端）', async ({ page }, testInfo) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    await expect(page.getByRole('link', { name: '持仓管理' })).toBeVisible();
-    await expect(page.getByRole('link', { name: '申购赎回记录' })).toBeVisible();
-    await expect(page.getByRole('link', { name: '调仓交易记录' })).toBeVisible();
+    const isMobile = testInfo.project.name === 'mobile';
+    // 页头/操作区 4 入口：申购赎回唯一 primary；「事件」可见文案为简称，
+    // accessible name 保留全称「份额变动事件」（aria-label，WCAG 2.5.3 + 既有定位契约）
+    await expect(page.getByRole('link', { name: '申购赎回', exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: isMobile ? '调仓' : '调仓交易', exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole('link', { name: '份额变动事件' })).toBeVisible();
     await expect(page.getByRole('link', { name: '快照管理' })).toBeVisible();
+    // 唯一性守卫：active+admin 详情页同名 link 仅页头一处（管理卡去重后不得双匹配）
+    await expect(page.getByRole('link', { name: '份额变动事件' })).toHaveCount(1);
+    await expect(page.getByRole('link', { name: '快照管理' })).toHaveCount(1);
+    // 管理卡：保留其余 4 入口，事件/快照不再重复出现
+    const card = page.getByTestId('manage-links-card');
+    await expect(card.getByRole('link', { name: '持仓管理' })).toBeVisible();
+    await expect(card.getByRole('link', { name: '申购赎回记录' })).toBeVisible();
+    await expect(card.getByRole('link', { name: '调仓交易记录' })).toBeVisible();
+    await expect(card.getByRole('link', { name: '现金流水' })).toBeVisible();
+    await expect(card.getByRole('link', { name: '份额变动事件' })).toHaveCount(0);
+    await expect(card.getByRole('link', { name: '快照管理' })).toHaveCount(0);
   });
 
   test('draft 组合不渲染持仓明细区', async ({ page }, testInfo) => {

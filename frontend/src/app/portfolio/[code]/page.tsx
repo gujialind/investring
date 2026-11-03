@@ -112,8 +112,8 @@ function PortfolioDetailInner() {
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* 页头：返回 / 名称+code+成立日期·状态小字 / 操作区 */}
-        <div className="flex items-center justify-between">
+        {/* 页头：返回 / 名称+code+成立日期·状态小字 / 操作区（#786：4 入口可换行、标题不压缩） */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-4">
             <Link href="/portfolio">
               <Button variant="ghost" size="sm">
@@ -134,16 +134,14 @@ function PortfolioDetailInner() {
             </div>
           </div>
           {isAdmin && (
-            <div className="flex gap-2">
-              <PortfolioActionButtons
-                portfolioCode={code}
-                status={portfolio.status as "draft" | "active" | "closed"}
-                basePath="/portfolio"
-                variant="desktop"
-                onActivateClick={() => activatePortfolio.mutate(code)}
-                isActivatePending={activatePortfolio.isPending}
-              />
-            </div>
+            <PortfolioActionButtons
+              portfolioCode={code}
+              status={portfolio.status as "draft" | "active" | "closed"}
+              basePath="/portfolio"
+              variant="desktop"
+              onActivateClick={() => activatePortfolio.mutate(code)}
+              isActivatePending={activatePortfolio.isPending}
+            />
           )}
         </div>
 
@@ -209,8 +207,12 @@ function PortfolioDetailInner() {
                     currentConfig={portfolio.display_config}
                   />
 
-                  {/* 管理入口（持仓管理/申赎赎回/调仓交易/份额事件/快照） */}
-                  <ManageLinksCard basePath="/portfolio" code={code} />
+                  {/* 管理入口（持仓管理/申赎赎回/调仓交易/现金流水；事件/快照已上移，#786 场景去重） */}
+                  <ManageLinksCard
+                    basePath="/portfolio"
+                    code={code}
+                    status={portfolio.status as "draft" | "active" | "closed"}
+                  />
                 </div>
 
                 <div className="w-[360px] shrink-0 space-y-4">
