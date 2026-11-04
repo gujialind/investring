@@ -9,15 +9,19 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.constants.audit_actions import ACTION_DELETE, RESOURCE_PORTFOLIO
 from app.models.asset_classification import AssetClassDimensionRule, AssetClassification
+from app.models.base import Base
 from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
 from app.models.portfolio import Portfolio
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.subscription import Subscription
 from app.models.trade import Trade
+from app.services.audit_service import record_audit
 from app.services.cumulative_profit_service import compute_cumulative_profits
 from app.services.exceptions import BusinessError, NotFoundError
 
@@ -422,10 +426,17 @@ def update_portfolio(
 
 
 def close_portfolio(db: Session, code: str) -> Portfolio:
-    """关闭组合（存在 pending 交易或已关闭则拒绝）。不 commit。"""
+    """关闭组合（仅 active；已关闭或有 pending 交易则拒绝）。不 commit。
+
+    状态闸门顺序即契约：已关闭 → 非 active → 存在 pending。前两条是状态机
+    前置，第三条是数据约束；把 `PORTFOLIO_NOT_ACTIVE` 排在 pending 检查之前，
+    draft 组合不会因「无 pending 交易」被误关（issue #820 口径 Q2）。
+    """
     portfolio = _get_portfolio_or_404(db, code)
     if portfolio.status == "closed":
         raise BusinessError("PORTFOLIO_ALREADY_CLOSED", "组合已关闭")
+    if portfolio.status != "active":
+        raise BusinessError("PORTFOLIO_NOT_ACTIVE", "组合未激活")
 
     pending_subs = db.query(Subscription).filter(
         Subscription.portfolio_code == code, Subscription.status == "pending"
@@ -455,6 +466,92 @@ def reactivate_portfolio(db: Session, code: str) -> Portfolio:
     portfolio.status = "active"
     portfolio.closed_at = None
     return portfolio
+
+
+def _portfolio_dependent_tables() -> list:
+    """按元数据派生「直接引用 portfolio.code」的表：返回 (表, 本侧外键列) 列表。
+
+    名单不手写（issue #820）：新增引用表自动进入删除判据，遗漏由
+    `tests/unit/test_portfolio_delete_dependents.py` 的集合断言翻红暴露。
+    """
+    entries = []
+    for table in Base.metadata.tables.values():
+        for fk in table.foreign_keys:
+            if fk.column.table.name == Portfolio.__tablename__:
+                entries.append((table, fk.parent, fk.constraint))
+                break
+    return entries
+
+
+def _count_portfolio_dependents(db: Session, code: str) -> dict:
+    """返回引用本组合且**有行**的依赖表 → 计数（空 dict 即「空壳」）。"""
+    counts: dict = {}
+    for table, fk_column, _constraint in _portfolio_dependent_tables():
+        n = (
+            db.query(func.count())
+            .select_from(table)
+            .filter(fk_column == code)
+            .scalar()
+        )
+        if n:
+            counts[table.name] = n
+    return counts
+
+
+def delete_draft_portfolio(db: Session, code: str) -> None:
+    """物理删除空壳 draft 组合（issue #820）。不 commit。
+
+    判据是「status == "draft" **且** 依赖表计数全为 0」，两者缺一不可：
+    unconfirm 首笔申购会把 active 退回 draft 而申赎行仍在（#820 事实 C1），
+    只信 status 会删掉有历史账务的组合。行锁与子表 INSERT 的 FK 共享锁互斥，
+    消除「先计数后删除」的竞态；MySQL FK RESTRICT 只作次防线——应用侧 SQLite
+    连接未开 `PRAGMA foreign_keys`，不能把兜底交给方言行为。
+    审计在 `db.delete()` 之前写：`record_audit` 会先 flush 业务改动，先删会让
+    审计失败与业务删除的先后关系不可辨。失败路径（404/409）不落审计行。
+    """
+    portfolio = (
+        db.query(Portfolio)
+        .filter(Portfolio.code == code)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not portfolio:
+        raise NotFoundError("NOT_FOUND", f"组合 {code} 不存在")
+
+    if portfolio.status != "draft":
+        raise BusinessError(
+            "PORTFOLIO_NOT_DELETABLE",
+            f"仅草稿组合可删除，当前状态: {portfolio.status}",
+            http_status=409,
+            details={"status": portfolio.status},
+        )
+
+    dependencies = _count_portfolio_dependents(db, code)
+    if dependencies:
+        raise BusinessError(
+            "PORTFOLIO_HAS_DEPENDENT_DATA",
+            "组合仍存在关联数据，无法删除",
+            http_status=409,
+            details={"dependencies": dependencies},
+        )
+
+    record_audit(
+        db,
+        action=ACTION_DELETE,
+        resource_type=RESOURCE_PORTFOLIO,
+        resource_id=code,
+        resource_name=portfolio.name,
+        old_value={
+            "code": portfolio.code,
+            "name": portfolio.name,
+            "status": portfolio.status,
+            "started_at": portfolio.started_at.isoformat() if portfolio.started_at else None,
+            "closed_at": portfolio.closed_at.isoformat() if portfolio.closed_at else None,
+        },
+    )
+    db.delete(portfolio)
+    logger.info("删除空壳草稿组合: code=%s", code)
 
 
 def get_nav_history(

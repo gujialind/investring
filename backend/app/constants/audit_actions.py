@@ -33,6 +33,7 @@ RESOURCE_SHARE_CHANGE_EVENT = "share_change_event"
 RESOURCE_SNAPSHOT = "snapshot"
 RESOURCE_MANUAL_MARKET_VALUE = "manual_market_value"
 RESOURCE_API_KEY = "api_key"
+RESOURCE_PORTFOLIO = "portfolio"
 
 # ---- sentinel ----
 

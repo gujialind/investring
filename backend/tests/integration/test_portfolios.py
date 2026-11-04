@@ -106,13 +106,43 @@ class TestPortfolioStatus:
         port = test_db.query(Portfolio).filter(Portfolio.code == "P_CLOSE").first()
         assert port.status == "closed"
 
-    def test_close_draft_portfolio_fails(self, client, admin_headers, test_db):
-        """关闭 draft 组合：当前实现允许直接关闭（无校验 draft 状态）"""
+    def test_close_draft_portfolio_rejected(self, client, admin_headers, test_db):
+        """#820 口径 Q2：close 只对 active 开放——draft 直接关闭会造出既不能删
+        也不再使用的空壳，收紧后返回 422 PORTFOLIO_NOT_ACTIVE 且状态不变。
+        """
         create_portfolio(test_db, code="P_DR_CL", status="draft")
         resp = client.post("/api/portfolios/P_DR_CL/close", headers=admin_headers)
-        # 当前实现仅检查 closed 和 pending 交易，不检查 draft
-        # 如果未来添加 draft 校验，改为 (400, 422)
-        assert resp.status_code in (200, 400, 422)
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["error"] == "PORTFOLIO_NOT_ACTIVE"
+
+        port = test_db.query(Portfolio).filter(Portfolio.code == "P_DR_CL").first()
+        assert port.status == "draft"
+        assert port.closed_at is None
+
+    def test_close_already_closed_keeps_existing_code(self, client, admin_headers, test_db):
+        """闸门顺序（#820）：已关闭优先于「非 active」——重复关闭仍报既有码，
+        新增的 PORTFOLIO_NOT_ACTIVE 不得把这条换成别的码。
+        """
+        create_portfolio(test_db, code="P_CL_TWICE", status="closed")
+        resp = client.post("/api/portfolios/P_CL_TWICE/close", headers=admin_headers)
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["error"] == "PORTFOLIO_ALREADY_CLOSED"
+
+    def test_close_active_with_pending_reports_pending(self, client, admin_headers, test_db):
+        """active + pending 申赎 → 仍走 PENDING_TRANSACTIONS_EXIST（新增的状态闸门
+        排在它之前，不能把这条数据约束判成状态问题）。
+        """
+        create_portfolio(test_db, code="P_CL_PEND", status="active")
+        create_subscription(test_db, portfolio_code="P_CL_PEND", investor_code="ADMIN")
+
+        resp = client.post("/api/portfolios/P_CL_PEND/close", headers=admin_headers)
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "PENDING_TRANSACTIONS_EXIST"
+        assert "1 笔申赎" in detail["message"]
+
+        port = test_db.query(Portfolio).filter(Portfolio.code == "P_CL_PEND").first()
+        assert port.status == "active"
 
     def test_reactivate_closed_portfolio(self, client, admin_headers, test_db):
         """重新激活已关闭组合"""
