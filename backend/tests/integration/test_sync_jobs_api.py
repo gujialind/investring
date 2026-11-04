@@ -66,6 +66,80 @@ class TestSubmitPriceSync:
         )
         assert response.status_code == 401
 
+    def test_scope_hyphen_normalized_to_by_product(self, client, admin_headers, test_db, monkeypatch):
+        """#808 验收 2：by-product（连字符）经 schema 归一为 by_product 落进 job params"""
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            response = client.post(
+                "/api/sync-jobs/price",
+                json={"scope": "by-product",
+                      "products": [["510300.SH", "CN_EXCHANGE"]]},
+                headers=admin_headers,
+            )
+        assert response.status_code == 200
+        job = test_db.query(SyncJob).filter(SyncJob.id == response.json()["job_id"]).first()
+        assert job.params["scope"] == "by_product"
+
+    def test_unknown_scope_rejected_422(self, client, admin_headers, test_db):
+        """#808 验收 2：未知 scope 不再静默落入全量分支 → 422 且不落 job"""
+        response = client.post(
+            "/api/sync-jobs/price",
+            json={"scope": "bogus"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert "scope 可用值" in response.text
+        assert "by_product" in response.text
+        assert test_db.query(SyncJob).count() == 0
+
+    @pytest.mark.parametrize(
+        "products",
+        [
+            [["510300.SH"]],
+            [["510300.SH", "CN_EXCHANGE", "EXTRA"]],
+            [["510300.SH", "  "]],
+        ],
+    )
+    def test_malformed_products_rejected_422(
+        self, client, admin_headers, test_db, products
+    ):
+        """#808 S1：条目非两段或含空段 → 投递前 422，不在 worker 静默跑 0 产品任务"""
+        response = client.post(
+            "/api/sync-jobs/price",
+            json={"scope": "by_product", "products": products},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert test_db.query(SyncJob).count() == 0
+
+    def test_products_segments_stripped_before_store(
+        self, client, admin_headers, test_db, monkeypatch
+    ):
+        """#808 S1：段内空格归一，避免 (code, market) 精确匹配静默落空"""
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.market_data_service._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            response = client.post(
+                "/api/sync-jobs/price",
+                json={"scope": "by_product",
+                      "products": [[" 510300.SH ", " CN_EXCHANGE "]]},
+                headers=admin_headers,
+            )
+        assert response.status_code == 200
+        job = test_db.query(SyncJob).filter(SyncJob.id == response.json()["job_id"]).first()
+        assert job.params["products"] == [["510300.SH", "CN_EXCHANGE"]]
+
+    def test_by_product_without_products_rejected_422(self, client, admin_headers, test_db):
+        """#808 Q3：scope=by_product 且 products 空 → 422，不在 worker 静默跑 0 产品任务"""
+        response = client.post(
+            "/api/sync-jobs/price",
+            json={"scope": "by_product", "products": []},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert test_db.query(SyncJob).count() == 0
+
 
 class TestGetJobStatus:
     """GET /api/sync-jobs/{job_id}"""

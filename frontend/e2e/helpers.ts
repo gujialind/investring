@@ -166,7 +166,7 @@ export async function authHeaders(page: Page): Promise<{ Authorization: string }
 // 漂移出来的正是多套一层 getByRole('dialog') 的那份（#640 T-1 因此从未真正执行过）；
 // 第四轮再消掉 trade-buy-amount-linkage 的 selectTradeDate（同形、只少那条跳过守卫）。
 // 刻意未并的两处见 frontend/e2e/AGENTS.md §1 的台账：share-change-cash-pay-date 的 pickDay
-// 同为 ISO 口径但翻页基准取控件当前值、点击前额外断言 toBeEnabled；datepicker-in-dialog
+// 同为 ISO 口径、仅多一条点击前 toBeEnabled 断言；datepicker-in-dialog
 // 按「当月某日」（data-day$="-18"）定位，不属本函数口径。
 // ===========================================================================
 
@@ -194,9 +194,11 @@ export function toISODate(d: Date): string {
  * 2026-09-16 实踩：目标日恰为表单默认值 today）。#542 已改为「点任何日都关弹层、toggle-off
  * 不回传调用方」，清空唯一入口是 X 按钮，故这里的跳过只剩效率意义。
  *
- * ⚠️ 目标日与 today 最多相差数天，日历默认展示当前月（或已选日所在月），故 `data-day`
- * 不在当前月时按月翻一次——**没有断言兜底这条翻页前提**，若把 target 口径改成「最近
- * N 个交易日」（长假可跨月），这里会静默点错月（#640 U-5）。
+ * 翻页基准取**控件当前值**（未选值时取 today），不能按 today：`DatePicker` 打开时把
+ * month 重置为 `date ?? new Date()`（ui/date-picker.tsx），跨月连续选两日时后一目标
+ * 可能仍 ≤ today 却晚于已选日（#660 的 d3=上月末、d4=本月首个交易日），按 today 判会
+ * 反向翻页并超时（CI 2026-11-02 实踩）。各调用点目标与基准最多跨一个自然月；更远会
+ * 点不到目标日而显式超时，不会静默点错月。
  *
  * 隐含前提：trigger 所在 DialogContent **不得**自带 `overflow-y-auto`——#191 方案 C 把
  * 弹层 Portal 注入 DialogContent 自身，父级 overflow 会裁掉月历底行，那一点落在遮罩上、
@@ -207,12 +209,16 @@ export async function pickCalendarDay(
   trigger: Locator,
   targetISO: string,
 ): Promise<void> {
-  if ((await trigger.textContent())?.trim() === targetISO) return;
+  const currentISO = (await trigger.textContent())?.trim();
+  if (currentISO === targetISO) return;
   await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
   // 显式上界，与全局 use.actionTimeout（#551 §2）同值；留字面值防预算随配置漂移
   if ((await day.count()) === 0) {
-    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
+    const fromISO = currentISO && /^\d{4}-\d{2}-\d{2}$/.test(currentISO)
+      ? currentISO
+      : toISODate(new Date());
+    const dir = targetISO > fromISO ? 'next' : 'previous';
     await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
   }
   await day.click({ timeout: 10_000 });
