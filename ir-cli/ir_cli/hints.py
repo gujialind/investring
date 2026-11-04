@@ -26,6 +26,8 @@ ERROR_HINTS: dict = {
     "CANNOT_DELETE_CONFIRMED": "confirmed 记录不可直接删除，先执行 unconfirm 回退至 pending",
     "INVALID_STATUS": "记录状态不允许该操作（confirm/cancel 仅限 pending，unconfirm 仅限 confirmed，cancelled 不可修改）：先查询当前状态（ir trade list / ir sub list / ir share-event list --portfolio-code <code>）再按状态处理",
     "PENDING_TRANSACTIONS_EXIST": "存在 pending 申赎/交易，先逐笔 confirm 或 cancel 后重试",
+    "PORTFOLIO_NOT_DELETABLE": "只有草稿（draft）组合可删除：active 先 `ir portfolio close <code> --yes` 关闭、closed 保留历史，两者都不支持物理删除；误建且已激活的组合须先赎回份额再关闭（#820）",
+    "PORTFOLIO_HAS_DEPENDENT_DATA": "组合仍有关联记录（details.dependencies 点名表与行数），删除不级联：用 `ir portfolio context <code>` 侦察后逐条清理点名记录；已产生账务的组合属正常不可删，改用 `ir portfolio close`（#820）",
     "CASH_TRADE_FORBIDDEN": "禁止直接创建 CASH 交易，现金变动须走 ir sub（申赎）/ ir cash-transfer（跨平台转移）/ 基金调仓自动配对；调仓 CASH 腿的财务字段与生命周期只能由基金腿驱动",
     "CASH_PLATFORM_NOT_ALLOWED": "现金腿平台在不允许的时机传入：卖出到账平台改在确认时传 ir trade confirm <id> --cash-platform-code <平台>；买入扣款平台在创建时用 ir trade create --cash-platform-code <平台> 确定后不可改",
     "CASH_CONFIRM_DATE_NOT_ALLOWED": "现金日在不允许的时机传入：卖出到账日改在确认时传 ir trade confirm <id> --cash-confirm-date <到账日>（缺省 = 基金确认日）；买入扣款日固定为下单日 T，不可改",

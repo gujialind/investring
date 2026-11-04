@@ -166,7 +166,7 @@ ir schema trade              # 仅输出指定命令组
 | `INVALID_CONFIRM_DAYS` | confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；返回 422 |
 | `DIMENSION_VALUE_IN_USE` | 维度值关联仍被产品引用，不可移除（`details.products` 列引用产品） |
 | `DIMENSION_RULE_CONFLICT` | 维度规则收紧与存量产品冲突（`details.products` 列冲突产品） |
-| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1，不发任何后端请求）：`investor delete`、`portfolio close`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
+| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1，不发任何后端请求）：`investor delete`、`portfolio close`、`portfolio delete`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
 
 ### 3.4 数据类型说明
 
@@ -403,7 +403,7 @@ ir portfolio close <CODE> --yes
 |------|:------:|------|
 | `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
-> **约束**：存在 pending 状态的申购/赎回或调仓交易时禁止关闭。关闭可经 `ir portfolio reactivate` 回退，但仍纳入确认门槛以统一破坏性命令口径（#629）。
+> **约束**：只有 `active` 组合可关闭（#820 收紧：`draft` 关闭返回 422 `PORTFOLIO_NOT_ACTIVE`，避免造出既不能删除也不再使用的空壳）；存在 pending 状态的申购/赎回或调仓交易时禁止关闭。关闭可经 `ir portfolio reactivate` 回退，但仍纳入确认门槛以统一破坏性命令口径（#629）。
 
 #### `ir portfolio reactivate`
 
@@ -414,6 +414,20 @@ ir portfolio reactivate <CODE>
 ```
 
 > **约束**：仅 `closed` 状态可激活。
+
+#### `ir portfolio delete`
+
+删除空壳草稿组合（不可恢复）。
+
+```bash
+ir portfolio delete <CODE> --yes
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
+
+> **约束**（issue #820）：放行条件是「状态为 `draft` **且** 没有任何关联记录（申赎、调仓、持仓/市值快照、投资人份额、手动市值、份额事件）」。两个条件都不满足时分别返回 409 `PORTFOLIO_NOT_DELETABLE`（状态不对）与 409 `PORTFOLIO_HAS_DEPENDENT_DATA`（`details.dependencies` 点名的表仍有行）；不级联删除，也不提供「先 close 再删」的旁路。撤销首笔申购确认会把组合退回 `draft` 而申赎行仍在，因此「是草稿」不等于「是误建空壳」——删除前用 `ir portfolio context <CODE>` 侦察。删除成功后同一 code 可立即重建。
 
 #### `ir portfolio nav-history`
 

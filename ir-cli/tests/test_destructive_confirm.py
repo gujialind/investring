@@ -1,11 +1,13 @@
 """破坏性命令的 --yes 确认门槛（issue #629）
 
 覆盖：
-- 六命令不带 `--yes` → exit 1 + `CONFIRM_REQUIRED` + **零后端调用**（判空在 `from_config()` 之前）
+- `DESTRUCTIVE` 表内全部命令不带 `--yes` → exit 1 + `CONFIRM_REQUIRED` + **零后端调用**（判空在 `from_config()` 之前）
 - 带 `--yes` → 命中期望 method/path（`portfolio close` 是 POST 生命周期写，其余为 DELETE）
 - `--help` 选项面出现 `--yes`（手册 ↔ 实现的双向比对由 test_doc_parity 守门）
 - `delete-bulk` 回归：不带 `--yes` 时 hints 仍点名 `--dry-run`——#629 起静态表只给通用文案，
   该指引由命令调用点显式持有
+
+新增破坏性命令时只在 `DESTRUCTIVE` 加一行，上面三类断言自动覆盖它。
 
 运行方式（仓库根）：
     PYTHONPATH=ir-cli .venv/bin/python -m pytest ir-cli/tests -q
@@ -72,6 +74,7 @@ def _run(cli, args):
 DESTRUCTIVE = [
     (["investor", "delete", "alice"], "DELETE", "/api/investors/alice"),
     (["portfolio", "close", "P1"], "POST", "/api/portfolios/P1/close"),
+    (["portfolio", "delete", "P1"], "DELETE", "/api/portfolios/P1"),
     (["share-event", "delete", "7"], "DELETE", "/api/share-change-events/7"),
     (["product", "delete", "022959.OF", "CN_OTC"], "DELETE", "/api/products/022959.OF/CN_OTC"),
     (["platform", "delete", "alipay"], "DELETE", "/api/platforms/alipay"),
@@ -94,7 +97,7 @@ class TestConfirmGateRejects:
 
     @pytest.mark.parametrize("args,method,path", DESTRUCTIVE)
     def test_hint_is_generic_and_names_no_unsupported_flag(self, monkeypatch, cli, args, method, path):
-        """#629：这六命令没有 --dry-run，通用 hint 不得承诺它（否则重演 #616 的虚假指引）"""
+        """这些命令没有 --dry-run，通用 hint 不得承诺它（否则重演 #616 的虚假指引）"""
         _patch_client(monkeypatch)
         _, doc, _ = _run(cli, args)
         hint = doc["error"]["hints"][0]
