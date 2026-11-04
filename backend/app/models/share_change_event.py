@@ -50,9 +50,13 @@ class ShareChangeEvent(Base):
     def share_effective_date(self):
         """份额生效日（#743）：再投资设了确认日则份额在确认日到账，否则回落除息日。
 
-        与 `cash_effective_date` 对仗，是快照份额窗口、pending 闸门与
-        auto_confirm 判键的单一口径。同日登记/除息（`entitlement_date == ex_date`）
-        只有设了 `share_confirm_date` 才合法，故同日事件的份额必然落在确认日。
+        与 `cash_effective_date` 对仗，是快照份额窗口与 pending 闸门（非现金分红）
+        的单一口径。同日登记/除息（`entitlement_date == ex_date`）对再投资只有设了
+        `share_confirm_date` 才合法，同日事件的份额必然落在确认日；对现金分红
+        （#765）同日合法且必须携带严格晚于除息日的 `cash_pay_date`——现金分红
+        不动份额，本属性回落 `ex_date`，闸门与自动确认改按 `cash_effective_date`
+        判（见 snapshot_service `_check_share_change_events` /
+        `auto_confirm_after_snapshot`）。
         """
         if self.event_type == "reinvest_dividend" and self.share_confirm_date:
             return self.share_confirm_date

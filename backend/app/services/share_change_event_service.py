@@ -64,6 +64,12 @@ MSG_FUND_LEVEL_NO_HOLDINGS = "权益登记日无持仓，无需确认"
 MSG_REINVEST_ON_EXCHANGE = "场内份额只能现金分红，不支持红利再投资，请改录 cash_dividend"
 MSG_REINVEST_NAV_NOT_POSITIVE = "再投资净值必须大于 0；净值未发布可留空，确认时自动取除息日净值"
 MSG_DIV_CASH_NOT_POSITIVE = "每份分红金额必须大于 0"
+# #765：同日登记/除息现金分红的到账日强制约束（拒绝文案单点，创建/更新/确认候选共用）
+MSG_SAME_DAY_CASH_PAY_DATE_REQUIRED = (
+    "同日登记/除息的现金分红必须指定晚于除息日的现金到账日"
+    "（确认需要除息日快照做基数，到账日缺失或同日会互相等待）"
+)
+MSG_SAME_DAY_CASH_PAY_DATE_ORDER = "同日登记/除息的现金分红，现金到账日必须严格晚于除息日"
 # #771：自动确认跳过「须补录」事件时给出的可操作指引（单点，供 snapshot_service 与测试引用）
 MSG_DIV_CASH_BACKFILL_HINT = (
     "该事件的每份分红金额无效（为 0、负值或非数值），确认必然被拒绝；"
@@ -410,15 +416,21 @@ def _prepare_confirmation_event(
         _, changes = _diff_fields(event, updates)
         if changes:
             _require_receivable_not_snapshotted(db, event)
-        _validate_cash_pay_date(selection.event_type, event.ex_date, selection.cash_pay_date)
         # #784：确认/预览候选的日期校验按事件落库市场日历（HK_MUTUAL→HKEX，其余→SSE）
+        # 确认日校验先于到账日（与创建同序）：类型不匹配的字段错优先报
         _validate_share_confirm_date(
             db, selection.event_type, event.ex_date, selection.share_confirm_date,
             exchange=exchange_for_market(event.market),
         )
+        # #765：候选为同日登记/除息的现金分红时，到账日强制约束按事件现值登记日判
+        _validate_cash_pay_date(
+            selection.event_type, event.ex_date, selection.cash_pay_date,
+            event.entitlement_date,
+        )
         if set(changes) & {"event_type", "cash_pay_date", "share_confirm_date"}:
             _validate_event_dates(
-                db, event.portfolio_code, event.ex_date, event.entitlement_date,
+                db, event.portfolio_code, selection.event_type,
+                event.ex_date, event.entitlement_date,
                 selection.share_confirm_date,
                 exchange=exchange_for_market(event.market),
             )
@@ -739,6 +751,7 @@ def _confirm_fund_level_event(db: Session, event: ShareChangeEvent) -> None:
 def _validate_event_dates(
     db: Session,
     portfolio_code: str,
+    event_type: str,
     ex_date: date,
     entitlement_date: date,
     share_confirm_date: Optional[date] = None,
@@ -755,8 +768,17 @@ def _validate_event_dates(
 
     #743：设了 `share_confirm_date`（再投资份额确认日）时允许
     `entitlement_date == ex_date`——场外分红普遍「权益登记日 = 除息日」，份额在
-    确认日才到账，除息日只记应收。未设时保持严格 `>` 与原文案（拆分/合并/送股/
-    现金分红的份额与现金都按 `ex_date` 生效，同日会造成基数与生效互相打架）。
+    确认日才到账，除息日只记应收。
+
+    #765：`cash_dividend` 同样允许同日——现金分红不动份额，现金按
+    `cash_effective_date`（`cash_pay_date` 回退 `ex_date`）生效；同日形态
+    必须携带严格晚于除息日的 `cash_pay_date`（否则「确认要基数快照、快照要闸门
+    放行」互等死锁），该约束在 `_validate_cash_pay_date` 按合并后终值把关。
+    `dividend_pending` **刻意不放宽**：方式未定则无任何适用日期可作闸门/派生键，
+    同日形态下「闸门阻断 D 日快照 ↔ 确认需要 D 日基数快照」同样死锁，且确认
+    选择路径会被派生在途守卫二次锁死——同日待定分红留给 #766（检测器建事件
+    形态设计）一并解决。其余类型（拆分/合并/送股/强制调整）未设确认日时保持
+    严格 `>` 与原文案。
     """
     # 权益登记日必须是交易日（exchange 日历）
     if not is_trading_day(db, entitlement_date, exchange=exchange):
@@ -764,7 +786,8 @@ def _validate_event_dates(
     # 除息日必须是交易日（exchange 日历）
     if not is_trading_day(db, ex_date, exchange=exchange):
         raise BusinessError("INVALID_EX_DATE", "除息日不是交易日")
-    if share_confirm_date is not None:
+    same_day_allowed = share_confirm_date is not None or event_type == "cash_dividend"
+    if same_day_allowed:
         if ex_date < entitlement_date:
             raise BusinessError(
                 "INVALID_DATE_ORDER",
@@ -812,40 +835,83 @@ def _validate_share_confirm_date(
 
 
 def _require_receivable_not_snapshotted(db: Session, event: ShareChangeEvent) -> None:
-    """#743：pending 的再投资应收一旦进入快照即冻结事件的改/取消/删除。
+    """#743/#765：pending 的派生应收/在途一旦进入快照即冻结事件的改/取消/删除。
 
-    应收是**派生值**（生成快照时由基数 × `div_cash` 现算，不落库），所以事件在
+    应收与在途都是**派生值**（生成快照时现算，不落库），所以事件在
     `ex_date <= 最新快照日` 之后被改动会让已生成的快照与事件口径漂移，而系统
     无从察觉。与 confirmed 事件的 `SNAPSHOT_DEPENDENCY` 同一处置：先删 `ex_date`
     及之后的快照（级联会把事件退回 pending），再改。
 
-    只约束 pending——confirmed 事件已由 unconfirm 的快照保护把关；未设
-    `share_confirm_date` 的事件不产生应收，pending 闸门仍按 `ex_date` 阻断快照
-    生成，故不存在「已进快照」的形态。调用方按**实际变更的字段**豁免：仅改 notes、
-    或整对象重提交而值未变（编辑弹窗常态）都不影响口径，不触发本守卫。
+    覆盖两类形态：
+    - #743 设了 `share_confirm_date` 的 pending 再投资（应收 `ex_date <= D <
+      share_confirm_date`）；
+    - #765 pending 现金分红（在途 `ex_date <= D < cash_pay_date`，pending 与
+      confirmed 都由 reinvest_receivable 派生/落库口径计入快照）。不带到账日的
+      现金分红没有在途区间，pending 闸门自 ex_date 阻断快照，本守卫对其天然
+      不可达（`ex_date <= 最新快照日` 与闸门阻断互斥）。
+
+    只约束 pending——confirmed 事件已由 unconfirm 的快照保护把关。调用方按
+    **实际变更的字段**豁免：仅改 notes、或整对象重提交而值未变（编辑弹窗常态）
+    都不影响口径，不触发本守卫。
     """
-    if event.status != "pending" or event.share_confirm_date is None:
+    if event.status != "pending":
+        return
+    if event.share_confirm_date is None and event.event_type != "cash_dividend":
         return
     latest_snapshot = get_latest_snapshot_date(db, event.portfolio_code)
     if not latest_snapshot or event.ex_date > latest_snapshot:
         return
+    if event.event_type == "cash_dividend":
+        message = (
+            f"该事件的分红在途已计入 {event.ex_date} 及之后的快照，"
+            f"请先删除 {event.ex_date} 及之后的快照"
+        )
+    else:
+        message = (
+            f"该事件的再投资应收已计入 {event.ex_date} 及之后的快照，"
+            f"请先删除 {event.ex_date} 及之后的快照"
+        )
     raise BusinessError(
         "SNAPSHOT_DEPENDENCY",
-        f"该事件的再投资应收已计入 {event.ex_date} 及之后的快照，"
-        f"请先删除 {event.ex_date} 及之后的快照",
+        message,
         details={"from_date": event.ex_date.isoformat()},
     )
 
 
 def _validate_cash_pay_date(
-    event_type: str, ex_date: date, cash_pay_date: Optional[date]
+    event_type: str,
+    ex_date: date,
+    cash_pay_date: Optional[date],
+    entitlement_date: Optional[date] = None,
 ) -> None:
+    """现金到账日校验（#522；#765 增同日形态强制约束）。
+
+    `entitlement_date` 由调用方按**合并后终值**传入（创建即入参、更新/确认候选取
+    合并值）；缺省 None 时跳过同日判定（仅用于不掌握登记日的历史调用形态，
+    当前无此类调用方）。
+
+    #765：同日登记/除息（`entitlement_date == ex_date`）的现金分红必须携带
+    **严格晚于除息日**的 `cash_pay_date`——确认需要读登记日（= 除息日）快照做
+    基数，而该快照的生成又被 pending 闸门按 `cash_effective_date` 把关；到账日
+    缺失或等于除息日会让「确认要快照、快照要确认」互等死锁。到账日晚于除息日时
+    闸门放行 D..P-1 的快照，pending 期由派生在途补足市值（reinvest_receivable）。
+    """
+    if event_type != "cash_dividend":
+        if cash_pay_date is not None:
+            raise BusinessError("INVALID_PARAM", "仅现金分红可设置 cash_pay_date")
+        return
+    same_day = entitlement_date is not None and entitlement_date == ex_date
+    if same_day and cash_pay_date is None:
+        raise BusinessError(
+            "INVALID_PARAM", MSG_SAME_DAY_CASH_PAY_DATE_REQUIRED,
+            details={"field": "cash_pay_date"},
+        )
     if cash_pay_date is None:
         return
-    if event_type != "cash_dividend":
-        raise BusinessError("INVALID_PARAM", "仅现金分红可设置 cash_pay_date")
     if cash_pay_date < ex_date:
         raise BusinessError("INVALID_DATE_ORDER", "现金到账日不能早于除息日")
+    if same_day and cash_pay_date == ex_date:
+        raise BusinessError("INVALID_DATE_ORDER", MSG_SAME_DAY_CASH_PAY_DATE_ORDER)
 
 
 def create_share_change_event(
@@ -896,14 +962,16 @@ def create_share_change_event(
     product_code, market = resolve_product_market(db, product_code, market)
 
     _validate_event_dates(
-        db, portfolio_code, ex_date, entitlement_date, share_confirm_date,
+        db, portfolio_code, event_type, ex_date, entitlement_date, share_confirm_date,
         exchange=exchange_for_market(market),
     )
-    _validate_cash_pay_date(event_type, ex_date, cash_pay_date)
+    # 确认日校验先于到账日：cash_dividend 误带 share_confirm_date 时优先报
+    # 「仅红利再投资可设置」（更具体的字段错），再报同日到账日缺失
     _validate_share_confirm_date(
         db, event_type, ex_date, share_confirm_date,
         exchange=exchange_for_market(market),
     )
+    _validate_cash_pay_date(event_type, ex_date, cash_pay_date, entitlement_date)
 
     # 显式 (code, market) 组合不存在报 NOT_FOUND——杜绝复合外键违约 500
     if not db.query(Product).filter(
@@ -1062,21 +1130,27 @@ def update_share_change_event(
     # 让编辑弹窗恒发的原值撞上 DATE_BEFORE_SNAPSHOT——#743 的应收窗口使「pending 且
     # `ex_date <=` 最新快照日」成为合法常驻状态，该状态下的漂移由上方守卫负责，不该由
     # 「除息日必须晚于最新快照日」这条创建期规则重复拦截。
+    effective_entitlement_date = updates.get(
+        "entitlement_date", event.entitlement_date
+    )
     if set(new_values) & {"ex_date", "entitlement_date", "share_confirm_date"}:
-        effective_entitlement_date = updates.get(
-            "entitlement_date", event.entitlement_date
-        )
         _validate_event_dates(
-            db, event.portfolio_code, effective_ex_date, effective_entitlement_date,
+            db, event.portfolio_code, event.event_type,
+            effective_ex_date, effective_entitlement_date,
             effective_share_confirm_date,
             exchange=exchange_for_market(event.market),
         )
-    _validate_cash_pay_date(
-        event.event_type, effective_ex_date, updates.get("cash_pay_date", event.cash_pay_date)
-    )
+    # 确认日校验先于到账日（与创建同序）
     _validate_share_confirm_date(
         db, event.event_type, effective_ex_date, effective_share_confirm_date,
         exchange=exchange_for_market(event.market),
+    )
+    # #765：到账日按合并后终值校验——同日形态清空到账日（清除型字段显式 null）
+    # 会重新落入死锁形态，必须与创建同口径拒绝
+    _validate_cash_pay_date(
+        event.event_type, effective_ex_date,
+        updates.get("cash_pay_date", event.cash_pay_date),
+        effective_entitlement_date,
     )
 
     # issue #279：按合并后值校验（event_type/product_code 不可改，恒取事件现值），

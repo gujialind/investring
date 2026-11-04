@@ -854,9 +854,9 @@ ir share-event create \
 | `--product-code` | 是 | 产品代码 |
 | `--market` | 是 | 市场类型 |
 | `--event-type` | 是 | 事件类型（见下表） |
-| `--ex-date` | 是 | 除息日（**必须是产品市场日历的交易日**：HK_MUTUAL 按 HKEX，其余按 SSE，#784；默认须 > 权益登记日；`reinvest_dividend` 设了 `--share-confirm-date` 时允许等于权益登记日）。不再兼任再投资份额应用日：份额按 `share_effective_date`（设了确认日取确认日，否则取除息日）应用 |
+| `--ex-date` | 是 | 除息日（**必须是产品市场日历的交易日**：HK_MUTUAL 按 HKEX，其余按 SSE，#784；默认须 > 权益登记日；`reinvest_dividend` 设了 `--share-confirm-date`、或 `cash_dividend` 时允许等于权益登记日（同日登记/除息，#743/#765）。`dividend_pending` 仍要求严格大于——方式未定无适用日期可作闸门/派生键，同日待定分红留给 #766）。不再兼任再投资份额应用日：份额按 `share_effective_date`（设了确认日取确认日，否则取除息日）应用 |
 | `--entitlement-date` | 是 | 权益登记日（基数日，**必须是产品市场日历的交易日**：HK_MUTUAL 按 HKEX，其余按 SSE，#784） |
-| `--cash-pay-date` | 否 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend` 可设；须不早于除息日，允许非交易日；省略或 JSON `null` 时按除息日到账 |
+| `--cash-pay-date` | 否 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend` 可设；须不早于除息日，允许非交易日；省略或 JSON `null` 时按除息日到账。**同日登记/除息（`--entitlement-date == --ex-date`）时必填且须严格晚于除息日**（#765）——否则「确认需除息日快照做基数、快照又被闸门按到账日放行」互等死锁；缺失报 `INVALID_PARAM`、等于除息日报 `INVALID_DATE_ORDER`。ex_date 起至到账日前一日的快照计该笔分红在途（IN_TRANSIT_DIVIDEND，pending 与 confirmed 同口径派生，不计可用现金） |
 | `--share-confirm-date` | 否 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend` 可设（其他类型传入报 `INVALID_PARAM`）；**必须是产品市场日历的交易日**（HK_MUTUAL 按 HKEX，其余按 SSE，#784；否则 `INVALID_SHARE_CONFIRM_DATE`）且**晚于除息日**（否则 `INVALID_DATE_ORDER`）；设置后才允许权益登记日 = 除息日（同日登记/除息），ex_date 起至确认日前一交易日的快照计该笔再投资应收（IN_TRANSIT_DIVIDEND 在途，不计可用现金）；未设时份额仍在除息日应用 |
 | `--platform-code` | 视类型 | 平台级事件（cash_dividend/reinvest_dividend/forced_adjustment）必填 |
 | `--entitlement-shares` | 否 | 权益登记日份额 |
@@ -899,7 +899,7 @@ ir share-event update <ID> [--ex-date YYYY-MM-DD] [--entitlement-shares N] [--ra
   [--div-cash N] [--reinvest-nav N] [--cash-change N] [--cash-pay-date YYYY-MM-DD] \
   [--share-confirm-date YYYY-MM-DD] [--notes <备注>]
 
-# 清空到账日，恢复按除息日到账
+# 清空到账日，恢复按除息日到账（同日登记/除息的现金分红不可清空——到账日必须严格晚于除息日，#765）
 ir share-event update <ID> --json '{"cash_pay_date":null}'
 
 # 清空再投资份额确认日，份额改按除息日应用（同日登记/除息的事件清空后须先把权益登记日改到除息日之前）
@@ -959,7 +959,7 @@ ir share-event confirm <ID> [--event-type <方式>] \
 | 参数 | 默认值 | 说明 |
 |------|:------:|------|
 | `--event-type` | 不传 | 仅 `cash_dividend` / `reinvest_dividend`；完整候选语义同上方 preview；待定分红必须选择 |
-| `--cash-pay-date` | 不传 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend`；须与 `--event-type` 同传，候选省略默认除息日 |
+| `--cash-pay-date` | 不传 | 现金分红到账日（YYYY-MM-DD），仅 `cash_dividend`；须与 `--event-type` 同传，候选省略默认除息日。**例外（#765）**：事件为同日登记/除息时默认除息日非法，必须显式传严格晚于除息日的到账日（否则 `INVALID_PARAM` / `INVALID_DATE_ORDER`） |
 | `--share-confirm-date` | 不传 | 再投资份额确认日（YYYY-MM-DD），仅 `reinvest_dividend`；须与 `--event-type` 同传，候选省略默认除息日 |
 | `--sync-nav` | false | 红利再投资的除息日净值缺失（`MISSING_NAV`）时自动同步该产品自除息日起的净值并重试一次（会访问外部数据源）；同步失败或仍缺失照常报 `MISSING_NAV` |
 

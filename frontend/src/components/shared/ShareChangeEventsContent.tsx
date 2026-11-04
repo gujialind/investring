@@ -333,6 +333,21 @@ export default function ShareChangeEventsContent({
       return;
     }
 
+    // #765：同日登记/除息的现金分红必须携带严格晚于除息日的到账日（后端同口径 422）——
+    // 确认需要除息日快照做基数，到账日缺失或同日会互相等待
+    if (
+      formData.event_type === "cash_dividend" &&
+      formData.entitlement_date === formData.ex_date &&
+      !(formData.cash_pay_date && formData.cash_pay_date > formData.ex_date)
+    ) {
+      addToast({
+        type: "error",
+        title: "表单校验失败",
+        message: "同日登记/除息的现金分红，现金到账日必须晚于除息日",
+      });
+      return;
+    }
+
     // #343 双保险：基金级事件不渲染平台选择器，空串归一为 undefined 再提交
     //（后端 service 同口径归一，此处仅避免无效载荷）
     submitCreate({
@@ -523,8 +538,9 @@ export default function ShareChangeEventsContent({
                 )}
 
                 {/* 日期字段顺序 = 业务时序（#355）：权益登记日先于除息日，与确认弹窗既有顺序一致。
-                    后端默认强制 ex_date > entitlement_date；仅当红利再投资填了「份额确认日」
-                    （#743，份额改在确认日到账）时才允许两者同日，同日未填确认日仍返回 422 */}
+                    后端默认强制 ex_date > entitlement_date；两种例外允许同日——红利再投资填了
+                    「份额确认日」（#743，份额改在确认日到账），或现金分红填了严格晚于除息日的
+                    「现金到账日」（#765，现金改在到账日入账）。例外未满足仍返回 422 */}
                 <div className={formGrid}>
                   <div className="space-y-2">
                     <Label htmlFor="entitlement_date">权益登记日</Label>
@@ -550,7 +566,9 @@ export default function ShareChangeEventsContent({
 
                 {formData.event_type === "cash_dividend" && (
                   <div className="space-y-2" data-testid="cash-pay-date-field">
-                    <Label htmlFor="cash_pay_date">现金到账日（可选）</Label>
+                    <Label htmlFor="cash_pay_date">
+                      现金到账日{formData.entitlement_date === formData.ex_date ? "（必填）" : "（可选）"}
+                    </Label>
                     <DatePicker
                       id="cash_pay_date"
                       date={parseDateOnly(formData.cash_pay_date ?? "")}
@@ -558,8 +576,14 @@ export default function ShareChangeEventsContent({
                       placeholder="默认除息日"
                     />
                     <p className="text-xs text-muted-foreground">
-                      有效到账日：{formatDate(formData.cash_pay_date ?? formData.ex_date)}
-                      {formData.cash_pay_date == null && "（默认除息日）"}。可选非交易日，不得早于除息日；到账前计入在途，不计可用现金。
+                      {formData.entitlement_date === formData.ex_date ? (
+                        <>同日登记/除息：到账日必须晚于除息日（#765）。可选非交易日；到账前计入在途，不计可用现金。</>
+                      ) : (
+                        <>
+                          有效到账日：{formatDate(formData.cash_pay_date ?? formData.ex_date)}
+                          {formData.cash_pay_date == null && "（默认除息日）"}。可选非交易日，不得早于除息日；到账前计入在途，不计可用现金。
+                        </>
+                      )}
                     </p>
                   </div>
                 )}

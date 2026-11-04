@@ -89,6 +89,7 @@ export function EventEditDialog({
   const [navError, setNavError] = useState<string | null>(null);
   const [shareConfirmDateError, setShareConfirmDateError] = useState<string | null>(null);
   const [divCashError, setDivCashError] = useState<string | null>(null);
+  const [cashPayDateError, setCashPayDateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && event) setForm(toForm(event));
@@ -96,6 +97,7 @@ export function EventEditDialog({
     setNavError(null);
     setShareConfirmDateError(null);
     setDivCashError(null);
+    setCashPayDateError(null);
   }, [open, event]);
 
   if (!event || !form) return null;
@@ -115,6 +117,15 @@ export function EventEditDialog({
     };
     if (event.event_type === "cash_dividend") {
       payload.cash_pay_date = form.cash_pay_date || null;
+      // #765：同日登记/除息的现金分红必须携带严格晚于除息日的到账日（否则后端 422）。
+      // 现金到账日=除息日（含清空回落除息日）在同日形态下与省略同义，会被死锁守卫拒绝。
+      if (
+        form.entitlement_date === form.ex_date &&
+        !(form.cash_pay_date && form.cash_pay_date > form.ex_date)
+      ) {
+        setCashPayDateError("同日登记/除息的现金分红，到账日必须晚于除息日");
+        return;
+      }
     }
     // #764：每份分红金额非空时必须为正（0/负值后端 422 INVALID_PARAM）；空串 = 不改此字段，
     // 与下方 NUM_FIELDS「非空才入 payload」同口径，故不拦
@@ -221,16 +232,31 @@ export function EventEditDialog({
 
             {event.event_type === "cash_dividend" && (
               <div className="space-y-2" data-testid="cash-pay-date-field">
-                <Label htmlFor="edit_cash_pay_date">现金到账日（可选）</Label>
+                <Label htmlFor="edit_cash_pay_date">
+                  现金到账日{form.entitlement_date === form.ex_date ? "（必填）" : "（可选）"}
+                </Label>
                 <DatePicker
                   id="edit_cash_pay_date"
                   date={parseDateOnly(form.cash_pay_date)}
-                  onSelect={(date) => setField({ cash_pay_date: toDateOnly(date) })}
+                  onSelect={(date) => {
+                    setCashPayDateError(null);
+                    setField({ cash_pay_date: date ? toDateOnly(date) : "" });
+                  }}
                   placeholder="默认除息日"
                 />
+                {cashPayDateError && <p className="text-xs text-destructive">{cashPayDateError}</p>}
                 <p className="text-xs text-muted-foreground">
-                  有效到账日：{formatDate(form.cash_pay_date || form.ex_date)}
-                  {!form.cash_pay_date && "（默认除息日）"}。清空后按除息日到账；可选非交易日，不得早于除息日。
+                  {form.entitlement_date === form.ex_date ? (
+                    <>
+                      同日登记/除息：到账日必须晚于除息日（#765，确认需要除息日快照做基数）。
+                      可选非交易日；到账前计入在途，不计可用现金。
+                    </>
+                  ) : (
+                    <>
+                      有效到账日：{formatDate(form.cash_pay_date || form.ex_date)}
+                      {!form.cash_pay_date && "（默认除息日）"}。清空后按除息日到账；可选非交易日，不得早于除息日。
+                    </>
+                  )}
                 </p>
               </div>
             )}

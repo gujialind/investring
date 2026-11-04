@@ -124,7 +124,9 @@ function EventConfirmSession({
       </div>
       {choice?.event_type === "cash_dividend" && (
         <div className="space-y-2" data-testid="confirm-cash-pay-date-field">
-          <Label htmlFor="confirm_cash_pay_date">现金到账日（可选）</Label>
+          <Label htmlFor="confirm_cash_pay_date">
+            现金到账日{event.entitlement_date === event.ex_date ? "（必填）" : "（可选）"}
+          </Label>
           <DatePicker
             id="confirm_cash_pay_date"
             date={parseDateOnly(choice.cash_pay_date ?? "")}
@@ -133,7 +135,9 @@ function EventConfirmSession({
             placeholder="默认除息日"
           />
           <p className="text-xs text-muted-foreground">
-            留空按除息日到账；可选非交易日，不得早于除息日。
+            {event.entitlement_date === event.ex_date
+              ? "同日登记/除息：到账日必须晚于除息日（#765）；可选非交易日。"
+              : "留空按除息日到账；可选非交易日，不得早于除息日。"}
           </p>
         </div>
       )}
