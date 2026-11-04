@@ -195,8 +195,10 @@ export function toISODate(d: Date): string {
  * 不回传调用方」，清空唯一入口是 X 按钮，故这里的跳过只剩效率意义。
  *
  * ⚠️ 目标日与 today 最多相差数天，日历默认展示当前月（或已选日所在月），故 `data-day`
- * 不在当前月时按月翻一次——**没有断言兜底这条翻页前提**，若把 target 口径改成「最近
- * N 个交易日」（长假可跨月），这里会静默点错月（#640 U-5）。
+ * 不在当前月时按月翻一次——**没有断言兜底这条翻页前提**，单次翻页只够相邻月（#640 U-5）。
+ * 翻页方向须按「弹层当前展示月」判断（见下方取值）：已选日可能是上月（最近 N 个交易日
+ * 跨月），此时 target 可能等于或早于 today 却仍需向后翻（#808 CI 2026-11-02 实踩：
+ * 已选 10-30 ⇒ 弹层停 10 月，target 11-02 按 today 判成 previous → 翻到 9 月，10s 超时）。
  *
  * 隐含前提：trigger 所在 DialogContent **不得**自带 `overflow-y-auto`——#191 方案 C 把
  * 弹层 Portal 注入 DialogContent 自身，父级 overflow 会裁掉月历底行，那一点落在遮罩上、
@@ -212,7 +214,13 @@ export async function pickCalendarDay(
   const day = page.locator(`button.rdp-day_button[data-day="${targetISO}"]`);
   // 显式上界，与全局 use.actionTimeout（#551 §2）同值；留字面值防预算随配置漂移
   if ((await day.count()) === 0) {
-    const dir = targetISO > toISODate(new Date()) ? 'next' : 'previous';
+    // 方向按弹层展示月判（默认展示「已选日所在月」，无已选日才是当前月），不能与 today
+    // 比较：跨月时 target 可能等于/早于 today 却属于下一个展示月（#808 CI 实踩）
+    const current = (await trigger.textContent())?.trim() ?? '';
+    const shownMonth = /^\d{4}-\d{2}/.test(current)
+      ? current.slice(0, 7)
+      : toISODate(new Date()).slice(0, 7);
+    const dir = targetISO.slice(0, 7) > shownMonth ? 'next' : 'previous';
     await page.locator(`button.rdp-button_${dir}`).click({ timeout: 10_000 });
   }
   await day.click({ timeout: 10_000 });
