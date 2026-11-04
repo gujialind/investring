@@ -60,7 +60,8 @@ interface PortfolioListContentProps {
  * 组合列表页内容（桌面/移动共用）。
  * 抽离自原 app/portfolio/page.tsx，两端仅 basePath 与 variant 不同。
  * 关闭组合用 ClosePortfolioDialog（惰性查询持仓/投资人，issue #99），
- * 重新激活与删除空壳草稿（issue #820）都用原生 AlertDialog 确认。
+ * 删除空壳草稿用 DeletePortfolioDialog（三处共用一份确认文案，issue #820），
+ * 重新激活仍是本页内联的 AlertDialog 确认。
  */
 export default function PortfolioListContent({ basePath, variant = "desktop" }: PortfolioListContentProps) {
   const router = useRouter();
