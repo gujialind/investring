@@ -38,12 +38,15 @@ export function useProductList(params?: ProductListParams, options?: { enabled?:
   return query;
 }
 
-// 单个产品详情 Hook
+// 单个产品详情 Hook。
+// #825 L2 Nit：market 缺失时不发 GET /products/{code}（单段自动解析端点）——详情页路由契约
+// 恒带 market，缺参时调用方直接渲染「缺少 market 参数」空态，请求发了也没有消费方；
+// 一码多市场产品还会先撞一次 422 重试。未来若真需要无 market 的自动解析形态，再单独放开。
 export function useProduct(code: string, market?: string) {
   return useQuery({
     queryKey: [PRODUCT_QUERY_KEY, code, market],
     queryFn: () => productApi.get(code, market),
-    enabled: !!code,
+    enabled: !!code && !!market,
     staleTime: 30 * 1000,
   });
 }
