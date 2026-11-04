@@ -8,9 +8,14 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   E2E_ACTIVE,
   E2E_PORT,
+  activatePortfolioViaApi,
+  closePortfolioViaApi,
   collectPageErrors,
+  createPortfolioViaApi,
   gotoPortfolioDetail,
   gotoPortfolioSubpage,
+  isolatedPortfolioCode,
+  openAppAndAuth,
   openFilterPanelIfMobile,
   openPopover,
   portfolioPath,
@@ -39,9 +44,30 @@ test.describe('页面渲染回归（防 P0 复发）', () => {
     await expect(page.locator('aside a[href="/settings/logs"]')).toHaveCount(0);
   });
 
-  // 防 P0-5：前端曾提供后端不存在的 DELETE /portfolios/{code}（405）
-  test('组合详情页不应出现删除组合入口', async ({ page }) => {
-    await gotoPortfolioDetail(page, E2E_PORT);
+  // 防 P0-5 的既有意图（前后端契约一致）保留，判据按 #820 反转：
+  // 后端已提供 DELETE /api/portfolios/{code}（仅空壳 draft），于是
+  // **draft 详情必须有删除入口，active/closed 必须没有**。
+  // 形态一律自建，不复用 E2E_PORT——#636 已证明它会被 trade-buy-amount-linkage 激活，
+  // 拿它断 draft 会随用例执行顺序漂移。
+  test('组合详情页删除入口按形态出现：draft 有、active/closed 无（#820）', async ({ page }, testInfo) => {
+    // authHeaders 经 localStorage 取 token，须先落到同源页（about:blank 会 SecurityError）
+    const headers = await openAppAndAuth(page);
+
+    const draftCode = isolatedPortfolioCode('E820R', testInfo, 'D');
+    await createPortfolioViaApi(page, headers, draftCode);
+    await page.goto(`/portfolio/${draftCode}`);
+    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(1);
+
+    // closed 夹具必须「先激活再关闭」：#820 收紧后 draft 直接 close 会 422
+    const closedCode = isolatedPortfolioCode('E820R', testInfo, 'C');
+    await createPortfolioViaApi(page, headers, closedCode);
+    await activatePortfolioViaApi(page, headers, closedCode);
+    await closePortfolioViaApi(page, headers, closedCode);
+    await page.goto(`/portfolio/${closedCode}`);
+    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(0);
+
+    // active 用种子契约组合（形态由 backend/tests/integration/test_seed_contract.py 锁定）
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(0);
   });
 });
