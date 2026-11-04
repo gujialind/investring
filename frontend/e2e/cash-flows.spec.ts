@@ -5,7 +5,8 @@
  * 承担）：页面从 `GET /portfolios/{code}/cash-flows` 渲染、概览四卡、(平台,现金日期) rowSpan
  * 合并段（桌面）/ 每卡重复平台（移动）、「当日另有 N 笔」+ 当日弹窗、流水详情（对账块 +
  * 预计到账投影 + 前端推算文案）、按平台构成弹窗（看明细钻穿 / 更新预选平台 / 合计行无更新）、
- * 在途行「不计入余额」注记、ManageLinksCard 第 6 项入口；#727 评审补充：四卡/余额列/
+ * 在途行「不计入余额」注记、管理卡「现金流水」入口（按名定位不依赖顺序；#786 后
+ * active+admin 卡为 4 项、现金流水居第 4）；#727 评审补充：四卡/余额列/
  * 投影金额断言、写入口（现金转移）提交成功后读侧免刷新自动更新、对账块不被状态筛选污染。
  * #727 第二轮 L2 补充：存量档金额的负向断言（子串匹配区分不了 `¥x` 与 `+¥x`）、「当日
  * 另有 N 笔」N=0 不渲染、当日弹窗「当前筛选命中」标注、同日查询失败态优先于在屏行。
@@ -203,7 +204,8 @@ async function statValueInks(page: Page, keys: string[]) {
 }
 
 test.describe('现金流水页（#725，双端）', () => {
-  // #16：ManageLinksCard 第 6 项进入本页（只读点击 E2E_ACTIVE 详情页，无写操作）
+  // #16：管理卡「现金流水」入口进入本页（按名定位不依赖顺序；#786 后 active+admin
+  // 卡为 4 项、本项居第 4；只读点击 E2E_ACTIVE 详情页，无写操作）
   test('组合详情「现金流水」入口进入本页', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoPortfolioDetail(page, E2E_ACTIVE);
