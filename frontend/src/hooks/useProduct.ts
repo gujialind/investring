@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, useQueries, keepPreviousData } from "@tanstack/react-query";
 import { productApi, getErrorMessage } from "@/lib/api";
-import type { NavAnalysisRange, ProductListParams } from "@/lib/api";
+import type { NavAnalysisRange, NavHistoryItem, ProductListParams } from "@/lib/api";
 import { ProductCreate, ProductUpdate } from "@/types/product";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -207,4 +207,33 @@ export function useNavAnalysis(
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   });
+}
+
+/** 历史净值分页大小（首屏 5 行 + 查看更多）；单点在此，ProductNavCards 与消费方共用同一 query key */
+export const NAV_HISTORY_PAGE_SIZE = 5;
+
+/**
+ * 历史净值「首屏 N 页 + 查看更多」：按页并行查询后按页序拼接（keepPreviousData 的单页 hook
+ * 不适合追加式加载；页间数据由后端分页契约保证不重叠）。#647：失败与真空态必须可区分，故同时
+ * 返回 isError/error/refetch，调用方的失败臂须排在「长度为 0」之前。
+ * enabled 缺省 true；现金产品（market=""）无净值端点会 404，调用方传 enabled=false 规避。
+ * 页 1 的 query key 在 pages≥1 时恒定，故 ProductDetailContent 概览卡取 latestPrice（pages=1）
+ * 与 ProductNavCards 历史卡的首屏查询命中同一缓存条目，react-query 去重为单次请求。
+ */
+export function useNavHistory(code: string, market: string, pages: number, enabled = true) {
+  const queries = useQueries({
+    queries: Array.from({ length: pages }, (_, i) => ({
+      queryKey: [PRODUCT_QUERY_KEY, "nav-history", code, market, i + 1, NAV_HISTORY_PAGE_SIZE],
+      queryFn: () =>
+        productApi.getNavHistory(code, market, { page: i + 1, page_size: NAV_HISTORY_PAGE_SIZE }),
+      staleTime: 5 * 60 * 1000,
+      enabled,
+    })),
+  });
+  const items: NavHistoryItem[] = queries.flatMap((q) => q.data?.items ?? []);
+  const total = queries[0]?.data?.total ?? 0;
+  const isError = queries.some((q) => q.isError);
+  const error = queries.find((q) => q.isError)?.error ?? null;
+  const refetch = () => queries.forEach((q) => void q.refetch());
+  return { items, total, isError, error, refetch };
 }
