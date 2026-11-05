@@ -99,7 +99,7 @@ jobs:
       #              head commit），保持抽栈前的语义：PR 绿 ⇒ 与当时 base 合并后可绿。
       #              抽栈时曾统一为 head，等于让 frontend-e2e 少验证「head+base 组合」，
       #              故按模式拆回。
-      # fetch-depth 0：baseline 侧要 checkout base.sha 的 frontend/e2e。
+      # fetch-depth 0：baseline 侧要 checkout 分叉点（merge-base）的 frontend/e2e。
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -108,17 +108,27 @@ jobs:
 
       # baseline 侧只换 e2e 目录，构建源仍是 PR head——「同一构建、唯一变量是
       # frontend/e2e/**」不变量（#401 场景：测试重构 + src 补 data-testid 依赖这一点）。
+      # 对照基准取 base 与 head 的**分叉点**，不是 pull_request.base.sha（#827）：分支
+      # 落后时 base 侧会含 head 没有的用例，拿它撞 head 的旧 src 只会得到「head 缺实现」
+      # 的假回归；分叉点则保证两侧 e2e 同源可比。
       # 先 rm -rf 再 checkout：head 独有 spec 会残留跑成并集（旧脚本 SWAP_ORPHANS
       # 同源坑）；e2e/.auth/admin.json 是 gitignore 的、由 setup project 重建，删了无妨。
-      # **引号是承重的（#490）**：base.sha 展开为空时，不引号就退化成
+      # **引号是承重的（#490）**：SHA 展开为空时，不引号就退化成
       # `git checkout -- frontend/e2e`——从 index 恢复 head 版本，baseline 与 candidate
       # 同树 ⇒ 恒空 diff ⇒ 形态门禁静默失效且全绿。带引号则 git 收到空参数当场失败，
       # 坏法从 fail-open 翻成 fail-closed（同一位置由 test_ci_e2e_compare.py 钉住）。
       - name: Swap e2e to base (baseline only)
         if: inputs.mode == 'capture' && inputs.side == 'baseline'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           rm -rf frontend/e2e
-          git checkout "${{ github.event.pull_request.base.sha }}" -- frontend/e2e
+          FORK_SHA="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+          if [ "$FORK_SHA" != "$PR_BASE_SHA" ]; then
+            echo "::notice::PR 分支落后 base（base=$PR_BASE_SHA head=$PR_HEAD_SHA fork=$FORK_SHA），baseline e2e 按分叉点检出（#827）"
+          fi
+          git checkout "$FORK_SHA" -- frontend/e2e
 
       # ---- 后端：建库 → bootstrap prepare → seed → 启动 ----
       - name: Setup Python 3.12
