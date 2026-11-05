@@ -995,6 +995,45 @@ def _run_price_sync_job_impl(job_id: int):
             job.finished_at = datetime.utcnow()
             db.commit()
             return
+
+        # #831：部分命中时清单内未命中条目不得静默消失——落 status="miss" 明细、
+        # 计入 skipped_count、error_message 汇总提示。total/终态判定/failed_count
+        # 保持原语义：miss 是「未执行」不是「同步失败」，不新增状态机分支。
+        # 全未命中走上面 #821 分支（failed、不落明细行），形态不对称为刻意保留，
+        # 防止后来者把两条路径「统一」掉而回退 #821 验收。
+        if scope == "by_product":
+            hit_keys = {(p.code, p.market) for p in products}
+            missed_entries = []
+            seen_misses = set()
+            for c, m in params.get("products") or []:
+                if (c, m) not in hit_keys and (c, m) not in seen_misses:
+                    seen_misses.add((c, m))
+                    missed_entries.append((c, m))
+            if missed_entries:
+                # nav_date 取窗口上界，与命中分支同法（#746 口径）：显式 end_date
+                # 否则业务昨天；格式非法会在此抛出并被外层 except 记为整单 failed，
+                # 与命中路径对非法 end_date 的响亮失败一致，不静默。
+                if params.get("end_date"):
+                    miss_nav_date = datetime.strptime(
+                        params["end_date"], "%Y-%m-%d"
+                    ).date()
+                else:
+                    miss_nav_date = business_yesterday()
+                for c, m in missed_entries:
+                    db.add(NavSyncDetail(
+                        job_id=job_id,
+                        product_code=c,
+                        market=m,
+                        nav_date=miss_nav_date.strftime("%Y-%m-%d"),
+                        status="miss",
+                        error_message="库内未命中，已跳过",
+                    ))
+                    job.skipped_count += 1
+                job.error_message = (
+                    f"{len(missed_entries)} 个条目库内未命中已跳过: "
+                    + ", ".join(f"{c}({m})" for c, m in missed_entries)
+                )[:1000]
+
         db.commit()
 
         for product in products:
