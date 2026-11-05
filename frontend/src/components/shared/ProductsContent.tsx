@@ -34,6 +34,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { cn, formatNav, formatProductCodeLabel } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
+import ProductCell from "@/components/shared/ProductCell";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
@@ -60,6 +61,8 @@ import { queryKeys } from "@/lib/queryKeys";
 
 interface ProductsContentProps {
   variant?: "desktop" | "mobile";
+  /** 链接前缀（§1.2 契约）：桌面 ""、移动 "/m"；详情页 href = `${basePath}/products/{code}` */
+  basePath?: "" | "/m";
 }
 
 // 虚拟产品判定口径（#514）：对齐后端 product_service.VIRTUAL_PRODUCT_TYPES（#327）与
@@ -90,7 +93,7 @@ const DATA_SOURCE_OPTIONS = ["tushare", "akshare"];
  * 筛选/分页全部走服务端参数（queryKey 带 listParams 自动刷新）；
  * 五维筛选的选项收窄与大类联动清空走 lib/dimensions 纯函数（与产品筛选弹窗共用）。
  */
-export default function ProductsContent({ variant = "desktop" }: ProductsContentProps) {
+export default function ProductsContent({ variant = "desktop", basePath = "" }: ProductsContentProps) {
   const addToast = useUIStore((state) => state.addToast);
 
   // 分页状态（#234：替代原 page_size:100 假分页）
@@ -540,9 +543,7 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
             <Table className={cn(isFetching && !isLoading && "opacity-50")}>
               <TableHeader>
                 <TableRow>
-                  <TableHead>代码</TableHead>
-                  <TableHead>市场</TableHead>
-                  <TableHead>名称</TableHead>
+                  <TableHead>产品名称</TableHead>
                   <TableHead>类型</TableHead>
                   <TableHead className="number-cell">确认天数</TableHead>
                   <TableHead className="number-cell">估值滞后</TableHead>
@@ -552,14 +553,36 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((product) => (
+                {products.map((product) => {
+                  // #824 代码/市场/名称三列合并为「产品名称」列，复用调仓页 ProductCell
+                  // （主行产品名 + 次行 `显示码 · 中文市场名`，港互认双码并列由 formatProductCodeLabel 单点决定）。
+                  // 净值型产品（ETF/OEF/LOF）产品名可点击跳详情页；虚拟产品（CASH/IN_TRANSIT）无净值详情、不加链接。
+                  // 行 key / 操作入参仍用原始 code。
+                  const isNavType = !VIRTUAL_PRODUCT_TYPES.includes(product.product_type);
+                  const detailHref = `${basePath}/products/${encodeURIComponent(product.code)}?market=${encodeURIComponent(product.market ?? "")}`;
+                  const nameCell = (
+                    <ProductCell
+                      code={product.code}
+                      name={product.name}
+                      market={product.market}
+                      displayCode={product.display_code}
+                    />
+                  );
+                  return (
                   <TableRow key={`${product.code}-${product.market || "null"}`}>
-                    {/* #705 代码列出显示码；港互认双码并列。行 key/操作入参仍用原始 code */}
-                    <TableCell className="font-medium">
-                      {formatProductCodeLabel(product.display_code, product.code, product.market)}
+                    <TableCell>
+                      {isNavType ? (
+                        <Link
+                          href={detailHref}
+                          className="hover:text-primary"
+                          data-testid="product-detail-link"
+                        >
+                          {nameCell}
+                        </Link>
+                      ) : (
+                        nameCell
+                      )}
                     </TableCell>
-                    <TableCell>{product.market || "--"}</TableCell>
-                    <TableCell>{product.name}</TableCell>
                     <TableCell>{product.product_type}</TableCell>
                     <TableCell className="number-cell">{product.confirm_days}</TableCell>
                     {/* issue #228：快照估值取价日，0 显示 T，N 显示 T-N */}
@@ -632,7 +655,8 @@ export default function ProductsContent({ variant = "desktop" }: ProductsContent
                       )}
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
