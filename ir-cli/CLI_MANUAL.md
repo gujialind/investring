@@ -403,7 +403,7 @@ ir portfolio close <CODE> --yes
 |------|:------:|------|
 | `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
-> **约束**：只有 `active` 组合可关闭（#820 收紧：`draft` 关闭返回 422 `PORTFOLIO_NOT_ACTIVE`，避免造出既不能删除也不再使用的空壳）；存在 pending 状态的申购/赎回或调仓交易时禁止关闭。关闭可经 `ir portfolio reactivate` 回退，但仍纳入确认门槛以统一破坏性命令口径（#629）。
+> **约束**：只有 `active` 组合可关闭（#820 收紧：`draft` 关闭返回 422 `PORTFOLIO_NOT_ACTIVE`，误建空壳应直接 `ir portfolio delete` 而非经 close 绕行）；存在 pending 状态的申购/赎回或调仓交易时禁止关闭。关闭可经 `ir portfolio reactivate` 回退，但仍纳入确认门槛以统一破坏性命令口径（#629）。
 
 #### `ir portfolio reactivate`
 
@@ -417,7 +417,7 @@ ir portfolio reactivate <CODE>
 
 #### `ir portfolio delete`
 
-删除空壳草稿组合（不可恢复）。
+删除空壳组合（`draft` 或 `closed`，不可恢复）。
 
 ```bash
 ir portfolio delete <CODE> --yes
@@ -427,7 +427,7 @@ ir portfolio delete <CODE> --yes
 |------|:------:|------|
 | `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
-> **约束**（issue #820）：放行条件是「状态为 `draft` **且** 没有任何关联记录（申赎、调仓、持仓/市值快照、投资人份额、手动市值、份额事件）」。两个条件都不满足时分别返回 409 `PORTFOLIO_NOT_DELETABLE`（状态不对）与 409 `PORTFOLIO_HAS_DEPENDENT_DATA`（`details.dependencies` 点名的表仍有行）；不级联删除，也不提供「先 close 再删」的旁路。撤销首笔申购确认会把组合退回 `draft` 而申赎行仍在，因此「是草稿」不等于「是误建空壳」——删除前用 `ir portfolio context <CODE>` 侦察。删除成功后同一 code 可立即重建。
+> **约束**（issue #820，扩围口径由维护者 2026-11-05 定案）：放行条件是「状态为 `draft` 或 `closed` **且** 没有任何关联记录（申赎、调仓、持仓/市值快照、投资人份额、手动市值、份额事件）」。两个条件都不满足时分别返回 409 `PORTFOLIO_NOT_DELETABLE`（状态不对，即 `active`）与 409 `PORTFOLIO_HAS_DEPENDENT_DATA`（`details.dependencies` 点名的表仍有行）；不级联删除，`active` 组合一律先走生命周期（清账后 `close`）而不是删除。撤销首笔申购确认会把组合退回 `draft` 而申赎行仍在，因此「是草稿」不等于「是误建空壳」——删除前用 `ir portfolio context <CODE>` 侦察。删除成功后同一 code 可立即重建。
 
 #### `ir portfolio nav-history`
 

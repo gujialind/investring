@@ -72,7 +72,7 @@ function MobilePortfolioDetailInner() {
 
   // 分组维度配置弹窗（issue #144，与桌面端共用 Dialog）
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
-  // 删除空壳草稿确认弹窗（issue #820，与桌面端共用 Dialog）
+  // 删除空壳确认弹窗（#820 扩围，与桌面端共用 Dialog）
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
   const positions = positionsData?.items || [];
@@ -105,6 +105,8 @@ function MobilePortfolioDetailInner() {
   }
 
   const isDraft = portfolio.status === "draft";
+  // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
+  const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses);
 
   return (
@@ -170,11 +172,11 @@ function MobilePortfolioDetailInner() {
               variant="mobile"
               onActivateClick={() => activatePortfolio.mutate(code)}
               isActivatePending={activatePortfolio.isPending}
-              onDeleteClick={isDraft ? () => setIsDeleteOpen(true) : undefined}
+              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
               isDeletePending={deletePortfolio.isPending}
             />
           )}
-          {/* 删除空壳草稿确认（issue #820，与桌面端共用弹窗） */}
+          {/* 删除空壳确认（#820 扩围，与桌面端共用弹窗） */}
           <DeletePortfolioDialog
             open={isDeleteOpen}
             onOpenChange={setIsDeleteOpen}

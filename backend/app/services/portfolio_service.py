@@ -469,10 +469,12 @@ def reactivate_portfolio(db: Session, code: str) -> Portfolio:
 
 
 def _portfolio_dependent_tables() -> list:
-    """按元数据派生「直接引用 portfolio.code」的表：返回 (表, 本侧外键列) 列表。
+    """按元数据派生「有外键直接引用 portfolio.code」的表：返回 (表, 本侧外键列) 列表。
 
-    名单不手写（issue #820）：新增引用表自动进入删除判据，遗漏由
-    `tests/unit/test_portfolio_delete_dependents.py` 的集合断言翻红暴露。
+    注意保证范围仅限**外键引用**：不带 FK 的 `portfolio_code` 列（现只有
+    idempotency_cache，见守门测试的显式豁免清单）不在计数内。
+    名单不手写（issue #820）：新增外键引用表自动进入删除判据，非 FK 引用
+    由 `tests/unit/test_portfolio_delete_dependents.py` 的断言翻红暴露。
     """
     entries = []
     for table in Base.metadata.tables.values():
@@ -499,11 +501,12 @@ def _count_portfolio_dependents(db: Session, code: str) -> dict:
 
 
 def delete_draft_portfolio(db: Session, code: str) -> None:
-    """物理删除空壳 draft 组合（issue #820）。不 commit。
+    """物理删除空壳组合（issue #820，扩围口径：draft 与 closed 两态）。不 commit。
 
-    判据是「status == "draft" **且** 依赖表计数全为 0」，两者缺一不可：
+    判据是「status ∈ {draft, closed} **且** 依赖表计数全为 0」，两者缺一不可：
     unconfirm 首笔申购会把 active 退回 draft 而申赎行仍在（#820 事实 C1），
-    只信 status 会删掉有历史账务的组合。行锁与子表 INSERT 的 FK 共享锁互斥，
+    只信 status 会删掉有历史账务的组合；closed 同理——注册后未清账的组合
+    各表计数不为零，走 `PORTFOLIO_HAS_DEPENDENT_DATA`。行锁与子表 INSERT 的 FK 共享锁互斥，
     消除「先计数后删除」的竞态；MySQL FK RESTRICT 只作次防线——应用侧 SQLite
     连接未开 `PRAGMA foreign_keys`，不能把兜底交给方言行为。
     审计在 `db.delete()` 之前写：`record_audit` 会先 flush 业务改动，先删会让
@@ -519,10 +522,10 @@ def delete_draft_portfolio(db: Session, code: str) -> None:
     if not portfolio:
         raise NotFoundError("NOT_FOUND", f"组合 {code} 不存在")
 
-    if portfolio.status != "draft":
+    if portfolio.status not in ("draft", "closed"):
         raise BusinessError(
             "PORTFOLIO_NOT_DELETABLE",
-            f"仅草稿组合可删除，当前状态: {portfolio.status}",
+            f"仅空壳草稿或已关闭组合可删除，当前状态: {portfolio.status}",
             http_status=409,
             details={"status": portfolio.status},
         )
@@ -551,7 +554,7 @@ def delete_draft_portfolio(db: Session, code: str) -> None:
         },
     )
     db.delete(portfolio)
-    logger.info("删除空壳草稿组合: code=%s", code)
+    logger.info("删除空壳组合: code=%s status=%s", code, portfolio.status)
 
 
 def get_nav_history(

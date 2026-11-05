@@ -1,8 +1,8 @@
 # ============================================================================
-# 集成测试：空壳草稿组合的删除（issue #820）
+# 集成测试：空壳组合（draft/closed）的删除（issue #820，扩围口径）
 # ============================================================================
-# 覆盖 SPEC v1.0 §6.1 的验收断言：
-# 1. 「status == draft **且** 依赖表计数全为 0」才放行——两个条件各自成组，
+# 覆盖 SPEC v1.1 §6.1 的验收断言（判据扩围为 status ∈ {draft, closed}）：
+# 1. 「status ∈ {draft, closed} **且** 依赖表计数全为 0」才放行——两个条件各自成组，
 #    合并测会漏掉「unconfirm 把 active 退回 draft 而申赎行仍在」这一形态（事实 C1）
 # 2. 不级联：任一依赖表有行即 409，且父行与子行都完好
 # 3. 状态码口径：401/403/404/409 各归其位；重复删除第二次是 404 而非 500
@@ -15,7 +15,7 @@
 # ============================================================================
 
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -161,23 +161,72 @@ class TestStatusGate:
         assert resp.status_code == 409, resp.text
         detail = _detail(resp)
         assert detail["error"] == "PORTFOLIO_NOT_DELETABLE"
-        assert detail["message"] == "仅草稿组合可删除，当前状态: active"
+        assert detail["message"] == "仅空壳草稿或已关闭组合可删除，当前状态: active"
         assert detail["details"] == {"status": "active"}
 
         assert test_db.query(Portfolio).filter(Portfolio.code == "PDEL_ACT").first() is not None
         assert _audit_rows(test_db, "PDEL_ACT") == []
 
-    def test_closed_rejected_with_409(self, client, admin_headers, test_db):
-        create_portfolio(test_db, code="PDEL_CL", name="已关闭组合", status="closed")
-
-        resp = client.delete("/api/portfolios/PDEL_CL", headers=admin_headers)
-        assert resp.status_code == 409, resp.text
-        assert _detail(resp)["error"] == "PORTFOLIO_NOT_DELETABLE"
-
     def test_missing_portfolio_is_404(self, client, admin_headers):
         resp = client.delete("/api/portfolios/PDEL_NONE", headers=admin_headers)
         assert resp.status_code == 404, resp.text
         assert _detail(resp) == {"error": "NOT_FOUND", "message": "组合 PDEL_NONE 不存在"}
+
+
+class TestDeleteEmptyClosed:
+    """扩围口径（Collyn 2026-11-05「空壳组合纳入验收」）：closed 空壳同样可删。
+
+    注意该形态经公共 API **不可构造**——激活必落一行 subscription，close 只改
+    status；故 closed 空壳只存在于历史数据/直接造数场景，用 ORM 复现。
+    """
+
+    @pytest.fixture
+    def closed(self, test_db):
+        p = create_portfolio(test_db, code="PDEL_CLS", name="已关闭空壳", status="closed")
+        p.closed_at = datetime(2025, 1, 6, 12, 0)
+        test_db.commit()
+        return p
+
+    def test_success_removes_row_and_echoes_code(self, client, admin_headers, test_db, closed):
+        resp = client.delete("/api/portfolios/PDEL_CLS", headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"message": "组合 PDEL_CLS 删除成功"}
+        assert test_db.query(Portfolio).filter(Portfolio.code == "PDEL_CLS").first() is None
+
+    def test_records_one_audit_row_with_closed_fields(self, client, admin_headers, test_db, closed):
+        assert client.delete("/api/portfolios/PDEL_CLS", headers=admin_headers).status_code == 200
+
+        rows = _audit_rows(test_db, "PDEL_CLS")
+        assert len(rows) == 1, f"期望恰好 1 条删除审计，实得 {len(rows)}"
+        row = rows[0]
+        assert row.resource_name == "已关闭空壳"
+        assert row.new_value is None
+        old = json.loads(row.old_value)
+        assert old == {
+            "code": "PDEL_CLS",
+            "name": "已关闭空壳",
+            "status": "closed",
+            "started_at": None,
+            "closed_at": "2025-01-06T12:00:00",
+        }
+
+    def test_code_is_reusable_after_delete(self, client, admin_headers, closed):
+        assert client.delete("/api/portfolios/PDEL_CLS", headers=admin_headers).status_code == 200
+
+        again = client.post(
+            "/api/portfolios",
+            json={"code": "PDEL_CLS", "name": "重建的同码组合"},
+            headers=admin_headers,
+        )
+        assert again.status_code == 200, again.text
+        assert again.json()["code"] == "PDEL_CLS"
+
+    def test_second_delete_is_404_not_500(self, client, admin_headers, closed):
+        assert client.delete("/api/portfolios/PDEL_CLS", headers=admin_headers).status_code == 200
+
+        second = client.delete("/api/portfolios/PDEL_CLS", headers=admin_headers)
+        assert second.status_code == 404, second.text
+        assert _detail(second)["error"] == "NOT_FOUND"
 
 
 class TestDependentDataGate:
@@ -217,6 +266,24 @@ class TestDependentDataGate:
         assert resp.status_code == 409, resp.text
         assert _detail(resp)["error"] == "PORTFOLIO_HAS_DEPENDENT_DATA"
         assert test_db.query(Subscription).filter(Subscription.portfolio_code == code).count() == 1
+
+    def test_closed_with_dependent_data_rejected(self, client, admin_headers, test_db):
+        """扩围口径下 closed 的放行同样以「零依赖行」为条件：有账即 409。
+
+        抽 subscription 一表即可——依赖计数与 status 无关，逐表覆盖由上面的
+        参数化用例承担。
+        """
+        code = "PDEL_CLD"
+        create_portfolio(test_db, code=code, name="已关闭且有账", status="closed")
+        create_subscription(test_db, portfolio_code=code, investor_code="ADMIN")
+
+        resp = client.delete(f"/api/portfolios/{code}", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        detail = _detail(resp)
+        assert detail["error"] == "PORTFOLIO_HAS_DEPENDENT_DATA"
+        assert detail["details"] == {"dependencies": {"subscription": 1}}
+        assert test_db.query(Portfolio).filter(Portfolio.code == code).first() is not None
+        assert _audit_rows(test_db, code) == []
 
 
 class TestPermissions:

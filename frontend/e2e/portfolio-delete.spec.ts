@@ -1,13 +1,16 @@
 /**
- * 前端 E2E 测试：空壳草稿组合的删除闭环（issue #820）
+ * 前端 E2E 测试：空壳组合的删除闭环（issue #820，扩围口径）
  *
- * 覆盖 SPEC v1.0 §6.3-2：
+ * 覆盖 SPEC v1.1 §6.3-2：
  * 1. 列表卡片删除入口 → 二次确认弹窗点名 name + code → 确认 → 成功 toast → 卡片消失
  *    → 同一 code 可立即重建（issue 的核心痛点「误建 code 永久占用」）
  * 2. 取消确认弹窗零副作用
  * 3. 详情页删除成功后跳回列表（详情页数据已 removeQueries，停留会打到 404）
  * 4. viewer 会话双处都无删除入口（前端 isAdmin 门控；后端 403 由
  *    backend/tests/integration/test_portfolio_delete.py 守）
+ * 5. closed 卡片有删除入口（扩围：入口按状态出现、不按「是否真空壳」预判），
+ *    closed 且有账时后端 409 拦截、数据不动（closed 空壳经 API 不可构造，
+ *    其成功删除路径由后端集成测试 TestDeleteEmptyClosed 承担）
  *
  * 数据说明：形态一律自建（`helpers.isolatedPortfolioCode` 区分 project/worker/retry），
  * 不复用种子 E2E_PORT——它的草稿态会被 trade-buy-amount-linkage 激活（#636），
@@ -16,6 +19,8 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import {
+  activatePortfolioViaApi,
+  closePortfolioViaApi,
   createPortfolioViaApi,
   isolatedPortfolioCode,
   openAppAndAuth,
@@ -144,5 +149,34 @@ test.describe('组合删除闭环（#820）', () => {
     await gotoDetailAndWait(page, code);
     await expect(page.getByRole('button', { name: DELETE_BUTTON })).toHaveCount(0);
     // 夹具由 admin 会话创建，viewer 删不掉——留残留属既有清理定案（见文件头）
+  });
+
+  test('closed 卡片有删除入口；有账组合由后端 409 拦截且数据不动（#820 扩围）', async ({ page }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('E820D', testInfo, 'C');
+    await createPortfolioViaApi(page, headers, code, `已关闭有账 ${code}`);
+    // closed 形态必须「先激活再关闭」（#820 收紧后 draft 直接 close 会 422）；
+    // 激活必落 subscription 行，于是得到「closed 且有账」——入口照出，删除应被拒
+    await activatePortfolioViaApi(page, headers, code);
+    await closePortfolioViaApi(page, headers, code);
+
+    await page.goto('/portfolio');
+    const button = cardDeleteButton(page, code);
+    await expect(button, `列表未渲染自建 closed ${code} 的删除入口（扩围门控）`).toBeVisible();
+
+    await button.click();
+    const dialog = deleteDialog(page);
+    await dialog.getByRole('button', { name: '确认删除' }).click();
+
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '删除失败' }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId('toast-card').filter({ hasText: '组合仍存在关联数据' }),
+    ).toBeVisible();
+    // 拒绝不留痕：入口仍在、后端仍能查到（残留由每轮重建的 E2E 库吸收）
+    await expect(button).toBeVisible();
+    const got = await page.request.get(`/api/portfolios/${code}`, { headers });
+    expect(got.status()).toBe(200);
   });
 });

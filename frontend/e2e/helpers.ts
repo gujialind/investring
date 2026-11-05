@@ -617,11 +617,12 @@ export async function nextTradingDays(
  *
  * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。两条理由按严重度排：
  * ① 数据前提一破就会**响亮失败**：`POST /api/portfolios` 撞 `ALREADY_EXISTS` 400，第一次
- *   就红并指名道出撞的是哪个 code。#820 虽补了 `DELETE /api/portfolios/{code}`，但它只放行
- *   「draft 且无任何关联记录」的空壳——`trade-in-transit` 这类被激活、生成过快照的组合本就
- *   删不掉，加 nonce 只会把一次响亮失败换成同一后端生命周期内的静默残留堆积，更难发现。
- *   （`regression.spec.ts` 现在守的是 #820 的反向契约：draft 详情**必须**有删除入口、
- *   active/closed 必须没有。）
+ *   就红并指名道出撞的是哪个 code。#820 虽补了 `DELETE /api/portfolios/{code}`（扩围后放行
+ *   「draft/closed 且无任何关联记录」的空壳），但 `trade-in-transit` 这类被激活、生成过
+ *   快照的组合仍有依赖行、删不掉，加 nonce 只会把一次响亮失败换成同一后端生命周期内的
+ *   静默残留堆积，更难发现。
+ *   （`regression.spec.ts` 现在守的是 #820 扩围后的契约：draft/closed 详情**必须**有删除
+ *   入口、active 必须没有；「有账不可删」由 `portfolio-delete.spec.ts` 断后端 409。）
  * ② 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
  *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
  *   `frontend/e2e/AGENTS.md` §1「E2E（Playwright）」的「净值夹具」条）。

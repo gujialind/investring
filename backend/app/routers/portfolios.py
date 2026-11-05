@@ -131,7 +131,7 @@ def delete_portfolio(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
-    """删除空壳草稿组合（issue #820）。判据与失败码见 portfolio_service。"""
+    """删除空壳组合（draft/closed，issue #820）。判据与失败码见 portfolio_service。"""
     portfolio_service.delete_draft_portfolio(db, code)
     db.commit()
     return {"message": f"组合 {code} 删除成功"}

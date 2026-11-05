@@ -226,15 +226,15 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 <a id="rule-portfolio"></a>
 ## 组合管理
 
-* 创建为 draft，首次申购确认置 active；active 可 close 为 closed，closed 可 reactivate。**close 只对 active 开放**（#820）——draft 直接关闭会造出既不能删也不再使用的空壳。已关闭组合禁止申赎/调仓、允许查历史。
-* **误建组合的清理**（#820）：只有「`status == "draft"` **且** 全部依赖表计数为 0」的空壳草稿可由管理员物理删除（`DELETE /api/portfolios/{code}`，记审计）。两个条件缺一不可：撤销首笔确认会把 active 退回 draft 而申赎行仍在，只信 status 会删掉有历史账务的组合。不做软删除、不做级联删除，也不提供「先 close 再删」的旁路；删除成功后同 code 可立即重建。
+* 创建为 draft，首次申购确认置 active；active 可 close 为 closed，closed 可 reactivate。**close 只对 active 开放**（#820）——draft 不经激活直接关闭会绕过生命周期，应走删除而不是 close。已关闭组合禁止申赎/调仓、允许查历史。
+* **误建组合的清理**（#820，扩围口径由维护者 2026-11-05 定案）：只有「`status ∈ {draft, closed}` **且** 全部依赖表计数为 0」的空壳可由管理员物理删除（`DELETE /api/portfolios/{code}`，记审计）。两个条件缺一不可：撤销首笔确认会把 active 退回 draft 而申赎行仍在，只信 status 会删掉有历史账务的组合；closed 同理，注册后未清账的组合靠依赖计数拦下。active 一律拒绝，不提供「先 close 再删」之外的清理旁路（close 本身即正常生命周期动作）；不做软删除、不做级联删除，删除成功后同 code 可立即重建。
 * **started_at** 为现存 confirmed 申购的最小 confirm_date（#180），代表到账事实、与激活轮次正交。确认时在 started_at 为空时写入（覆盖空组合 reactivate 后首购）；unconfirm 后重算最小值，close/reactivate 不修改。无 confirmed 申购且状态 active 时回退 draft，closed 不回退——关闭是用户意图，级联删快照只是数据修复。
 * 组合自身无份额列，总份额只在每日 `portfolio_value_snapshot.total_shares`。
 * **auto_snapshot_enabled**（#156）默认 False、opt-in，只约束自动任务，不影响手动生成/重算。**display_config**（#144）保存持仓明细二级分组的显式覆盖项，NULL 采用前端默认。
 * 删除投资人的份额保护见[投资人与份额](#rule-investor)。
 
 * 存在 pending 申赎或 pending trade 时关闭 → `PENDING_TRANSACTIONS_EXIST`；已关闭再关 → `PORTFOLIO_ALREADY_CLOSED`；对非 active（含 draft）关闭 → `PORTFOLIO_NOT_ACTIVE`（#820）；非 `closed` 调 reactivate → `PORTFOLIO_NOT_CLOSED`。
-* 删除组合的状态闸门 → `PORTFOLIO_NOT_DELETABLE`（非 draft，409）；依赖表仍有行 → `PORTFOLIO_HAS_DEPENDENT_DATA`（409，`details.dependencies` 给出表名与计数）（#820）。
+* 删除组合的状态闸门 → `PORTFOLIO_NOT_DELETABLE`（非 draft/closed，即 active，409）；依赖表仍有行 → `PORTFOLIO_HAS_DEPENDENT_DATA`（409，`details.dependencies` 给出表名与计数）（#820）。
 
 * 持仓表禁止手动 CRUD（`POSITION_TABLE_PROTECTED`），现金修正走 `cash-position` 覆盖层（见下）。
 
@@ -346,10 +346,10 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `PLATFORM_NOT_FOUND` | 404 | 传入平台 code 在 `platform` 表查无记录（全部站点均 `NotFoundError`，恒 404）：调仓的 `platform_code` 与 `cash_platform_code`、申赎创建与 PUT 的 `platform_code`、平台级事件的 `platform_code`、现金转移的转出/转入平台、现金手动重估的 `platform_code` | services/trade_service.py::resolve_cash_leg_plan; services/subscription_service.py::create_subscription |
 | `PLATFORM_REQUIRED` | 422 | 创建份额变动事件时 `event_type` 属平台级（cash_dividend / reinvest_dividend / forced_adjustment）而 `platform_code` 为空（空串先归一为 None，#343）；创建调仓交易未传 `platform_code`——基金腿平台决定持仓归属，缺省会让买入现金闸门退化为全组合聚合 | services/share_change_event_service.py::create_share_change_event; services/trade_service.py::create_trade |
 | `PORTFOLIO_ALREADY_CLOSED` | 422 | `close_portfolio`：目标组合 status 已为 closed 时重复关闭被拒（组合不存在走 `_get_portfolio_or_404` 的 404） | services/portfolio_service.py::close_portfolio |
-| `PORTFOLIO_HAS_DEPENDENT_DATA` | 409 | 删除空壳草稿组合时，任一依赖表仍有引用本组合 `code` 的行（判据按元数据派生、不硬编码表名清单；`details.dependencies` 给出表名→计数）。刻意不与 `PORTFOLIO_NOT_DELETABLE` 合并：前者是「状态不对」，后者是「数据还挂着」，处置动作不同（#820） | services/portfolio_service.py::delete_draft_portfolio |
+| `PORTFOLIO_HAS_DEPENDENT_DATA` | 409 | 删除空壳组合（draft/closed）时，任一依赖表仍有引用本组合 `code` 的行（判据按元数据派生、不硬编码表名清单，仅覆盖**外键**引用；无 FK 的 `portfolio_code` 列由守门测试显式豁免登记；`details.dependencies` 给出表名→计数）。刻意不与 `PORTFOLIO_NOT_DELETABLE` 合并：前者是「数据还挂着」，后者是「状态不对」，处置动作不同（#820） | services/portfolio_service.py::delete_draft_portfolio |
 | `PORTFOLIO_NOT_ACTIVE` | 422 | 组合状态非 active 的写操作闸门：创建调仓、编辑调仓、创建跨平台现金转移、**关闭组合**（#820 收紧，draft 不再可关）均要求 `status == "active"`；创建申赎口径较宽——status 不在 (active, draft) 才拒，draft 放行以支持首购确认时激活（[组合管理](#rule-portfolio)） | services/trade_service.py::create_trade; services/subscription_service.py::create_subscription; services/portfolio_service.py::close_portfolio |
 | `PORTFOLIO_NOT_CLOSED` | 422 | `reactivate_portfolio`：组合 `status != "closed"`（draft / active）时不可重开 | services/portfolio_service.py::reactivate_portfolio |
-| `PORTFOLIO_NOT_DELETABLE` | 409 | 删除组合时 `status != "draft"`（active / closed 一律拒绝，含「先 close 再删」的旁路），`details.status` 回显当前状态（#820） | services/portfolio_service.py::delete_draft_portfolio |
+| `PORTFOLIO_NOT_DELETABLE` | 409 | 删除组合时 `status` 不在 (draft, closed)（即 active；#820 扩围口径，closed 空壳可删、active 一律拒绝），`details.status` 回显当前状态 | services/portfolio_service.py::delete_draft_portfolio |
 | `PORTFOLIO_NOT_FOUND` | 404 | 按 code 查不到 portfolio 行：快照 status / list / bulk-delete 端点与 recalculate-async 的组合前置校验（router 侧 `HTTPException` 404）；catch-up、generate-next、现金转移创建、现金手动重估的写入/列表/删除、现金流水聚合查询（#725，只读端点同码）（service 侧 `NotFoundError`）。注意单日 generate 的组合不存在不落本码，走 ValueError → `VALIDATION_FAILED`；纯读路径的聚合视图（#595/#672）刻意走通用 `NOT_FOUND`，与本码分工见该行 | routers/snapshots.py::recalculate_async; services/snapshot_service.py::catch_up_snapshots; services/cash_flow_service.py::list_cash_flows |
 | `POSITION_NOT_FOUND` | 422 | 份额变动事件指向不存在的持仓行：① 确认平台级 `forced_adjustment` 时，`entitlement_date` 当日快照无 (product_code, market, platform_code) 持仓行（提前快失败，否则要到快照生成才炸）；② 快照生成应用窗口内 confirmed 事件时，该三元组键在持仓字典中不存在（LOF market 误填为典型），或键存在但命中的是现金行（`cash_amount IS NOT NULL`） | services/snapshot_service.py::_generate_portfolio_position; services/share_change_event_service.py::resolve_entitlement_shares |
 | `POSITION_TABLE_PROTECTED` | 422 | POST / PUT / DELETE `/api/positions` 三端点无条件拒绝（handler 首行即抛，不读请求体、不查记录）：`portfolio_position` 是系统生成的快照表，现金修正须走 cash-position（`manual_market_value` 覆盖层），删快照走 `DELETE /snapshots/{portfolio_code}/{snapshot_date}` | routers/positions.py::create_position; ::update_position |

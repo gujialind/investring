@@ -60,7 +60,7 @@ interface PortfolioListContentProps {
  * 组合列表页内容（桌面/移动共用）。
  * 抽离自原 app/portfolio/page.tsx，两端仅 basePath 与 variant 不同。
  * 关闭组合用 ClosePortfolioDialog（惰性查询持仓/投资人，issue #99），
- * 删除空壳草稿用 DeletePortfolioDialog（三处共用一份确认文案，issue #820），
+ * 删除空壳（draft/closed）用 DeletePortfolioDialog（三处共用一份确认文案，issue #820），
  * 重新激活仍是本页内联的 AlertDialog 确认。
  */
 export default function PortfolioListContent({ basePath, variant = "desktop" }: PortfolioListContentProps) {
@@ -267,11 +267,12 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                       <Power className="h-4 w-4 text-success" />
                     </Button>
                   )}
-                  {/* 误建的空壳草稿才可删（#820）；有关联记录时后端拒绝，入口不做预判。
-                      E2E 锚点：卡片内按钮的可及名同为「删除组合」，页面上会有多张草稿卡，
+                  {/* 空壳（draft/closed）才可删（#820 扩围）；是否真空壳由后端 409 判定，
+                      入口不做本地预判。active 不出现该按钮（走生命周期而非删除）。
+                      E2E 锚点：卡片内按钮的可及名同为「删除组合」，页面上会有多张可删卡，
                       故按 code 给 testid（frontend/e2e/AGENTS.md 的定位器契约：需要锚点就在
                       组件侧补 data-testid，不用类名/xpath 祖先定位）。 */}
-                  {isAdmin && portfolio.status === "draft" && (
+                  {isAdmin && (portfolio.status === "draft" || portfolio.status === "closed") && (
                     <Button
                       variant="outline"
                       size="icon"
@@ -327,7 +328,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {/* 删除空壳草稿确认（issue #820）：点名 name + code，说明不可恢复与 code 可复用 */}
+      {/* 删除空壳确认（issue #820 扩围）：点名 name + code，说明不可恢复与 code 可复用 */}
       <DeletePortfolioDialog
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}

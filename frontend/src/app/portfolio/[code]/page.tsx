@@ -73,7 +73,7 @@ function PortfolioDetailInner() {
 
   // 分组维度配置弹窗（issue #144）
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
-  // 删除空壳草稿确认弹窗（issue #820）
+  // 删除空壳确认弹窗（#820 扩围）
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
   const positions = positionsData?.items || [];
@@ -112,6 +112,8 @@ function PortfolioDetailInner() {
   }
 
   const isDraft = portfolio.status === "draft";
+  // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
+  const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses);
 
   return (
@@ -146,11 +148,11 @@ function PortfolioDetailInner() {
               variant="desktop"
               onActivateClick={() => activatePortfolio.mutate(code)}
               isActivatePending={activatePortfolio.isPending}
-              onDeleteClick={isDraft ? () => setIsDeleteOpen(true) : undefined}
+              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
               isDeletePending={deletePortfolio.isPending}
             />
           )}
-          {/* 删除空壳草稿的二次确认（issue #820）：点名 name + code + 不可恢复 */}
+          {/* 删除空壳确认（#820 扩围）：点名 name + code + 不可恢复 */}
           <DeletePortfolioDialog
             open={isDeleteOpen}
             onOpenChange={setIsDeleteOpen}

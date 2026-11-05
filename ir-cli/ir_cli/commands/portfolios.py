@@ -171,10 +171,10 @@ def delete(
     code: str = typer.Argument(..., help="组合代码"),
     yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
 ):
-    """删除空壳草稿组合（不可恢复）"""
+    """删除空壳组合（draft 或 closed，不可恢复）"""
     if not yes:
         error("CONFIRM_REQUIRED",
-              f"删除组合 {code} 不可恢复：请追加 --yes 确认，先用 ir portfolio context {code} 核实其为草稿且无关联记录")
+              f"删除组合 {code} 不可恢复：请追加 --yes 确认，先用 ir portfolio context {code} 核实其为空壳（草稿或已关闭）且无关联记录")
     client = APIClient.from_config()
     result = client.delete(f"/api/portfolios/{code}")
     success(data=result["data"])

@@ -132,7 +132,7 @@ export function useActivatePortfolio() {
   });
 }
 
-// 删除组合 Hook（#820：仅空壳 draft 可删，不可恢复）
+// 删除组合 Hook（#820 扩围：仅空壳 draft/closed 可删，不可恢复）
 export function useDeletePortfolio() {
   const queryClient = useQueryClient();
   const addToast = useUIStore((state) => state.addToast);
@@ -154,7 +154,7 @@ export function useDeletePortfolio() {
       addToast({
         type: "error",
         title: "删除失败",
-        message: getErrorMessage(error, "请确认组合为草稿且无关联记录"),
+        message: getErrorMessage(error, "请确认组合为空壳（草稿或已关闭）且无关联记录"),
       });
     },
   });

@@ -793,7 +793,7 @@
           "组合管理"
         ],
         "summary": "Delete Portfolio",
-        "description": "删除空壳草稿组合（issue #820）。判据与失败码见 portfolio_service。",
+        "description": "删除空壳组合（draft/closed，issue #820）。判据与失败码见 portfolio_service。",
         "operationId": "delete_portfolio_api_portfolios__code__delete",
         "security": [
           {
