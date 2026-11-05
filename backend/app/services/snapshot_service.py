@@ -31,7 +31,10 @@ from app.services.trading_utils import (
     get_latest_snapshot_date,
 )
 from app.services.exceptions import BusinessError, NotFoundError
-from app.services.reinvest_receivable import list_reinvest_receivables
+from app.services.reinvest_receivable import (
+    list_cash_dividend_in_transit,
+    list_reinvest_receivables,
+)
 from app.services.subscription_service import unconfirm_single_subscription
 from app.services.audit_service import record_audit
 from app.constants.audit_actions import (
@@ -89,7 +92,10 @@ def _compute_in_transit_amounts(
     ② 现金转移（cross_day）：CASH sell 已确认，CASH buy 仍 **pending**
        （#493 收紧：cancelled 不算在途，避免组内一腿 cancelled 被挂在途）。
     买入和卖出在途均为正数，金额按**现金腿平台**归属。
-    ③ 现金分红按 ex_date <= D < cash_pay_date 计在途，归属事件平台。
+    ③ 现金分红按 ex_date <= D < cash_pay_date 计在途，归属事件平台；#765 起
+       pending 与 confirmed 都计（pending 派生、confirmed 用落库 cash_change，
+       单点 `reinvest_receivable.list_cash_dividend_in_transit`），无 cash_pay_date
+       的形态没有在途区间、照旧由 pending 闸门按 ex_date 阻断。
     ④ 红利再投资应收（#743）按 `ex_date <= D < share_confirm_date` 计入同一
        `dividend` 方向：语义由「分红在途」统一承载，不新增虚拟产品。金额是
        **派生值**（基数 × div_cash 现算），pending 与 confirmed 都计——同日
@@ -196,20 +202,16 @@ def _compute_in_transit_amounts(
                 result.get((platform_code, "buy"), Decimal("0")) + Decimal(str(amount))
             )
 
-    dividend_transit = db.query(
-        ShareChangeEvent.platform_code,
-        func.sum(ShareChangeEvent.cash_change),
-    ).filter(
-        ShareChangeEvent.portfolio_code == portfolio_code,
-        ShareChangeEvent.event_type == "cash_dividend",
-        ShareChangeEvent.status == "confirmed",
-        ShareChangeEvent.platform_code.isnot(None),
-        ShareChangeEvent.ex_date <= snapshot_date,
-        ShareChangeEvent.cash_pay_date > snapshot_date,
-    ).group_by(ShareChangeEvent.platform_code).all()
-    for platform_code, amount in dividend_transit:
-        if amount and amount > 0:
-            result[(platform_code, "dividend")] = Decimal(str(amount))
+    # --- ③ 现金分红在途（#765 统一派生口径，单点在 reinvest_receivable）---
+    # ex_date <= D < cash_pay_date 计入在途，归属事件平台；pending 按
+    # 「登记日基数 × div_cash」现算（同日登记/除息形态优先 live_positions），
+    # confirmed 用落库 cash_change——两值公式同源，确认时点不影响快照数值，
+    # pending 闸门因此得以按 cash_effective_date 放行 D..P-1 的快照生成。
+    for in_transit_row in list_cash_dividend_in_transit(
+        db, portfolio_code, snapshot_date, live_positions=live_positions
+    ):
+        key = (in_transit_row.platform_code, "dividend")
+        result[key] = result.get(key, Decimal("0")) + in_transit_row.amount
 
     # --- ④ 红利再投资应收（#743，与现金分红在途同列 dividend 方向）---
     for receivable in list_reinvest_receivables(
@@ -2001,8 +2003,13 @@ def auto_confirm_after_snapshot(
     #771：`div_cash` 显式非正的分红事件**不进入确认**，直接记一条
     `action=auto_confirm_skipped` 并带补录指引——这类行确认必被 #764 门禁拒绝，
     每次尝试只会刷 WARNING 且事件永久 pending（尝试频率见 `pending_events` 查询：
-    按 `share_effective_date` 精确匹配，重算/追平每经过该生效日窗口重试一次）；
+    非现金分红按 `share_effective_date` 精确匹配、现金分红按 #765 范围谓词，
+    重算/追平每经过相应生效日窗口重试一次）；
     跳过不计入 auto_confirm_failed，由人工补录金额后再确认。
+
+    #765：现金分红的判键由 `share_effective_date` 等值改为范围谓词（详见查询处
+    注释）；基数快照缺失（HK 半开形态）同样走 `auto_confirm_skipped` 通道
+    （code=MISSING_POSITION_SNAPSHOT），不计失败、经人工确认消化。
 
     #747 到期守卫：`next_confirm_date > business_today()` 时直接返回（申赎段已跑完）。
     周六提前生成周五快照时，下一交易日是周一而业务今天仍是周六——不挡住的话，
@@ -2074,7 +2081,9 @@ def auto_confirm_after_snapshot(
     # #784 后 HK_MUTUAL 事件按 HKEX 日历校验，其 share_effective_date 可能落在
     # SSE 日序列外：这类事件本就永不匹配下面的 SSE 精确匹配（匹配键是 SSE 下一
     # 交易日），由 pending 闸门（share_effective_date <= target_date）阻断快照
-    # 生成、经人工确认消化——「跳过」与其行为一致，不构成静默丢失。A 股口径的
+    # 生成、经人工确认消化——「跳过」与其行为一致，不构成静默丢失。#765 的现金
+    # 分红范围谓词不依赖 SSE 等值匹配，但日历到头时同样无快照日可触发，跳过
+    # 语义不变（半开形态的现金分红基数快照缺失时另有探针跳过，见下）。A 股口径的
     # 「D 之后无交易日 ⟹ 无记录等于该日」演绎照旧成立。
     # 旧回退把 next_confirm_date 设成 snapshot_date 本身，会造成**错日匹配**（不是 no-op）。
     # 残留风险（须记）：若日后日历行被删/is_open 被翻，曾经合法的 ex_date 会被静默跳过——
@@ -2157,18 +2166,43 @@ def auto_confirm_after_snapshot(
                 f"code={entry.get('code')}, error={entry.get('error')}"
             )
 
-    # Event 自动确认（share_effective_date == next_trading_day(D) 的 pending events）
+    # Event 自动确认
     # 只处理父/独立记录（跳过子记录，子记录由父记录确认时自动生成）
-    # #743：判键由 ex_date 改为 share_effective_date——同日登记/除息的再投资事件
-    # 因此在 D（= ex_date）快照生成**之后**才被尝试确认，此时它的基数快照已存在
-    # （resolve_entitlement_shares 不再报 MISSING_POSITION_SNAPSHOT），无需显式排除；
-    # share_confirm_date 为 NULL 的存量事件判键回落 ex_date，行为不变。
+    # - 非现金分红：维持 #743 判键 `share_effective_date == next_trading_day(D)`
+    #   精确匹配——同日登记/除息的再投资事件因此在 D（= ex_date）快照生成**之后**
+    #   才被尝试确认，此时它的基数快照已存在（resolve_entitlement_shares 不再报
+    #   MISSING_POSITION_SNAPSHOT），无需显式排除；`share_confirm_date` 为 NULL
+    #   的存量事件判键回落 ex_date，行为不变。
+    # - 现金分红（#765 统一谓词，范围匹配、节假日自动顺延、无「错过即永不重试」）：
+    #     entitlement_date <= D 且（ex_date < D 或 cash_effective_date <= D+1）
+    #   主句「ex_date < D」= 除息日快照生成后的下一次快照日确认——同日形态在 D+1
+    #   触发（基数 snapshot(D) 已存在），带到账日的非同日形态同点位（较现状的
+    #   ex_date-1 后移一个快照日，快照数值零差异：pending 期由派生在途补足）；
+    #   兜底句「cash_effective_date <= D+1」保证现金生效日迫近时必须在闸门阻断前
+    #   确认：不带到账日的存量主流形态（cash_effective 回落 ex_date）恰在
+    #   recalculate(ex_date-1) 命中，触发点与现状等值判键**逐字一致**；到账日恰为
+    #   D+1 的形态在 D 日命中，不会被 D+1 的闸门（cash_effective <= target）挡死。
+    #   基数快照缺失的形态（HK 半开：登记日落 SSE 休市日）由循环内探针跳过。
     # id 定序（#782 评审）：批量加锁与单笔确认/PUT 或另一批量路径并发时，行锁获取序
     # 可预期，收窄死锁窗口；死锁重试覆盖面维持现状（仅 generate 端点）。
+    is_cash_dividend = ShareChangeEvent.event_type == "cash_dividend"
     pending_events = db.query(ShareChangeEvent).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         ShareChangeEvent.status == "pending",
-        ShareChangeEvent.share_effective_date == next_confirm_date,
+        or_(
+            and_(
+                ~is_cash_dividend,
+                ShareChangeEvent.share_effective_date == next_confirm_date,
+            ),
+            and_(
+                is_cash_dividend,
+                ShareChangeEvent.entitlement_date <= snapshot_date,
+                or_(
+                    ShareChangeEvent.ex_date < snapshot_date,
+                    ShareChangeEvent.cash_effective_date <= next_confirm_date,
+                ),
+            ),
+        ),
         ShareChangeEvent.parent_event_id.is_(None),  # 只处理父/独立记录
     ).populate_existing().order_by(ShareChangeEvent.id).with_for_update().all()
 
@@ -2178,6 +2212,7 @@ def auto_confirm_after_snapshot(
         MSG_DIV_CASH_BACKFILL_HINT,
         MSG_DIV_CASH_NOT_POSITIVE,
         MSG_DIVIDEND_METHOD_REQUIRED,
+        MSG_POSITION_SNAPSHOT_MISSING,
         confirm_share_change_event,
         dividend_div_cash_invalid,
     )
@@ -2195,12 +2230,40 @@ def auto_confirm_after_snapshot(
             results.append(entry)
             logger.info(f"分红方式待选择: portfolio={portfolio_code}, event_id={event_id}")
             continue
+        # #765：现金分红的范围谓词会命中「基数快照不存在」的形态（HK 半开：
+        # 权益登记日落 SSE 休市日、无该日持仓快照）。照旧尝试只会撞
+        # MISSING_POSITION_SNAPSHOT 计入 records_failed、且范围谓词下每次重算都
+        # 重复刷；改为跳过并留痕，事件经人工确认消化（与 #784 半开形态处置一致）。
+        # 探针与确认路径 _require_entitlement_snapshot 同口径（组合 + 登记日，
+        # market 无关）；同日形态的基数即除息日当日快照，主句触发时（D+1）恒已生成。
+        if event.event_type == "cash_dividend":
+            base_exists = db.query(PortfolioPosition.id).filter(
+                PortfolioPosition.portfolio_code == portfolio_code,
+                PortfolioPosition.snapshot_date == event.entitlement_date,
+            ).first()
+            if not base_exists:
+                entry.update({
+                    "action": "auto_confirm_skipped",
+                    "code": "MISSING_POSITION_SNAPSHOT",
+                    "error": MSG_POSITION_SNAPSHOT_MISSING,
+                    "hint": (
+                        f"权益登记日 {event.entitlement_date} 无持仓快照"
+                        "（如登记日落 SSE 休市日），请人工确认后继续"
+                    ),
+                })
+                results.append(entry)
+                logger.info(
+                    f"Event auto-confirm skipped: event_id={event_id}, "
+                    f"portfolio={portfolio_code}, 基数快照缺失（{event.entitlement_date}）"
+                )
+                continue
         # #771：显式非正 div_cash 的分红事件确认必被 #764 门禁拒绝（创建/更新已挡，
         # 走到这里的只有绕过服务层直造的存量行）。照旧尝试只会刷一条
         # auto_confirm_failed WARNING、事件永久 pending；改为跳过并给出补录指引。
-        # 重试频率不是「逐日」：上面的查询按 share_effective_date == next_confirm_date
-        # 精确匹配，脏行只在生成其生效日前一交易日的快照时被试一次；反复刷告警发生在
-        # 重算/追平每经过该生效日窗口时（现场形态即来源于此）。
+        # 重试频率不是「逐日」：非现金分红按 share_effective_date == next_confirm_date
+        # 精确匹配，脏行只在生成其生效日前一交易日的快照时被试一次；现金分红的
+        # 范围谓词（#765）在生效日闸门放行区间内每经过一个快照日重试一次，
+        # 反复刷告警发生在重算/追平每经过该窗口时（现场形态即来源于此）。
         # 缺失（NULL）不跳——它仍能确认成空事件，是 #764 刻意放行的既有口径。
         # action 用独立值：task_runner 按 action=="auto_confirm_failed" 计数归并，
         # 「等人工补录」不是失败，不得计入 records_failed；调度路径把它并进 warnings
@@ -2377,16 +2440,33 @@ def _check_share_change_events(
     才应用，故 `share_effective_date > target` 时放行——应收已由
     `_compute_in_transit_amounts` 计入本日快照；到确认日仍未确认则照旧阻断。
     `share_confirm_date` 为 NULL 的存量事件判键回落 `ex_date`，行为不变。
+
+    #765：`cash_dividend` 的判键改为 `cash_effective_date`（= `cash_pay_date or
+    ex_date`）——现金分红不动份额，现金按到账日生效；带到账日的事件在
+    `ex_date <= D < cash_pay_date` 区间由派生在途计入快照（pending 与 confirmed
+    同口径），pending 不再阻断该区间的快照生成，到到账日仍未确认才阻断。
+    不带 `cash_pay_date` 的形态 `cash_effective_date` 回落 `ex_date`，阻断点与
+    现状逐字一致。其余类型判键不变。
     """
     # id 定序（#782 复审）：超过 10 笔上限时「前 10」取最早登记者，重复运行提示子集可复现。
+    is_cash_dividend = ShareChangeEvent.event_type == "cash_dividend"
     pending_events = db.query(ShareChangeEvent.id, ShareChangeEvent.event_type).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
-        ShareChangeEvent.share_effective_date <= target_date,
+        or_(
+            and_(
+                is_cash_dividend,
+                ShareChangeEvent.cash_effective_date <= target_date,
+            ),
+            and_(
+                ~is_cash_dividend,
+                ShareChangeEvent.share_effective_date <= target_date,
+            ),
+        ),
         ShareChangeEvent.status == "pending"
     ).order_by(ShareChangeEvent.id).all()
 
     if pending_events:
-        message = f"存在{len(pending_events)}笔未确认的份额变动事件（份额生效日 <= {target_date}），请先确认或取消后再生成快照"
+        message = f"存在{len(pending_events)}笔未确认的份额变动事件（生效日 <= {target_date}），请先确认或取消后再生成快照"
         undecided = [str(event.id) for event in pending_events if event.event_type == PENDING_DIVIDEND_TYPE]
         if undecided:
             # error_message 有 1000 字符上限且本段位于聚合尾部（#782 评审）：

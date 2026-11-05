@@ -493,7 +493,10 @@ def test_positive_subcent_amount_is_not_a_new_result_side_rejection(test_db, bas
     ({}, {"event_type": REINVEST, "share_confirm_date": WEEKEND}, "INVALID_SHARE_CONFIRM_DATE"),
     ({}, {"event_type": CASH, "share_confirm_date": APPLY}, "INVALID_PARAM"),
     ({}, {"event_type": REINVEST, "cash_pay_date": APPLY}, "INVALID_PARAM"),
-    ({"event_type": REINVEST, "entitlement_date": EX, "share_confirm_date": APPLY}, {"event_type": CASH}, "INVALID_DATE_ORDER"),
+    # #765：同日登记/除息事件选现金分红——到账日缺失报 INVALID_PARAM（同日强制
+    # 携带晚于除息日的到账日），到账日 == 除息日报 INVALID_DATE_ORDER（严格晚于）
+    ({"event_type": REINVEST, "entitlement_date": EX, "share_confirm_date": APPLY}, {"event_type": CASH}, "INVALID_PARAM"),
+    ({"event_type": REINVEST, "entitlement_date": EX, "share_confirm_date": APPLY}, {"event_type": CASH, "cash_pay_date": EX}, "INVALID_DATE_ORDER"),
     ({"event_type": REINVEST, "reinvest_nav": Decimal("1.9")}, {"event_type": REINVEST}, "PRICE_NAV_MISMATCH"),
     ({"event_type": REINVEST, "reinvest_nav": Decimal("0")}, {"event_type": REINVEST}, "INVALID_PARAM"),
 ])
@@ -803,6 +806,9 @@ def test_other_manual_types_keep_no_body_confirmation(client, admin_headers, tes
 
 
 @pytest.mark.parametrize("overrides,code", [
+    # 同日（ex == ENT）的 dividend_pending 仍拒绝（#765 收窄：同日放宽仅限
+    # cash_dividend——方式未定的同日事件在闸门/基数快照之间结构性死锁，
+    # 同日待定分红留给 #766 检测器建事件形态设计一并解决）
     ({"ex_date": ENT.isoformat()}, "INVALID_DATE_ORDER"),
     ({"ex_date": BASE.isoformat()}, "INVALID_DATE_ORDER"),
     ({"ex_date": WEEKEND.isoformat()}, "INVALID_EX_DATE"),
