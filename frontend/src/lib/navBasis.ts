@@ -8,7 +8,8 @@ import type { NavBasis } from "@/lib/api/product";
  * 场内产品的 `unit_price` 还是二级市场收盘价（含折溢价）而非净值。标题照旧写「累计
  * 净值走势」就是把回退口径的数字标成累计净值，所以文案必须由 basis 驱动。
  *
- * 两个详情页（产品页与平台-产品页）各有一份同形卡片，故口径文案单点在此，避免漂移。
+ * 三个详情页（组合详情-产品详情、产品管理-净值型产品详情、平台-产品详情）共用
+ * `ProductNavCards` 渲染三卡，故口径文案单点在此，避免漂移。
  */
 
 export interface NavBasisLabels {

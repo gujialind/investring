@@ -460,8 +460,8 @@ test.describe("平台-产品详情页", () => {
   });
 
   test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }) => {
-    // 与 product-detail.spec.ts 的同名用例同形：两页各一份卡片判序，缺一条就等于那一页
-    // 没有网（口径文案单点在 lib/navBasis.ts，但「有没有接上」是每页各自的接线）。
+    // 与 product-detail.spec.ts 的同名用例同形：三卡判序统一由共享 ProductNavCards 提供，
+    // 本页的接线点是 testIdPrefix="platform-product"（testid 不串台）+ market 透传。
     await page.goto(PLATFORM_PRODUCT_PATH);
     const curve = page.getByTestId("platform-product-curve-card");
     await expect(
@@ -485,7 +485,16 @@ test.describe("平台-产品详情页", () => {
     }
   });
 
-  test("历史净值：两行降序、累计净值/日涨跌占位", async ({ page }) => {
+  test("历史净值：两行降序、累计净值/日涨跌占位，且 page=1 只请求一次（#828）", async ({ page }) => {
+    // #828 A9：概览 latestPrice 与历史卡首屏共用同一 query key，去重后 page=1 只应发一次；
+    // 两条各自请求会让概览与历史首行在慢网下短暂不一致，计数断言守住该缓存契约。
+    const pageOneRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/nav-history") && url.searchParams.get("page") === "1") {
+        pageOneRequests.push(request.url());
+      }
+    });
     await page.goto(PLATFORM_PRODUCT_PATH);
     const history = page.getByTestId("platform-product-history-card");
     const rows = history.getByTestId(/^platform-product-history-row/);
@@ -496,12 +505,13 @@ test.describe("平台-产品详情页", () => {
     await expect(rows.nth(0).getByText("--").first()).toBeVisible();
     // 无查看更多（仅 2 行 < page_size 5）
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
+    expect(pageOneRequests).toHaveLength(1);
   });
 
   test("历史净值请求失败 → 失败态与重试，而非空态（#647）", async ({ page }) => {
-    // 与 product-detail.spec.ts 同形：两页共用 QueryErrorState 只统一了文案入口，
-    // 失败/空态的**判序**各写一份，而组件不在覆盖率分母内——把 historyError 分支
-    // 改回 `length === 0` 优先，#647 的原始症状会在 CI 全绿下复发（#655 L2 ①）
+    // 与 product-detail.spec.ts 同形：失败/空态判序统一由共享 ProductNavCards 提供，
+    // 本页只经 testIdPrefix 接线——若把 historyError 分支改回 `length === 0` 优先，
+    // #647 的原始症状会在 CI 全绿下复发（#655 L2 ①）
     await page.route("**/market-data/products/**/nav-history*", (route) =>
       route.fulfill({ status: 500, json: { detail: "internal error" } })
     );
@@ -513,7 +523,8 @@ test.describe("平台-产品详情页", () => {
   });
 
   test("交易记录读取失败 → 失败态与重试，同页净值卡不受影响（#663②）", async ({ page }) => {
-    // 与上一条同形但落在另一页：两页各写一份判序，缺一条就等于那一页没有网。
+    // 与上一条同形但落在**交易卡**（判序仍由本页内联维护，不在共享三卡范围内）：
+    // 本页与产品详情页各有一份交易卡判序，缺一条就等于那一页的交易失败态没有网。
     // message 与上一条不同串，红的时候能直接看出是哪页的 route 生效了。
     await page.route(/\/api\/trades(\?|$)/, (route) =>
       route.fulfill({
@@ -981,8 +992,8 @@ test.describe("现金市值更新 Dialog", () => {
   });
 });
 
-// #683 D-2 的另一页：两页共用 useNavAnalysis 却各写一份判序，缺一条就等于那一页没有网
-//（#663② 立的「同形两页各一条」口径）。message 与本文件其它用例逐条不同串。
+// #683 D-2 的另一页：nav-analysis 判序已收口到共享 ProductNavCards，本页经
+// testIdPrefix="platform-product" 接线（缺这条就等于该页没接上）。message 与本文件其它用例逐条不同串。
 test.describe("净值分析失败态落在平台-产品详情页（#683 D-2）", () => {
   test("净值分析读取失败 → 曲线卡与区间收益率卡都不落空态/全 --（#683 D-2b）", async ({ page }) => {
     // 判据取 nav-analysis 末段：本文件既有的 nav-history glob（`**/market-data/products/**/

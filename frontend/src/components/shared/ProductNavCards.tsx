@@ -40,17 +40,25 @@ interface ProductNavCardsProps {
   /** 非空市场维度；现金产品（market=""）由调用方决定是否渲染本组件 */
   market: string;
   variant: "desktop" | "mobile";
+  /** 可选 testid 前缀，缺省 "product"；平台-产品页传 "platform-product"，保持既有 E2E 定位契约 */
+  testIdPrefix?: string;
 }
 
 /**
  * #824 产品净值三卡（累计净值走势 / 区间收益率 / 历史净值）——从 ProductDetailContent 逐字抽出，
- * 供组合详情-产品详情页与产品管理-净值型产品详情页共用，消除同形副本漂移（口径单点见 lib/navBasis.ts）。
+ * 供组合详情-产品详情页、产品管理-净值型产品详情页与平台-产品详情页共用，消除同形副本漂移
+ * （口径单点见 lib/navBasis.ts；#828 起平台页也改走本组件，testid 由 testIdPrefix 保持不串台）。
  * 三卡是纯 `(productCode, market)` 函数、无内部链接，故不依赖组合上下文与 basePath。
  * 现金产品无净值端点，调用方（!isCash）不渲染本组件即隐藏三卡。
  * 数据源：nav-analysis（曲线 + 六窗，#637）、nav-history 分页（首屏 5 行 + 查看更多）。
  * 返回三卡的 Fragment，由调用方容器负责栅格与间距（桌面左栏 space-y-4、移动 space-y-3）。
  */
-export default function ProductNavCards({ productCode, market, variant }: ProductNavCardsProps) {
+export default function ProductNavCards({
+  productCode,
+  market,
+  variant,
+  testIdPrefix = "product",
+}: ProductNavCardsProps) {
   const isMobile = variant === "mobile";
 
   const [range, setRange] = useState<NavAnalysisRange>("6m");
@@ -82,7 +90,7 @@ export default function ProductNavCards({ productCode, market, variant }: Produc
   const curveCard = (
     <section
       className="relative rounded-lg border border-border bg-card p-4"
-      data-testid="product-curve-card"
+      data-testid={`${testIdPrefix}-curve-card`}
       // #683 D-1：重取期（含 placeholder 生效的换区间在途）标为 busy。断言按属性而非
       // opacity 类名——定位器契约禁止按 Tailwind 工具类定位（手法同 #650 的 aria-current）
       aria-busy={analysisRevalidating ? "true" : "false"}
@@ -131,7 +139,7 @@ export default function ProductNavCards({ productCode, market, variant }: Produc
   const returnsCard = (
     <section
       className="relative rounded-lg border border-border bg-card p-4"
-      data-testid="product-returns-card"
+      data-testid={`${testIdPrefix}-returns-card`}
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
       <h3 className="text-lg font-semibold">{navLabels.returnsTitle}</h3>
@@ -166,7 +174,7 @@ export default function ProductNavCards({ productCode, market, variant }: Produc
   );
 
   const historyCard = (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="product-history-card">
+    <section className="rounded-lg border border-border bg-card p-4" data-testid={`${testIdPrefix}-history-card`}>
       <h3 className="text-lg font-semibold">历史净值</h3>
       {historyError ? (
         <QueryErrorState error={historyErr} onRetry={refetchHistory} className="mt-3" />
@@ -186,7 +194,7 @@ export default function ProductNavCards({ productCode, market, variant }: Produc
               return (
                 <li
                   key={item.price_date}
-                  data-testid="product-history-row"
+                  data-testid={`${testIdPrefix}-history-row`}
                   className="grid grid-cols-4 border-t border-border py-1.5 text-sm tabular-nums"
                 >
                   <span className="whitespace-nowrap">{formatDate(item.price_date)}</span>

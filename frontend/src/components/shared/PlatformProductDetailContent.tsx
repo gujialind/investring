@@ -3,22 +3,19 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { useQueries } from "@tanstack/react-query";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import NavCurve from "@/components/charts/NavCurve";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import ProductNavCards from "./ProductNavCards";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
-import { productApi, type NavAnalysisRange, type NavHistoryItem } from "@/lib/api";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
-import { navBasisLabels } from "@/lib/navBasis";
 import { cashRowLabel, isCashLeg, tradeCardDetailLine } from "@/lib/tradePairs";
 import {
   cn,
@@ -27,37 +24,18 @@ import {
   formatMarketName,
   formatNav,
   formatProductCodeLabel,
-  formatReturnRate,
   formatSharesUnit,
   formatSignedCurrency,
   getNumberCellClass,
   getReturnColorClass,
-  getSignedReturn,
   getStatusBadgeVariant,
   getTradeStatusLabel,
 } from "@/lib/utils";
 import { useHoldingsByProduct } from "@/hooks/usePosition";
-import { useNavAnalysis } from "@/hooks/useProduct";
+import { useNavHistory } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 
-const NAV_RANGE_TABS: { key: NavAnalysisRange; label: string }[] = [
-  { key: "1m", label: "近1月" },
-  { key: "3m", label: "近3月" },
-  { key: "6m", label: "近6月" },
-  { key: "1y", label: "近1年" },
-];
-
-const RETURN_WINDOWS: { label: string; field: "m1" | "m3" | "m6" | "y1" | "ytd" | "all" }[] = [
-  { label: "近1月", field: "m1" },
-  { label: "近3月", field: "m3" },
-  { label: "近6月", field: "m6" },
-  { label: "近1年", field: "y1" },
-  { label: "今年以来", field: "ytd" },
-  { label: "成立以来", field: "all" },
-];
-
-const HISTORY_PAGE_SIZE = 5;
 const TRADE_TYPE_LABELS: Record<string, string> = { buy: "买入", sell: "卖出" };
 
 function shortMmDd(dateStr: string): string {
@@ -103,42 +81,12 @@ export default function PlatformProductDetailContent({
   );
   const slice = product?.platforms.find((s) => s.platform_code === platformCode);
 
-  const [range, setRange] = useState<NavAnalysisRange>("6m");
-  const {
-    data: analysis,
-    isError: analysisError,
-    error: analysisErr,
-    refetch: refetchAnalysis,
-    // #683 D-1：换区间在途时 react-query 用 placeholder 保留**上一个区间**的值
-    // （keepPreviousData），此时 isRefetching 为真而 isError 仍为假。库自带具名字段，
-    // 首屏在途为假（isPending 时 isRefetching=false），故不必再造派生谓词。
-    isRefetching: analysisRevalidating,
-  } = useNavAnalysis(productCode, market, range);
-  // #703：整段历史无累计净值时后端回退单位净值口径，标题与注记随 basis 变（单点见
-  // lib/navBasis.ts，与产品详情页共用）
-  const navLabels = navBasisLabels(analysis?.nav_basis, market);
-
-  const [visiblePages, setVisiblePages] = useState(1);
-  // S1：现金产品无净值端点（market="" 会 404），非现金且 market 非空时才请求
-  const historyQueries = useQueries({
-    queries: Array.from({ length: visiblePages }, (_, i) => ({
-      queryKey: ["products", "nav-history", productCode, market, i + 1, HISTORY_PAGE_SIZE],
-      queryFn: () =>
-        productApi.getNavHistory(productCode, market, { page: i + 1, page_size: HISTORY_PAGE_SIZE }),
-      staleTime: 5 * 60 * 1000,
-      enabled: !isCash && !!market,
-    })),
-  });
-  const historyItems: NavHistoryItem[] = historyQueries.flatMap((q) => q.data?.items ?? []);
-  const historyTotal = historyQueries[0]?.data?.total ?? 0;
-  const historyError = historyQueries.some((q) => q.isError);
-  // #647：失败态升级为共享 QueryErrorState（带 getErrorMessage 文案与重试入口），
-  // 与产品详情页同一套文案/样式入口，不各写一份
-  const historyErr = historyQueries.find((q) => q.isError)?.error ?? null;
-  const refetchHistory = () => {
-    historyQueries.forEach((q) => void q.refetch());
-  };
-  const latestPrice = historyItems[0];
+  // 概览卡「单位净值 · 累计净值 (MM/DD)」取最新一条历史净值。三卡（走势/区间收益率/历史净值）
+  // 已收口到共享 ProductNavCards（#828），此处只为概览取首屏首条——页 1 的 query key 与
+  // ProductNavCards 首屏查询一致，react-query 去重为单次请求（见 useNavHistory 注释）。
+  // 现金（market=""）不请求。
+  const { items: latestNavItems } = useNavHistory(productCode, market, 1, !isCash && !!market);
+  const latestPrice = latestNavItems[0];
 
   const {
     data: tradesData,
@@ -288,144 +236,6 @@ export default function PlatformProductDetailContent({
     </div>
   );
 
-  // 净值相关卡片仅非现金产品显示
-  const curveCard = !isCash && (
-    <section
-      className="relative rounded-lg border border-border bg-card p-4"
-      data-testid="platform-product-curve-card"
-      // #683 D-1：重取期（含 placeholder 生效的换区间在途）标为 busy。断言按属性而非
-      // opacity 类名——定位器契约禁止按 Tailwind 工具类定位（手法同 #650 的 aria-current）
-      aria-busy={analysisRevalidating ? "true" : "false"}
-    >
-      <h3 className="text-lg font-semibold">{navLabels.curveTitle}</h3>
-      {navLabels.note && (
-        <p className="mt-1 text-xs text-muted-foreground" data-testid="nav-basis-note">
-          {navLabels.note}
-        </p>
-      )}
-      {analysisRevalidating && (
-        <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
-      )}
-      <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
-        {NAV_RANGE_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            aria-pressed={range === tab.key}
-            data-testid={`nav-range-${tab.key}`}
-            className={`rounded-md px-3 py-1 text-sm ${
-              range === tab.key
-                ? "bg-primary/10 text-primary font-medium"
-                : "text-muted-foreground hover:bg-muted"
-            }`}
-            onClick={() => setRange(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      {/* #683 D-2：失败 ≠「这个区间没净值」。失败臂必须排在 NavCurve 之前，否则后端故障被
-          NavCurve 的内置空态文案吞掉（与 ProductDetailContent 的同名卡片同形，两页各一份判序）。
-          D-1：重取期保留 placeholder 的**上一个区间**数值，但整块压暗 + 右上角 spinner
-          （docs/design/visual-spec.md §14 局部加载态），不得为消除该观感而删 keepPreviousData。 */}
-      {analysisError ? (
-        <QueryErrorState error={analysisErr} onRetry={refetchAnalysis} className="mt-3" />
-      ) : (
-        <div className={cn("mt-2", analysisRevalidating && "opacity-50")}>
-          <NavCurve data={(analysis?.curve ?? []).map((p) => ({ date: p.date, nav: p.accumulated_nav }))} height={isMobile ? 220 : 300} />
-        </div>
-      )}
-    </section>
-  );
-
-  const returnsCard = !isCash && (
-    <section
-      className="relative rounded-lg border border-border bg-card p-4"
-      data-testid="platform-product-returns-card"
-      aria-busy={analysisRevalidating ? "true" : "false"}
-    >
-      <h3 className="text-lg font-semibold">{navLabels.returnsTitle}</h3>
-      {navLabels.note && (
-        <p className="mt-1 text-xs text-muted-foreground" data-testid="returns-basis-note">
-          {navLabels.note}
-        </p>
-      )}
-      {analysisRevalidating && (
-        <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
-      )}
-      {/* 失败臂整块替换六窗（不是塞进 grid 子位）：失败时六个 return-<field> 都不存在，
-          「全为 --」的形态随之消失，后端故障不再被读成「这些窗口没有净值」 */}
-      {analysisError ? (
-        <QueryErrorState error={analysisErr} onRetry={refetchAnalysis} className="mt-3" />
-      ) : (
-        <div className={cn("mt-3 grid grid-cols-3 gap-3", analysisRevalidating && "opacity-50")}>
-          {RETURN_WINDOWS.map((w) => {
-            const value = analysis?.interval_returns?.[w.field];
-            return (
-              <div key={w.field} data-testid={`return-${w.field}`}>
-                <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(value)}`}>
-                  {formatReturnRate(value)}
-                </div>
-                <div className="text-xs text-muted-foreground">{w.label}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-
-  const historyCard = !isCash && (
-    <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-history-card">
-      <h3 className="text-lg font-semibold">历史净值</h3>
-      {historyError ? (
-        <QueryErrorState error={historyErr} onRetry={refetchHistory} className="mt-3" />
-      ) : historyItems.length === 0 ? (
-        <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
-      ) : (
-        <>
-          <div className="mt-2 grid grid-cols-4 text-xs text-muted-foreground">
-            <span>日期</span>
-            <span className="text-right">单位净值</span>
-            <span className="text-right">累计净值</span>
-            <span className="text-right">日涨跌</span>
-          </div>
-          <ul>
-            {historyItems.map((item) => {
-              const pct = getSignedReturn(item.pct_change);
-              return (
-                <li
-                  key={item.price_date}
-                  data-testid="platform-product-history-row"
-                  className="grid grid-cols-4 border-t border-border py-1.5 text-sm tabular-nums"
-                >
-                  <span className="whitespace-nowrap">{formatDate(item.price_date)}</span>
-                  <span className="text-right">{formatNav(item.unit_price)}</span>
-                  <span className="text-right">
-                    {item.accumulated_nav !== null ? formatNav(item.accumulated_nav) : "--"}
-                  </span>
-                  <span className={`text-right ${pct.colorClass}`}>{pct.text}</span>
-                </li>
-              );
-            })}
-          </ul>
-          {historyItems.length < historyTotal && (
-            <div className="mt-2 text-center">
-              <Button
-                variant="link"
-                size="sm"
-                data-testid="history-load-more"
-                onClick={() => setVisiblePages((p) => p + 1)}
-              >
-                查看更多
-              </Button>
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  );
-
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-trades-card">
       <div className="flex items-center justify-between">
@@ -529,18 +339,28 @@ export default function PlatformProductDetailContent({
 
       {isMobile ? (
         <>
-          {curveCard}
-          {returnsCard}
-          {historyCard}
+          {!isCash && (
+            <ProductNavCards
+              productCode={productCode}
+              market={market}
+              variant={variant}
+              testIdPrefix="platform-product"
+            />
+          )}
           {tradesCard}
           {allPlatformsCard}
         </>
       ) : (
         <div className="grid grid-cols-[1fr_360px] gap-4">
           <div className="space-y-4">
-            {curveCard}
-            {returnsCard}
-            {historyCard}
+            {!isCash && (
+              <ProductNavCards
+                productCode={productCode}
+                market={market}
+                variant={variant}
+                testIdPrefix="platform-product"
+              />
+            )}
           </div>
           <div className="space-y-4">
             {tradesCard}
