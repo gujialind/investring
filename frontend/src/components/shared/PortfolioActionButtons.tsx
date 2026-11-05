@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Power, Plus, ArrowRightLeft, CalendarClock, Camera } from "lucide-react";
+import { Power, Plus, ArrowRightLeft, CalendarClock, Camera, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 interface PortfolioActionButtonsProps {
@@ -13,13 +13,18 @@ interface PortfolioActionButtonsProps {
   variant?: "desktop" | "mobile";
   onActivateClick: () => void;
   isActivatePending?: boolean;
+  /** 仅 draft/closed 且调用方（详情页 admin 门控）传入时渲染删除入口（issue #820 扩围） */
+  onDeleteClick?: () => void;
+  isDeletePending?: boolean;
 }
 
 /**
  * 组合详情页操作按钮组（草稿/活跃/关闭三态，issue #99）。
  * 详情页不再提供「关闭组合」入口（关闭仅在列表页）；业务逻辑两端一致，
  * 仅布局与链接前缀通过 variant / basePath 区分。
- * 注：后端不提供删除组合能力（外键 RESTRICT，生命周期由关闭/重新激活管理），故无删除入口。
+ * 删除入口在 draft/closed 出现（issue #820 扩围：空壳两态可物理删除，active 保留历史；
+ * 「是否真空壳」不由前端预判，后端 409  govern），
+ * 由页面侧的 admin 门控决定是否传入 onDeleteClick。
  * #595 曾把份额变动/快照管理等低频入口收敛到「管理」入口卡（ManageLinksCard），
  * 操作区只保留高频动作（D1：页头仅 申购赎回 / 调仓）。
  * #786 部分反转 #595：份额变动事件（可见文案简称「事件」）与快照管理是常用入口，
@@ -33,6 +38,8 @@ export default function PortfolioActionButtons({
   variant = "desktop",
   onActivateClick,
   isActivatePending,
+  onDeleteClick,
+  isDeletePending,
 }: PortfolioActionButtonsProps) {
   const cls = variant === "mobile" ? "w-full" : "";
   const container =
@@ -50,6 +57,17 @@ export default function PortfolioActionButtons({
             {variant === "mobile" ? "首次申购" : "首次申购激活"}
           </Button>
         </Link>
+        {onDeleteClick && (
+          <Button
+            variant="outline"
+            onClick={onDeleteClick}
+            disabled={isDeletePending}
+            className={variant === "mobile" ? "col-span-2 w-full" : cls}
+          >
+            <Trash2 className="mr-2 h-4 w-4 text-destructive" />
+            删除组合
+          </Button>
+        )}
       </div>
     );
   }
@@ -103,6 +121,17 @@ export default function PortfolioActionButtons({
         <Power className="mr-2 h-4 w-4 text-success" />
         重新激活
       </Button>
+      {onDeleteClick && (
+        <Button
+          variant="outline"
+          onClick={onDeleteClick}
+          disabled={isDeletePending}
+          className={variant === "mobile" ? "col-span-2 w-full" : ""}
+        >
+          <Trash2 className="mr-2 h-4 w-4 text-destructive" />
+          删除组合
+        </Button>
+      )}
     </div>
   );
 }

@@ -1,5 +1,13 @@
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
-import { E2E_ACTIVE, E2E_PORT, authHeaders, gotoPortfolioDetail, toISODate } from './helpers';
+import {
+  E2E_ACTIVE,
+  E2E_PORT,
+  activatePortfolioViaApi,
+  authHeaders,
+  closePortfolioViaApi,
+  gotoPortfolioDetail,
+  toISODate,
+} from './helpers';
 
 /**
  * #595 组合详情页持仓明细双视图：「按产品 / 按平台」分段切换 + URL ?view= 持久化（D-7）。
@@ -22,8 +30,9 @@ import { E2E_ACTIVE, E2E_PORT, authHeaders, gotoPortfolioDetail, toISODate } fro
 
 /**
  * 经 API 自建「现金 + pending 买入 + T 日快照」组合：T 日快照写入 IN_TRANSIT_BUY 行
- * （买入在途，trades 不自动确认），返回组合 code。code 区分 project/retry
- * （组合无 DELETE 端点，残留由每轮重建的 E2E 库吸收，属既有接受的定案）。
+ * （买入在途，trades 不自动确认），返回组合 code。code 区分 project/retry。
+ * 残留由每轮重建的 E2E 库吸收——#820 补的 DELETE 只放行「空壳 draft」，本夹具已激活并
+ * 生成快照，删不掉；「不加分 per-run nonce」仍是既有定案（helpers.isolatedPortfolioCode）。
  */
 async function setupInTransitPortfolio(page: Page, testInfo: TestInfo): Promise<string> {
   const code = `E595IT_${testInfo.project.name}_${testInfo.retry}`;
@@ -332,15 +341,16 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     });
     await expect(draftResp, `创建 draft 组合失败 ${draftResp.status()}`).toBeOK();
 
-    // closed 自建后 API 关闭（无 pending 申赎/交易，close_portfolio 允许）
+    // closed 夹具必须「先激活再关闭」：#820 收紧 close 为仅 active，
+    // 对 draft 直接调 close 会 422 PORTFOLIO_NOT_ACTIVE（激活经首购确认）
     const closedCode = `E786C_${suffix}`;
     const closedResp = await page.request.post('/api/portfolios', {
       data: { code: closedCode, name: `去重边界 closed ${closedCode}` },
       headers,
     });
     await expect(closedResp, `创建 closed 组合失败 ${closedResp.status()}`).toBeOK();
-    const closeResp = await page.request.post(`/api/portfolios/${closedCode}/close`, { headers });
-    await expect(closeResp, `关闭组合失败 ${closeResp.status()}`).toBeOK();
+    await activatePortfolioViaApi(page, headers, closedCode);
+    await closePortfolioViaApi(page, headers, closedCode);
 
     // draft：桌面既存形态不渲染管理卡；移动卡保留事件/快照（去重仅限 active）
     await page.goto(`/portfolio/${draftCode}`);
@@ -374,8 +384,9 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     // 执行，chromium 半区的 trade-buy-amount-linkage 用例 7 会经 API「申购+确认」
     // 激活共享种子 E2E_PORT，mobile 半区运行时它已是「活跃」（#636 CI 截图实证），
     // 依赖全局种子的 draft 断言会在 mobile 半区必红。按 share-change-cash-pay-date
-    // 的自建组合模式造 fixture，code 区分 project/retry（组合无 DELETE 端点，残留
-    // 由每轮重建的 E2E 库吸收，属既有接受的定案）。
+    // 的自建组合模式造 fixture，code 区分 project/retry。本用例的空壳 draft 虽已可经
+    // #820 的 DELETE 清理，但清理策略不变：残留由每轮重建的 E2E 库吸收，删除端点只在
+    // portfolio-delete.spec.ts 的显式用例里被测到（不在每个夹具用例里顺手加清理动作）。
     const code = `E595_${testInfo.project.name}_${testInfo.retry}`;
     await gotoPortfolioDetail(page, E2E_PORT);
     const headers = await authHeaders(page);

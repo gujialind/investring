@@ -132,8 +132,33 @@ export function useActivatePortfolio() {
   });
 }
 
-// 注：后端不提供 DELETE /portfolios/{code}（外键 RESTRICT，生命周期由关闭/重新激活管理），
-// 故不提供删除组合 Hook。
+// 删除组合 Hook（#820 扩围：仅空壳 draft/closed 可删，不可恢复）
+export function useDeletePortfolio() {
+  const queryClient = useQueryClient();
+  const addToast = useUIStore((state) => state.addToast);
+
+  return useMutation({
+    mutationFn: (code: string) => portfolioApi.delete(code),
+    onSuccess: (_, code) => {
+      // 详情及其派生查询整段失效（行已不存在，保留缓存会让回访页打到 404）；
+      // 失败不做本地乐观移除——后端判据（状态 + 关联记录）比前端可见信息更全
+      queryClient.removeQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
+      queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      addToast({
+        type: "success",
+        title: "删除成功",
+        message: "组合已删除",
+      });
+    },
+    onError: (error: unknown) => {
+      addToast({
+        type: "error",
+        title: "删除失败",
+        message: getErrorMessage(error, "请确认组合为空壳（草稿或已关闭）且无关联记录"),
+      });
+    },
+  });
+}
 
 // 最新净值快照 Hook
 export function useLatestSnapshot(code: string) {

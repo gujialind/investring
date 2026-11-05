@@ -615,15 +615,15 @@ export async function nextTradingDays(
  * `workers` 默认取 CPU 数（CI 才钉 2），任一进两位就撑到 19（16 核本地即如此）、两位齐全
  * 就到 20 上限。**但腾位不是 §4 的决定性理由**——见下。
  *
- * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。三条理由按严重度排：
- * ① 组合**没有 DELETE 端点**（`regression.spec.ts` 的「组合详情页不应出现删除组合入口」
- *   正是在守这条前后端契约，防 P0-5：前端曾提供后端不存在的 `DELETE /portfolios/{code}`）。
- *   加了 nonce，同一后端上连跑 N 次就累积无法删除的 draft 组合——量级不小：
- *   `trade-in-transit` 一轮即 8 条（4 个调用点 × 2 project，`--retries=0` 口径；带 retry
- *   更多），只在下次 `run_e2e_backend.py` 重启重灌时才清掉。
- * ② 现在这个 `ALREADY_EXISTS` 400 是**响亮失败**：数据前提一破，第一次 `POST` 就红并指名
- *   道出撞的是哪个 code。nonce 会把它换成静默堆积，比现状更难发现。
- * ③ 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
+ * **per-run nonce：#551 §4 评估后决定不加**，这是定案不是欠账。两条理由按严重度排：
+ * ① 数据前提一破就会**响亮失败**：`POST /api/portfolios` 撞 `ALREADY_EXISTS` 400，第一次
+ *   就红并指名道出撞的是哪个 code。#820 虽补了 `DELETE /api/portfolios/{code}`（扩围后放行
+ *   「draft/closed 且无任何关联记录」的空壳），但 `trade-in-transit` 这类被激活、生成过
+ *   快照的组合仍有依赖行、删不掉，加 nonce 只会把一次响亮失败换成同一后端生命周期内的
+ *   静默残留堆积，更难发现。
+ *   （`regression.spec.ts` 现在守的是 #820 扩围后的契约：draft/closed 详情**必须**有删除
+ *   入口、active 必须没有；「有账不可删」由 `portfolio-delete.spec.ts` 断后端 409。）
+ * ② 受益面只有本地手跑——CI 每个 job 新建栈（`.github/workflows/e2e-stack.yml`），本就
  *   不存在跨 run 复用；而本地正该走「重启后端重灌种子」这条既定菜谱（见
  *   `frontend/e2e/AGENTS.md` §1「E2E（Playwright）」的「净值夹具」条）。
  *
@@ -638,6 +638,65 @@ export function isolatedPortfolioCode(
   const day = toISODate(new Date()).replace(/-/g, '');
   const proj = testInfo.project.name === 'mobile' ? 'M' : 'D';
   return `${prefix}${day}${proj}${testInfo.workerIndex}${testInfo.retry}${suffix}`;
+}
+
+// ===========================================================================
+// 组合形态的 API 夹具（issue #820）
+//
+// 删除/关闭类用例需要「可控的组合形态」，而两个种子契约组合都不能拿来改形态
+// （E2E_PORT 是零交易契约、且会被其他 spec 激活漂移 #636；E2E_ACTIVE 禁 recalculate/
+// close 类破坏性操作）。这里单点持有「自建 → 激活 → 关闭」三步，供 ≥2 个 spec 共用，
+// 不在各 spec 里复制同形代码（#478/#479 的提取口径）。
+// ===========================================================================
+
+async function apiPost(page: Page, headers: { Authorization: string }, path: string, data?: unknown) {
+  const resp = await page.request.post(path, { headers, data });
+  expect(resp, `POST ${path} 返回 ${resp.status()} ${await resp.text()}`).toBeOK();
+  return resp.json();
+}
+
+/** 经 API 自建 draft 组合（code 由 isolatedPortfolioCode 保证 project/worker/retry 唯一） */
+export async function createPortfolioViaApi(
+  page: Page,
+  headers: { Authorization: string },
+  code: string,
+  name = `E2E 夹具组合 ${code}`,
+): Promise<void> {
+  await apiPost(page, headers, '/api/portfolios', { code, name });
+}
+
+/**
+ * 首购确认把 draft 激活为 active（零快照组合首窗净值 1.0000，无需行情，同
+ * `trade-in-transit` 的现金注入形态）。
+ *
+ * #820 之后这步是「造 closed 夹具」的**必经前置**：close 收紧为仅 active，
+ * 直接对 draft 调 close 会 422 `PORTFOLIO_NOT_ACTIVE`。
+ * 申请日取「today 起最近一个交易日」，经日历端点锚定，不写死年份（#468）。
+ */
+export async function activatePortfolioViaApi(
+  page: Page,
+  headers: { Authorization: string },
+  code: string,
+): Promise<void> {
+  const applyDate = await nearestTradingDay(page, headers);
+  const sub = (await apiPost(page, headers, '/api/subscriptions', {
+    portfolio_code: code,
+    investor_code: 'ADMIN',
+    platform_code: 'HBZQ',
+    sub_type: 'subscribe',
+    amount: 100000,
+    apply_date: applyDate,
+  })) as { id: number };
+  await apiPost(page, headers, `/api/subscriptions/${sub.id}/confirm`);
+}
+
+/** 关闭组合（仅 active 可关，#820 收紧） */
+export async function closePortfolioViaApi(
+  page: Page,
+  headers: { Authorization: string },
+  code: string,
+): Promise<void> {
+  await apiPost(page, headers, `/api/portfolios/${code}/close`);
 }
 
 /**

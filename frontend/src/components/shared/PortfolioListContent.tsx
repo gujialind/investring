@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Eye, Users, Loader2, Power, PowerOff } from "lucide-react";
+import { Plus, Eye, Users, Loader2, Power, PowerOff, Trash2 } from "lucide-react";
 import { formatCurrency, formatReturnRate, getReturnColorClass, getStatusBadgeVariant } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -31,11 +31,13 @@ import {
   useCreatePortfolio,
   useClosePortfolio,
   useActivatePortfolio,
+  useDeletePortfolio,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import ClosePortfolioDialog from "@/components/shared/dialogs/ClosePortfolioDialog";
+import DeletePortfolioDialog from "@/components/shared/dialogs/DeletePortfolioDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -58,7 +60,8 @@ interface PortfolioListContentProps {
  * 组合列表页内容（桌面/移动共用）。
  * 抽离自原 app/portfolio/page.tsx，两端仅 basePath 与 variant 不同。
  * 关闭组合用 ClosePortfolioDialog（惰性查询持仓/投资人，issue #99），
- * 重新激活仍用原生 AlertDialog 确认。
+ * 删除空壳（draft/closed）用 DeletePortfolioDialog（三处共用一份确认文案，issue #820），
+ * 重新激活仍是本页内联的 AlertDialog 确认。
  */
 export default function PortfolioListContent({ basePath, variant = "desktop" }: PortfolioListContentProps) {
   const router = useRouter();
@@ -66,6 +69,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
   const createPortfolio = useCreatePortfolio();
   const closePortfolio = useClosePortfolio();
   const activatePortfolio = useActivatePortfolio();
+  const deletePortfolio = useDeletePortfolio();
   const { isAdmin } = useRoleCheck();
 
   const portfolios = data?.items || [];
@@ -73,9 +77,10 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
   const [filter, setFilter] = useState<string>("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState({ code: "", name: "", description: "" });
-  // 关闭组合：ClosePortfolioDialog 目标；重新激活：AlertDialog 目标
+  // 关闭组合：ClosePortfolioDialog 目标；重新激活 / 删除：AlertDialog 目标
   const [closeTarget, setCloseTarget] = useState<string | null>(null);
   const [activateTarget, setActivateTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const filteredPortfolios = portfolios.filter((p) => filter === "all" || p.status === filter);
 
@@ -95,6 +100,9 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
     activatePortfolio.mutate(activateTarget);
     setActivateTarget(null);
   };
+
+  // 确认弹窗要点名 name + code（#820 口径 Q4）：删除不可恢复，只给 code 不够认对象
+  const deleteTargetPortfolio = portfolios.find((p) => p.code === deleteTarget);
 
   if (isLoading) return <LoadingState />;
 
@@ -259,6 +267,23 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                       <Power className="h-4 w-4 text-success" />
                     </Button>
                   )}
+                  {/* 空壳（draft/closed）才可删（#820 扩围）；是否真空壳由后端 409 判定，
+                      入口不做本地预判。active 不出现该按钮（走生命周期而非删除）。
+                      E2E 锚点：卡片内按钮的可及名同为「删除组合」，页面上会有多张可删卡，
+                      故按 code 给 testid（frontend/e2e/AGENTS.md 的定位器契约：需要锚点就在
+                      组件侧补 data-testid，不用类名/xpath 祖先定位）。 */}
+                  {isAdmin && (portfolio.status === "draft" || portfolio.status === "closed") && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setDeleteTarget(portfolio.code)}
+                      disabled={deletePortfolio.isPending}
+                      title="删除组合"
+                      data-testid={`portfolio-delete-${portfolio.code}`}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardContent>
@@ -303,6 +328,20 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* 删除空壳确认（issue #820 扩围）：点名 name + code，说明不可恢复与 code 可复用 */}
+      <DeletePortfolioDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        portfolioCode={deleteTarget ?? ""}
+        portfolioName={deleteTargetPortfolio?.name}
+        isPending={deletePortfolio.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deletePortfolio.mutate(deleteTarget, {
+            onSettled: () => setDeleteTarget(null),
+          });
+        }}
+      />
     </div>
   );
 }

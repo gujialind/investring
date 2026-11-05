@@ -787,6 +787,50 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "组合管理"
+        ],
+        "summary": "Delete Portfolio",
+        "description": "删除空壳组合（draft/closed，issue #820）。判据与失败码见 portfolio_service。",
+        "operationId": "delete_portfolio_api_portfolios__code__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/portfolios/{code}/close": {

@@ -13,10 +13,12 @@ import {
   usePositionList,
   usePortfolioInvestors,
   useActivatePortfolio,
+  useDeletePortfolio,
   usePortfolioPerformance,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
+import DeletePortfolioDialog from "@/components/shared/dialogs/DeletePortfolioDialog";
 import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
@@ -61,6 +63,7 @@ function MobilePortfolioDetailInner() {
     enabled: showInvestors,
   });
   const activatePortfolio = useActivatePortfolio();
+  const deletePortfolio = useDeletePortfolio();
   const { isAdmin } = useRoleCheck();
 
   // 绩效指标：draft 组合无快照，不请求
@@ -69,6 +72,8 @@ function MobilePortfolioDetailInner() {
 
   // 分组维度配置弹窗（issue #144，与桌面端共用 Dialog）
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
+  // 删除空壳确认弹窗（#820 扩围，与桌面端共用 Dialog）
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
   const positions = positionsData?.items || [];
   const assetClasses = assetClassDict?.items || [];
@@ -100,6 +105,8 @@ function MobilePortfolioDetailInner() {
   }
 
   const isDraft = portfolio.status === "draft";
+  // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
+  const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses);
 
   return (
@@ -165,8 +172,25 @@ function MobilePortfolioDetailInner() {
               variant="mobile"
               onActivateClick={() => activatePortfolio.mutate(code)}
               isActivatePending={activatePortfolio.isPending}
+              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
+              isDeletePending={deletePortfolio.isPending}
             />
           )}
+          {/* 删除空壳确认（#820 扩围，与桌面端共用弹窗） */}
+          <DeletePortfolioDialog
+            open={isDeleteOpen}
+            onOpenChange={setIsDeleteOpen}
+            portfolioCode={portfolio.code}
+            portfolioName={portfolio.name}
+            isPending={deletePortfolio.isPending}
+            onConfirm={() =>
+              deletePortfolio.mutate(code, {
+                // 详情页数据已被 removeQueries，留在本页会打到 404，成功后回列表
+                onSuccess: () => router.push("/m/portfolio"),
+                onSettled: () => setIsDeleteOpen(false),
+              })
+            }
+          />
 
           {!isDraft && (
             <>

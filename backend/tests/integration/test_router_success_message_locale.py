@@ -247,7 +247,7 @@ class TestShareEventReceiptMessages:
 
 
 class TestPortfolioReceiptMessages:
-    """portfolios.py:114/125——组合码是用户输入，按 #680 口径回显"""
+    """routers/portfolios.py 的 close/reactivate/delete——组合码是用户输入，按 #680 口径回显"""
 
     def test_close_then_reactivate(self, client, admin_headers, test_db):
         create_portfolio(test_db, code="MSG687_PC", status="active")
@@ -263,6 +263,14 @@ class TestPortfolioReceiptMessages:
             f"Response: {reactivated.status_code} {reactivated.json()}"
         )
         assert reactivated.json() == {"message": "组合 MSG687_PC 激活成功"}
+
+    def test_delete_draft_echoes_code(self, client, admin_headers, test_db):
+        """#820 新增删除端点的 200 回执：中文 + 回显用户输入的组合码"""
+        create_portfolio(test_db, code="MSG820_PD", status="draft")
+
+        deleted = client.delete("/api/portfolios/MSG820_PD", headers=admin_headers)
+        assert deleted.status_code == 200, f"Response: {deleted.status_code} {deleted.json()}"
+        assert deleted.json() == {"message": "组合 MSG820_PD 删除成功"}
 
 
 class TestNotificationReceiptMessages:

@@ -125,6 +125,18 @@ def reactivate_portfolio(
     return {"message": f"组合 {code} 激活成功"}
 
 
+@router.delete("/{code}")
+def delete_portfolio(
+    code: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_admin),
+):
+    """删除空壳组合（draft/closed，issue #820）。判据与失败码见 portfolio_service。"""
+    portfolio_service.delete_draft_portfolio(db, code)
+    db.commit()
+    return {"message": f"组合 {code} 删除成功"}
+
+
 @router.get("/{code}/nav-history", response_model=list[NavHistoryRecord])
 def get_nav_history(
     code: str,
