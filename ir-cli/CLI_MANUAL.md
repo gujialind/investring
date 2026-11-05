@@ -1068,7 +1068,7 @@ ir market sync-history <PRODUCT_CODE> <MARKET>
 
 #### `ir market sync-all`
 
-批量同步价格数据（异步任务，POST `/api/sync-jobs/price`；单 active 任务锁，已有 pending/running 任务时 409）。**#808 起 `--products` 真正限定范围**：此前缺省 scope 或按旧帮助写 `by-product` 都静默退化为全量同步。**#821 起 `scope=all` 携带清单在直连 API 层也 422**；`by_product` 清单在库内全部未命中时任务终态为 `failed`（`total=0`、`error_message` 说明未命中），不再记 `success`——用 `ir sync-job status <id>` 查看终态。
+批量同步价格数据（异步任务，POST `/api/sync-jobs/price`；单 active 任务锁，已有 pending/running 任务时 409）。**#808 起 `--products` 真正限定范围**：此前缺省 scope 或按旧帮助写 `by-product` 都静默退化为全量同步。**#821 起 `scope=all` 携带清单在直连 API 层也 422**；`by_product` 清单在库内全部未命中时任务终态为 `failed`（`total=0`、`error_message` 说明未命中），不再记 `success`——用 `ir sync-job status <id>` 查看终态。**#831 起部分命中不再静默丢弃未命中条目**：未命中条目落明细（`ir sync-job details <id>` 可见 `status="miss"` 行）、计入任务 `skipped_count`，`error_message` 汇总「N 个条目库内未命中已跳过」（超长条目超出列宽时不落明细行，仅计数与汇总可见）；`total` 仍为命中数、终态仍按同步结果判定（命中部分全成功即 `success` 带上述留痕），miss 不计 `failed_count`。
 
 ```bash
 ir market sync-all [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--scope all|by_product] [--products code|market,...] [--data-source tushare|akshare]
@@ -1079,7 +1079,7 @@ ir market sync-all [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--scope al
 | `--start-date` | 否 | 开始日期；不传为增量同步（回看最近 10 个交易日，#698） |
 | `--end-date` | 否 | 结束日期 |
 | `--scope` | 否 | 范围 `all` / `by_product`（旧写法 `by-product` 后端自动归一，未知值 422）；传 `--products` 且缺省时自动 `by_product`；显式 `--scope all` 与 `--products` 冲突、或显式 `by_product` 未带有效 `--products`，均报 `USAGE_ERROR`（exit 64）；直连 API 传 `scope=all` + 非空 `products` 同样 422（#821） |
-| `--products` | 否 | 产品清单 `code|market,code|market`；条目须恰为两段且 code/market 去空格后非空，非法条目逐个 warning（stderr）跳过，**全部非法时报 `USAGE_ERROR`（exit 64）且不下发任务**；直连 API 时后端同样要求条目格式合法、`scope=by_product` 的 products 非空（否则 422）；条目合法但库内全部未命中时任务终态 `failed`（`total=0`，不再记 `success`，#821） |
+| `--products` | 否 | 产品清单 `code|market,code|market`；条目须恰为两段且 code/market 去空格后非空，非法条目逐个 warning（stderr）跳过，**全部非法时报 `USAGE_ERROR`（exit 64）且不下发任务**；直连 API 时后端同样要求条目格式合法、`scope=by_product` 的 products 非空（否则 422）；条目合法但库内全部未命中时任务终态 `failed`（`total=0`，不再记 `success`，#821）；部分命中时未命中条目落 `miss` 明细并计入 `skipped_count`，`error_message` 汇总提示（#831） |
 | `--data-source` | 否 | 数据源过滤（`tushare`/`akshare`，仅 `scope=all` 生效） |
 
 ---
