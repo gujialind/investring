@@ -65,6 +65,18 @@ DEPENDENCY_TABLES = {
     ),
 }
 
+# 依赖表 → 独立短码。`Portfolio.code` 为 String(20)，MySQL 严格模式下
+# 超长会报 DataError(1406)，故此处不直接用表名。
+DEPENDENCY_CODES = {
+    "subscription": "SUB",
+    "trade": "TRD",
+    "portfolio_position": "POS",
+    "portfolio_value_snapshot": "SNAP",
+    "investor_holding": "HOLD",
+    "manual_market_value": "MMV",
+    "share_change_event": "SCE",
+}
+
 
 def _detail(resp):
     return resp.json()["detail"]
@@ -173,7 +185,7 @@ class TestDependentDataGate:
     def test_dependent_row_blocks_delete_without_cascade(
         self, client, admin_headers, test_db, table
     ):
-        code = f"PDEL_{table.upper()}"
+        code = f"PDEL_{DEPENDENCY_CODES[table]}"
         create_portfolio(test_db, code=code, name="有依赖的草稿", status="draft")
         child = DEPENDENCY_TABLES[table](test_db, code)
 
