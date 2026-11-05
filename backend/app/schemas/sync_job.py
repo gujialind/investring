@@ -43,10 +43,13 @@ class PriceSyncRequest(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def _by_product_requires_products(self):
+    def _scope_products_consistency(self):
         # #808 Q3：scope=by_product 空清单会在 worker 静默跑成 0 产品任务，投递前拒绝
         if self.scope == "by_product" and not self.products:
             raise ValueError("scope=by_product 时 products 不能为空")
+        # #821：scope=all 带清单会被 worker 静默忽略而走全量分支，投递前拒绝
+        if self.scope == "all" and self.products:
+            raise ValueError("scope=all 时不能传 products（清单仅在 scope=by_product 生效）")
         return self
 
 
