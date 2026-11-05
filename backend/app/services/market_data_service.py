@@ -1002,12 +1002,19 @@ def _run_price_sync_job_impl(job_id: int):
         # 全未命中走上面 #821 分支（failed、不落明细行），形态不对称为刻意保留，
         # 防止后来者把两条路径「统一」掉而回退 #821 验收。
         if scope == "by_product":
-            hit_keys = {(p.code, p.market) for p in products}
+            # #832 处置 S1：miss 判定必须与命中查询同口径归一。MySQL utf8mb4 _ci 排序
+            # 规则大小写不敏感，清单条目 510300.sh 实际命中该行并同步 success；此前
+            # hit_keys 用 Python 精确比较会把「已同步」的条目误记 miss，与成功明细
+            # 自相矛盾。lower() 只作判定外层：SQLite 命中必为精确相等，不会因归一
+            # 错放真未命中条目。seen_misses 同键归一，大小写变体按 MySQL 语义视作
+            # 同一条目，只计一次。
+            hit_keys = {(p.code.lower(), p.market.lower()) for p in products}
             missed_entries = []
             seen_misses = set()
             for c, m in params.get("products") or []:
-                if (c, m) not in hit_keys and (c, m) not in seen_misses:
-                    seen_misses.add((c, m))
+                norm = (c.lower(), m.lower())
+                if norm not in hit_keys and norm not in seen_misses:
+                    seen_misses.add(norm)
                     missed_entries.append((c, m))
             if missed_entries:
                 # nav_date 取窗口上界，与命中分支同法（#746 口径）：显式 end_date
@@ -1020,14 +1027,23 @@ def _run_price_sync_job_impl(job_id: int):
                 else:
                     miss_nav_date = business_yesterday()
                 for c, m in missed_entries:
-                    db.add(NavSyncDetail(
-                        job_id=job_id,
-                        product_code=c,
-                        market=m,
-                        nav_date=miss_nav_date.strftime("%Y-%m-%d"),
-                        status="miss",
-                        error_message="库内未命中，已跳过",
-                    ))
+                    # #832 处置 S2：明细列 product_code/market 为定长 VARCHAR(20)
+                    # （models/nav_sync_detail.py）。超长请求原文照写会在 MySQL 严格
+                    # 模式撞 1406，抛错路径进外层 except 后终态 commit 再次失败
+                    # （无 rollback），任务楔死 running 且单 active 锁 409 掉后续价格
+                    # 同步。此处超长条目跳过明细行，skipped_count 与 error_message
+                    # 汇总照常记录——丢弃仍可见（job 列是 Text），不牵连命中部分。
+                    # 不取「外层 except 先 rollback」方案：那是改所有同步任务共享的
+                    # 收口路径，超出本 issue 授权面；楔死根因（确定性写坏值）在此拦掉。
+                    if len(c) <= 20 and len(m) <= 20:
+                        db.add(NavSyncDetail(
+                            job_id=job_id,
+                            product_code=c,
+                            market=m,
+                            nav_date=miss_nav_date.strftime("%Y-%m-%d"),
+                            status="miss",
+                            error_message="库内未命中，已跳过",
+                        ))
                     job.skipped_count += 1
                 job.error_message = (
                     f"{len(missed_entries)} 个条目库内未命中已跳过: "

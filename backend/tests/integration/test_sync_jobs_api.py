@@ -439,3 +439,85 @@ class TestByProductPartialMiss:
             NavSyncDetail.status == "miss",
         ).count()
         assert rows == 1
+
+
+@pytest.mark.dialect
+class TestByProductMissMysqlDialect:
+    """PR #832 处置两条 L2 Suggestion 的 MySQL 方言反例——SQLite 下形态不显形
+    （`==` 二进制比较、VARCHAR 长度不强制），仅 MySQL 双跑有语义：
+
+    - S1：utf8mb4_general_ci 大小写不敏感，变体条目实际命中并同步 success，
+      miss 判定须同口径归一，不得把「已同步」条目误记 miss；
+    - S2：>20 字符的未命中条目撞 product_code/market 定长列（写侧 1406），
+      不得楔死任务；丢弃经 skipped_count/error_message 照常可见。
+
+    断言只依赖任务终态与明细形态，不依赖具体驱动异常类型。
+    """
+
+    def _mysql_only(self, test_db):
+        if test_db.get_bind().dialect.name != "mysql":
+            pytest.skip("大小写不敏感排序规则与定长列 1406 仅 MySQL 方言成立")
+
+    def _run(self, test_db, monkeypatch, products):
+        job = SyncJob(
+            job_type="price_incremental_sync", status="pending",
+            triggered_by="manual",
+            params={
+                "job_type": "price_incremental_sync",
+                "scope": "by_product",
+                "products": products,
+            },
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.market_data_service.sync_product_prices") as mock_sync:
+            mock_sync.return_value = {
+                "success": True, "synced_count": 10, "source": "tushare",
+            }
+            _run_price_sync_job_impl(job.id)
+        test_db.refresh(job)
+        details = test_db.query(NavSyncDetail).filter(
+            NavSyncDetail.job_id == job.id
+        ).all()
+        return job, {d.product_code: d for d in details}
+
+    def test_case_variant_hit_entry_not_misrecorded_miss(self, test_db, monkeypatch):
+        """S1 反例：510300.sh/cn_exchange 在 _ci 下命中既有行，只应落 success 明细。
+
+        修复前 miss 判定按 Python 精确比较，该条目会被误记 status="miss"，与同一
+        产品同步 success 自相矛盾；归一后大小写变体不再进 missed_entries。
+        """
+        self._mysql_only(test_db)
+        job, by_code = self._run(
+            test_db, monkeypatch,
+            products=[["510300.sh", "cn_exchange"], ["999999.XX", "CN_OTC"]],
+        )
+        assert job.total == 1, "_ci 命中查询只认得既有行，变体条目不得另算一票"
+        assert job.skipped_count == 1, "变体条目已命中已同步，不计 skip"
+        assert job.status == "success"
+        assert "999999.XX" in (job.error_message or "")
+        miss_rows = [d for d in by_code.values() if d.status == "miss"]
+        assert [d.product_code for d in miss_rows] == ["999999.XX"], (
+            "变体条目不得出现 miss 行"
+        )
+        assert by_code["510300.SH"].status == "success"
+
+    def test_overlong_miss_entry_stays_visible_without_wedging(self, test_db, monkeypatch):
+        """S2 反例：25 字符未命中条目不落定长列明细，计数与汇总仍可见、任务正常终态。
+
+        修复前该条目原样写 VARCHAR(20) 撞 1406，经外层 except 把任务楔死在
+        running（SQLite 无长度强制，本地全绿抓不到）。
+        """
+        self._mysql_only(test_db)
+        long_code = "U" * 25
+        job, by_code = self._run(
+            test_db, monkeypatch,
+            products=[["510300.SH", "CN_EXCHANGE"], [long_code, "CN_OTC"]],
+        )
+        assert job.status == "success", "超长条目不得楔死整单或牵连命中部分"
+        assert job.skipped_count == 1, "不落明细也要计数，丢弃可见语义不丢"
+        assert "U" * 25 in (job.error_message or ""), "汇总须点名超长条目原文"
+        assert long_code not in by_code, "超长原文不进定长列"
+        assert by_code["510300.SH"].status == "success"

@@ -1068,7 +1068,7 @@ ir market sync-history <PRODUCT_CODE> <MARKET>
 
 #### `ir market sync-all`
 
-批量同步价格数据（异步任务，POST `/api/sync-jobs/price`；单 active 任务锁，已有 pending/running 任务时 409）。**#808 起 `--products` 真正限定范围**：此前缺省 scope 或按旧帮助写 `by-product` 都静默退化为全量同步。**#821 起 `scope=all` 携带清单在直连 API 层也 422**；`by_product` 清单在库内全部未命中时任务终态为 `failed`（`total=0`、`error_message` 说明未命中），不再记 `success`——用 `ir sync-job status <id>` 查看终态。**#831 起部分命中不再静默丢弃未命中条目**：未命中条目落明细（`ir sync-job details <id>` 可见 `status="miss"` 行）、计入任务 `skipped_count`，`error_message` 汇总「N 个条目库内未命中已跳过」；`total` 仍为命中数、终态仍按同步结果判定（命中部分全成功即 `success` 带上述留痕），miss 不计 `failed_count`。
+批量同步价格数据（异步任务，POST `/api/sync-jobs/price`；单 active 任务锁，已有 pending/running 任务时 409）。**#808 起 `--products` 真正限定范围**：此前缺省 scope 或按旧帮助写 `by-product` 都静默退化为全量同步。**#821 起 `scope=all` 携带清单在直连 API 层也 422**；`by_product` 清单在库内全部未命中时任务终态为 `failed`（`total=0`、`error_message` 说明未命中），不再记 `success`——用 `ir sync-job status <id>` 查看终态。**#831 起部分命中不再静默丢弃未命中条目**：未命中条目落明细（`ir sync-job details <id>` 可见 `status="miss"` 行）、计入任务 `skipped_count`，`error_message` 汇总「N 个条目库内未命中已跳过」（超长条目超出列宽时不落明细行，仅计数与汇总可见）；`total` 仍为命中数、终态仍按同步结果判定（命中部分全成功即 `success` 带上述留痕），miss 不计 `failed_count`。
 
 ```bash
 ir market sync-all [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--scope all|by_product] [--products code|market,...] [--data-source tushare|akshare]
