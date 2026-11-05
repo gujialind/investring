@@ -984,6 +984,17 @@ def _run_price_sync_job_impl(job_id: int):
             ).all()
 
         job.total = len(products)
+        # #821：by_product 清单在库内全部未命中时循环不执行、failed_count==0，
+        # 会被下面的终态判定误记为 success；此处显式置 failed 让「什么都没做」可见
+        if scope == "by_product" and not products:
+            job.status = "failed"
+            job.error_message = (
+                "scope=by_product 的产品清单在库内全部未命中"
+                f"（{len(params.get('products') or [])} 个条目），未执行任何同步"
+            )
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return
         db.commit()
 
         for product in products:

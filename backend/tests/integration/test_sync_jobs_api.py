@@ -140,6 +140,16 @@ class TestSubmitPriceSync:
         assert response.status_code == 422
         assert test_db.query(SyncJob).count() == 0
 
+    def test_scope_all_with_products_rejected_422(self, client, admin_headers, test_db):
+        """#821 验收 1：scope=all 带清单 → 422，不落 job（worker 会静默忽略清单）"""
+        response = client.post(
+            "/api/sync-jobs/price",
+            json={"scope": "all", "products": [["510300.SH", "CN_EXCHANGE"]]},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert test_db.query(SyncJob).count() == 0
+
 
 class TestGetJobStatus:
     """GET /api/sync-jobs/{job_id}"""
@@ -304,3 +314,33 @@ class TestIncrementalJobWindow:
             _run_price_sync_job_impl(job.id)
 
         assert mock_sync.call_args.kwargs["start_date"] == date(2025, 6, 1)
+
+
+class TestByProductNoMatch:
+    """#821：by_product 清单在库内全部未命中时，终态须区别于「成功空跑」。"""
+
+    def test_all_products_missing_marks_failed(self, test_db, monkeypatch):
+        job = SyncJob(
+            job_type="price_incremental_sync",
+            status="pending",
+            triggered_by="manual",
+            params={
+                "job_type": "price_incremental_sync",
+                "scope": "by_product",
+                "products": [["999999.SH", "CN_EXCHANGE"]],
+            },
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+        patch_non_closing_session_local(monkeypatch, test_db)
+
+        with patch("app.services.market_data_service.sync_product_prices") as mock_sync:
+            _run_price_sync_job_impl(job.id)
+            assert mock_sync.call_count == 0, "全部未命中时不得执行任何同步"
+
+        test_db.refresh(job)
+        assert job.total == 0
+        assert job.status == "failed", "0 产品任务不得记为 success（#821 验收 2）"
+        assert "未命中" in (job.error_message or "")
+        assert job.finished_at is not None
