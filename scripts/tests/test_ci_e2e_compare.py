@@ -21,6 +21,8 @@
 # import 期读，job 改名会塌成一条 collection error（一个红格子、丢掉逐用例粒度）。
 # ============================================================================
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -46,6 +48,10 @@ SIDES = ("baseline", "candidate")
 MATRIX_SIDE = "${{ matrix.side }}"
 INPUTS_SIDE = "${{ inputs.side }}"
 BASE_SHA = "${{ github.event.pull_request.base.sha }}"
+HEAD_SHA = "${{ github.event.pull_request.head.sha }}"
+#: #827：对照基线取分叉点而不是 base.sha；两行都是引号承重位。
+FORK_ASSIGN = 'FORK_SHA="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"'
+FORK_CHECKOUT = 'git checkout "$FORK_SHA" -- frontend/e2e'
 
 COMPARE_JOB = "e2e-compare"
 CAPTURE_JOB = "e2e-compare-capture"
@@ -222,9 +228,19 @@ def capture_problems(stack_text: str, stack_lines: list[str], source: str) -> li
         )
     if "rm -rf frontend/e2e" not in swap:
         problems.append("swap 步丢了 `rm -rf frontend/e2e`——head 独有 spec 残留成并集")
-    if f'git checkout "{BASE_SHA}" -- frontend/e2e' not in swap:
+    body = code_lines(step_body(stack_text, step=SWAP_STEP, source=source))
+    if not _lines_with(body, f"PR_BASE_SHA: {BASE_SHA}"):
+        problems.append("swap 步丢了 `PR_BASE_SHA` env——分叉点必须由 base.sha 参与计算（#827）")
+    if not _lines_with(body, f"PR_HEAD_SHA: {HEAD_SHA}"):
+        problems.append("swap 步丢了 `PR_HEAD_SHA` env——少一半输入，merge-base 会退化成 base.sha")
+    if FORK_ASSIGN not in swap:
         problems.append(
-            f"swap 步的 base.sha 不再是**带引号**的 `{BASE_SHA}`——"
+            "swap 步不再用分叉点：须为 `" + FORK_ASSIGN + "`——"
+            "直接取 base.sha 会把 head 缺实现的用例误报成形态回归（#827）"
+        )
+    if FORK_CHECKOUT not in swap:
+        problems.append(
+            "swap 步的检出基准不再是分叉点（**带引号的** `$FORK_SHA`）——"
             "空值展开会让 baseline 静默等同 candidate，恒空 diff 且全绿（#490）"
         )
     raw = code_lines(step_body(stack_text, step=RAW_UPLOAD_STEP, source=source))
@@ -352,9 +368,16 @@ def compliant_capture_stack() -> str:
         [
             f"      - name: {SWAP_STEP}",
             f"        if: inputs.mode == 'capture' && inputs.side == '{SIDES[0]}'",
+            "        env:",
+            f"          PR_BASE_SHA: {BASE_SHA}",
+            f"          PR_HEAD_SHA: {HEAD_SHA}",
             "        run: |",
             "          rm -rf frontend/e2e",
-            f'          git checkout "{BASE_SHA}" -- frontend/e2e',
+            f"          {FORK_ASSIGN}",
+            '          if [ "$FORK_SHA" != "$PR_BASE_SHA" ]; then',
+            '            echo "::notice::PR 分支落后 base，baseline e2e 按分叉点检出（#827）"',
+            "          fi",
+            f"          {FORK_CHECKOUT}",
             f"      - name: {CAPTURE_RUN_STEP}",
             "        run: |",
             "          rc=0",
@@ -588,10 +611,39 @@ class TestGuardIsDiscriminating:
         mutated = compliant_capture_stack().replace(" --workers=2", "")
         assert capture_problems(mutated, code_lines(mutated), "合成 capture")
 
-    def test_unquoted_base_sha_is_caught(self):
-        mutated = compliant_capture_stack().replace(f'"{BASE_SHA}"', BASE_SHA)
+    def test_baseline_sha_regression_is_caught(self):
+        """#827：对照基线改回 base.sha 必须被点名，否则落后分支的假回归会复活。"""
+        mutated = compliant_capture_stack().replace(
+            FORK_CHECKOUT, 'git checkout "$PR_BASE_SHA" -- frontend/e2e'
+        )
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("分叉点" in p for p in problems), problems
+
+    def test_unquoted_fork_sha_is_caught(self):
+        mutated = compliant_capture_stack().replace(FORK_CHECKOUT, "git checkout $FORK_SHA -- frontend/e2e")
+        assert mutated != compliant_capture_stack()
         problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
         assert any("引号" in p for p in problems), problems
+
+    def test_missing_head_env_is_caught(self):
+        mutated = compliant_capture_stack().replace(f"          PR_HEAD_SHA: {HEAD_SHA}\n", "")
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("PR_HEAD_SHA" in p for p in problems), problems
+
+    def test_fork_assign_reverted_to_base_sha_is_caught(self):
+        """#827：分叉点赋值改回直取 base.sha（checkout 行不动）必须被点名——这是最自然的回退形态。"""
+        mutated = compliant_capture_stack().replace(FORK_ASSIGN, 'FORK_SHA="$PR_BASE_SHA"')
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("分叉点" in p for p in problems), problems
+
+    def test_missing_base_env_is_caught(self):
+        mutated = compliant_capture_stack().replace(f"          PR_BASE_SHA: {BASE_SHA}\n", "")
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("PR_BASE_SHA" in p for p in problems), problems
 
     def test_swap_condition_degraded_to_mode_is_caught(self):
         mutated = compliant_capture_stack().replace(
@@ -686,3 +738,47 @@ class TestGuardIsDiscriminating:
         assert mutated != compliant_flaky_stack()
         problems = flaky_wiring_problems(mutated, source="合成 flaky")
         assert any("$ARGS" in p for p in problems), problems
+
+
+class TestBaselineForkPointReplay:
+    """#827：合成 git 回放——落后分支下 baseline 必须取分叉点，而不是 base.sha。"""
+
+    def test_baseline_follows_fork_point_not_base_sha(self, tmp_path):
+        repo = tmp_path
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+            ).stdout.strip()
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "ci@example.com")
+        git("config", "user.name", "ci")
+        (repo / "frontend" / "e2e").mkdir(parents=True)
+        (repo / "frontend" / "e2e" / "old.spec.ts").write_text("old\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "fork point")
+        fork = git("rev-parse", "HEAD")
+
+        # base 在分叉后新增用例（模拟 main 合入 #765 的新 spec 块）
+        (repo / "frontend" / "e2e" / "new.spec.ts").write_text("new\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "base adds case")
+        base = git("rev-parse", "HEAD")
+
+        # PR 分支自分叉点起，只改 src，不碰 e2e
+        git("checkout", "-q", "-b", "pr", fork)
+        (repo / "src.txt").write_text("src\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "pr src only")
+        head = git("rev-parse", "HEAD")
+
+        def e2e_names(sha: str) -> list[str]:
+            git("reset", "-q", "--hard", head)
+            shutil.rmtree(repo / "frontend" / "e2e")
+            git("checkout", sha, "--", "frontend/e2e")
+            return sorted(x.name for x in (repo / "frontend" / "e2e").iterdir())
+
+        assert git("merge-base", base, head) == fork
+        assert e2e_names(fork) == e2e_names(head)
+        assert e2e_names(base) != e2e_names(head)
