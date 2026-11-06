@@ -632,6 +632,19 @@ class TestGuardIsDiscriminating:
         problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
         assert any("PR_HEAD_SHA" in p for p in problems), problems
 
+    def test_fork_assign_reverted_to_base_sha_is_caught(self):
+        """#827：分叉点赋值改回直取 base.sha（checkout 行不动）必须被点名——这是最自然的回退形态。"""
+        mutated = compliant_capture_stack().replace(FORK_ASSIGN, 'FORK_SHA="$PR_BASE_SHA"')
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("分叉点" in p for p in problems), problems
+
+    def test_missing_base_env_is_caught(self):
+        mutated = compliant_capture_stack().replace(f"          PR_BASE_SHA: {BASE_SHA}\n", "")
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("PR_BASE_SHA" in p for p in problems), problems
+
     def test_swap_condition_degraded_to_mode_is_caught(self):
         mutated = compliant_capture_stack().replace(
             f"        if: inputs.mode == 'capture' && inputs.side == '{SIDES[0]}'",
