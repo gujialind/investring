@@ -2447,9 +2447,17 @@ def _check_share_change_events(
     同口径），pending 不再阻断该区间的快照生成，到到账日仍未确认才阻断。
     不带 `cash_pay_date` 的形态 `cash_effective_date` 回落 `ex_date`，阻断点与
     现状逐字一致。其余类型判键不变。
+
+    #766：同日 `dividend_pending`（`entitlement_date == ex_date`）放行除息日
+    快照——确认需以除息日持仓为基数，若在除息日阻断则死锁；除息日起由派生
+    现金在途对冲净值缺口（见 reinvest_receivable），从 D+1 起仍未确认则阻断。
     """
     # id 定序（#782 复审）：超过 10 笔上限时「前 10」取最早登记者，重复运行提示子集可复现。
     is_cash_dividend = ShareChangeEvent.event_type == "cash_dividend"
+    is_same_day_pending = and_(
+        ShareChangeEvent.event_type == PENDING_DIVIDEND_TYPE,
+        ShareChangeEvent.entitlement_date == ShareChangeEvent.ex_date,
+    )
     pending_events = db.query(ShareChangeEvent.id, ShareChangeEvent.event_type).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         or_(
@@ -2460,6 +2468,12 @@ def _check_share_change_events(
             and_(
                 ~is_cash_dividend,
                 ShareChangeEvent.share_effective_date <= target_date,
+                # 同日 dividend_pending：share_effective_date == ex_date，放行除息日
+                # （share_effective_date == target_date），从下一日起阻断
+                ~and_(
+                    is_same_day_pending,
+                    ShareChangeEvent.share_effective_date == target_date,
+                ),
             ),
         ),
         ShareChangeEvent.status == "pending"
