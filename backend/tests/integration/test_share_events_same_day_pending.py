@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.share_change_event import ShareChangeEvent
 from app.services.reinvest_receivable import list_cash_dividend_in_transit
 from app.services.share_change_event_service import (
@@ -47,7 +48,8 @@ DIV_CASH = Decimal("0.05")
 CASH_AMOUNT = quantize_amount(SHARES * DIV_CASH)  # 50.00
 
 
-def _env(db, suffix):
+def _env(db, suffix, ex_nav=None):
+    """基线环境；`ex_nav` 用于模拟除息日除权下跌（默认与基线同价）。"""
     port, plat, fund = f"S766_{suffix}", f"SP_{suffix}", f"SF_{suffix}"
     capital = quantize_amount(SHARES * NAV)
 
@@ -73,7 +75,8 @@ def _env(db, suffix):
         platform_code=plat, apply_date=date(2026, 10, 15), confirm_date=BASE, status="confirmed",
     )
     for day in (BASE, EX, MID, PAY):
-        create_price_record(db, fund, MARKET, day, float(NAV))
+        day_nav = ex_nav if day == EX and ex_nav is not None else NAV
+        create_price_record(db, fund, MARKET, day, float(day_nav))
     create_trade(
         db, port, "CASH", "", trade_type="buy", platform_code=plat,
         trade_date=date(2026, 10, 15), confirm_date=BASE, status="confirmed",
@@ -249,3 +252,89 @@ class TestSameDayPendingFreeze:
 
         update_share_change_event(test_db, event, {"div_cash": Decimal("0.08")})
         assert test_db.get(ShareChangeEvent, event.id).div_cash == Decimal("0.08")
+
+
+class TestSameDayPendingSnapshotE2E:
+    """真实快照生成端到端：#766 复审 Suggestion 1 的反例。
+
+    原有用例都在助手函数层、净值全程 1.5，无法验证「派生在途恰好补齐除息日
+    除权缺口、确认切换类型后 total_value 不跳变」。本类走真实
+    `generate_daily_snapshots`：EX 日净值跌到 1.45，持仓市值 1450，派生在途
+    50.00 补回 1500；确认现金/再投后重建 EX，total_value 仍为 1500。
+    派生金额与确认写库金额同源（`quantize_amount(基数 × div_cash)`）由此获得
+    可复核的运行证据，而非仅靠代码分析。
+    """
+
+    EX_NAV = Decimal("1.45")
+    EX_MARKET_VALUE = quantize_amount(SHARES * EX_NAV)      # 1450.00（除权缺口 50.00）
+    EXPECTED_TOTAL = EX_MARKET_VALUE + CASH_AMOUNT          # 1500.00
+
+    def _generate_ex(self, db, port):
+        from app.services.snapshot_service import generate_daily_snapshots
+        result = generate_daily_snapshots(db, port, EX)
+        assert result["success"], result
+        db.commit()
+        return (
+            db.query(PortfolioValueSnapshot)
+            .filter(
+                PortfolioValueSnapshot.portfolio_code == port,
+                PortfolioValueSnapshot.snapshot_date == EX,
+            )
+            .one()
+        )
+
+    def _recalc_ex(self, db, port):
+        from app.services.snapshot_service import recalculate_snapshots
+        result = recalculate_snapshots(db, port, EX, EX)
+        assert not result.get("errors"), result
+        db.commit()
+
+    def _assert_no_gap(self, db, port):
+        snap = (
+            db.query(PortfolioValueSnapshot)
+            .filter(
+                PortfolioValueSnapshot.portfolio_code == port,
+                PortfolioValueSnapshot.snapshot_date == EX,
+            )
+            .one()
+        )
+        assert quantize_amount(snap.total_value) == self.EXPECTED_TOTAL
+        assert quantize_amount(snap.in_transit_total) == CASH_AMOUNT
+
+    def test_ex_dividend_gap_offset_and_cash_confirm_keeps_total(self, test_db):
+        port, plat, fund = _env(test_db, "E2ECASH", ex_nav=self.EX_NAV)
+        event = _pending_event(test_db, port, fund, plat)
+
+        snap = self._generate_ex(test_db, port)
+        # 除权后持仓市值 1450 + 派生在途 50 = 1500，与除息前净值持平
+        assert quantize_amount(snap.total_value) == self.EXPECTED_TOTAL
+        assert quantize_amount(snap.in_transit_total) == CASH_AMOUNT
+
+        confirm_share_change_event(
+            test_db, event,
+            selection=DividendSelection(event_type="cash_dividend", cash_pay_date=PAY),
+        )
+        test_db.commit()
+        refreshed = test_db.get(ShareChangeEvent, event.id)
+        # 派生金额 == 确认写库金额（同源的单点证据）
+        assert refreshed.cash_change == CASH_AMOUNT
+
+        self._recalc_ex(test_db, port)
+        self._assert_no_gap(test_db, port)
+
+    def test_ex_dividend_gap_offset_and_reinvest_confirm_keeps_total(self, test_db):
+        port, plat, fund = _env(test_db, "E2EREINV", ex_nav=self.EX_NAV)
+        event = _pending_event(test_db, port, fund, plat)
+
+        snap = self._generate_ex(test_db, port)
+        assert quantize_amount(snap.total_value) == self.EXPECTED_TOTAL
+
+        confirm_share_change_event(
+            test_db, event,
+            selection=DividendSelection(event_type="reinvest_dividend", share_confirm_date=PAY),
+        )
+        test_db.commit()
+
+        self._recalc_ex(test_db, port)
+        self._assert_no_gap(test_db, port)
+
