@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.share_change_event import ShareChangeEvent
 from app.services.reinvest_receivable import list_cash_dividend_in_transit
@@ -49,7 +50,11 @@ CASH_AMOUNT = quantize_amount(SHARES * DIV_CASH)  # 50.00
 
 
 def _env(db, suffix, ex_nav=None):
-    """基线环境；`ex_nav` 用于模拟除息日除权下跌（默认与基线同价）。"""
+    """基线环境；`ex_nav` 用于模拟除息日起净值维持的除权后水平（默认与基线同价）。
+
+    `ex_nav` 同时应用于 EX/MID/PAY：除息后净值不回升，MID/PAY 的市值缺口才是
+    分红本身造成的，才能验证在途/应收的对冲连续性（#836 回归）。
+    """
     port, plat, fund = f"S766_{suffix}", f"SP_{suffix}", f"SF_{suffix}"
     capital = quantize_amount(SHARES * NAV)
 
@@ -75,7 +80,7 @@ def _env(db, suffix, ex_nav=None):
         platform_code=plat, apply_date=date(2026, 10, 15), confirm_date=BASE, status="confirmed",
     )
     for day in (BASE, EX, MID, PAY):
-        day_nav = ex_nav if day == EX and ex_nav is not None else NAV
+        day_nav = ex_nav if day != BASE and ex_nav is not None else NAV
         create_price_record(db, fund, MARKET, day, float(day_nav))
     create_trade(
         db, port, "CASH", "", trade_type="buy", platform_code=plat,
@@ -337,4 +342,99 @@ class TestSameDayPendingSnapshotE2E:
 
         self._recalc_ex(test_db, port)
         self._assert_no_gap(test_db, port)
+
+
+class TestSameDayPendingConfirmThenGenerateMidPay:
+    """#836：确认后按 MID/PAY 逐日走真实生成入口（原缺陷：MID/PAY 只做常量/单元式调用）。
+
+    判别力：若移除确认路径的 `allow_snapshot_overlap`（除息日快照已存在时
+    `DATE_BEFORE_SNAPSHOT`），`confirm_share_change_event` 直接失败；若移除
+    snapshot_service 的在途派生，MID 的 `in_transit_total` 为 0。两者都会让本类
+    断言失败。覆盖现金与再投资两条路径：分红应收在 MID 的净值行可见、份额未提前
+    入账；PAY 现金到账/份额入账后在途退出。
+    """
+
+    EX_NAV = TestSameDayPendingSnapshotE2E.EX_NAV
+    EX_MARKET_VALUE = TestSameDayPendingSnapshotE2E.EX_MARKET_VALUE
+    EXPECTED_TOTAL = TestSameDayPendingSnapshotE2E.EXPECTED_TOTAL
+
+    def _generate(self, db, port, day):
+        from app.services.snapshot_service import generate_daily_snapshots
+        result = generate_daily_snapshots(db, port, day)
+        assert result["success"], result
+        db.commit()
+        return (
+            db.query(PortfolioValueSnapshot)
+            .filter(
+                PortfolioValueSnapshot.portfolio_code == port,
+                PortfolioValueSnapshot.snapshot_date == day,
+            )
+            .one()
+        )
+
+    def _rows(self, db, port, day):
+        return {
+            (p.product_code, p.platform_code): p
+            for p in db.query(PortfolioPosition).filter(
+                PortfolioPosition.portfolio_code == port,
+                PortfolioPosition.snapshot_date == day,
+            )
+        }
+
+    def test_cash_confirm_mid_in_transit_then_pay_cash_arrival(self, test_db):
+        port, plat, fund = _env(test_db, "E2EMIDC", ex_nav=self.EX_NAV)
+        event = _pending_event(test_db, port, fund, plat)
+        self._generate(test_db, port, EX)
+
+        confirm_share_change_event(
+            test_db, event,
+            selection=DividendSelection(event_type="cash_dividend", cash_pay_date=PAY),
+        )
+        test_db.commit()
+
+        mid = self._generate(test_db, port, MID)
+        rows = self._rows(test_db, port, MID)
+        # 份额未提前入账，除权后市值仍未恢复，缺口由派生在途补齐
+        assert quantize_amount(rows[(fund, plat)].shares) == SHARES
+        assert quantize_amount(rows[(fund, plat)].market_value) == self.EX_MARKET_VALUE
+        assert quantize_amount(rows[("IN_TRANSIT_DIVIDEND", plat)].cash_amount) == CASH_AMOUNT
+        assert quantize_amount(mid.total_value) == self.EXPECTED_TOTAL
+        assert quantize_amount(mid.in_transit_total) == CASH_AMOUNT
+
+        pay = self._generate(test_db, port, PAY)
+        rows = self._rows(test_db, port, PAY)
+        # 到账日在途退出，现金入账，份额不变
+        assert ("IN_TRANSIT_DIVIDEND", plat) not in rows
+        assert quantize_amount(rows[(fund, plat)].shares) == SHARES
+        assert quantize_amount(rows[("CASH", plat)].cash_amount) == CASH_AMOUNT
+        assert quantize_amount(pay.total_value) == self.EXPECTED_TOTAL
+        assert quantize_amount(pay.in_transit_total) == Decimal("0")
+
+    def test_reinvest_confirm_mid_receivable_then_pay_shares(self, test_db):
+        port, plat, fund = _env(test_db, "E2EMIDR", ex_nav=self.EX_NAV)
+        event = _pending_event(test_db, port, fund, plat)
+        self._generate(test_db, port, EX)
+
+        confirm_share_change_event(
+            test_db, event,
+            selection=DividendSelection(event_type="reinvest_dividend", share_confirm_date=PAY),
+        )
+        test_db.commit()
+        expected_shares = quantize_amount(test_db.get(ShareChangeEvent, event.id).shares_after)
+
+        mid = self._generate(test_db, port, MID)
+        rows = self._rows(test_db, port, MID)
+        # 确认日未到，份额未提前入账，应收在途仍挂在净值行
+        assert quantize_amount(rows[(fund, plat)].shares) == SHARES
+        assert quantize_amount(rows[("IN_TRANSIT_DIVIDEND", plat)].cash_amount) == CASH_AMOUNT
+        assert quantize_amount(mid.total_value) == self.EXPECTED_TOTAL
+        assert quantize_amount(mid.in_transit_total) == CASH_AMOUNT
+
+        pay = self._generate(test_db, port, PAY)
+        rows = self._rows(test_db, port, PAY)
+        # 确认日份额入账，应收退出，总额保持
+        assert ("IN_TRANSIT_DIVIDEND", plat) not in rows
+        assert quantize_amount(rows[(fund, plat)].shares) == expected_shares
+        assert quantize_amount(pay.total_value) == self.EXPECTED_TOTAL
+        assert quantize_amount(pay.in_transit_total) == Decimal("0")
 
