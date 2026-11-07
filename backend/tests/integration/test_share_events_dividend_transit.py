@@ -109,6 +109,65 @@ def _derived(client, headers, day):
     return {p["product_code"]: p for p in response.json()["items"]}
 
 
+def _holdings(client, headers, day):
+    response = client.get(
+        f"/api/positions/portfolio/{PORTFOLIO}/holdings/by-product", headers=headers,
+        params={"snapshot_date": day.isoformat()},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_pending_cash_dividend_profits_continuous_until_pay(
+    client, admin_headers, test_db, dividend_portfolio,
+):
+    """#837（D4 扩围）：非同日 pending 现金分红窗口内三字段连续，确认后到账口径不变。
+
+    EX/MONDAY 的累计收益只加 +R@EX——未来的 −R@TUESDAY 不得提前抵消
+    （cumulative 的 profit_flows 无日期维度，leg 日期过滤是本用例的判别点）。
+    """
+    event = create_share_change_event(
+        test_db, portfolio_code=PORTFOLIO, product_code=FUND, market=MARKET,
+        platform_code=PLATFORM, event_type="cash_dividend", ex_date=EX,
+        entitlement_date=BASE, cash_pay_date=TUESDAY, div_cash=Decimal("0.1"),
+        force_cover=True,
+    )
+    test_db.commit()
+    assert event.status == "pending"
+    for day in (EX, MONDAY):
+        _generate(client, admin_headers, day)
+        derived = _derived(client, admin_headers, day)
+        assert derived[FUND]["daily_profit"] == 0
+        assert derived[FUND]["profit_loss"] == 0
+        assert derived["CASH"]["daily_profit"] == 0
+        rows = _positions(test_db, day)
+        assert rows[("CASH", PLATFORM)].cash_amount == 0
+        assert rows[("IN_TRANSIT_DIVIDEND", PLATFORM)].cash_amount == Decimal("10")
+        body = _holdings(client, admin_headers, day)
+        fund_row = {p["product_code"]: p for p in body["products"]}[FUND]
+        assert fund_row["daily_profit"] == 0
+        assert fund_row["holding_profit"] == 0
+        assert fund_row["cumulative_profit"] == 0
+        assert Decimal(str(body["total_market_value"])) == Decimal("1000")
+        assert Decimal(str(body["in_transit_market_value"])) == Decimal("10")
+
+    confirm_share_change_event(test_db, event)
+    test_db.commit()
+    _generate(client, admin_headers, TUESDAY)
+    rows = _positions(test_db, TUESDAY)
+    assert ("IN_TRANSIT_DIVIDEND", PLATFORM) not in rows
+    assert rows[("CASH", PLATFORM)].cash_amount == Decimal("10")
+    derived = _derived(client, admin_headers, TUESDAY)
+    assert derived["CASH"]["daily_profit"] == 0
+    assert derived["CASH"]["profit_loss"] == 0
+    assert derived[FUND]["daily_profit"] == 0
+    assert derived[FUND]["profit_loss"] == 0
+    body = _holdings(client, admin_headers, TUESDAY)
+    fund_row = {p["product_code"]: p for p in body["products"]}[FUND]
+    assert fund_row["cumulative_profit"] == 0
+    assert Decimal(str(body["total_market_value"])) == Decimal("1000")
+
+
 @pytest.mark.parametrize("pay_date", [None, EX, WEEKEND, MONDAY, TUESDAY])
 def test_share_event_cash_dates_preserve_value_and_cash_profits(
     client, admin_headers, test_db, dividend_portfolio, pay_date,
