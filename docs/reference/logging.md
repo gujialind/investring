@@ -172,7 +172,8 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 **nav_sync 的闸门锚定业务昨天（#747）**：首跑与重试都以 `business_today() - 1` 判交易日
 （`_should_run_today(..., gate_date=...)`），语义是「昨天收盘后是否有待同步的新净值」——
 周六放行（昨天周五）、周日/周一拦截（昨天非交易日）且不建记录；快照与 cascade 复查
-仍按业务今天判定（快照日序列严格交易日连续）。
+仍按业务今天判定（快照日序列严格交易日连续）。分红检测在 nav_sync 末尾执行，其「必须
+早于除息日快照」的时序前提、错过窗口的后果与人工补救见[分红检测时序 runbook](../runbooks/dividend-detection.md)（#838）。
 
 **有新净值时的快照联动补跑（#715/#747）**：nav 终态为 `success` / `partial_success`
 **且** `new_nav_count > 0` 时，查当日 `snapshot_generate` 是否已有任一触发来源的
