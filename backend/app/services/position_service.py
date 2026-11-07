@@ -24,7 +24,10 @@ from app.services.trading_utils import (
 )
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.audit_service import record_audit
-from app.services.reinvest_receivable import aggregate_receivable_flows
+from app.services.reinvest_receivable import (
+    aggregate_cash_dividend_flows,
+    aggregate_receivable_flows,
+)
 from app.constants.audit_actions import (
     ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
     RESOURCE_MANUAL_MARKET_VALUE,
@@ -95,10 +98,11 @@ def compute_cash_balance(
 # 持仓读侧派生（issue #99）：daily_profit / 现金累计收益 / 分红加回
 #
 # 口径（路线 C：分红加回基金 + 事件计入现金基数，与评审推演一致）：
-# - 非现金行 profit_loss = 市值 − 份额×成本 + Σ 该产品/market/平台 confirmed 事件 cash_change
-#   （现金分红加回 = 复权口径；拆分/合并事件 cash_change=0 天然无影响）
+# - 非现金行 profit_loss = 市值 − 份额×成本 + Σ 该产品/market/平台事件分红加回
+#   （confirmed cash_change + 再投资应收 #743 + pending 现金分红流水 #837；复权口径；
+#   拆分/合并事件 cash_change=0 天然无影响）
 # - 非现金行 daily_profit = 当日市值 − 前一快照日市值 − 当日确认净买入额
-#   + 当日事件 cash_change（分红日加回对冲除权，daily=0）
+#   + 当日事件分红加回（分红日加回对冲除权，daily=0）
 # - 现金行 profit_loss = 当前现金 − 现金基数（累计净存入 − 累计买入 + 累计卖出
 #   + 转移净额 + 事件净额），≈ 0，仅吸收手动调平/利息等未记账差额
 # - 现金行 daily_profit = 当日现金 − 前日现金 − 当日净流入（同基数五类流水按日过滤）
@@ -213,6 +217,12 @@ def _aggregate_position_flows(db: Session, items: Sequence[PortfolioPosition]) -
     # 在 [ex_date, share_confirm_date) 区间连续。刻意不进 event_cash_flows——
     # 再投资不产生现金，计入现金腿会凭空抬高 CASH 累计收益。
     for key, entries in aggregate_receivable_flows(db, portfolio_codes, max_date).items():
+        event_rows.setdefault(key, []).extend(entries)
+
+    # #837：pending 现金分红成对进 event_rows（+R@除息日、带 pay 日再 −R@到账日），
+    # 补齐 pending 窗口的产品维度加回；确认后由上方 confirmed 事件腿同额接管。
+    # 刻意不进 event_cash_flows——pending 期现金未到账，与再投资同一理由。
+    for key, entries in aggregate_cash_dividend_flows(db, portfolio_codes, max_date).items():
         event_rows.setdefault(key, []).extend(entries)
 
     return {
@@ -398,8 +408,10 @@ def compute_event_cash_addbacks(
     ``flows`` 由调用方经 ``compute_derived_fields`` 统一聚合后注入（issue #103）。
 
     返回 {(portfolio_code, product_code, market, platform_code): float}，
-    值为 confirmed 事件 cash_change 按 (产品, market, 平台) 聚合（ex_date <= 行快照日）。
-    拆分/合并事件 cash_change=0 天然无影响；无事件行不在返回中（调用方按 0 处理）。
+    值为事件分红加回按 (产品, market, 平台) 聚合（leg 日期 <= 行快照日）：
+    confirmed 事件 cash_change + 再投资应收成对流水（#743）+ pending 现金分红
+    成对流水（#837）。拆分/合并事件 cash_change=0 天然无影响；无事件行不在
+    返回中（调用方按 0 处理）。
     """
     result = {}
     fund_items = [p for p in items if p.shares is not None]
@@ -429,7 +441,8 @@ def compute_derived_fields(
 ) -> dict:
     """一次聚合，批量产出持仓读侧派生字段（issue #103：消除三函数重复聚合）。
 
-    聚合 ``_aggregate_position_flows`` 仅执行 1 次（trade + event 共 2 条查询），
+    聚合 ``_aggregate_position_flows`` 仅执行 1 次（trade、event、再投资应收、
+    pending 现金分红共 4 条查询），
     结果注入 ``compute_daily_profits`` / ``compute_cash_cumulative_profits`` /
     ``compute_event_cash_addbacks`` 三个 helper，避免各自独立聚合导致的冗余查询。
 

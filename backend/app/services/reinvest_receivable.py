@@ -1,4 +1,5 @@
-"""分红在途/应收的派生口径单点（#743 再投资应收；#765 扩展到现金分红在途）。
+"""分红在途/应收的派生口径单点（#743 再投资应收；#765 扩展到现金分红在途；
+#837 扩展到 pending 现金分红的读侧收益流水）。
 
 场外分红普遍「权益登记日 = 除息日」：红利按除息日净值折算份额，到红利发放日
 （`share_confirm_date`）才到账。除息日到到账日之间这笔红利既不是现金也不是份额，
@@ -25,6 +26,12 @@ ex_date 阻断、先确认后生成。
 对冲市值缺口。金额与现金/再投同源（基数 × div_cash），确认切换事件类型后
 即退出本查询、由对应类型的在途/应收接管，无市值跳变。窗口无上界
 （`cash_pay_date` 为 None），实际由闸门在 D+1 阻断未确认快照。
+
+**#837 pending 期读侧收益加回**：在途只补市值，产品维度损益的除权缺口由
+`aggregate_cash_dividend_flows` 成对加回（`+R@ex_date`，带 pay 日再
+`−R@cash_pay_date`）；只取 pending——confirmed 由既有事件现金腿同额接管，
+同日 pending 确认再投后由 `aggregate_receivable_flows` 接管，确认前后同一
+快照日读数不跳变。
 
 独立模块的理由：快照生成与读侧收益连续要同一口径，而 `snapshot_service` 与
 `position_service` 互不依赖——放任一侧都会造成反向 import。本模块只依赖 models
@@ -235,13 +242,56 @@ def aggregate_receivable_flows(
     return flows
 
 
+def aggregate_cash_dividend_flows(
+    db: Session, portfolio_codes: Sequence[str], max_date: date
+) -> Dict[Tuple[str, str, str, str], List[Tuple[date, float]]]:
+    """读侧收益连续用的 pending 现金分红流水（#837，批量，复用下方现金在途查询）。
+
+    pending 期（同日 `dividend_pending` 与带 `cash_pay_date` 的 pending
+    `cash_dividend`）基金市值已因除权下跌 R，但 confirmed 事件现金腿要到确认后
+    才接管——窗口内没有加回会把除权下跌单独记进产品损益。本函数把同一金额
+    （`_cash_row_amount` 现算，与确认写库 `cash_change` 同源、按分量化）成对
+    加回：`+R@ex_date` 恒产出；带 `cash_pay_date` 再产出 `−R@cash_pay_date`，
+    镜像在途窗口 `ex_date <= D < cash_pay_date` 的退出；同日 pending 无 pay 日，
+    只产出 `+R`。
+
+    **只取 pending**：confirmed 由既有事件现金腿在同一 `ex_date` 接管同一金额，
+    同日 pending 确认再投后由 `aggregate_receivable_flows` 接管，双计会虚增收益。
+    金额 <= 0 跳过（#771 同判据，与在途侧两端同消失，不造收益）。
+
+    刻意**只进 `event_rows` / `profit_flows`（产品维度），不进 `event_cash_flows`
+    （现金维度）**：pending 期现金未到账，计入现金腿会凭空抬高现金累计收益，
+    与 `aggregate_receivable_flows` 同一理由。
+
+    消费方注意：`cumulative_profit_service` 的 `profit_flows` 是无日期维度的
+    累计求和，必须按 leg 日期 `<= snapshot_date` 逐条过滤后再累加，否则未来的
+    `−R@pay` 会提前抵消 `+R`；`event_rows` 的两个消费方自带日期过滤
+    （`compute_daily_profits` 取 `==`、`compute_event_cash_addbacks` 取 `<=`）。
+    """
+    flows: Dict[Tuple[str, str, str, str], List[Tuple[date, float]]] = {}
+    if not portfolio_codes:
+        return flows
+    for row in _query_cash_rows(db, portfolio_codes, max_date):
+        if row.status != "pending":
+            continue
+        amount = _cash_row_amount(row, row.ex_date, None)
+        if amount <= 0:
+            continue
+        key = (row.portfolio_code, row.product_code, row.market, row.platform_code)
+        value = float(amount)
+        flows.setdefault(key, []).append((row.ex_date, value))
+        if row.cash_pay_date is not None:
+            flows.setdefault(key, []).append((row.cash_pay_date, -value))
+    return flows
+
+
 # ==================== 现金分红在途（#765） ====================
 #
 # 与再投资应收同一派生机制、独立入口：现金分红的金额在 confirmed 后以落库
 # `cash_change` 为准（用户可见的记账事实），pending 期按「基数 × div_cash」现算。
-# 刻意不做进 `aggregate_receivable_flows`：现金分红的读侧收益加回走
-# `cumulative_profit_service` 的既有事件现金腿（confirmed + cash_change），
-# 在途只影响快照市值行，不需要产品维度成对流水。
+# 刻意不做进 `aggregate_receivable_flows`：confirmed 的读侧收益加回走既有事件
+# 现金腿（confirmed + cash_change）；pending 窗口的收益加回由
+# `aggregate_cash_dividend_flows`（#837）承担，在途本身只影响快照市值行。
 
 
 class CashDividendInTransit(NamedTuple):

@@ -15,7 +15,10 @@ from app.models.subscription import Subscription
 from app.models.trade import Trade
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import IN_TRANSIT_PRODUCT_CODES
-from app.services.reinvest_receivable import list_reinvest_receivables
+from app.services.reinvest_receivable import (
+    aggregate_cash_dividend_flows,
+    list_reinvest_receivables,
+)
 from app.utils.quantize import quantize_nav
 
 
@@ -36,7 +39,8 @@ def compute_cumulative_profits(
 
     基金 = D 日市值 + confirmed 卖出实际净额 - confirmed 买入含费支出
            + confirmed 平台/子事件现金腿（仅现金分红/强制调整，ex_date <= D）
-           + 再投资应收（#743，ex_date <= D < share_confirm_date）。
+           + 再投资应收（#743，ex_date <= D < share_confirm_date）
+           + pending 现金分红流水（#837，leg 日期 <= D）。
     CASH = D 日现金 - confirmed CASH 腿净流入 - 基金事件已到账现金。
     CASH 自身调整、手动重估留在现金损益；在途不产生独立收益。
 
@@ -47,7 +51,7 @@ def compute_cumulative_profits(
     列），手动重估差额留在现金损益；故 Σinvestors 与 Σproducts 一般不闭合，
     差额显式命名为「未归属到投资人的产品级收益」，属口径设计而非缺陷。
 
-    固定七次批量 SELECT，不依赖列表分页，不写 ORM 或提交事务。历史流水键
+    固定八次批量 SELECT，不依赖列表分页，不写 ORM 或提交事务。历史流水键
     与当日持仓键取并集，清仓缺行市值为零，绝不回查旧快照复活持仓。
     逐行取 Decimal 后在内存累加（避免 SQLite SUM 的浮点累计误差），仅在
     基础键返回时用 quantize_nav 量化，汇总粒度直接加总这些四位数值。
@@ -126,6 +130,12 @@ def compute_cumulative_profits(
         # 因净值除权下跌 R、在份额确认日因份额到账回升 R，故窗口内把 R 加回基金侧，
         # 让单产品累计收益连续、总市值只随净值波动。不动 CASH 侧——再投资无现金腿。
         receivables = list_reinvest_receivables(db, portfolio_code, snapshot_date)
+        # #837：pending 现金分红成对流水（+R@ex_date / −R@cash_pay_date），补齐
+        # pending 窗口的基金侧加回；确认后由上方 confirmed 事件现金腿同额接管。
+        # 不动 CASH 侧——pending 期现金未到账。
+        cash_dividend_flows = aggregate_cash_dividend_flows(
+            db, [portfolio_code], snapshot_date
+        )
 
     market_values = defaultdict(lambda: _ZERO)
     profit_flows = defaultdict(lambda: _ZERO)
@@ -153,6 +163,13 @@ def compute_cumulative_profits(
         profit_flows[
             (receivable.product_code, receivable.market, receivable.platform_code)
         ] += receivable.amount
+
+    for key, legs in cash_dividend_flows.items():
+        # profit_flows 无日期维度：逐腿按 <= snapshot_date 过滤，否则未来的
+        # −R@pay 会提前抵消 +R，累计收益仍留除权缺口（#837）。
+        for leg_date, amount in legs:
+            if leg_date <= snapshot_date:
+                profit_flows[key[1:]] += Decimal(str(amount))
 
     for investor_code, market_value in investor_holdings:
         investor_values[investor_code] += market_value or _ZERO

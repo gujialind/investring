@@ -5,7 +5,10 @@
 - 闸门对同日 `dividend_pending` 放行除息日快照，从 D+1 起阻断；
 - 除息日起派生现金在途对冲净值缺口（金额与现金/再投同源），确认切换类型后退出。
 
-本文件钉住这三处行为，不重复覆盖非同日 pending（见 test_share_events_cash_same_day.py
+#837 追加读侧覆盖：pending 窗口产品维度日/持有/累计收益经
+`aggregate_cash_dividend_flows` 加回，确认前后同一快照日读数不跳变。
+
+本文件钉住这些行为，不重复覆盖非同日 pending（见 test_share_events_cash_same_day.py
 与 test_share_events_reinvest_receivable.py）。
 """
 from datetime import date
@@ -13,9 +16,13 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.portfolio_position import PortfolioPosition
 from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.share_change_event import ShareChangeEvent
-from app.services.reinvest_receivable import list_cash_dividend_in_transit
+from app.services.reinvest_receivable import (
+    aggregate_cash_dividend_flows,
+    list_cash_dividend_in_transit,
+)
 from app.services.share_change_event_service import (
     DividendSelection,
     confirm_share_change_event,
@@ -30,6 +37,7 @@ from tests.factories import (
     create_position_snapshot,
     create_price_record,
     create_product,
+    create_share_change_event as create_raw_event,
     create_subscription,
     create_trade,
     create_value_snapshot,
@@ -49,7 +57,7 @@ CASH_AMOUNT = quantize_amount(SHARES * DIV_CASH)  # 50.00
 
 
 def _env(db, suffix, ex_nav=None):
-    """基线环境；`ex_nav` 用于模拟除息日除权下跌（默认与基线同价）。"""
+    """基线环境；`ex_nav` 模拟除息日起（含之后交易日）的除权价（默认全程与基线同价）。"""
     port, plat, fund = f"S766_{suffix}", f"SP_{suffix}", f"SF_{suffix}"
     capital = quantize_amount(SHARES * NAV)
 
@@ -75,7 +83,7 @@ def _env(db, suffix, ex_nav=None):
         platform_code=plat, apply_date=date(2026, 10, 15), confirm_date=BASE, status="confirmed",
     )
     for day in (BASE, EX, MID, PAY):
-        day_nav = ex_nav if day == EX and ex_nav is not None else NAV
+        day_nav = ex_nav if day >= EX and ex_nav is not None else NAV
         create_price_record(db, fund, MARKET, day, float(day_nav))
     create_trade(
         db, port, "CASH", "", trade_type="buy", platform_code=plat,
@@ -337,4 +345,260 @@ class TestSameDayPendingSnapshotE2E:
 
         self._recalc_ex(test_db, port)
         self._assert_no_gap(test_db, port)
+
+
+def _generate(client, headers, port, day):
+    response = client.post(
+        "/api/snapshots/generate", headers=headers,
+        json={"portfolio_code": port, "target_date": day.isoformat()},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["success"] is True, response.text
+
+
+def _holdings(client, headers, port, day):
+    response = client.get(
+        f"/api/positions/portfolio/{port}/holdings/by-product", headers=headers,
+        params={"snapshot_date": day.isoformat()},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _positions_api(client, headers, port, day):
+    response = client.get(
+        "/api/positions", headers=headers,
+        params={"portfolio_code": port, "snapshot_date": day.isoformat()},
+    )
+    assert response.status_code == 200, response.text
+    return {p["product_code"]: p for p in response.json()["items"]}
+
+
+class TestSameDayPendingReadSide:
+    """#837：pending 窗口产品维度三字段不留除权缺口，确认前后同日读数不跳变。
+
+    除息日起净值恒 1.45（ex_nav 覆盖 EX 及之后），除权缺口与应收 R=50 精确
+    相等；EX/MID 与现金路径按 0 等值断言，再投到账日按一分容差（份额两步
+    量化的固有残差，参照 #743 TestReadSideContinuity 的 CENT 口径）。
+    """
+
+    EX_NAV = Decimal("1.45")
+    CENT = Decimal("0.01")
+
+    def _fund(self, body, fund):
+        return {p["product_code"]: p for p in body["products"]}[fund]
+
+    def _assert_zero_profits(self, row, *, exact=True):
+        for field in ("daily_profit", "holding_profit", "cumulative_profit"):
+            value = Decimal(str(row[field] or 0))
+            if exact:
+                assert value == 0, (field, row)
+            else:
+                assert abs(value) <= self.CENT, (field, row)
+
+    def test_pending_ex_profits_continuous(self, client, admin_headers, test_db):
+        """A1/A2：pending 除息日三字段为 0，总额=产品市值+在途，CASH 不动。"""
+        port, plat, fund = _env(test_db, "RDA", ex_nav=self.EX_NAV)
+        _pending_event(test_db, port, fund, plat)
+        _generate(client, admin_headers, port, EX)
+
+        body = _holdings(client, admin_headers, port, EX)
+        row = self._fund(body, fund)
+        assert Decimal(str(row["market_value"])) == Decimal("1450")
+        self._assert_zero_profits(row)
+        assert Decimal(str(body["total_market_value"])) == Decimal("1500")
+        assert Decimal(str(body["in_transit_market_value"])) == Decimal("50")
+        assert Decimal(str(body["total_market_value"])) == sum(
+            (Decimal(str(p["market_value"])) for p in body["products"]), Decimal("0")
+        ) + Decimal(str(body["in_transit_market_value"]))
+
+        items = _positions_api(client, admin_headers, port, EX)
+        assert items[fund]["daily_profit"] == 0
+        assert items[fund]["profit_loss"] == 0
+        assert items["IN_TRANSIT_DIVIDEND"]["cash_amount"] == 50
+        assert items["IN_TRANSIT_DIVIDEND"]["daily_profit"] is None
+        assert items["CASH"]["cash_amount"] == 0
+        assert items["CASH"]["daily_profit"] == 0
+
+    def test_confirm_cash_no_jump_and_pay_day(self, client, admin_headers, test_db):
+        """A3/A4：确认现金后同日重查不跳变；到账日在途转 CASH、收益口径不变。"""
+        port, plat, fund = _env(test_db, "RDC", ex_nav=self.EX_NAV)
+        event = _pending_event(test_db, port, fund, plat)
+        _generate(client, admin_headers, port, EX)
+
+        confirm_share_change_event(
+            test_db, event,
+            selection=DividendSelection(event_type="cash_dividend", cash_pay_date=PAY),
+        )
+        test_db.commit()
+
+        body = _holdings(client, admin_headers, port, EX)
+        self._assert_zero_profits(self._fund(body, fund))
+        assert Decimal(str(body["total_market_value"])) == Decimal("1500")
+        assert Decimal(str(body["in_transit_market_value"])) == Decimal("50")
+
+        _generate(client, admin_headers, port, MID)
+        _generate(client, admin_headers, port, PAY)
+        body = _holdings(client, admin_headers, port, PAY)
+        assert Decimal(str(body["in_transit_market_value"])) == Decimal("0")
+        assert Decimal(str(body["total_market_value"])) == Decimal("1500")
+        self._assert_zero_profits(self._fund(body, fund))
+        items = _positions_api(client, admin_headers, port, PAY)
+        assert "IN_TRANSIT_DIVIDEND" not in items
+        assert items["CASH"]["cash_amount"] == 50
+        assert items["CASH"]["daily_profit"] == 0
+        assert items["CASH"]["profit_loss"] == 0
+        assert items[fund]["daily_profit"] == 0
+
+    def test_confirm_reinvest_no_jump_and_share_arrival(self, client, admin_headers, test_db):
+        """A5：同日 pending 确认再投，EX/MID 连续；到账日份额落地、残差 ≤ 一分。"""
+        port, plat, fund = _env(test_db, "RDR", ex_nav=self.EX_NAV)
+        event = _pending_event(test_db, port, fund, plat)
+        _generate(client, admin_headers, port, EX)
+
+        confirm_share_change_event(
+            test_db, event,
+            selection=DividendSelection(event_type="reinvest_dividend", share_confirm_date=PAY),
+        )
+        test_db.commit()
+
+        body = _holdings(client, admin_headers, port, EX)
+        self._assert_zero_profits(self._fund(body, fund))
+        assert Decimal(str(body["total_market_value"])) == Decimal("1500")
+
+        _generate(client, admin_headers, port, MID)
+        body = _holdings(client, admin_headers, port, MID)
+        assert Decimal(str(body["in_transit_market_value"])) == Decimal("50")
+        self._assert_zero_profits(self._fund(body, fund))
+        mid_row = test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port, product_code=fund, snapshot_date=MID,
+        ).one()
+        assert Decimal(str(mid_row.shares)) == Decimal("1000")
+
+        _generate(client, admin_headers, port, PAY)
+        body = _holdings(client, admin_headers, port, PAY)
+        assert Decimal(str(body["in_transit_market_value"])) == Decimal("0")
+        assert abs(Decimal(str(body["total_market_value"])) - Decimal("1500")) <= self.CENT
+        self._assert_zero_profits(self._fund(body, fund), exact=False)
+        pay_row = test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port, product_code=fund, snapshot_date=PAY,
+        ).one()
+        assert Decimal(str(pay_row.shares)) == Decimal("1034.48")
+        assert test_db.query(PortfolioPosition).filter_by(
+            portfolio_code=port, product_code="IN_TRANSIT_DIVIDEND", snapshot_date=PAY,
+        ).first() is None
+
+
+class TestAggregateCashDividendFlows:
+    """#837 派生流水单点：pending-only、成对规则、非正/缺基数跳过、一次批量。"""
+
+    def test_same_day_pending_single_leg(self, test_db):
+        port, plat, fund = _env(test_db, "FLS1")
+        _pending_event(test_db, port, fund, plat)
+        TestSameDayPendingConfirmation()._ex_snapshot(test_db, port, fund, plat)
+        flows = aggregate_cash_dividend_flows(test_db, [port], PAY)
+        assert flows == {(port, fund, MARKET, plat): [(EX, 50.0)]}
+
+    def test_non_same_day_pending_paired(self, test_db):
+        port, plat, fund = _env(test_db, "FLS2")
+        create_raw_event(
+            test_db, portfolio_code=port, product_code=fund, market=MARKET,
+            platform_code=plat, event_type="cash_dividend", status="pending",
+            ex_date=EX, entitlement_date=BASE, cash_pay_date=PAY, div_cash=DIV_CASH,
+        )
+        flows = aggregate_cash_dividend_flows(test_db, [port], PAY)
+        assert flows == {(port, fund, MARKET, plat): [(EX, 50.0), (PAY, -50.0)]}
+
+    @pytest.mark.parametrize("status", ["confirmed", "cancelled"])
+    def test_non_pending_excluded(self, test_db, status):
+        """confirmed 由既有事件现金腿同额接管，cancelled 从未生效——都不得重复产出。"""
+        port, plat, fund = _env(test_db, f"FLS3{status[:4]}")
+        create_raw_event(
+            test_db, portfolio_code=port, product_code=fund, market=MARKET,
+            platform_code=plat, event_type="cash_dividend", status=status,
+            ex_date=EX, entitlement_date=BASE, cash_pay_date=PAY,
+            div_cash=DIV_CASH, cash_change=CASH_AMOUNT,
+        )
+        assert aggregate_cash_dividend_flows(test_db, [port], PAY) == {}
+
+    def test_reinvest_type_not_in_cash_flows(self, test_db):
+        """确认再投后类型切换退出本查询，由 aggregate_receivable_flows 接管。"""
+        port, plat, fund = _env(test_db, "FLS4")
+        create_raw_event(
+            test_db, portfolio_code=port, product_code=fund, market=MARKET,
+            platform_code=plat, event_type="reinvest_dividend", status="pending",
+            ex_date=EX, entitlement_date=EX, share_confirm_date=PAY, div_cash=DIV_CASH,
+        )
+        assert aggregate_cash_dividend_flows(test_db, [port], PAY) == {}
+
+    @pytest.mark.parametrize("div_cash", [Decimal("0"), Decimal("-0.05")])
+    def test_non_positive_div_cash_skipped(self, test_db, div_cash):
+        """#771 同判据：非正金额两端同消失，不造收益。"""
+        port, plat, fund = _env(test_db, f"FLS5{'Z' if div_cash == 0 else 'N'}")
+        create_raw_event(
+            test_db, portfolio_code=port, product_code=fund, market=MARKET,
+            platform_code=plat, event_type="cash_dividend", status="pending",
+            ex_date=EX, entitlement_date=BASE, cash_pay_date=PAY, div_cash=div_cash,
+        )
+        assert aggregate_cash_dividend_flows(test_db, [port], PAY) == {}
+
+    def test_missing_entitlement_base_skipped(self, test_db):
+        """权益登记日无持仓快照（基数 0）→ 金额 0 → 跳过，不抛错。"""
+        port, plat, fund = _env(test_db, "FLS6")
+        create_raw_event(
+            test_db, portfolio_code=port, product_code=fund, market=MARKET,
+            platform_code=plat, event_type="cash_dividend", status="pending",
+            ex_date=EX, entitlement_date=date(2026, 10, 15), cash_pay_date=PAY,
+            div_cash=DIV_CASH,
+        )
+        assert aggregate_cash_dividend_flows(test_db, [port], PAY) == {}
+
+    def test_multi_portfolio_and_platform_batch(self, test_db):
+        """多组合多平台一次调用全返回（键不串行），金额按各自平台基数。"""
+        port1, plat1, fund1 = _env(test_db, "FLS7A")
+        port2, plat2, fund2 = _env(test_db, "FLS7B")
+        plat3 = "SP_FLS7C"
+        create_platform(test_db, code=plat3)
+        create_position_snapshot(
+            test_db, port1, fund1, MARKET, snapshot_date=BASE, platform_code=plat3,
+            shares=500, market_value=750, unit_price=float(NAV), cost_price=float(NAV),
+        )
+        for port, fund, plat in ((port1, fund1, plat1), (port2, fund2, plat2), (port1, fund1, plat3)):
+            create_raw_event(
+                test_db, portfolio_code=port, product_code=fund, market=MARKET,
+                platform_code=plat, event_type="cash_dividend", status="pending",
+                ex_date=EX, entitlement_date=BASE, cash_pay_date=PAY, div_cash=DIV_CASH,
+            )
+        flows = aggregate_cash_dividend_flows(test_db, [port1, port2], PAY)
+        assert flows == {
+            (port1, fund1, MARKET, plat1): [(EX, 50.0), (PAY, -50.0)],
+            (port2, fund2, MARKET, plat2): [(EX, 50.0), (PAY, -50.0)],
+            (port1, fund1, MARKET, plat3): [(EX, 25.0), (PAY, -25.0)],
+        }
+
+    def test_empty_portfolios_short_circuits(self, test_db):
+        assert aggregate_cash_dividend_flows(test_db, [], PAY) == {}
+
+
+class TestSameDayPendingDirtyDivCash:
+    """A9（#771 同判据）：非正 div_cash 的 pending 行不产生流水与在途，读数同改动前。"""
+
+    @pytest.mark.parametrize("div_cash", [Decimal("0"), Decimal("-0.05")])
+    def test_no_flows_no_transit_no_addback(self, client, admin_headers, test_db, div_cash):
+        port, plat, fund = _env(
+            test_db, f"DIRTY{'Z' if div_cash == 0 else 'N'}", ex_nav=Decimal("1.45"),
+        )
+        test_db.add(ShareChangeEvent(
+            portfolio_code=port, product_code=fund, market=MARKET, platform_code=plat,
+            event_type="dividend_pending", status="pending", event_source="tushare",
+            ex_date=EX, entitlement_date=EX, div_cash=div_cash,
+        ))
+        test_db.commit()
+        _generate(client, admin_headers, port, EX)
+
+        assert aggregate_cash_dividend_flows(test_db, [port], EX) == {}
+        items = _positions_api(client, admin_headers, port, EX)
+        assert "IN_TRANSIT_DIVIDEND" not in items
+        # 无加回：除权下跌如实体现（与改动前一致），不凭空造收益
+        assert items[fund]["daily_profit"] == -50
 

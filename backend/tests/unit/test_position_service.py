@@ -10,7 +10,11 @@
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import event as sql_event
+
+from app.models import PortfolioPosition
 from app.services.position_service import (
+    _aggregate_position_flows,
     compute_cash_balance,
     get_cash_value,
     calculate_available_cash,
@@ -673,3 +677,33 @@ class TestCalculateAvailableSharesEventWindow:
                     event_type="cash_dividend")
         shares = calculate_available_shares(test_db, "EWF_P8", "EWF", "CN_OTC")
         assert shares == Decimal("1000.00")
+
+
+class TestAggregatePositionFlowsQueryCount:
+    """#837 评审：聚合层查询数钉子（防 N+1，参照累计收益同款 SQL 捕获）。"""
+
+    def test_fixed_four_batch_selects(self, test_db):
+        create_portfolio(test_db, code="AGG_P", status="active")
+        create_platform(test_db, code="AGG_PLAT")
+        create_product(test_db, code="AGG_FUND", market="CN_OTC")
+        create_position_snapshot(
+            test_db, "AGG_P", "AGG_FUND", "CN_OTC", SNAP_DATE,
+            shares=Decimal("100"), market_value=Decimal("150"),
+            platform_code="AGG_PLAT",
+        )
+        items = test_db.query(PortfolioPosition).all()
+        statements = []
+
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        connection = test_db.connection()
+        sql_event.listen(connection, "before_cursor_execute", capture)
+        try:
+            _aggregate_position_flows(test_db, items)
+        finally:
+            sql_event.remove(connection, "before_cursor_execute", capture)
+        # trade、confirmed 事件、再投资应收、pending 现金分红各一条批量 SELECT
+        # （#837 起 4 条），不随 items 行数放大；新增查询须有意更新本钉子
+        assert len(statements) == 4
+        assert all(s.lstrip().upper().startswith("SELECT") for s in statements)
