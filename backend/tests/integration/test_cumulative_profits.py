@@ -812,7 +812,12 @@ class TestPendingCashDividendFlows:
         assert self._fund_profit(result) == Decimal("0.0000")
 
     def test_pay_day_pair_nets_to_zero(self, test_db, portfolio):
-        """pay 日起成对流水净额为 0，与在途窗口退出同步（#837 D1 异常窗口口径）。"""
+        """pay 日起成对流水净额为 0，与在途窗口退出同步（#837 D1 异常窗口口径）。
+
+        该状态只能工厂层构造：API 侧 pending 现金分红在 cash_effective_date <= 目标日
+        被快照闸门阻断（_check_share_change_events），不存在「pay 日仍 pending」
+        的生产快照。
+        """
         self._setup(test_db, portfolio)
         _position(test_db, portfolio, MONDAY, "990", shares="100")
         _snapshot(test_db, portfolio, MONDAY)
