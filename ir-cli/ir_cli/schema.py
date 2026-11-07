@@ -21,7 +21,7 @@ PROTOCOL = {
         "1": "业务错误或未预期内部错误（按 error.code 区分；业务错误可换参数重试）",
         "2": "认证错误（需 ir auth login）",
         "3": "连接/超时错误（可原样重试或检查服务）",
-        "64": "用法错误（选项/参数不存在或必填缺失，命令未执行；换参数前先看 --help，勿重登录）",
+        "64": "用法错误（选项/参数不存在、必填缺失或取值冲突，命令未执行；换参数前先看 --help，勿重登录）",
     },
 }
 
@@ -224,7 +224,7 @@ def build_schema(root: Any, group_name: Optional[str] = None, index_only: bool =
     if index_only:
         # 紧凑编码 "组名:子命令1 子命令2;..."：dict-of-lists 约 1.3KB，此编码 <1KB
         return {
-            "protocol": {"exit_codes": "0=成功 1=业务错误 2=认证(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在)"},
+            "protocol": {"exit_codes": "0=成功 1=业务错误 2=认证(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在或取值冲突)"},
             "groups": ";".join(
                 f"{name}:{' '.join(grp.commands.keys())}" for name, grp in groups.items()
             ),
