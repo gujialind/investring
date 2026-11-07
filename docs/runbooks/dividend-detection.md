@@ -10,7 +10,7 @@ tushare 分红检测在 **`run_nav_sync` 末尾**执行（`backend/app/services/
 - 对某条公告，若 `ex_date <= 最新快照日`，直接 `continue` 跳过（`backend/app/services/task_runner.py:541-542`）。
 
 因此成立的前提是：**目标除息日的快照尚未生成**（等价于 nav_sync 及其前置链路先于该日快照完成）。
-正常调度是 nav_sync 07:00、快照 07:30（`docs/reference/logging.md:163-175`），时序天然满足；但以下情况会破坏该前提：
+正常调度是 nav_sync 07:00、快照 07:30（`docs/reference/logging.md:163-176`、`:193`），时序天然满足；但以下情况会破坏该前提：
 
 - nav_sync 连续失败/自动重试，快照由别的触发源（手动、cascade 复查、追平）先行生成；
 - 人工先跑 `snapshot_generate` 再跑 nav_sync；
@@ -22,18 +22,19 @@ tushare 分红检测在 **`run_nav_sync` 末尾**执行（`backend/app/services/
 - **后续快照没有分红口径**：现金在途/再投资应收不会派生（`backend/app/services/reinvest_receivable.py`），`ex_date` 起的净值缺口不会被补齐；事件列表里也不会有这条记录（`docs/reference/business-constraints.md:203`、`:204`）。
 - **检测器不会自愈**：重跑 nav_sync 仍会命中同一跳过条件；错过窗口后只能人工补录。
 
-判定是否已错过：
+判定是否已错过（先排除「本来就不该建事件」的组合）：
 
-1. 取该组合最新快照日；若 `>=` 公告的 `ex_date`，即已错过检测窗口；
-2. 事件列表按 `(产品, 除息日, 平台)` 查不到对应记录；
-3. 任务日志不会出现该公告的跳过项（这正是本 runbook 要说明的「无痕」）。
+1. 先确认该组合在权益登记日持有该产品且对应平台非空：检测器只对最新快照中 `shares > 0`、`platform_code` 非空的持仓行建事件（`backend/app/services/task_runner.py:526-540`），未持有/已清仓的组合本就不在建事件范围内，不适用本判定；
+2. 取该组合最新快照日；若 `>=` 公告的 `ex_date`，即已错过检测窗口；
+3. 事件列表按 `(产品, 除息日, 平台)` 查不到对应记录；
+4. 任务日志不会出现该公告的跳过项（这正是本 runbook 要说明的「无痕」）。
 
 ## 3. 人工补救（需授权，生产操作前先确认可回退）
 
 补录事件要求 `ex_date` 晚于最新快照日（`docs/reference/business-constraints.md:211`），所以必须先回退快照：
 
 1. **停写**：确认没有并发的 nav_sync / snapshot 任务在跑（否则删除后又被重建）。
-2. **回退快照**：`DELETE /api/snapshots/{portfolio_code}/bulk/{from_date}`，`from_date = ex_date`（含当日），逐日删除并触发级联回退（`backend/app/routers/snapshots.py:444-507`）。
+2. **回退快照**：先 `DELETE /api/snapshots/{portfolio_code}/bulk/{from_date}?dry_run=true` 预览将删除的日期范围（零副作用），确认范围无误后再 `DELETE /api/snapshots/{portfolio_code}/bulk/{from_date}?confirm=true` 执行；`from_date = ex_date`（含当日），逐日删除并触发级联回退（`backend/app/routers/snapshots.py:444-507`）。
 3. **补录事件**：按公告手工创建分红事件（现金/再投/待定），`ex_date`、`entitlement_date`、`platform_code`、`div_cash` 须与公告一致；同日形态按 `docs/reference/business-constraints.md:207-208` 的口径把关。
 4. **重建快照**：从 `ex_date` 起逐日生成或重算；现金分红到账日、再投资份额确认日按事件口径落账。
 5. **复核**：事件列表出现该记录；`ex_date` 快照的 `in_transit_total` / 份额变动符合预期；总额与公告金额一致。
