@@ -414,7 +414,13 @@ def _prepare_confirmation_event(
             ),
         }
         _, changes = _diff_fields(event, updates)
-        if changes:
+        # #766：同日 pending 的派生在途正由本次确认消化（确认写库金额与派生同源，
+        # 不改变已生成快照），故确认/预览对它跳过应收守卫；改/取消/删除仍被拦。
+        _is_same_day_pending = (
+            event.event_type == PENDING_DIVIDEND_TYPE
+            and event.entitlement_date == event.ex_date
+        )
+        if changes and not _is_same_day_pending:
             _require_receivable_not_snapshotted(db, event)
         # #784：确认/预览候选的日期校验按事件落库市场日历（HK_MUTUAL→HKEX，其余→SSE）
         # 确认日校验先于到账日（与创建同序）：类型不匹配的字段错优先报
@@ -433,6 +439,9 @@ def _prepare_confirmation_event(
                 event.ex_date, event.entitlement_date,
                 selection.share_confirm_date,
                 exchange=exchange_for_market(event.market),
+                # #766：同日 pending 的除息日快照由闸门特判放行、正是确认的基数
+                # 快照，「晚于最新快照日」的创建期规则不该拦对它的确认。
+                allow_snapshot_overlap=_is_same_day_pending,
             )
         for field, value in updates.items():
             setattr(candidate, field, value)
@@ -757,6 +766,7 @@ def _validate_event_dates(
     share_confirm_date: Optional[date] = None,
     *,
     exchange: str = SSE_EXCHANGE,
+    allow_snapshot_overlap: bool = False,
 ) -> None:
     """校验事件日期：均为交易日、除息日不早于权益登记日、晚于最新快照日。
 
@@ -774,11 +784,15 @@ def _validate_event_dates(
     `cash_effective_date`（`cash_pay_date` 回退 `ex_date`）生效；同日形态
     必须携带严格晚于除息日的 `cash_pay_date`（否则「确认要基数快照、快照要闸门
     放行」互等死锁），该约束在 `_validate_cash_pay_date` 按合并后终值把关。
-    `dividend_pending` **刻意不放宽**：方式未定则无任何适用日期可作闸门/派生键，
-    同日形态下「闸门阻断 D 日快照 ↔ 确认需要 D 日基数快照」同样死锁，且确认
-    选择路径会被派生在途守卫二次锁死——同日待定分红留给 #766（检测器建事件
-    形态设计）一并解决。其余类型（拆分/合并/送股/强制调整）未设确认日时保持
-    严格 `>` 与原文案。
+    其余类型（拆分/合并/送股/强制调整）未设确认日时保持严格 `>` 与原文案。
+
+    #766：`dividend_pending` 同日已由检测器支持（`entitlement_date == ex_date`），
+    除息日快照由闸门特判放行、正是确认的基数快照——故确认路径（带 selection
+    转换类型）对本函数传 `allow_snapshot_overlap=True`，豁免「除息日必须晚于
+    最新快照日」一条（交易日与日期序校验保留；确认金额与派生在途同源、不改变
+    已生成快照，漂移由 `_require_receivable_not_snapshotted` 对改/取消/删除
+    收口，与 update 路径 #743 的「日期实际变更才重跑创建期校验」同口径）。
+    创建路径不传该豁免：登记历史同日公告时若快照已存在，仍须先删快照。
     """
     # 权益登记日必须是交易日（exchange 日历）
     if not is_trading_day(db, entitlement_date, exchange=exchange):
@@ -798,13 +812,14 @@ def _validate_event_dates(
             "INVALID_DATE_ORDER",
             "除息日必须严格大于权益登记日（ex_date > entitlement_date）",
         )
-    # 除息日必须晚于最新快照日
-    latest_snapshot = get_latest_snapshot_date(db, portfolio_code)
-    if latest_snapshot and ex_date <= latest_snapshot:
-        raise BusinessError(
-            "DATE_BEFORE_SNAPSHOT",
-            f"除息日必须晚于最新快照日（{latest_snapshot}）",
-        )
+    # 除息日必须晚于最新快照日（#766 确认路径豁免，见 docstring）
+    if not allow_snapshot_overlap:
+        latest_snapshot = get_latest_snapshot_date(db, portfolio_code)
+        if latest_snapshot and ex_date <= latest_snapshot:
+            raise BusinessError(
+                "DATE_BEFORE_SNAPSHOT",
+                f"除息日必须晚于最新快照日（{latest_snapshot}）",
+            )
 
 
 def _validate_share_confirm_date(
@@ -842,13 +857,18 @@ def _require_receivable_not_snapshotted(db: Session, event: ShareChangeEvent) ->
     无从察觉。与 confirmed 事件的 `SNAPSHOT_DEPENDENCY` 同一处置：先删 `ex_date`
     及之后的快照（级联会把事件退回 pending），再改。
 
-    覆盖两类形态：
+    覆盖三类形态：
     - #743 设了 `share_confirm_date` 的 pending 再投资（应收 `ex_date <= D <
       share_confirm_date`）；
     - #765 pending 现金分红（在途 `ex_date <= D < cash_pay_date`，pending 与
       confirmed 都由 reinvest_receivable 派生/落库口径计入快照）。不带到账日的
       现金分红没有在途区间，pending 闸门自 ex_date 阻断快照，本守卫对其天然
       不可达（`ex_date <= 最新快照日` 与闸门阻断互斥）。
+    - #766 同日 dividend_pending（`entitlement_date == ex_date`）：临时派生
+      现金在途（`ex_date <= D` 无上界），除息日快照由闸门特判放行，派生金额
+      已可能烘焙进快照——改 div_cash/取消/删除必须经本守卫冻结；确认/预览路径
+      在调用点对它跳过（确认即消化在途，金额同源不改变已生成快照）。非同日
+      pending 不派生在途且闸门自 ex_date 阻断快照，与本守卫天然互斥。
 
     只约束 pending——confirmed 事件已由 unconfirm 的快照保护把关。调用方按
     **实际变更的字段**豁免：仅改 notes、或整对象重提交而值未变（编辑弹窗常态）
@@ -856,12 +876,20 @@ def _require_receivable_not_snapshotted(db: Session, event: ShareChangeEvent) ->
     """
     if event.status != "pending":
         return
-    if event.share_confirm_date is None and event.event_type != "cash_dividend":
+    _is_same_day_pending = (
+        event.event_type == PENDING_DIVIDEND_TYPE
+        and event.entitlement_date == event.ex_date
+    )
+    if (
+        event.share_confirm_date is None
+        and event.event_type != "cash_dividend"
+        and not _is_same_day_pending
+    ):
         return
     latest_snapshot = get_latest_snapshot_date(db, event.portfolio_code)
     if not latest_snapshot or event.ex_date > latest_snapshot:
         return
-    if event.event_type == "cash_dividend":
+    if event.event_type in ("cash_dividend", PENDING_DIVIDEND_TYPE):
         message = (
             f"该事件的分红在途已计入 {event.ex_date} 及之后的快照，"
             f"请先删除 {event.ex_date} 及之后的快照"

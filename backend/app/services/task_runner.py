@@ -462,6 +462,11 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
 
     幂等性不变：`div_cash` 修复后重跑检测，同 `(组合, 产品, 除息日, 平台)` 仍由
     `existing` 判据去重，不重复建；跳过留痕同样按 `(产品, 除息日)` 去重。
+
+    **同日公告（#766）**：`ex_date == record_date` 是场外分红最常见形态，检测器
+    放行并建 `dividend_pending`。死锁（闸门阻断除息日快照 ↔ 确认需除息日基数
+    快照）由 snapshot_service 闸门特判放行除息日、reinvest_receivable 临时派生
+    现金在途共同化解；逆序（`ex_date < record_date`）仍属脏数据跳过。
     """
     from app.services.tushare_client import get_fund_div, TushareNotConfiguredError, TushareAPIError
     from app.services.share_change_event_service import dividend_div_cash_invalid
@@ -495,7 +500,11 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                 except ValueError:
                     continue
 
-                if ex_date <= entitlement_date:
+                # #766：仅跳过逆序（ex_date < record_date）的脏数据；同日（ex_date == record_date）
+                # 是场外分红最常见形态，放行由后续闸门/在途机制处理（见 _check_share_change_events
+                # 与 reinvest_receivable 对同日 dividend_pending 的特判）。历史公告由
+                # 下方 `ex_date <= pos.snapshot_date` 兜住，不靠本条件防重。
+                if ex_date < entitlement_date:
                     continue
 
                 # #771：直造 ORM 绕过服务层校验，是「闸门装在正门、检测走后门」的根因。

@@ -20,6 +20,12 @@ pending → confirmed 的确认时点不影响任何已生成快照的数值，�
 NULL 回退 ex_date 的形态没有在途区间（与 #522 现状一致），由 pending 闸门按
 ex_date 阻断、先确认后生成。
 
+**#766 同日 dividend_pending 临时走现金在途**：检测器建同日 `dividend_pending`
+（方式未定），闸门放行除息日快照以破除死锁，但除息日净值已跌、需派生在途
+对冲市值缺口。金额与现金/再投同源（基数 × div_cash），确认切换事件类型后
+即退出本查询、由对应类型的在途/应收接管，无市值跳变。窗口无上界
+（`cash_pay_date` 为 None），实际由闸门在 D+1 阻断未确认快照。
+
 独立模块的理由：快照生成与读侧收益连续要同一口径，而 `snapshot_service` 与
 `position_service` 互不依赖——放任一侧都会造成反向 import。本模块只依赖 models
 与 quantize，且**恒为一次批量 SELECT**（事件左连权益登记日持仓，
@@ -31,9 +37,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.constants.share_change_events import PENDING_DIVIDEND_TYPE
 from app.models.portfolio_position import PortfolioPosition
 from app.models.share_change_event import ShareChangeEvent
 from app.utils.quantize import quantize_amount
@@ -238,7 +245,11 @@ def aggregate_receivable_flows(
 
 
 class CashDividendInTransit(NamedTuple):
-    """一条现金分红在途（`ex_date <= D < cash_pay_date`）。"""
+    """一条现金分红在途（`ex_date <= D < cash_pay_date`）。
+
+    #766：同日 `dividend_pending` 临时走现金在途对冲除息净值缺口，此时
+    `cash_pay_date` 为 None（方式未定），窗口无上界、直到确认切换类型。
+    """
 
     event_id: int
     portfolio_code: str
@@ -246,7 +257,7 @@ class CashDividendInTransit(NamedTuple):
     market: str
     platform_code: str
     ex_date: date
-    cash_pay_date: date
+    cash_pay_date: Optional[date]
     amount: Decimal
 
 
@@ -260,7 +271,7 @@ class _CashRow(NamedTuple):
     market: str
     platform_code: str
     ex_date: date
-    cash_pay_date: date
+    cash_pay_date: Optional[date]
     entitlement_date: date
     status: str
     entitlement_shares: Optional[Decimal]
@@ -274,7 +285,9 @@ def _query_cash_rows(
 ) -> List[_CashRow]:
     """取可能产生在途的现金分红行及其权益登记日持仓份额（恒一次批量 SELECT）。
 
-    `cash_pay_date` 为空的事件不产生在途区间（现金按 ex_date 当日生效），不入查询；
+    现金分红要求 `cash_pay_date` 非空才有在途区间；#766 同日 `dividend_pending`
+    （`cash_pay_date` 为 None）也入查询，临时走现金在途对冲除息缺口，窗口由
+    `list_cash_dividend_in_transit` 按 `ex_date <= D` 放行。
     pending 与 confirmed 都取——pending 期派生金额、confirmed 用落库 cash_change。
     """
     codes = tuple(portfolio_codes)
@@ -303,9 +316,20 @@ def _query_cash_rows(
         ),
     ).filter(
         ShareChangeEvent.portfolio_code.in_(codes),
-        ShareChangeEvent.event_type == "cash_dividend",
+        or_(
+            and_(
+                ShareChangeEvent.event_type == "cash_dividend",
+                ShareChangeEvent.cash_pay_date.isnot(None),
+            ),
+            # #766：同日 dividend_pending 临时走现金在途（方式未定，金额与现金/再投
+            # 同源，确认后切换事件类型即退出本查询）。cash_pay_date 为 None，
+            # 窗口无上界，由 list_cash_dividend_in_transit 按 ex_date <= D 放行。
+            and_(
+                ShareChangeEvent.event_type == PENDING_DIVIDEND_TYPE,
+                ShareChangeEvent.entitlement_date == ShareChangeEvent.ex_date,
+            ),
+        ),
         ShareChangeEvent.status.in_(RECEIVABLE_STATUSES),
-        ShareChangeEvent.cash_pay_date.isnot(None),
         ShareChangeEvent.platform_code.isnot(None),
         ShareChangeEvent.ex_date <= upper_date,
     ).all()
@@ -336,7 +360,11 @@ def list_cash_dividend_in_transit(
     *,
     live_positions: Optional[Dict[tuple, dict]] = None,
 ) -> List[CashDividendInTransit]:
-    """列出 `target_date` 当日的现金分红在途（`ex_date <= D < cash_pay_date`）。
+    """列出 `target_date` 当日的现金分红在途。
+
+    现金分红窗口 `ex_date <= D < cash_pay_date`；#766 同日 `dividend_pending`
+    无上界（`cash_pay_date` 为 None），按 `ex_date <= D` 放行，直到确认切换
+    事件类型退出本查询。
 
     金额 <= 0 一律跳过（与 `list_reinvest_receivables` 同判据）：0 不落空在途行，
     负值只可能来自脏行、不落负向在途。`live_positions` 语义与再投资应收相同：
@@ -344,7 +372,11 @@ def list_cash_dividend_in_transit(
     """
     result = []
     for row in _query_cash_rows(db, [portfolio_code], target_date):
-        if not (row.ex_date <= target_date < row.cash_pay_date):
+        if row.cash_pay_date is not None:
+            if not (row.ex_date <= target_date < row.cash_pay_date):
+                continue
+        elif not (row.ex_date <= target_date):
+            # 同日 dividend_pending：无上界，仅要求除息日已到
             continue
         amount = _cash_row_amount(row, target_date, live_positions)
         if amount <= 0:

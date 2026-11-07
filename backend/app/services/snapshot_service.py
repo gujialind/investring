@@ -95,7 +95,10 @@ def _compute_in_transit_amounts(
     ③ 现金分红按 ex_date <= D < cash_pay_date 计在途，归属事件平台；#765 起
        pending 与 confirmed 都计（pending 派生、confirmed 用落库 cash_change，
        单点 `reinvest_receivable.list_cash_dividend_in_transit`），无 cash_pay_date
-       的形态没有在途区间、照旧由 pending 闸门按 ex_date 阻断。
+       的形态没有在途区间、照旧由 pending 闸门按 ex_date 阻断——**例外**：#766
+       的同日 dividend_pending（ex_date == entitlement_date）虽无 cash_pay_date，
+       仍按 `ex_date <= D` 的无上界窗口派生在途、且除息日快照由闸门特判放行
+       （否则「确认需除息日基数快照 ↔ 闸门阻断除息日快照」互相等待）。
     ④ 红利再投资应收（#743）按 `ex_date <= D < share_confirm_date` 计入同一
        `dividend` 方向：语义由「分红在途」统一承载，不新增虚拟产品。金额是
        **派生值**（基数 × div_cash 现算），pending 与 confirmed 都计——同日
@@ -2447,9 +2450,17 @@ def _check_share_change_events(
     同口径），pending 不再阻断该区间的快照生成，到到账日仍未确认才阻断。
     不带 `cash_pay_date` 的形态 `cash_effective_date` 回落 `ex_date`，阻断点与
     现状逐字一致。其余类型判键不变。
+
+    #766：同日 `dividend_pending`（`entitlement_date == ex_date`）放行除息日
+    快照——确认需以除息日持仓为基数，若在除息日阻断则死锁；除息日起由派生
+    现金在途对冲净值缺口（见 reinvest_receivable），从 D+1 起仍未确认则阻断。
     """
     # id 定序（#782 复审）：超过 10 笔上限时「前 10」取最早登记者，重复运行提示子集可复现。
     is_cash_dividend = ShareChangeEvent.event_type == "cash_dividend"
+    is_same_day_pending = and_(
+        ShareChangeEvent.event_type == PENDING_DIVIDEND_TYPE,
+        ShareChangeEvent.entitlement_date == ShareChangeEvent.ex_date,
+    )
     pending_events = db.query(ShareChangeEvent.id, ShareChangeEvent.event_type).filter(
         ShareChangeEvent.portfolio_code == portfolio_code,
         or_(
@@ -2460,6 +2471,12 @@ def _check_share_change_events(
             and_(
                 ~is_cash_dividend,
                 ShareChangeEvent.share_effective_date <= target_date,
+                # 同日 dividend_pending：share_effective_date == ex_date，放行除息日
+                # （share_effective_date == target_date），从下一日起阻断
+                ~and_(
+                    is_same_day_pending,
+                    ShareChangeEvent.share_effective_date == target_date,
+                ),
             ),
         ),
         ShareChangeEvent.status == "pending"

@@ -177,7 +177,11 @@ class TestSkipScope:
         assert _run(test_db, empty, [_div(div_cash=0)]) == (0, [])
 
     def test_invalid_announcement_shape_not_reported_as_backfill(self, test_db):
-        """公告本身无效（非「实施」/除息日不晚于登记日）时既不建也不留痕（既有过滤不变）。"""
+        """公告本身无效（非「实施」/除息日早于登记日）时既不建也不留痕。
+
+        #766：同日（ex_date == record_date）现为有效形态，只有逆序（ex < record）
+        仍被过滤。
+        """
         fund = _env(test_db, "INVALID")
         assert _run(test_db, fund, [_div(div_proc="取消", div_cash=0)]) == (0, [])
         assert _run(
@@ -196,9 +200,20 @@ class TestDetectorIdempotency:
         assert _run(test_db, fund, [_div()]) == (0, [])
         assert _rows(test_db, fund)[0].event_type == event_type
 
-    def test_same_day_announcement_still_skipped(self, test_db):
+    def test_same_day_announcement_creates_pending_event(self, test_db):
+        """#766：同日公告（ex_date == record_date）建 dividend_pending，不再跳过。"""
         fund = _env(test_db, "SAME")
-        assert _run(test_db, fund, [_div(record_date=EX.strftime("%Y%m%d"))]) == (0, [])
+        assert _run(test_db, fund, [_div(record_date=EX.strftime("%Y%m%d"))]) == (1, [])
+        event = _rows(test_db, fund)[0]
+        assert event.event_type == "dividend_pending"
+        assert (event.entitlement_date, event.ex_date) == (EX, EX)
+
+    def test_reverse_order_announcement_still_skipped(self, test_db):
+        """#766：逆序公告（ex_date < record_date）属脏数据，仍跳过、不留痕。"""
+        fund = _env(test_db, "REV")
+        assert _run(
+            test_db, fund, [_div(ex_date="20261018", record_date="20261019", div_cash=0.0039)]
+        ) == (0, [])
         assert _rows(test_db, fund) == []
 
     def test_repeat_fetch_does_not_duplicate_event(self, test_db):
