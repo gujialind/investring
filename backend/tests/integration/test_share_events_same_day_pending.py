@@ -153,8 +153,13 @@ class TestSameDayPendingInTransit:
 
 
 class TestSameDayPendingConfirmation:
-    def _ex_position(self, db, port, fund, plat):
-        """模拟除息日快照已生成（闸门放行后），写入除息日持仓快照供确认取基数。"""
+    def _ex_snapshot(self, db, port, fund, plat):
+        """模拟闸门放行后的除息日快照完整态：持仓行（确认取基数）+ 净值行。
+
+        净值行是关键——真实快照生成必写 PortfolioValueSnapshot，使
+        get_latest_snapshot_date == EX；缺了它确认路径撞不到「ex_date <=
+        最新快照日」判据，#766 评审 Blocker 正是这样漏网的。
+        """
         create_position_snapshot(
             db, port, fund, MARKET, snapshot_date=EX, platform_code=plat,
             shares=float(SHARES), market_value=float(SHARES * NAV),
@@ -164,12 +169,14 @@ class TestSameDayPendingConfirmation:
             db, port, "CASH", "", snapshot_date=EX, platform_code=plat,
             cash_amount=0, market_value=0,
         )
+        create_value_snapshot(db, port, EX, total_value=float(SHARES * NAV),
+                              unit_price=float(NAV), total_shares=float(SHARES))
         db.commit()
 
     def test_confirm_as_cash(self, test_db):
         port, plat, fund = _env(test_db, "CASH")
         event = _pending_event(test_db, port, fund, plat)
-        self._ex_position(test_db, port, fund, plat)
+        self._ex_snapshot(test_db, port, fund, plat)
 
         confirm_share_change_event(
             test_db, event,
@@ -182,7 +189,7 @@ class TestSameDayPendingConfirmation:
     def test_confirm_as_reinvest(self, test_db):
         port, plat, fund = _env(test_db, "REINV")
         event = _pending_event(test_db, port, fund, plat)
-        self._ex_position(test_db, port, fund, plat)
+        self._ex_snapshot(test_db, port, fund, plat)
 
         confirm_share_change_event(
             test_db, event,
@@ -191,3 +198,54 @@ class TestSameDayPendingConfirmation:
         refreshed = test_db.get(ShareChangeEvent, event.id)
         assert refreshed.event_type == "reinvest_dividend"
         assert refreshed.share_confirm_date == PAY
+
+    def test_confirm_without_ex_position_snapshot_rejected(self, test_db):
+        """锁死「确认只能在快照后」：无除息日基数快照时报 MISSING_POSITION_SNAPSHOT。"""
+        from app.services.exceptions import BusinessError
+        port, plat, fund = _env(test_db, "NOBASE")
+        event = _pending_event(test_db, port, fund, plat)
+
+        with pytest.raises(BusinessError) as exc_info:
+            confirm_share_change_event(
+                test_db, event,
+                selection=DividendSelection(event_type="cash_dividend", cash_pay_date=PAY),
+            )
+        assert exc_info.value.code == "MISSING_POSITION_SNAPSHOT"
+
+
+class TestSameDayPendingFreeze:
+    """除息日快照生成后，同日 pending 的改/取消被派生在途守卫冻结（#766 评审）。"""
+
+    def _ex_snapshot(self, db, port, fund, plat):
+        TestSameDayPendingConfirmation()._ex_snapshot(db, port, fund, plat)
+
+    def test_update_div_cash_after_ex_snapshot_blocked(self, test_db):
+        from app.services.exceptions import BusinessError
+        from app.services.share_change_event_service import update_share_change_event
+        port, plat, fund = _env(test_db, "FRZU")
+        event = _pending_event(test_db, port, fund, plat)
+        self._ex_snapshot(test_db, port, fund, plat)
+
+        with pytest.raises(BusinessError) as exc_info:
+            update_share_change_event(test_db, event, {"div_cash": Decimal("0.08")})
+        assert exc_info.value.code == "SNAPSHOT_DEPENDENCY"
+
+    def test_cancel_after_ex_snapshot_blocked(self, test_db):
+        from app.services.exceptions import BusinessError
+        from app.services.share_change_event_service import cancel_share_change_event
+        port, plat, fund = _env(test_db, "FRZC")
+        event = _pending_event(test_db, port, fund, plat)
+        self._ex_snapshot(test_db, port, fund, plat)
+
+        with pytest.raises(BusinessError) as exc_info:
+            cancel_share_change_event(test_db, event)
+        assert exc_info.value.code == "SNAPSHOT_DEPENDENCY"
+
+    def test_update_before_ex_snapshot_allowed(self, test_db):
+        """对照组：除息日快照未生成时（守卫天然不可达）改 div_cash 仍放行。"""
+        from app.services.share_change_event_service import update_share_change_event
+        port, plat, fund = _env(test_db, "FRZB")
+        event = _pending_event(test_db, port, fund, plat)
+
+        update_share_change_event(test_db, event, {"div_cash": Decimal("0.08")})
+        assert test_db.get(ShareChangeEvent, event.id).div_cash == Decimal("0.08")

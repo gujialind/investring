@@ -95,7 +95,10 @@ def _compute_in_transit_amounts(
     ③ 现金分红按 ex_date <= D < cash_pay_date 计在途，归属事件平台；#765 起
        pending 与 confirmed 都计（pending 派生、confirmed 用落库 cash_change，
        单点 `reinvest_receivable.list_cash_dividend_in_transit`），无 cash_pay_date
-       的形态没有在途区间、照旧由 pending 闸门按 ex_date 阻断。
+       的形态没有在途区间、照旧由 pending 闸门按 ex_date 阻断——**例外**：#766
+       的同日 dividend_pending（ex_date == entitlement_date）虽无 cash_pay_date，
+       仍按 `ex_date <= D` 的无上界窗口派生在途、且除息日快照由闸门特判放行
+       （否则「确认需除息日基数快照 ↔ 闸门阻断除息日快照」互相等待）。
     ④ 红利再投资应收（#743）按 `ex_date <= D < share_confirm_date` 计入同一
        `dividend` 方向：语义由「分红在途」统一承载，不新增虚拟产品。金额是
        **派生值**（基数 × div_cash 现算），pending 与 confirmed 都计——同日
