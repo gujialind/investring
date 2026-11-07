@@ -546,9 +546,10 @@ def test_queries_are_fixed_read_only_and_independent_of_list_pagination(
     assert set(test_db.dirty) == dirty_before
     assert set(test_db.new) == new_before
     assert trade.notes == "caller-owned unsaved change"
-    # 固定七次批量 SELECT（#694 起含 investor_holding 与 subscription 两条；
-    # #743 起含再投资应收一条——事件左连权益登记日持仓，恒一次、不随分页放大）
-    assert len(statements) == 7
+    # 固定八次批量 SELECT（#694 起含 investor_holding 与 subscription 两条；
+    # #743 起含再投资应收一条、#837 起含 pending 现金分红流水一条——事件左连
+    # 权益登记日持仓，恒一次、不随分页放大）
+    assert len(statements) == 8
     assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
     assert all("LIMIT" not in statement.upper() and "OFFSET" not in statement.upper()
                for statement in statements[1:])
@@ -780,3 +781,55 @@ class TestInvestorGranularity:
                 "cumulative_profit": Decimal("0.0000"),
             },
         ]
+
+
+class TestPendingCashDividendFlows:
+    """#837：pending 现金分红成对流水的累计收益口径与 leg 日期过滤。
+
+    造数：START 买入 1000（基金净投入 −1000），ENTITLEMENT 持仓 100 份
+    （pending 基数），EX 市值 990（除权下跌 10 = 100 × div_cash 0.1）。
+    """
+
+    def _setup(self, db, portfolio, *, status="pending", cash=None):
+        _trade(db, portfolio, "buy", "1000")
+        _position(db, portfolio, ENTITLEMENT, "1000", shares="100")
+        _event(db, portfolio, cash=cash, status=status, platform=A,
+               div_cash=Decimal("0.1"), cash_pay_date=MONDAY)
+        _position(db, portfolio, EX, "990", shares="100")
+        _snapshot(db, portfolio, EX)
+
+    def _fund_profit(self, result):
+        return next(
+            r["cumulative_profit"] for r in result["products"] if r["product_code"] == FUND
+        )
+
+    def test_ex_day_future_pay_leg_not_netted(self, test_db, portfolio):
+        """EX 日读取：未来的 −R@pay 不得提前抵消 +R（profit_flows 无日期维度）。"""
+        self._setup(test_db, portfolio)
+        result = _compute(test_db, portfolio, EX)
+        _assert_rollups(result)
+        # 990 − 1000 + 10 = 0；若 −10@MONDAY 被无条件并入则得 −10，用例失败
+        assert self._fund_profit(result) == Decimal("0.0000")
+
+    def test_pay_day_pair_nets_to_zero(self, test_db, portfolio):
+        """pay 日起成对流水净额为 0，与在途窗口退出同步（#837 D1 异常窗口口径）。
+
+        该状态只能工厂层构造：API 侧 pending 现金分红在 cash_effective_date <= 目标日
+        被快照闸门阻断（_check_share_change_events），不存在「pay 日仍 pending」
+        的生产快照。
+        """
+        self._setup(test_db, portfolio)
+        _position(test_db, portfolio, MONDAY, "990", shares="100")
+        _snapshot(test_db, portfolio, MONDAY)
+        result = _compute(test_db, portfolio, MONDAY)
+        _assert_rollups(result)
+        # 990 − 1000 + 10 − 10 = −10：窗口外不再加回
+        assert self._fund_profit(result) == Decimal("-10.0000")
+
+    def test_confirmed_takes_over_same_amount(self, test_db, portfolio):
+        """confirmed 由事件现金腿同额接管，pending 流水退出，不双计。"""
+        self._setup(test_db, portfolio, status="confirmed", cash="10")
+        result = _compute(test_db, portfolio, EX)
+        _assert_rollups(result)
+        # 990 − 1000 + 10（confirmed 腿）= 0，与 pending 期读数一致
+        assert self._fund_profit(result) == Decimal("0.0000")
