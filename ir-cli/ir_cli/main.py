@@ -101,7 +101,7 @@ _PROTOCOL_HELP = """InvestRing CLI - HTTP Client
 
 输出协议: 成功 {"ok":true,"data":...,"meta"?,"hints"?} / 失败 {"ok":false,"error":{"code","message","hints"?}}
 
-退出码: 0=成功 1=业务错误或未预期内部错误(见 error.code，业务错误可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在，命令未执行)
+退出码: 0=成功 1=业务错误或未预期内部错误(见 error.code，业务错误可换参重试) 2=认证错误(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在或取值冲突，命令未执行)
 
 诊断信息输出至 stderr，脚本/Agent 解析请只读取 stdout
 
