@@ -15,7 +15,7 @@
 ## 1. 后端运行日志
 
 **形态**：只写 stdout、单行 JSON；**不落文件**——轮转交给 docker `json-file` driver
-（生产与 dev 均为 `max-size=10m` / `max-file=3`）。配置入口
+（生产与本地 override 均为 `max-size=10m` / `max-file=3`）。配置入口
 `logging_config.setup_logging()`，`main.py` 模块级调用、**幂等**（多入口重复配置不得
 一行变两行）。
 
