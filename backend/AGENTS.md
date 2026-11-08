@@ -114,7 +114,7 @@
 
 * **四张日志表的 schema 事实来源是迁移 0013**（#405，四表名单见其 docstring 首行）：此前只由 `create_all` 建表、迁移里没有 `create_table`，模型改列后生产库静默不跟随（schema drift）。0013 逐表 `has_table()` 守卫故幂等；**downgrade 刻意 no-op**：删表 = 销毁审计/登录/任务历史，且 MySQL 下 `task_execution_log` 被外键引用，DROP 会报 errno 3730（理由见 [0013 的 `downgrade()` 注释](alembic/versions/0013_add_log_tables.py)）。**`audit_log` 列宽是硬约束**（`action` 20 / `resource_type` 50 / `investor_code` 20），改 `audit_actions.py` 常量值先看宽度（`tests/unit/test_audit_service.py` 守门）。
 
-* **全库字符集统一 utf8mb4**（#427/#433，常量单一来源 `app/constants/db_charset.py`）：库级 charset/排序规则、建库语句（`ci.yml` 两处 + `e2e-stack.yml` 一处）、`docker-compose.dev.yml` server 字符集、`app/config.py` 连接串与生产 RDS **必须同口径**。缺陷面是**两侧不一致**（utf8mb3 容不下 **4 字节**字符 → errno 1366 让**整条**记录写不进；失效两档名单与「刻意排除写入侧转义/替换」的理由见 [0014 docstring](alembic/versions/0014_log_tables_utf8mb4.py)）。
+* **全库字符集统一 utf8mb4**（#427/#433，常量单一来源 `app/constants/db_charset.py`）：库级 charset/排序规则、建库语句（`ci.yml` 两处 + `e2e-stack.yml` 一处）、`app/config.py` 连接串与生产 RDS **必须同口径**。缺陷面是**两侧不一致**（utf8mb3 容不下 **4 字节**字符 → errno 1366 让**整条**记录写不进；失效两档名单与「刻意排除写入侧转义/替换」的理由见 [0014 docstring](alembic/versions/0014_log_tables_utf8mb4.py)）。
 
   - **两层落地缺一不可**。① **建表侧**：`app/models/base.py` 的 `_CharsetBase.__init_subclass__` 为每个模型子类补 `mysql_charset`/`mysql_collate`（`setdefault` 语义，保留子类显式值与约束元组）；**不得靠逐模型重复配置字符集替代基类钩子**——漏一处就是一处静默 utf8mb3 表。② **存量侧**：迁移 **0015** 逐表 `CONVERT TO CHARACTER SET utf8mb4` + 库级 `ALTER DATABASE`；**0014** 是 #427 中间态、已在生产执行过、**保留不改**。四条被否决的实现路线见 [base.py docstring](app/models/base.py)。
 

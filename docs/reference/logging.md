@@ -15,7 +15,7 @@
 ## 1. 后端运行日志
 
 **形态**：只写 stdout、单行 JSON；**不落文件**——轮转交给 docker `json-file` driver
-（生产与 dev 均为 `max-size=10m` / `max-file=3`）。配置入口
+（生产与本地 override 均为 `max-size=10m` / `max-file=3`）。配置入口
 `logging_config.setup_logging()`，`main.py` 模块级调用、**幂等**（多入口重复配置不得
 一行变两行）。
 
@@ -297,7 +297,6 @@ log.error("提交失败", err);                // Error 的 message + stack 都�
 | 环境 | 去向 | 轮转 |
 | --- | --- | --- |
 | 生产（`docker-compose.yml`） | backend / frontend / nginx 三服务的 docker stdout | `json-file` 10m × 3 |
-| dev（`docker-compose.dev.yml`） | 三服务（含 mysql）的 docker stdout | `json-file` 10m × 3（与生产同值） |
 | 本地 override（`docker-compose.override.yml`） | backend 容器 stdout | `json-file` 10m × 3 |
 
 `nginx/nginx.conf` 的 `error_log … warn` 与 `access_log` 走镜像 stdout 符号链接，同样由
