@@ -125,7 +125,7 @@ async function gotoEvents(page: Page, s: Scenario): Promise<void> {
 }
 
 async function openDetail(page: Page, row: ReturnType<Page['locator']>): Promise<ReturnType<Page['locator']>> {
-  await row.getByTitle('查看详情', { exact: true }).click();
+  await row.getByTitle('详情', { exact: true }).click();
   const dlg = dialogByTitle(page, '事件详情');
   await expect(dlg).toBeVisible({ timeout: 10_000 });
   return dlg;

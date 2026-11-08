@@ -47,6 +47,7 @@ import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductN
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
+import RowActionButton from "@/components/shared/RowActionButton";
 import Link from "next/link";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
@@ -677,14 +678,11 @@ export default function TradesContent({
       <TableCell className="text-right">
         {/* #789 只读详情入口：**每一行**都有（含 CASH 腿——移出下方 isRebalCashLeg
             的 null 分支）；详情弹窗无任何写操作，不触碰本列生命周期按钮矩阵 */}
-        <Button
-          variant="ghost"
-          size="sm"
+        <RowActionButton
+          icon={Info}
+          label="详情"
           onClick={() => openTradeDetail(trade.id)}
-          title="详情"
-        >
-          <Info className="h-4 w-4" />
-        </Button>
+        />
         {/* 操作按钮对齐后端允许矩阵（#176）：pending=确认/删除（场内无取消，
             与后端 cancel_trade 的 CANNOT_CANCEL_EXCHANGE 一致）；confirmed=取消确认/修改引导，无删除。
             #493：调仓 CASH 腿（含孤儿行）不露出任何生命周期按钮——后端对其
@@ -693,72 +691,55 @@ export default function TradesContent({
           <>
             {trade.status === "pending" && (
               <>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <RowActionButton
+                  icon={Pencil}
+                  label="编辑"
                   onClick={() => openEditDialog(trade)}
-                  title="编辑"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                />
+                <RowActionButton
+                  icon={CheckCircle}
+                  label="确认"
                   onClick={() => setConfirmState({ action: "confirm", id: trade.id })}
                   disabled={confirmTrade.isPending}
-                  title="确认"
-                >
-                  <CheckCircle className="h-4 w-4" />
-                </Button>
+                />
                 {trade.market !== "CN_EXCHANGE" && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <RowActionButton
+                    icon={XCircle}
+                    label="取消"
+                    destructive
                     onClick={() => setConfirmState({ action: "cancel", id: trade.id })}
                     disabled={cancelTrade.isPending}
-                    title="取消"
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </Button>
+                  />
                 )}
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <RowActionButton
+                  icon={Trash2}
+                  label="删除"
+                  destructive
                   onClick={() => setConfirmState({ action: "delete", id: trade.id })}
                   disabled={deleteTradeMutation.isPending}
-                  title="删除"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                />
               </>
             )}
             {trade.status === "confirmed" && (
               <>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <RowActionButton
+                  icon={Undo}
+                  label="取消确认"
+                  destructive
                   onClick={() => setConfirmState({ action: "unconfirm", id: trade.id })}
-                  title="取消确认"
-                >
-                  <Undo className="h-4 w-4" />
-                </Button>
+                />
                 {canEditArrivalDate(trade) ? (
                   // 已确认**基金**卖出的窄例外（#493）：只开放到账日期 + 备注，其他财务字段
                   // 仍先取消确认。CASH 卖出腿（赎回 sub_ 腿 / 现金转移主腿）走 #525 门控排除：
                   // 它们没有可改的到账日语义（后端 PUT 一律 CASH_TRADE_FORBIDDEN，读侧派生
                   // 的 cash_confirm_date 恒 null），露出按钮即死路入口
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <RowActionButton
+                    icon={CalendarClock}
+                    label="修改到账日期"
                     onClick={() => openArrivalDialog(trade)}
-                    title="修改到账日期"
-                  >
-                    <CalendarClock className="h-4 w-4" />
-                  </Button>
+                  />
                 ) : (
-                  <Button variant="ghost" size="sm" onClick={() => setEditHint(true)} title="修改">
-                    <Pencil className="h-4 w-4" />
-                  </Button>
+                  <RowActionButton icon={Pencil} label="修改" onClick={() => setEditHint(true)} />
                 )}
               </>
             )}

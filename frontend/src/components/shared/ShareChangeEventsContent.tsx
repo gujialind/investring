@@ -33,7 +33,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
-import { Plus, ArrowLeft, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Eye } from "lucide-react";
+import { Plus, ArrowLeft, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Info } from "lucide-react";
+import RowActionButton from "@/components/shared/RowActionButton";
 import Link from "next/link";
 import { ShareChangeEventCreate, ApiException } from "@/lib/api";
 import { platformApi } from "@/lib/api";
@@ -826,58 +827,45 @@ export default function ShareChangeEventsContent({
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-2">
-                            {/* 查看详情（#754）：全状态、父/子记录一律可读 */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              title="查看详情"
-                              data-testid={`event-detail-open-${event.id}`}
+                            {/* 详情（#754）：全状态、父/子记录一律可读 */}
+                            <RowActionButton
+                              icon={Info}
+                              label="详情"
+                              testId={`event-detail-open-${event.id}`}
                               onClick={() => setDetailEventId(event.id)}
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
+                            />
                             {event.status === "pending" && (
                               <>
                                 {/* 编辑（#342）：仅 pending 父记录；子记录恒为 confirmed，parent 守卫为防御性 */}
                                 {!event.parent_event_id && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    title="编辑"
+                                  <RowActionButton
+                                    icon={Pencil}
+                                    label="编辑"
                                     onClick={() => setEditingEvent(event)}
-                                  >
-                                    <Pencil className="h-4 w-4" />
-                                  </Button>
+                                  />
                                 )}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  title="确认"
+                                <RowActionButton
+                                  icon={CheckCircle}
+                                  label="确认"
                                   onClick={() => setConfirmEventId(event.id)}
-                                >
-                                  <CheckCircle className="h-4 w-4 text-success" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  title="取消"
+                                />
+                                <RowActionButton
+                                  icon={XCircle}
+                                  label="取消"
+                                  destructive
                                   onClick={() => cancelEvent.mutate(event.id)}
                                   disabled={cancelEvent.isPending}
-                                >
-                                  <XCircle className="h-4 w-4 text-destructive" />
-                                </Button>
+                                />
                               </>
                             )}
                             {/* 取消确认（#274）：子记录（基金级确认时拆出）不展示入口 */}
                             {event.status === "confirmed" && !event.parent_event_id && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                title="取消确认"
+                              <RowActionButton
+                                icon={Undo}
+                                label="取消确认"
+                                destructive
                                 onClick={() => setUnconfirmEventId(event.id)}
-                              >
-                                <Undo className="h-4 w-4" />
-                              </Button>
+                              />
                             )}
                           </div>
                         </TableCell>
