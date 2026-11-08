@@ -9,9 +9,11 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   Filter,
+  Info,
   List,
   Loader2,
   Pencil,
+  Undo,
 } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,6 +48,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
+import RowActionButton from "@/components/shared/RowActionButton";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import CancelTransferDialog from "@/components/shared/dialogs/CancelTransferDialog";
@@ -137,7 +140,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [detailRow, setDetailRow] = useState<CashFlowRow | null>(null);
   const [sameDayRow, setSameDayRow] = useState<CashFlowRow | null>(null);
-  // 撤销重估二次确认目标（危险操作，visual-spec §13）
+  // 撤销重估二次确认目标（危险操作，visual-spec §14）
   const [revokeRow, setRevokeRow] = useState<CashFlowRow | null>(null);
   // 撤销转移目标（#788：转移类流水详情弹窗危险操作区）
   const [cancelTransferRow, setCancelTransferRow] = useState<CashFlowRow | null>(null);
@@ -290,14 +293,13 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     if (row.action.kind === "confirm") {
       return (
         <div className="flex items-center justify-end gap-1">
-          <Button
-            variant="link"
-            size="sm"
-            data-testid="row-detail"
+          <RowActionButton
+            icon={Info}
+            label="详情"
+            testId="row-detail"
             onClick={() => openDetail(row)}
-          >
-            详情
-          </Button>
+          />
+          {/* 文本例外（visual-spec §8）：状态推进 + 动态业务文案，保留 outline 文本 + spinner */}
           <Button
             variant="outline"
             size="sm"
@@ -313,15 +315,22 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     }
     if (row.action.kind === "revoke") {
       return (
-        <Button variant="link" size="sm" data-testid="row-action" onClick={() => setRevokeRow(row)}>
-          {row.action.label}
-        </Button>
+        <RowActionButton
+          icon={Undo}
+          label={row.action.label}
+          destructive
+          testId="row-action"
+          onClick={() => setRevokeRow(row)}
+        />
       );
     }
     return (
-      <Button variant="link" size="sm" data-testid="row-action" onClick={() => openDetail(row)}>
-        {row.action.label}
-      </Button>
+      <RowActionButton
+        icon={Info}
+        label={row.action.label}
+        testId="row-action"
+        onClick={() => openDetail(row)}
+      />
     );
   };
 
