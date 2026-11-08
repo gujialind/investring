@@ -36,6 +36,7 @@ import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import ProductCell from "@/components/shared/ProductCell";
 import EmptyState from "@/components/shared/EmptyState";
+import RowActionButton from "@/components/shared/RowActionButton";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
@@ -603,54 +604,39 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                      <RowActionButton
+                        icon={Pencil}
+                        label="编辑"
                         onClick={() => handleEdit(product)}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                      />
+                      <RowActionButton
+                        icon={Trash2}
+                        label="删除"
+                        destructive
                         onClick={() => handleDelete(product.code, product.market)}
                         disabled={deleteProduct.isPending}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      />
                       {product.market && (
                         <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          <RowActionButton
+                            icon={RefreshCw}
+                            label="同步价格"
+                            loading={syncPrice.isPending}
                             onClick={() => handleSyncPrice(product)}
                             disabled={syncPrice.isPending}
-                          >
-                            {syncPrice.isPending ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          />
+                          <RowActionButton
+                            icon={TrendingUp}
+                            label="同步历史"
+                            loading={syncHistory.isPending}
                             onClick={() => handleSyncHistory(product)}
                             disabled={syncHistory.isPending}
-                          >
-                            {syncHistory.isPending ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <TrendingUp className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          />
+                          <RowActionButton
+                            icon={Eye}
+                            label="价格走势"
                             onClick={() => handleViewPrices(product)}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
+                          />
                         </>
                       )}
                     </TableCell>

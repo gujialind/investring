@@ -27,6 +27,7 @@ import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 import { useInvestorList, useCreateInvestor, useUpdateInvestor, useRemoveInvestor } from "@/hooks/useInvestor";
 import { Investor } from "@/types/investor";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import RowActionButton from "@/components/shared/RowActionButton";
 
 export default function InvestorsContent() {
   const { data, isLoading } = useInvestorList({ page_size: 100 });
@@ -244,21 +245,18 @@ export default function InvestorsContent() {
                   <TableCell>{investor.phone || "--"}</TableCell>
                   <TableCell>{investor.email || "--"}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                    <RowActionButton
+                      icon={Pencil}
+                      label="编辑"
                       onClick={() => handleEdit(investor)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                    />
+                    <RowActionButton
+                      icon={Trash2}
+                      label="删除"
+                      destructive
                       onClick={() => handleDelete(investor.code)}
                       disabled={removeInvestor.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    />
                   </TableCell>
                 </TableRow>
               ))}

@@ -52,6 +52,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import RowActionButton from "@/components/shared/RowActionButton";
 import EmptyState from "@/components/shared/EmptyState";
 import {
   formatCurrency,
@@ -530,15 +531,14 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
                           <TableCell className={getNumberCellClass()}>{formatCurrency(item.total_value)}</TableCell>
                           <TableCell className={getNumberCellClass()}>{formatCurrency(item.in_transit_total)}</TableCell>
                           <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
+                            <RowActionButton
+                              icon={Trash2}
+                              label="删除"
+                              destructive
                               disabled={!isLatest || deleteSnapshot.isPending}
-                              title={isLatest ? "删除该日快照" : "快照连续原则：仅可删除最新日快照"}
+                              disabledHint={isLatest ? undefined : "快照连续原则：仅可删除最新日快照"}
                               onClick={() => isLatest && setPendingDeleteDate(item.snapshot_date)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            />
                           </TableCell>
                         </TableRow>
                       );
