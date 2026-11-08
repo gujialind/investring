@@ -228,6 +228,8 @@ export default function ShareChangeEventsContent({
   const updateEvent = useUpdateShareChangeEvent(code, editingEvent?.id ?? 0);
   // 取消确认二次确认弹窗（#274；后端保护：SNAPSHOT_DEPENDENCY / CANNOT_UNCONFIRM_CHILD）
   const [unconfirmEventId, setUnconfirmEventId] = useState<number | null>(null);
+  // 取消二次确认弹窗（#845，语义对齐同组件取消确认）
+  const [cancelEventId, setCancelEventId] = useState<number | null>(null);
   // 查看详情（#754）：按 id 从当前行集派生——确认/取消确认等 mutation 经 invalidate
   // 刷新列表后，打开中的弹窗数据随之新鲜（spec §3.1）；行消失（筛选变化）即关闭
   const [detailEventId, setDetailEventId] = useState<number | null>(null);
@@ -849,11 +851,12 @@ export default function ShareChangeEventsContent({
                                   label="确认"
                                   onClick={() => setConfirmEventId(event.id)}
                                 />
+                                {/* 取消（#845）：先开二次确认弹窗，确认后才发起取消请求 */}
                                 <RowActionButton
                                   icon={XCircle}
                                   label="取消"
                                   destructive
-                                  onClick={() => cancelEvent.mutate(event.id)}
+                                  onClick={() => setCancelEventId(event.id)}
                                   disabled={cancelEvent.isPending}
                                 />
                               </>
@@ -949,7 +952,9 @@ export default function ShareChangeEventsContent({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
+            {/* #845：危险操作确认按钮标 solid destructive（visual-spec §14），行为不变 */}
             <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
               onClick={() => {
                 if (forceCoverData) {
                   submitCreate(forceCoverData, true);
@@ -977,11 +982,43 @@ export default function ShareChangeEventsContent({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
+            {/* #845：危险操作确认按钮标 solid destructive（visual-spec §14），行为不变 */}
             <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
               onClick={() => {
                 if (unconfirmEventId !== null) {
                   unconfirmEvent.mutate(unconfirmEventId, {
                     onSuccess: () => setUnconfirmEventId(null),
+                  });
+                }
+              }}
+            >
+              确认
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 取消二次确认（#845，语义对齐同组件取消确认；后端保护经 getErrorMessage 透传） */}
+      <AlertDialog
+        open={cancelEventId !== null}
+        onOpenChange={(open) => !open && setCancelEventId(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>取消事件</AlertDialogTitle>
+            <AlertDialogDescription>
+              取消后该份额变动事件将标记为已取消，不再参与确认。是否继续？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                if (cancelEventId !== null) {
+                  cancelEvent.mutate(cancelEventId, {
+                    onSuccess: () => setCancelEventId(null),
                   });
                 }
               }}
