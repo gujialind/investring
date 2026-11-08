@@ -42,6 +42,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { cn } from "@/lib/utils";
 import { DIMENSION_LABELS, RULE_DIMENSIONS, RULE_LABELS } from "@/lib/dimensions";
 import LoadingState from "@/components/shared/LoadingState";
+import RowActionButton from "@/components/shared/RowActionButton";
 
 const DIMENSION_DESCRIPTIONS: Record<string, string> = {
   region: "产品投资地区（股票/债券必填）",
@@ -483,9 +484,7 @@ export default function AssetClassificationsContent({
                     <span className="text-sm font-medium">{c.name}</span>
                     {inactiveBadge(c)}
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(c)}>
-                    <Pencil className="h-4 w-4" />
-                  </Button>
+                  <RowActionButton icon={Pencil} label="编辑" onClick={() => openEdit(c)} />
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {c.code} · 排序 {c.sort_order} · {rulesSummary(c.code)}
@@ -519,9 +518,7 @@ export default function AssetClassificationsContent({
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(c)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
+                      <RowActionButton icon={Pencil} label="编辑" onClick={() => openEdit(c)} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -549,9 +546,7 @@ export default function AssetClassificationsContent({
                         <span className="text-sm font-medium">{v.name}</span>
                         {inactiveBadge(v)}
                       </div>
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(v)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
+                      <RowActionButton icon={Pencil} label="编辑" onClick={() => openEdit(v)} />
                     </div>
                     <p className="text-xs text-muted-foreground">{v.code}</p>
                     {applicableChips(v)}
@@ -586,9 +581,7 @@ export default function AssetClassificationsContent({
                           </TableCell>
                         ))}
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(v)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          <RowActionButton icon={Pencil} label="编辑" onClick={() => openEdit(v)} />
                         </TableCell>
                       </TableRow>
                     ))}

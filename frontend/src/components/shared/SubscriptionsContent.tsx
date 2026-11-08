@@ -48,6 +48,7 @@ import { validatePlatformCode, parsePositiveNumber } from "@/lib/validation";
 import { Badge } from "@/components/ui/badge";
 import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
+import RowActionButton from "@/components/shared/RowActionButton";
 import Link from "next/link";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
@@ -653,56 +654,46 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                           confirmed=取消确认/修改引导，无删除（后端 CANNOT_DELETE_CONFIRMED） */}
                       {sub.status === "pending" && (
                         <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          <RowActionButton
+                            icon={Pencil}
+                            label="编辑"
                             onClick={() => openEditDialog(sub)}
-                            title="编辑"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          />
+                          <RowActionButton
+                            icon={CheckCircle}
+                            label="确认"
                             onClick={() => setConfirmState({ action: "confirm", id: sub.id })}
                             disabled={confirmSubscription.isPending}
-                            title="确认"
-                          >
-                            <CheckCircle className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          />
+                          <RowActionButton
+                            icon={XCircle}
+                            label="取消"
+                            destructive
                             onClick={() => setConfirmState({ action: "cancel", id: sub.id })}
                             disabled={cancelSubscription.isPending}
-                            title="取消"
-                          >
-                            <XCircle className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          />
+                          <RowActionButton
+                            icon={Trash2}
+                            label="删除"
+                            destructive
                             onClick={() => setConfirmState({ action: "delete", id: sub.id })}
                             disabled={deleteSubscriptionMutation.isPending}
-                            title="删除"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          />
                         </>
                       )}
                       {sub.status === "confirmed" && (
                         <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          <RowActionButton
+                            icon={Undo}
+                            label="取消确认"
+                            destructive
                             onClick={() => setConfirmState({ action: "unconfirm", id: sub.id })}
-                            title="取消确认"
-                          >
-                            <Undo className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setEditHint(true)} title="修改">
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          />
+                          <RowActionButton
+                            icon={Pencil}
+                            label="修改"
+                            onClick={() => setEditHint(true)}
+                          />
                         </>
                       )}
                     </TableCell>

@@ -25,6 +25,7 @@ import {
 import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 import { Platform, PlatformCreate } from "@/lib/api";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import RowActionButton from "@/components/shared/RowActionButton";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import {
   usePlatformList,
@@ -201,21 +202,18 @@ export default function PlatformsContent() {
                   <TableCell>{platform.name}</TableCell>
                   <TableCell>{platform.platform_type || "--"}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                    <RowActionButton
+                      icon={Pencil}
+                      label="编辑"
                       onClick={() => handleEdit(platform)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                    />
+                    <RowActionButton
+                      icon={Trash2}
+                      label="删除"
+                      destructive
                       onClick={() => handleDelete(platform.code)}
                       disabled={deletePlatform.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    />
                   </TableCell>
                 </TableRow>
               ))}
