@@ -12,11 +12,13 @@
 from datetime import datetime, timedelta
 
 from app.models.audit_log import AuditLog
+from app.models.auth import ApiKey, AuthSession
 from app.models.login_log import LoginLog
 from app.models.nav_sync_detail import NavSyncDetail
 from app.models.scheduled_task import ScheduledTask
 from app.models.system_error_log import SystemErrorLog
 from app.models.task_execution_log import TaskExecutionLog
+from app.services.auth_service import utcnow
 from app.services.task_runner import TRIGGER_SCHEDULED, cleanup_old_logs
 
 AGED = datetime.now() - timedelta(days=120)
@@ -92,6 +94,8 @@ class TestCleanupOldLogsForeignKey:
         assert result == {
             "login_logs": 1,
             "audit_logs": 1,
+            "auth_sessions": 0,
+            "api_keys": 0,
             "nav_sync_details": 2,
             "task_logs": 1,
             "error_logs": 1,
@@ -113,6 +117,85 @@ class TestCleanupOldLogsForeignKey:
         assert result["task_logs"] == 1
         assert test_db.query(NavSyncDetail).count() == 0
         assert test_db.query(TaskExecutionLog).count() == 0
+
+
+def _session(db, *, sid, expires_at, revoked_at=None):
+    db.add(AuthSession(
+        id=sid,
+        investor_code="ADMIN",
+        created_at=utcnow() - timedelta(days=200),
+        expires_at=expires_at,
+        revoked_at=revoked_at,
+    ))
+
+
+def _api_key(db, *, kid, expires_at=None, revoked_at=None):
+    db.add(ApiKey(
+        id=kid,
+        investor_code="ADMIN",
+        label=f"key-{kid[:4]}",
+        secret_hash="0" * 64,
+        scopes=["read"],
+        created_at=utcnow() - timedelta(days=200),
+        expires_at=expires_at,
+        revoked_at=revoked_at,
+    ))
+
+
+class TestCredentialCleanup:
+    """#802：失效凭证按 90 天保留期清理，有效凭证永不误删"""
+
+    def test_valid_credentials_retained(self, test_db):
+        now = utcnow()
+        # 活跃会话
+        _session(test_db, sid="a" * 32, expires_at=now + timedelta(days=7))
+        # 已过期但仍在 90 天保留期内
+        _session(test_db, sid="b" * 32, expires_at=now - timedelta(days=10))
+        # 已撤销但仍在 90 天保留期内
+        _session(
+            test_db, sid="c" * 32,
+            expires_at=now + timedelta(days=7),
+            revoked_at=now - timedelta(days=10),
+        )
+        # 永久且未撤销的 Key
+        _api_key(test_db, kid="k" * 32)
+        # 未撤销、未到期的 Key
+        _api_key(test_db, kid="l" * 32, expires_at=now + timedelta(days=30))
+        test_db.flush()
+
+        result = cleanup_old_logs(test_db)
+
+        assert result["auth_sessions"] == 0
+        assert result["api_keys"] == 0
+        assert test_db.query(AuthSession).count() == 3
+        assert test_db.query(ApiKey).count() == 2
+
+    def test_aged_invalid_credentials_deleted(self, test_db):
+        now = utcnow()
+        aged = now - timedelta(days=120)
+        # 超期自然过期会话
+        _session(test_db, sid="d" * 32, expires_at=aged)
+        # 超期撤销会话：expires_at 仍在未来，靠 revoked_at 分支命中
+        _session(
+            test_db, sid="e" * 32,
+            expires_at=now + timedelta(days=7),
+            revoked_at=aged,
+        )
+        # 有效会话不得误删
+        _session(test_db, sid="f" * 32, expires_at=now + timedelta(days=7))
+        # 永久 Key 不得误删
+        _api_key(test_db, kid="m" * 32)
+        # 超期已撤销 / 超期已过期的 Key
+        _api_key(test_db, kid="n" * 32, revoked_at=aged)
+        _api_key(test_db, kid="o" * 32, expires_at=aged)
+        test_db.flush()
+
+        result = cleanup_old_logs(test_db)
+
+        assert result["auth_sessions"] == 2
+        assert result["api_keys"] == 2
+        assert [row.id for row in test_db.query(AuthSession).all()] == ["f" * 32]
+        assert [row.id for row in test_db.query(ApiKey).all()] == ["m" * 32]
 
 
 class TestLogCleanupRouter:
