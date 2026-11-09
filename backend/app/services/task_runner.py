@@ -44,14 +44,21 @@ TRIGGER_CASCADE = "cascade"
 # error_message 落库上限（Text 列本身无界，此处按 #305 既有口径截断）
 ERROR_MESSAGE_MAX = 1000
 
+# 失效认证凭证（auth_session / api_key）保留期（#802）。须显著长于
+# token_expire_days（默认 7 天），且与审计日志 90 天对齐，避免
+# audit_log.credential_id 指向已删除的凭证。
+CREDENTIAL_RETENTION_DAYS = 90
+
 
 def cleanup_old_logs(db: Session) -> dict:
     """
-    清理过期日志
+    清理过期日志与失效认证凭证
 
     清理策略：
     - 登录日志：保留 30 天
     - 审计日志：保留 90 天
+    - 失效认证会话：失效后保留 90 天
+    - 已撤销/已过期的代理凭证：失效后保留 90 天（永久且未撤销的 Key 永不清理）
     - 净值同步明细：保留 90 天
     - 任务执行日志：保留 90 天
     - 系统错误日志：保留 30 天
@@ -65,15 +72,22 @@ def cleanup_old_logs(db: Session) -> dict:
     from app.models.login_log import LoginLog
     from app.models.audit_log import AuditLog
     from app.models.system_error_log import SystemErrorLog
+    from app.models.auth import AuthSession, ApiKey
+    from app.services.auth_service import utcnow
 
     cutoff_login = datetime.now() - timedelta(days=30)
     cutoff_audit = datetime.now() - timedelta(days=90)
     cutoff_task = datetime.now() - timedelta(days=90)
     cutoff_error = datetime.now() - timedelta(days=30)
+    # 凭证 expires_at / revoked_at 由 auth_service.utcnow() 写为 naive UTC；
+    # cutoff 必须同源，不能复用上面的本地时间 datetime.now()（本地开发会偏移时区）。
+    cutoff_credential = utcnow() - timedelta(days=CREDENTIAL_RETENTION_DAYS)
 
     deleted = {
         "login_logs": 0,
         "audit_logs": 0,
+        "auth_sessions": 0,
+        "api_keys": 0,
         "nav_sync_details": 0,
         "task_logs": 0,
         "error_logs": 0,
@@ -86,6 +100,22 @@ def cleanup_old_logs(db: Session) -> dict:
     deleted["audit_logs"] = db.query(AuditLog).filter(
         AuditLog.created_at < cutoff_audit
     ).delete()
+
+    # 仅删除已失效且超过保留期的凭证：两分支都要求对应失效锚点已老化，
+    # 「未撤销且未过期」的有效行两分支均不命中（NULL 比较不成立）。
+    # api_key 的 expires_at / revoked_at 均为 NULL（永久且未撤销）时永不删除。
+    deleted["auth_sessions"] = db.query(AuthSession).filter(
+        or_(
+            AuthSession.revoked_at < cutoff_credential,
+            AuthSession.expires_at < cutoff_credential,
+        )
+    ).delete(synchronize_session=False)
+    deleted["api_keys"] = db.query(ApiKey).filter(
+        or_(
+            ApiKey.revoked_at < cutoff_credential,
+            ApiKey.expires_at < cutoff_credential,
+        )
+    ).delete(synchronize_session=False)
 
     # #426：子行除按自身 created_at 老化外，还要兜住「子行比父行新几秒、
     # 自身未老化但仍引用老化父行」的边界行（两者在同一次任务运行中先后创建）
