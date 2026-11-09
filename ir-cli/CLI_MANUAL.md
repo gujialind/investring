@@ -127,6 +127,7 @@ ir schema trade              # 仅输出指定命令组
 | `CONNECTION_ERROR` / `TIMEOUT_ERROR` / `NETWORK_ERROR` | 网络层失败：连接失败 / 超时 / 传输中断 |
 | `INVALID_JSON` | 本地校验：`--json` 不是合法 JSON 对象 |
 | `USAGE_ERROR` | Click 层用法错误：未知选项 / 未知子命令 / 缺必填参数。由入口统一收敛（`ir_cli/main.py::IrTyperGroup`），**exit 64**、命令未执行（#520）；#808 起命令内参数语义冲突（`--scope all` 与 `--products` 并存、`--scope by_product` 缺 `--products`、`--products` 条目全部非法）同样收敛为此码，均为 exit 64 且不下发任务 |
+| `SELF_REVOKE_FORBIDDEN` | CLI 本地拒绝：当前生效凭证（`IR_TOKEN` 或本地 token 文件中的 `ir_key_<key_id>.<secret>`）就是待撤销的 Key；**exit 1、零请求**。先清除 `IR_TOKEN` 或改用管理员密码会话登录（#850） |
 | `CLIENT_INIT_ERROR` | HTTP 客户端构造失败（构造期异常，含第三方库内部错误），**exit 3**；CLI 不读取代理环境变量（见 §2.2），排查方向为 `IR_BASE_URL` 合法性（#798） |
 | `INTERNAL_ERROR` | 未预期异常的全局兜底：任何未经专用错误出口收敛的异常由入口转为此码，**exit 1**，stdout 恒 JSON、不漏 raw traceback（#798）；设 `IR_DEBUG=1` 时完整异常栈写入 stderr（stdout 契约不变），报障复现时建议带上 |
 
@@ -166,7 +167,7 @@ ir schema trade              # 仅输出指定命令组
 | `INVALID_CONFIRM_DAYS` | confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；返回 422 |
 | `DIMENSION_VALUE_IN_USE` | 维度值关联仍被产品引用，不可移除（`details.products` 列引用产品） |
 | `DIMENSION_RULE_CONFLICT` | 维度规则收紧与存量产品冲突（`details.products` 列冲突产品） |
-| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1，不发任何后端请求）：`investor delete`、`portfolio close`、`portfolio delete`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
+| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1；除 `auth key-revoke` 允许一次只读 `GET /api/auth/keys` 用于展示影响面外，不发任何后端请求）：`investor delete`、`portfolio close`、`portfolio delete`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）、`auth key-revoke`（#850）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
 
 ### 3.4 数据类型说明
 
@@ -268,10 +269,16 @@ ir auth key-list
 #### `ir auth key-revoke`
 
 ```bash
-ir auth key-revoke <KEY_ID>
+ir auth key-revoke <KEY_ID> [--yes]
 ```
 
 管理员持久化撤销指定 Key；已撤销 Key 再撤销不重复记审计。代理 Key 自身不能管理凭证。
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时先只读查询一次目标 Key（`GET /api/auth/keys`）并在 stderr 展示 `label`、`scopes`、`expires_at`（空为永久）、`created_at` 与不可逆提示，随后返回 `CONFIRM_REQUIRED`（exit 1），不发出撤销写请求 |
+
+撤销前先做本地防呆：当前生效凭证（含 `IR_TOKEN`）就是目标 Key 时直接拒绝（`SELF_REVOKE_FORBIDDEN`，exit 1、零请求）；目标不在 Key 列表中返回 `NOT_FOUND`，同样不发撤销请求。
 
 ---
 

@@ -140,11 +140,81 @@ def key_list():
     success(data=result["data"])
 
 
+_API_KEY_PREFIX = "ir_key_"  # 与 backend API_KEY_PREFIX 保持一致
+
+
+def _self_key_id(token: Optional[str]) -> Optional[str]:
+    """从生效凭证解析代理 Key 的 id；非 Key 或形态不合法时返回 None。"""
+    if not token or not token.startswith(_API_KEY_PREFIX):
+        return None
+    key_id, separator, _ = token[len(_API_KEY_PREFIX):].partition(".")
+    if not separator or len(key_id) != 32 or any(ch not in "0123456789abcdef" for ch in key_id):
+        return None
+    return key_id
+
+
+def _fetch_key(client: APIClient, key_id: str) -> dict:
+    """只读定位目标 Key 元数据；未命中时本地失败，不发出撤销请求。"""
+    for key in client.get("/api/auth/keys")["data"]:
+        if key.get("id") == key_id:
+            return key
+    error(
+        "NOT_FOUND",
+        f"代理凭证不存在: {key_id}",
+        details={"key_id": key_id},
+        hints=["用 ir auth key-list 核对可用 key_id（列表包含已撤销记录）"],
+    )
+
+
+def _impact_details(key: dict) -> dict:
+    return {
+        "id": key.get("id"),
+        "label": key.get("label"),
+        "scopes": key.get("scopes") or [],
+        "expires_at": key.get("expires_at"),
+        "created_at": key.get("created_at"),
+        "revoked_at": key.get("revoked_at"),
+    }
+
+
+def _render_key_impact(key: dict) -> None:
+    """把撤销影响面写 stderr，stdout 保持单个 JSON。"""
+    scopes = ", ".join(key.get("scopes") or []) or "—"
+    lines = [
+        f"[撤销影响面] 目标 Key: {key.get('id')}",
+        f"  label:      {key.get('label') or '—'}",
+        f"  scopes:     {scopes}",
+        f"  expires_at: {key.get('expires_at') or '永久'}",
+        f"  created_at: {key.get('created_at') or '—'}",
+    ]
+    if key.get("revoked_at"):
+        lines.append(f"  状态:       已于 {key['revoked_at']} 撤销；重复撤销幂等，不会重复写审计")
+    lines.append("该操作不可逆，撤销后只能重建；请确认 key_id 指向的是预期凭证。")
+    print("\n".join(lines), file=sys.stderr)
+
+
 @app.command("key-revoke")
-def key_revoke(key_id: str = typer.Argument(..., help="待撤销的凭证 ID")):
+def key_revoke(
+    key_id: str = typer.Argument(..., help="待撤销的凭证 ID"),
+    yes: bool = typer.Option(False, "--yes", help="确认执行撤销；未提供则只展示影响面并拒绝"),
+):
     """管理员持久化撤销指定 Key"""
     client = APIClient.from_config()
     try:
+        if _self_key_id(client.token) == key_id:
+            error(
+                "SELF_REVOKE_FORBIDDEN",
+                "当前凭证就是待撤销的 Key：先清除 IR_TOKEN 或改用管理员密码会话登录后重试",
+                details={"key_id": key_id, "credential_type": "api_key"},
+            )
+        key = _fetch_key(client, key_id)
+        _render_key_impact(key)
+        if not yes:
+            error(
+                "CONFIRM_REQUIRED",
+                f"撤销代理 Key {key_id} 不可逆，撤销后只能重建；确认无误后追加 --yes 重跑",
+                details=_impact_details(key),
+            )
         result = client.post(f"/api/auth/keys/{key_id}/revoke")
     finally:
         client.close()

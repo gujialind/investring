@@ -55,6 +55,7 @@ ERROR_HINTS: dict = {
     "INVALID_CONFIRM_DAYS": "confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；修正后重试: ir product update <code> <market> --confirm-days <N>",
     "INVALID_SHARE_CONFIRM_DATE": "再投资份额确认日非法：仅 reinvest_dividend 可设、须为产品市场日历的交易日（HK_MUTUAL 按 HKEX，其余按 SSE；`ir system trading-day is-open <date>` 查询按 SSE 口径）且晚于除息日；改正后重试，或清空改按除息日应用份额: ir share-event update <id> --json '{\"share_confirm_date\": null}'",
     "CONFIRM_REQUIRED": "破坏性操作未确认已被拒绝：先用命令给出的 get/status 目标核实影响面，确认无误后追加 --yes 重跑",
+    "SELF_REVOKE_FORBIDDEN": "当前生效凭证就是待撤销的 Key，未发请求：先清除 IR_TOKEN（或改用管理员密码会话登录）再重试；Key 不能管理凭证",
     # CLI 侧错误码（后端不产出）：#520 用法错误改由入口统一收敛为 JSON + exit 64
     "USAGE_ERROR": "选项/参数不存在、必填缺失或取值冲突（如 --products 条目需 code|market 格式、--scope all 与 --products 不能并用），命令未执行：先 ir schema --index 定位命令，再 ir <组> <子命令> --help 核对选项与取值",
     # #798：构造期异常（exit 3）与全局兜底（exit 1），保证任何异常路径都走 JSON 错误出口
