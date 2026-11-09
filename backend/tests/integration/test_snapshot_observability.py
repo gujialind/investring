@@ -84,6 +84,7 @@ class TestRecalculateObservability:
                 "start_date": D0.isoformat(),
                 "end_date": D0.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -121,6 +122,7 @@ class TestRecalculateObservability:
                 "start_date": D0.isoformat(),
                 "end_date": D0.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -186,6 +188,7 @@ class TestRecalculateObservability:
         resp = client.post(
             "/api/snapshots/recalculate",
             json={"portfolio_code": code, "start_date": D0.isoformat(), "end_date": D0.isoformat()},
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200, resp.text
@@ -250,6 +253,7 @@ class TestRecalculateObservability:
                 "start_date": D0.isoformat(),
                 "end_date": D0.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200, resp.text
@@ -290,6 +294,7 @@ class TestRecalculateObservability:
                 "start_date": D0.isoformat(),
                 "end_date": EX_DAY.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200

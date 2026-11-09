@@ -139,6 +139,7 @@ class TestRecalculatePrecheckIs422Not500:
             "/api/snapshots/recalculate",
             json={"portfolio_code": code,
                   "start_date": TARGET.isoformat(), "end_date": TARGET.isoformat()},
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 422, resp.text

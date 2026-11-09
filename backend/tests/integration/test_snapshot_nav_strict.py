@@ -244,6 +244,7 @@ class TestSnapshotNavStrict:
                 "start_date": D0.isoformat(),
                 "end_date": NEXT_DAY.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 422
@@ -534,6 +535,7 @@ class TestNavLagDaysPricing:
 
         resp = client.post(
             f"/api/snapshots/{endpoint}", json=payload, headers=admin_headers,
+            params={"confirm": True} if endpoint == "recalculate" else None,
         )
         assert resp.status_code == 422, resp.text
         detail = resp.json()["detail"]

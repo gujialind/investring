@@ -9,6 +9,7 @@
 的编排层例外（与 task_runner._generate_snapshots_for_date 语义一致）：
 多日回补中已完成的日子须保留，失败日仅回滚当日。
 """
+import bisect
 import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -27,6 +28,7 @@ from app.services.trading_utils import (
     SSE_EXCHANGE,
     exchange_for_market,
     is_trading_day as _trading_utils_is_trading_day,
+    list_trading_days,
     try_get_next_trading_day,
     get_latest_snapshot_date,
 )
@@ -419,6 +421,68 @@ def generate_daily_snapshots(
     }
 
 
+def _resolve_recalculate_portfolios(db: Session, portfolio_code: Optional[str]) -> List[Portfolio]:
+    """重算目标组合：显式 code 只校验存在性（不查 active，与执行侧一致）；None/空串 → 全部 active。
+
+    必须保留 `if portfolio_code:` 真值判断：改成 `is not None` 会让管理员会话传空串
+    从「全部 active」变成 422 VALIDATION_FAILED，属静默行为回归（#855）。
+    """
+    if portfolio_code:
+        portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
+        if not portfolio:
+            raise ValueError(f"组合 {portfolio_code} 不存在")
+        return [portfolio]
+    return db.query(Portfolio).filter(Portfolio.status == "active").all()
+
+
+def _effective_recalculate_end(db: Session, portfolio_code: str, end_date: date) -> date:
+    """实际重算终点：end_date 之后仍有快照时扩展到最新快照日（纯计算，日志留在执行侧）。"""
+    latest_snapshot_date = db.query(func.max(PortfolioValueSnapshot.snapshot_date)).filter(
+        PortfolioValueSnapshot.portfolio_code == portfolio_code
+    ).scalar()
+    if latest_snapshot_date and latest_snapshot_date > end_date:
+        return latest_snapshot_date
+    return end_date
+
+
+def preview_recalculate_range(
+    db: Session,
+    portfolio_code: Optional[str],
+    start_date: date,
+    end_date: date,
+) -> Dict[str, Any]:
+    """重算影响面预览（纯 SELECT、零副作用、不预校验 NAV）。
+
+    trading_days 为区间内已同步交易日张数（工作量上界），不是成功承诺。
+    组合不存在与执行侧同抛 ValueError（router 映射为 422 VALIDATION_FAILED）。
+    """
+    portfolios = _resolve_recalculate_portfolios(db, portfolio_code)
+    effective_ends = [
+        (portfolio.code, _effective_recalculate_end(db, portfolio.code, end_date))
+        for portfolio in portfolios
+    ]
+    # 一次查询覆盖全部组合，再按各组合 effective_end 用 bisect 切分计数
+    trading_days = (
+        list_trading_days(db, start_date, max(end for _, end in effective_ends))
+        if effective_ends else []
+    )
+    entries = []
+    for code, effective_end in effective_ends:
+        lo = bisect.bisect_left(trading_days, start_date)
+        hi = bisect.bisect_right(trading_days, effective_end)
+        entries.append({
+            "portfolio_code": code,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "effective_end_date": effective_end.isoformat(),
+            "trading_days": max(hi - lo, 0),
+        })
+    return {
+        "portfolios": entries,
+        "total_trading_days": sum(entry["trading_days"] for entry in entries),
+    }
+
+
 def recalculate_snapshots(
     db: Session,
     portfolio_code: Optional[str],
@@ -452,32 +516,25 @@ def recalculate_snapshots(
         由调用方在无 errors 时统一 commit、有 errors 时统一 rollback，
         对外表现为「要么完整成功，要么无变化」。
     """
-    # 获取需要处理的组合列表
-    if portfolio_code:
-        portfolios = [db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()]
-        if not portfolios[0]:
-            raise ValueError(f"组合 {portfolio_code} 不存在")
-    else:
-        portfolios = db.query(Portfolio).filter(Portfolio.status == "active").all()
+    # 获取需要处理的组合列表（显式 code 只校验存在性；None/空串 = 全部 active）
+    portfolios = _resolve_recalculate_portfolios(db, portfolio_code)
 
     results = []
 
     for portfolio in portfolios:
         # 检查 end_date 之后是否存在快照，若有则自动扩展 end_date
         # 因为 D 日快照被重算后，D+1 日快照依赖 D 日数据，也必须重新生成
-        latest_snapshot_date = db.query(func.max(PortfolioValueSnapshot.snapshot_date)).filter(
-            PortfolioValueSnapshot.portfolio_code == portfolio.code
-        ).scalar()
-        effective_end_date = end_date
-        if latest_snapshot_date and latest_snapshot_date > end_date:
+        effective_end_date = _effective_recalculate_end(db, portfolio.code, end_date)
+        if effective_end_date > end_date:
             logger.info(
                 f"组合 {portfolio.code}: end_date({end_date}) 后存在快照"
-                f"(最新={latest_snapshot_date})，自动扩展重算区间"
+                f"(最新={effective_end_date})，自动扩展重算区间"
             )
-            effective_end_date = latest_snapshot_date
 
         result = {
             "portfolio_code": portfolio.code,
+            # 实际改写终点（总是写出；未扩展时 = 请求 end_date），供审计追溯
+            "effective_end_date": effective_end_date.isoformat(),
             "processed_dates": [],
             "total_processed": 0,
             "auto_confirmed": [],
@@ -618,6 +675,7 @@ def recalculate_snapshots(
             "portfolios": [
                 {
                     "portfolio_code": r["portfolio_code"],
+                    "effective_end_date": r["effective_end_date"],
                     "processed_dates": r["processed_dates"],
                     "auto_confirmed": len(r["auto_confirmed"]),
                     "cascaded_unconfirmed": len(r["cascaded_unconfirmed"]),

@@ -136,6 +136,54 @@ class TestDeleteBulkRegression:
         assert client.calls == []
 
 
+class TestRecalculateRemoteConfirm:
+    """同步重算不做本地闸门（#855）：未带 --yes 也发请求，由后端返回零副作用预览"""
+
+    ARGS = [
+        "snapshot", "recalculate",
+        "--start-date", "2026-01-05", "--end-date", "2026-01-06", "--portfolio-code", "P1",
+    ]
+    BODY = {"start_date": "2026-01-05", "end_date": "2026-01-06", "portfolio_code": "P1"}
+
+    def test_without_yes_requests_preview(self, monkeypatch, cli):
+        client = _patch_client(monkeypatch)
+        code, _, raw = _run(cli, self.ARGS)
+        assert code == 0, raw
+        assert client.calls == [{
+            "method": "POST",
+            "path": "/api/snapshots/recalculate",
+            "params": {"confirm": False},
+            "json": self.BODY,
+        }]
+
+    def test_with_yes_confirms(self, monkeypatch, cli):
+        client = _patch_client(monkeypatch)
+        code, _, raw = _run(cli, self.ARGS + ["--yes"])
+        assert code == 0, raw
+        assert client.calls == [{
+            "method": "POST",
+            "path": "/api/snapshots/recalculate",
+            "params": {"confirm": True},
+            "json": self.BODY,
+        }]
+
+    def test_async_path_carries_no_confirm(self, monkeypatch, cli):
+        client = _patch_client(monkeypatch)
+        code, _, raw = _run(cli, self.ARGS + ["--yes", "--async"])
+        assert code == 0, raw
+        assert client.calls == [{
+            "method": "POST",
+            "path": "/api/snapshots/recalculate-async",
+            "params": {},
+            "json": self.BODY,
+        }]
+
+    def test_help_lists_yes(self, cli):
+        result = _runner().invoke(cli, ["snapshot", "recalculate", "--help"])
+        assert result.exit_code == 0
+        assert "--yes" in result.stdout.split("Options:", 1)[1]
+
+
 @pytest.fixture()
 def cli():
     return app

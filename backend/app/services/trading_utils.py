@@ -56,6 +56,28 @@ def is_trading_day(db: Session, target_date: date, exchange: str = SSE_EXCHANGE)
     return cal.is_open
 
 
+def list_trading_days(
+    db: Session, start_date: date, end_date: date, exchange: str = SSE_EXCHANGE
+) -> list[date]:
+    """区间内交易日的升序列表（只数存量行，不判断日历是否同步）。
+
+    与 `is_trading_day` 严格同判据：行缺失 = 非交易日。预览类调用只需数
+    已同步的存量行，永不因日历到头抛 `CALENDAR_NOT_SYNCED`。
+    """
+    rows = (
+        db.query(TradingCalendar.calendar_date)
+        .filter(
+            TradingCalendar.exchange == exchange,
+            TradingCalendar.is_open == True,
+            TradingCalendar.calendar_date >= start_date,
+            TradingCalendar.calendar_date <= end_date,
+        )
+        .order_by(TradingCalendar.calendar_date.asc())
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
 _CALENDAR_MSG = "交易日历数据缺失，请先同步交易日历"
 
 

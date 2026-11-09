@@ -338,7 +338,7 @@ def test_api_choice_resumes_snapshots_and_recalculation_is_idempotent(
         _assert_economics(test_db, ledger, day, method, effective)
     for _ in range(2):
         response = client.post(
-            "/api/snapshots/recalculate", headers=admin_headers,
+            "/api/snapshots/recalculate", headers=admin_headers, params={"confirm": True},
             json={"portfolio_code": ledger.port, "start_date": EX.isoformat(), "end_date": APPLY.isoformat()},
         )
         assert response.status_code == 200, response.text

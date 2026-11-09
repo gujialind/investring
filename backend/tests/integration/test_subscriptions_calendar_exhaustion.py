@@ -205,6 +205,7 @@ class TestCascadeUnconfirmViaSnapshotPaths:
             "/api/snapshots/recalculate",
             json={"portfolio_code": code,
                   "start_date": APPLY.isoformat(), "end_date": APPLY.isoformat()},
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200, resp.text

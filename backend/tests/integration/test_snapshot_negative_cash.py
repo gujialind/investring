@@ -132,6 +132,7 @@ class TestRecalculateNegativeCashBlock:
                 "start_date": self.D0.isoformat(),
                 "end_date": self.NEXT_DAY.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -178,6 +179,7 @@ class TestRecalculateNegativeCashBlock:
                 "start_date": self.D0.isoformat(),
                 "end_date": self.D0.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200

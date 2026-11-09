@@ -523,7 +523,7 @@ def test_recalculate_is_idempotent(client, admin_headers, test_db):
     _generate(client, admin_headers, port, EX)
 
     for _ in range(2):
-        response = client.post("/api/snapshots/recalculate", headers=admin_headers, json={
+        response = client.post("/api/snapshots/recalculate", headers=admin_headers, params={"confirm": True}, json={
             "portfolio_code": port,
             "start_date": BASE.isoformat(),
             "end_date": EX.isoformat(),

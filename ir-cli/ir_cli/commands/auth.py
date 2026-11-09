@@ -111,9 +111,9 @@ def status():
 @app.command("key-create")
 def key_create(
     label: str = typer.Option(..., "--label", help="代理凭证标签"),
-    scope: list[str] = typer.Option(["ledger:read"], "--scope", help="权限范围：ledger:read 或 ledger:write，可重复"),
+    scope: list[str] = typer.Option(["ledger:read"], "--scope", help="权限范围：ledger:read / ledger:write / snapshot:ops，可重复；snapshot:ops 须与 ledger:read 或 ledger:write 同持才构成补录闭环，且 --expires-at 必填（≤90 天，闲置滑动）"),
     investor: Optional[str] = typer.Option(None, "--investor", help="所属用户代码，默认当前管理员"),
-    expires_at: Optional[str] = typer.Option(None, "--expires-at", help="含时区的 ISO 到期时间；默认永不过期"),
+    expires_at: Optional[str] = typer.Option(None, "--expires-at", help="含时区的 ISO 到期时间；默认永不过期（含 snapshot:ops 时必填且 ≤90 天）"),
 ):
     """管理员创建独立代理 Key；stdout 仅本次返回秘密，请保存到密钥管理器"""
     client = APIClient.from_config()

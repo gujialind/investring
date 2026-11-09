@@ -556,7 +556,7 @@ class TestSnapshotFlow:
         }
 
         resp = client.post(
-            "/api/snapshots/recalculate", headers=admin_headers,
+            "/api/snapshots/recalculate", headers=admin_headers, params={"confirm": True},
             json={"portfolio_code": port, "start_date": EX.isoformat(), "end_date": MID.isoformat()},
         )
         assert resp.status_code == 200, resp.text

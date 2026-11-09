@@ -260,7 +260,7 @@ def test_share_event_rebuild_recalculate_and_entitlement_cascade(
     _generate(client, admin_headers, MONDAY)
     assert _positions(test_db, MONDAY)[("CASH", PLATFORM)].cash_amount == 10
     for _ in range(2):
-        response = client.post("/api/snapshots/recalculate", headers=admin_headers, json={
+        response = client.post("/api/snapshots/recalculate", headers=admin_headers, params={"confirm": True}, json={
             "portfolio_code": PORTFOLIO, "start_date": EX.isoformat(), "end_date": MONDAY.isoformat(),
         })
         assert response.status_code == 200, response.text
@@ -279,7 +279,7 @@ def test_share_event_rebuild_recalculate_and_entitlement_cascade(
     assert event.cash_pay_date == WEEKEND
     assert _compute_in_transit_amounts(test_db, PORTFOLIO, EX) == {}
     assert calculate_available_cash(test_db, PORTFOLIO, PLATFORM, MONDAY) == 0
-    response = client.post("/api/snapshots/recalculate", headers=admin_headers, json={
+    response = client.post("/api/snapshots/recalculate", headers=admin_headers, params={"confirm": True}, json={
         "portfolio_code": PORTFOLIO, "start_date": BASE.isoformat(), "end_date": MONDAY.isoformat(),
     })
     assert response.status_code == 200, response.text
