@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { collectPageErrors } from "./helpers";
 
 /**
@@ -13,6 +13,117 @@ import { collectPageErrors } from "./helpers";
  */
 
 const DETAIL_PATH = "/products/510300.SH?market=CN_EXCHANGE";
+
+/**
+ * #829 代表性行夹具：只替换列表端点 GET /api/products，不改种子。
+ *
+ * 港互认双码行是真实种子无法给出的最坏宽度样本（种子 hk_sale_code 恒为 NULL，
+ * 见 product-display-code.spec.ts 顶部说明）；display_code 是后端派生后的 HTTP
+ * 形态，故直接给出，不依赖前端重新推导。
+ */
+const PRODUCT_LIST_RESPONSE = {
+  items: [
+    {
+      code: "1001767344",
+      market: "HK_MUTUAL",
+      name: "摩根国际债券人民币对冲",
+      product_type: "OEF",
+      hk_sale_code: "968050",
+      display_code: "968050",
+      confirm_days: 1,
+      nav_lag_days: 0,
+      is_qdii: false,
+      data_source: "akshare",
+      data_source_status: "success",
+    },
+    {
+      code: "161017.SZ",
+      market: "CN_EXCHANGE",
+      name: "富国中证500指数增强(LOF)A",
+      product_type: "LOF",
+      hk_sale_code: null,
+      display_code: "161017",
+      confirm_days: 0,
+      nav_lag_days: 0,
+      is_qdii: false,
+      data_source: "tushare",
+      data_source_status: "success",
+    },
+    {
+      code: "510300.SH",
+      market: "CN_EXCHANGE",
+      name: "沪深300ETF",
+      product_type: "ETF",
+      hk_sale_code: null,
+      display_code: "510300",
+      confirm_days: 0,
+      nav_lag_days: 0,
+      is_qdii: false,
+      data_source: "tushare",
+      data_source_status: "success",
+    },
+    {
+      code: "CASH",
+      market: "",
+      name: "现金类资产",
+      product_type: "CASH",
+      hk_sale_code: null,
+      display_code: "CASH",
+      confirm_days: 0,
+      nav_lag_days: 0,
+      is_qdii: false,
+      data_source_status: null,
+    },
+  ],
+  total: 4,
+  page: 1,
+  page_size: 20,
+};
+
+const LAYOUT_ROWS = [
+  { name: "摩根国际债券人民币对冲", expectedMeta: "968050（1001767344） · 香港互认" },
+  { name: "富国中证500指数增强(LOF)A", expectedMeta: "161017 · A股场内" },
+  { name: "沪深300ETF", expectedMeta: "510300 · A股场内" },
+  { name: "现金类资产", expectedMeta: "CASH" },
+];
+
+async function expectProductMetaLayout(row: Locator, label: string) {
+  const meta = row.getByTestId("product-cell-meta");
+  await expect(meta).toBeVisible();
+
+  const box = await meta.boundingBox();
+  if (!box) throw new Error(`${label}：次行没有可见盒`);
+
+  const metrics = await meta.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      lineHeight: parseFloat(style.lineHeight),
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    };
+  });
+  expect(metrics.lineHeight, `${label}：line-height 应为正数`).toBeGreaterThan(0);
+
+  // A：次行只占一行（2 行文本必然超过 1.5 倍行高）
+  expect(
+    box.height,
+    `${label}：次行应单行（高 ${box.height}px，行高 ${metrics.lineHeight}px）`
+  ).toBeLessThanOrEqual(metrics.lineHeight * 1.5);
+
+  // B：次行自身不横向溢出（scrollWidth 含 overflow:hidden/ellipsis 的内容宽）
+  expect(
+    metrics.scrollWidth - metrics.clientWidth,
+    `${label}：次行 scrollWidth=${metrics.scrollWidth} 应 ≤ clientWidth=${metrics.clientWidth}`
+  ).toBeLessThanOrEqual(1);
+
+  // C：首列不窄于该行次行内容宽（关系式，不写死像素阈值）
+  const cell = await row.getByRole("cell").first().boundingBox();
+  if (!cell) throw new Error(`${label}：首列没有可见盒`);
+  expect(
+    cell.width,
+    `${label}：首列宽 ${cell.width}px 应 ≥ 次行内容宽 ${metrics.scrollWidth}px`
+  ).toBeGreaterThanOrEqual(metrics.scrollWidth - 1);
+}
 
 test.describe("产品管理表格列合并（#824 Part 1）", () => {
   test("三列合并为单一「产品名称」列，次行为 显示码 · 中文市场名", async ({ page }) => {
@@ -31,6 +142,32 @@ test.describe("产品管理表格列合并（#824 Part 1）", () => {
     const etfRow = card.getByRole("row").filter({ hasText: "沪深300ETF" }).first();
     await expect(etfRow).toContainText("510300 · A股场内");
     await expect(etfRow).not.toContainText("CN_EXCHANGE");
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
+  });
+
+  test("产品名称合并列：代表性行次行单行、不溢出、首列不窄于内容（#829）", async ({ page }) => {
+    const errors = collectPageErrors(page);
+    await page.route(/\/api\/products(\?|$)/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(PRODUCT_LIST_RESPONSE),
+          })
+        : route.continue()
+    );
+    await page.goto("/products");
+
+    const card = page.getByTestId("products-list-card");
+    await expect(card).toBeVisible({ timeout: 15_000 });
+
+    for (const { name, expectedMeta } of LAYOUT_ROWS) {
+      const row = card.getByRole("row").filter({ hasText: name });
+      await expect(row, `${name}：应唯一命中一行`).toHaveCount(1);
+      await expect(row.getByTestId("product-cell-meta")).toContainText(expectedMeta);
+      await expectProductMetaLayout(row, name);
+    }
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });

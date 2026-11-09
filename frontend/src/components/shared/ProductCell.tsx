@@ -36,7 +36,10 @@ export default function ProductCell({
   return (
     <>
       <div className="text-sm font-medium">{name}</div>
-      <div className="whitespace-nowrap text-xs text-muted-foreground">
+      <div
+        data-testid="product-cell-meta"
+        className="whitespace-nowrap text-xs text-muted-foreground"
+      >
         {codeText}
         {suffix}
       </div>
