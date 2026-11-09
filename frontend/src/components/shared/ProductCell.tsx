@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMarketName, formatProductCodeLabel } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * 产品主次双行单元格（visual-spec §8）：名称主行 + `代码 · 市场名` 次行；名称缺失回退单行只显示代码。
@@ -17,25 +18,37 @@ export default function ProductCell({
   name,
   market,
   displayCode,
+  inactive = false,
 }: {
   code: string;
   name?: string;
   market?: string;
   displayCode?: string | null;
+  /** #856：产品停用时主行内联「已停用」中性徽章（产品管理列表名称列）；启用态不渲染，输出与原先一致 */
+  inactive?: boolean;
 }) {
   const suffix = market ? ` · ${formatMarketName(market)}` : "";
   const codeText = formatProductCodeLabel(displayCode, code, market);
+  const inactiveBadge = inactive ? (
+    <Badge variant="neutral" className="ml-2 align-middle">
+      已停用
+    </Badge>
+  ) : null;
   if (!name) {
     return (
       <div className="whitespace-nowrap text-sm">
         {codeText}
         {suffix}
+        {inactiveBadge}
       </div>
     );
   }
   return (
     <>
-      <div className="text-sm font-medium">{name}</div>
+      <div className="text-sm font-medium">
+        {name}
+        {inactiveBadge}
+      </div>
       <div
         data-testid="product-cell-meta"
         className="whitespace-nowrap text-xs text-muted-foreground"

@@ -27,6 +27,8 @@ def get_products(
     confirm_days: Optional[int] = None,
     nav_lag_days: Optional[int] = None,
     is_qdii: Optional[bool] = None,
+    # issue #856：停用筛选（False 是合法值，判 is not None）；不传则全量含停用
+    is_active: Optional[bool] = None,
     # 维度筛选（issue #128）
     asset_class_code: Optional[str] = None,
     region_code: Optional[str] = None,
@@ -68,6 +70,8 @@ def get_products(
         query = query.filter(Product.nav_lag_days == nav_lag_days)
     if is_qdii is not None:
         query = query.filter(Product.is_qdii == is_qdii)
+    if is_active is not None:
+        query = query.filter(Product.is_active == is_active)
     if asset_class_code:
         query = query.filter(Product.asset_class_code == asset_class_code)
     if region_code:

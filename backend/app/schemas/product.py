@@ -61,9 +61,14 @@ class ProductUpdate(BaseModel):
     # validate_nav_lag_days 单一实现
     nav_lag_days: Optional[int] = None
     is_qdii: Optional[bool] = None
+    # issue #856：停用/启用（不传不改，显式 null 由 null_guard 拒绝）；
+    # 虚拟产品停用由 product_service.update_product 守卫（SYSTEM_PRODUCT_PROTECTED）
+    is_active: Optional[bool] = None
 
 
 class ProductResponse(ProductBase):
+    # issue #856：停用标记，列 NOT NULL + server_default，存量行回填 true
+    is_active: bool = True
     data_source: Optional[str] = None
     # 列可空（models/product.py 无 server_default）：迁移 0006 裸 SQL 种入的
     # IN_TRANSIT_BUY/SELL 该列为 NULL，声明成非空会让这些行的响应校验 500（#487 评审）

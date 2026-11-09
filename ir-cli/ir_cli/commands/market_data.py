@@ -54,14 +54,14 @@ def sync(
     start_date: Optional[str] = typer.Option(None, "--start-date", help="开始日期(YYYY-MM-DD)"),
     end_date: Optional[str] = typer.Option(None, "--end-date", help="结束日期(YYYY-MM-DD)"),
 ):
-    """同步产品价格数据"""
+    """同步产品价格数据（全量或按周期，#856 起调 sync-history；无日期=成立以来全量）"""
     client = APIClient.from_config()
     body = {}
     if start_date is not None:
         body["start_date"] = start_date
     if end_date is not None:
         body["end_date"] = end_date
-    result = client.post(f"/api/market-data/products/{code}/{market}/sync-price-data", json_data=body)
+    result = client.post(f"/api/market-data/products/{code}/{market}/sync-history", json_data=body)
     success(data=result["data"])
 
 

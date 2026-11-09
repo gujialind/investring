@@ -6,12 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -28,15 +28,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import Link from "next/link";
-import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, TrendingUp, Eye, Tags, Filter } from "lucide-react";
+import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter } from "lucide-react";
 import { Product } from "@/types/product";
-import { useUIStore } from "@/stores/uiStore";
-import { cn, formatNav, formatProductCodeLabel } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import ProductCell from "@/components/shared/ProductCell";
 import EmptyState from "@/components/shared/EmptyState";
-import RowActionButton from "@/components/shared/RowActionButton";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
@@ -49,13 +47,7 @@ import {
 import type { DimensionFilters } from "@/lib/dimensions";
 import { MARKET_OPTIONS } from "@/lib/market";
 import type { ProductListParams } from "@/lib/api";
-import {
-  useProductList,
-  useDeleteProduct,
-  useProductPrices,
-  useSyncProductPrice,
-  useSyncProductHistory,
-} from "@/hooks/useProduct";
+import { useProductList, useDeleteProduct } from "@/hooks/useProduct";
 import { useRunTask, useWatchedTaskExecution } from "@/hooks/useTask";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queryKeys";
@@ -95,8 +87,6 @@ const DATA_SOURCE_OPTIONS = ["tushare", "akshare"];
  * 五维筛选的选项收窄与大类联动清空走 lib/dimensions 纯函数（与产品筛选弹窗共用）。
  */
 export default function ProductsContent({ variant = "desktop", basePath = "" }: ProductsContentProps) {
-  const addToast = useUIStore((state) => state.addToast);
-
   // 分页状态（#234：替代原 page_size:100 假分页）
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -236,47 +226,6 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
   };
 
   const [pendingDelete, setPendingDelete] = useState<{ code: string; market?: string } | null>(null);
-
-  const [priceDialogOpen, setPriceDialogOpen] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-
-  const syncPrice = useSyncProductPrice();
-  const syncHistory = useSyncProductHistory();
-
-  const { data: priceData, isLoading: priceLoading } = useProductPrices(
-    priceDialogOpen ? selectedProduct?.code : undefined,
-    selectedProduct?.market,
-    30
-  );
-
-  const handleSyncPrice = (product: Product) => {
-    if (!product.market) {
-      addToast({
-        type: "error",
-        title: "同步失败",
-        message: "现金类产品无需同步价格",
-      });
-      return;
-    }
-    syncPrice.mutate({ code: product.code, market: product.market });
-  };
-
-  const handleSyncHistory = (product: Product) => {
-    if (!product.market) {
-      addToast({
-        type: "error",
-        title: "同步失败",
-        message: "现金类产品无需同步历史",
-      });
-      return;
-    }
-    syncHistory.mutate({ code: product.code, market: product.market });
-  };
-
-  const handleViewPrices = (product: Product) => {
-    setSelectedProduct(product);
-    setPriceDialogOpen(true);
-  };
 
   // 筛选栏控件（规范 §9：表格卡片内顶部，控件 h-9、无 Label、placeholder 表意）；
   // 下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值），
@@ -567,6 +516,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                       name={product.name}
                       market={product.market}
                       displayCode={product.display_code}
+                      inactive={!product.is_active}
                     />
                   );
                   return (
@@ -604,41 +554,36 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <RowActionButton
-                        icon={Pencil}
-                        label="编辑"
-                        onClick={() => handleEdit(product)}
-                      />
-                      <RowActionButton
-                        icon={Trash2}
-                        label="删除"
-                        destructive
-                        onClick={() => handleDelete(product.code, product.market)}
-                        disabled={deleteProduct.isPending}
-                      />
-                      {product.market && (
-                        <>
-                          <RowActionButton
-                            icon={RefreshCw}
-                            label="同步价格"
-                            loading={syncPrice.isPending}
-                            onClick={() => handleSyncPrice(product)}
-                            disabled={syncPrice.isPending}
-                          />
-                          <RowActionButton
-                            icon={TrendingUp}
-                            label="同步历史"
-                            loading={syncHistory.isPending}
-                            onClick={() => handleSyncHistory(product)}
-                            disabled={syncHistory.isPending}
-                          />
-                          <RowActionButton
-                            icon={Eye}
-                            label="价格走势"
-                            onClick={() => handleViewPrices(product)}
-                          />
-                        </>
-                      )}
+                      {/* #856：行操作收敛为「更多」菜单（编辑/删除）；同步价格/历史/走势
+                          迁到净值型产品详情页，列表行不再挂多个图标按钮 */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            title="更多操作"
+                            aria-label="更多操作"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleEdit(product)}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            编辑
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => handleDelete(product.code, product.market)}
+                            disabled={deleteProduct.isPending}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            删除
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                   );
@@ -682,58 +627,6 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           />
         </CardContent>
       </Card>
-
-      <Dialog open={priceDialogOpen} onOpenChange={setPriceDialogOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>
-              {selectedProduct?.name} (
-              {selectedProduct
-                ? formatProductCodeLabel(
-                    selectedProduct.display_code,
-                    selectedProduct.code,
-                    selectedProduct.market
-                  )
-                : "--"}
-              ) 价格走势
-            </DialogTitle>
-            <DialogDescription>
-              最近 30 条价格记录
-            </DialogDescription>
-          </DialogHeader>
-          {priceLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            </div>
-          ) : priceData && priceData.length > 0 ? (
-            <div className="rounded-md border max-h-96 overflow-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>日期</TableHead>
-                    <TableHead className="number-cell">价格/净值</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {priceData.map((record) => (
-                    <TableRow key={record.price_date}>
-                      <TableCell>{record.price_date}</TableCell>
-                      <TableCell className="number-cell font-medium">
-                        {formatNav(record.unit_price)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-              <TrendingUp className="h-8 w-8 mb-2" />
-              <p>暂无价格数据，请先同步价格</p>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
 
       <ConfirmDialog
         open={!!pendingDelete}

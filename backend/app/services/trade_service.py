@@ -1177,6 +1177,15 @@ def create_trade(
             "NOT_FOUND", f"产品 {product_code}({market}) 不存在", details=details
         )
 
+    # issue #856：停用产品禁止新建调仓（买/卖同挡）。只挡创建单点——update_trade
+    # 无 product_code 字段，存量 pending 的 confirm/cancel/PUT 与份额变动事件不受影响。
+    if not product.is_active:
+        raise BusinessError(
+            "PRODUCT_INACTIVE",
+            f"产品 {product_code}({market}) 已停用，不能新建买入/卖出记录",
+            details={"product_code": product_code, "market": market},
+        )
+
     # 禁止直接创建裸 CASH 交易：现金变动只能来自申赎/调仓配对/现金转移
     if product_code == "CASH":
         raise BusinessError(

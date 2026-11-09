@@ -214,7 +214,9 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
 # 204 → 210（#573 纳入 AssetClassification ↔ AssetClassificationDetail 配对，6 个同名字段）。
 # 210 → 213（#580 纳入 TradingCalendar ↔ TradingCalendarResponse 配对，3 个同名字段：
 # calendar_date / is_open / created_at；exchange 未在响应暴露、不参与核对）。
-MIN_CHECKED_FIELDS = 241
+# 241 → 242（#856 ProductResponse 增 is_active，与 Product.is_active 同名配对 +1；
+# 列 NOT NULL + server_default，不产生新违规、EXCEPTIONS 不增不减）。
+MIN_CHECKED_FIELDS = 242
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 

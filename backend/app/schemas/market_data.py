@@ -18,6 +18,15 @@ class PriceDataSyncRequest(BaseModel):
     end_date: date
 
 
+class SyncHistoryRequest(BaseModel):
+    """同步历史可选周期（#856）：两字段皆可空。全不传 = 成立以来全量；
+    只传 start_date = 从该日到今天；end_date 缺省由 router 补今天。
+    start_date > end_date 由 router 拒绝（400）。PriceDataSyncRequest 不动（deprecated 端点仍用）。"""
+
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+
 # --- #595 产品详情页净值数据（§5.3）：历史净值分页 + 区间曲线/区间收益率 ---
 
 

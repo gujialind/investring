@@ -2,13 +2,6 @@ import { request, ApiException } from "./client";
 import { Product, ProductCreate, ProductUpdate } from "@/types/product";
 import { PaginatedResponse } from "@/types/common";
 
-export interface PriceDataPoint {
-  product_code: string;
-  market: string;
-  price_date: string;
-  unit_price: number;
-}
-
 // --- #595 §5.3 产品详情页净值数据（步骤③-1 后端端点的前端契约） ---
 
 /**
@@ -97,6 +90,8 @@ export interface ProductListParams {
   confirm_days?: number;
   nav_lag_days?: number;
   is_qdii?: boolean;
+  /** issue #856：停用筛选（false 为合法值，axios 正常序列化）；不传则全量含停用 */
+  is_active?: boolean;
   asset_class_code?: string;
   region_code?: string;
   style_code?: string;
@@ -125,24 +120,11 @@ export const productApi = {
   delete: (code: string, market?: string) =>
     request<{ message: string }>({ method: "DELETE", url: `/products/${code}/${requireMarket(market, "删除产品")}` }),
 
-  syncPrice: (code: string, market?: string, data?: { start_date?: string; end_date?: string }) =>
-    request<{ message: string; synced_count?: number }>({
-      method: "POST",
-      url: `/market-data/products/${code}/${requireMarket(market, "同步价格")}/sync-price-data`,
-      data,
-    }),
-
-  syncHistory: (code: string, market?: string) =>
-    request<{ message: string; synced_count?: number }>({
+  syncHistory: (code: string, market?: string, data?: { start_date?: string; end_date?: string }) =>
+    request<{ message: string; synced_count?: number; new_count?: number }>({
       method: "POST",
       url: `/market-data/products/${code}/${requireMarket(market, "同步历史价格")}/sync-history`,
-    }),
-
-  getPriceData: (code: string, market: string, params?: { start_date?: string; end_date?: string; limit?: number }) =>
-    request<PriceDataPoint[]>({
-      method: "GET",
-      url: `/market-data/products/${code}/${market}/price-data`,
-      params,
+      data,
     }),
 
   // #595 §5.3 产品详情页：历史净值分页（日期降序，首屏 5 行 + 查看更多）

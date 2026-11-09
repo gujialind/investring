@@ -1404,6 +1404,22 @@
             }
           },
           {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Active"
+            }
+          },
+          {
             "name": "asset_class_code",
             "in": "query",
             "required": false,
@@ -3167,6 +3183,7 @@
         ],
         "summary": "Sync Price Data Endpoint",
         "operationId": "sync_price_data_endpoint_api_market_data_products__code___market__sync_price_data_post",
+        "deprecated": true,
         "security": [
           {
             "HTTPBearer": []
@@ -3263,6 +3280,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SyncHistoryRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -12826,6 +12860,11 @@
             ],
             "title": "Data Source"
           },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
           "data_source_status": {
             "anyOf": [
               {
@@ -13043,6 +13082,17 @@
               }
             ],
             "title": "Is Qdii"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
           }
         },
         "additionalProperties": false,
@@ -14903,6 +14953,37 @@
         },
         "type": "object",
         "title": "SubscriptionUpdate"
+      },
+      "SyncHistoryRequest": {
+        "properties": {
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          }
+        },
+        "type": "object",
+        "title": "SyncHistoryRequest",
+        "description": "同步历史可选周期（#856）：两字段皆可空。全不传 = 成立以来全量；\n只传 start_date = 从该日到今天；end_date 缺省由 router 补今天。\nstart_date > end_date 由 router 拒绝（400）。PriceDataSyncRequest 不动（deprecated 端点仍用）。"
       },
       "SyncJobResponse": {
         "properties": {

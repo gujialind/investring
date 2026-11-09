@@ -380,6 +380,7 @@ KNOWN_MANUAL_ONLY = {
     "ir product update": {
         "--data-source": "手册 4.9 登记 --data-source，实现 update 未开放",
         "--no-qdii": "手册写 --is-qdii/--no-qdii 双开关，实现只注册 --is-qdii",
+        "--no-is-active": "手册写 --is-active/--no-is-active 双开关（#856），click_command_specs 只读 primary opts 故仅见 --is-active（同 --no-qdii）",
     },
     "ir sub confirm": {
         "--confirm-date": "手册 4.5 登记 --confirm-date，实现 confirm 只有 --quiet + id（确认日由后端推定）",

@@ -900,6 +900,7 @@ export default function TradesContent({
                     <div className="min-w-0 flex-1">
                       <SearchableProductSelect
                         id="product_code"
+                        activeOnly
                         value={
                           formData.product_code
                             ? { code: formData.product_code, market: formData.market }

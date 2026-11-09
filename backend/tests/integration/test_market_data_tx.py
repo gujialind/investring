@@ -6,7 +6,7 @@
 # - 交易日历 REST sync 后日历记录落库
 # ============================================================================
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from app.models import Product, TradingCalendar
@@ -80,3 +80,77 @@ class TestTradingCalendarSyncTx:
             TradingCalendar.calendar_date <= date(2031, 1, 31),
         ).all()
         assert len(rows) == 3
+
+
+class TestSyncHistoryTx:
+    """issue #856：sync-history 可选周期 body 的契约。
+
+    mock 掉 router 命名空间的 sync_price_data，隔离 #856 改动的 router 周期逻辑
+    （start/end 推导与非法区间拒绝）与真实数据源；响应形状原样透传不变。
+    """
+
+    RESULT = {"success": True, "message": "同步完成", "synced_count": 5, "new_count": 2}
+    URL = "/api/market-data/products/510300.SH/CN_EXCHANGE/sync-history"
+
+    @patch("app.routers.market_data.sync_price_data")
+    def test_no_body_full_history(self, mock_sync, client, admin_headers, test_db):
+        """无请求体（request=None）= 成立以来全量：start None、end 今天，响应形状不变"""
+        mock_sync.return_value = dict(self.RESULT)
+        resp = client.post(self.URL, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == self.RESULT
+        args = mock_sync.call_args.args
+        assert args[1] == "510300.SH" and args[2] == "CN_EXCHANGE"
+        assert args[3] is None
+        assert args[4] == date.today()
+
+    @patch("app.routers.market_data.sync_price_data")
+    def test_empty_body_full_history(self, mock_sync, client, admin_headers, test_db):
+        """空 body {}（CLI 无日期形态）= 全量，修复此前 PriceDataSyncRequest 必填 422"""
+        mock_sync.return_value = dict(self.RESULT)
+        resp = client.post(self.URL, json={}, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        args = mock_sync.call_args.args
+        assert args[3] is None and args[4] == date.today()
+
+    @patch("app.routers.market_data.sync_price_data")
+    def test_single_start_date(self, mock_sync, client, admin_headers, test_db):
+        """只传 start_date → 从该日到今天（end 缺省补今天）"""
+        mock_sync.return_value = dict(self.RESULT)
+        resp = client.post(self.URL, json={"start_date": "2025-06-01"}, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        args = mock_sync.call_args.args
+        assert args[3] == date(2025, 6, 1)
+        assert args[4] == date.today()
+
+    @patch("app.routers.market_data.sync_price_data")
+    def test_both_dates(self, mock_sync, client, admin_headers, test_db):
+        """双日期 → 原样下传限定区间"""
+        mock_sync.return_value = dict(self.RESULT)
+        resp = client.post(
+            self.URL, json={"start_date": "2025-06-01", "end_date": "2025-06-06"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        args = mock_sync.call_args.args
+        assert args[3] == date(2025, 6, 1) and args[4] == date(2025, 6, 6)
+
+    @patch("app.routers.market_data.sync_price_data")
+    def test_start_after_end_400(self, mock_sync, client, admin_headers, test_db):
+        """start > end → 400 裸字符串错误（沿用本 router 形状，不新增错误码），不下传同步"""
+        resp = client.post(
+            self.URL, json={"start_date": "2025-06-10", "end_date": "2025-06-01"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "开始日期不能晚于结束日期"
+        mock_sync.assert_not_called()
+
+    @patch("app.routers.market_data.sync_price_data")
+    def test_future_start_400(self, mock_sync, client, admin_headers, test_db):
+        """未来 start（end 缺省今天）→ start > end → 400"""
+        future = date.today() + timedelta(days=10)
+        resp = client.post(self.URL, json={"start_date": future.isoformat()}, headers=admin_headers)
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "开始日期不能晚于结束日期"
+        mock_sync.assert_not_called()

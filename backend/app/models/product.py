@@ -25,6 +25,10 @@ class Product(Base):
     # is_qdii 降级为纯展示标签（不再参与取价业务分支）。
     nav_lag_days = Column(Integer, nullable=False, default=0, server_default=text('0'))
     is_qdii = Column(Boolean, default=False)
+    # issue #856：产品停用标记（清盘/暂停合并为一态）。False 只挡新增调仓
+    # （create_trade），存量待确认记录、份额事件、快照估值与净值同步不受影响；
+    # 虚拟产品（CASH/IN_TRANSIT）禁止停用。创建恒 active，不进 ProductBase。
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text('1'))
     data_source = Column(String(20), default="tushare")
     fallback_source = Column(String(20))
     data_source_status = Column(String(20), default="pending")

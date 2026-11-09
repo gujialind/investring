@@ -1,27 +1,61 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
-import { ArrowLeft, CheckCircle, XCircle, RefreshCw, TrendingUp, Loader2 } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { subMonths, subYears } from "date-fns";
+import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Loader2, Pencil, Trash2, Ban } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { DatePicker } from "@/components/ui/date-picker";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import QueryErrorState from "./QueryErrorState";
 import ProductNavCards from "./ProductNavCards";
-import { useProduct, useSyncProductPrice, useSyncProductHistory } from "@/hooks/useProduct";
+import {
+  useProduct,
+  useSyncProductHistory,
+  useUpdateProduct,
+  useDeleteProduct,
+} from "@/hooks/useProduct";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { ApiException } from "@/lib/api";
 import {
   formatDateTime,
   formatMarketName,
   formatProductCodeLabel,
+  toDateOnly,
 } from "@/lib/utils";
 
 // 虚拟产品判定（#514/#327）：对齐后端 product_service.VIRTUAL_PRODUCT_TYPES——无净值、不可交易，
 // 故不渲染净值三卡与同步操作（与 ProductsContent 同一口径）。
 const VIRTUAL_PRODUCT_TYPES = ["CASH", "IN_TRANSIT"];
+
+// 同步历史周期（#856）：6 档预设 + 自定义开始日期，默认成立以来。除「成立以来」外
+// 恒显式传 end_date=今天；「成立以来」不发请求体（后端 end 缺省补今天、start 无下界）。
+const PERIOD_OPTIONS = [
+  { value: "1m", label: "近1月" },
+  { value: "3m", label: "近3月" },
+  { value: "6m", label: "近6月" },
+  { value: "1y", label: "近1年" },
+  { value: "3y", label: "近3年" },
+  { value: "all", label: "成立以来" },
+  { value: "custom", label: "自定义" },
+] as const;
+type Period = (typeof PERIOD_OPTIONS)[number]["value"];
+
+const DEACTIVATE_HINT =
+  "停用后不可再新建该产品的买入/卖出记录（存量待确认记录不受影响）；清盘分配等持仓了结可经份额变动事件登记。";
 
 interface ProductManageDetailContentProps {
   /** 链接前缀（§1.2 契约）：桌面 ""、移动 "/m" */
@@ -49,14 +83,25 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
  */
 export default function ProductManageDetailContent({ basePath, variant }: ProductManageDetailContentProps) {
   const params = useParams();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const code = params.code as string;
   const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
 
   const { data: product, isLoading, isError, error, refetch } = useProduct(code, market);
-  const syncPrice = useSyncProductPrice();
   const syncHistory = useSyncProductHistory();
+  const updateProduct = useUpdateProduct();
+  const deleteProduct = useDeleteProduct();
+
+  // 头部三动作（#856）：编辑开 ProductFormDialog；停用/启用与删除各经 ConfirmDialog 二次确认
+  const [editOpen, setEditOpen] = useState(false);
+  const [toggleOpen, setToggleOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // 同步周期（#856）：默认成立以来；自定义只选开始日期，结束恒为今天
+  const [period, setPeriod] = useState<Period>("all");
+  const [customStart, setCustomStart] = useState<Date | undefined>(undefined);
 
   // 分类维度字典：把产品五维 code 映射为中文名（产品行只存 code）
   const { data: dictData } = useAssetClassifications();
@@ -92,6 +137,37 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
 
   const isNavType = !VIRTUAL_PRODUCT_TYPES.includes(product.product_type);
   const codeLabel = formatProductCodeLabel(product.display_code, product.code, product.market);
+
+  // 周期同步（#856）：成立以来不发 body；其余档 start=今天自然回推、end=今天显式传。
+  // 自定义未选开始日期时按钮禁用（syncDisabled），故 start 必有值。
+  const today = new Date();
+  const todayStr = toDateOnly(today);
+  const syncDisabled = syncHistory.isPending || (period === "custom" && !customStart);
+  const handleSyncHistory = () => {
+    if (period === "all") {
+      syncHistory.mutate({ code: product.code, market: product.market });
+      return;
+    }
+    const start =
+      period === "custom"
+        ? customStart
+        : period === "1m"
+          ? subMonths(today, 1)
+          : period === "3m"
+            ? subMonths(today, 3)
+            : period === "6m"
+              ? subMonths(today, 6)
+              : period === "1y"
+                ? subYears(today, 1)
+                : subYears(today, 3);
+    if (!start) return;
+    syncHistory.mutate({
+      code: product.code,
+      market: product.market,
+      start_date: toDateOnly(start),
+      end_date: todayStr,
+    });
+  };
 
   const dataSourceStatus =
     product.data_source_status === "success" ? (
@@ -164,33 +240,58 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
         <CardTitle className="text-lg">数据同步</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={() => syncPrice.mutate({ code: product.code, market: product.market })}
-            disabled={syncPrice.isPending || syncHistory.isPending}
-          >
-            {syncPrice.isPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
+        <div className="space-y-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Select value={period} onValueChange={(v) => setPeriod(v as Period)}>
+              <SelectTrigger
+                className="w-full sm:w-[150px]"
+                data-testid="sync-period-select"
+                aria-label="同步周期"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PERIOD_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {period === "custom" && (
+              // #856：仅禁未来日期；不传 showTradingDays——否则 DatePicker 进入硬禁用模式
+              // 会连带误禁非交易日，而周期窗口边界下非交易日是合法开始日。
+              <DatePicker
+                id="sync-start-date"
+                date={customStart}
+                onSelect={setCustomStart}
+                placeholder="开始日期"
+                className="w-full sm:w-[170px]"
+                dayDisabled={(day) => toDateOnly(day) > todayStr}
+              />
             )}
-            同步价格
-          </Button>
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={() => syncHistory.mutate({ code: product.code, market: product.market })}
-            disabled={syncPrice.isPending || syncHistory.isPending}
-          >
-            {syncHistory.isPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <TrendingUp className="mr-2 h-4 w-4" />
-            )}
-            同步历史
-          </Button>
+            <Button
+              variant="outline"
+              className="w-full sm:ml-auto sm:w-auto"
+              onClick={handleSyncHistory}
+              disabled={syncDisabled}
+              data-testid="sync-history-button"
+            >
+              {syncHistory.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              同步历史
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {period === "all"
+              ? "同步产品成立以来的全部历史净值。"
+              : period === "custom"
+                ? "自定义开始日期，结束日期为今天。"
+                : "按所选周期重刷净值，结束日期为今天。"}
+          </p>
         </div>
       </CardContent>
     </Card>
@@ -198,17 +299,66 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
 
   return (
     <div className={isMobile ? "space-y-3 p-3" : "space-y-4 p-6"}>
-      <div className="flex items-center gap-2">
-        <Button asChild variant="ghost" size="icon" aria-label="返回">
-          <Link href={`${basePath}/products`}>
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-lg font-semibold">{product.name || codeLabel}</h1>
-          <p className="text-sm text-muted-foreground">
-            {codeLabel} · {formatMarketName(product.market)}
-          </p>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button asChild variant="ghost" size="icon" aria-label="返回" className="shrink-0">
+            <Link href={`${basePath}/products`}>
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+          </Button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-lg font-semibold">{product.name || codeLabel}</h1>
+              {!product.is_active && (
+                <Badge variant="neutral" className="shrink-0" data-testid="product-inactive-badge">
+                  已停用
+                </Badge>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {codeLabel} · {formatMarketName(product.market)}
+            </p>
+          </div>
+        </div>
+        {/* #856 头部三动作：移动端图标-only（aria-label 表意），桌面带文字 */}
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditOpen(true)}
+            aria-label="编辑"
+            title="编辑"
+          >
+            <Pencil className="h-4 w-4 sm:mr-1.5" />
+            <span className="hidden sm:inline">编辑</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setToggleOpen(true)}
+            disabled={updateProduct.isPending}
+            aria-label={product.is_active ? "停用" : "启用"}
+            title={product.is_active ? "停用" : "启用"}
+          >
+            {product.is_active ? (
+              <Ban className="h-4 w-4 sm:mr-1.5" />
+            ) : (
+              <CheckCircle className="h-4 w-4 sm:mr-1.5" />
+            )}
+            <span className="hidden sm:inline">{product.is_active ? "停用" : "启用"}</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setDeleteOpen(true)}
+            disabled={deleteProduct.isPending}
+            aria-label="删除"
+            title="删除"
+          >
+            <Trash2 className="h-4 w-4 sm:mr-1.5" />
+            <span className="hidden sm:inline">删除</span>
+          </Button>
         </div>
       </div>
 
@@ -231,6 +381,47 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
           </div>
         </div>
       )}
+
+      {/* 仅打开时挂载：ProductFormDialog 也订阅维度字典，常驻会与维度卡订阅者叠加，
+          让字典 500 时 per-subscriber 的 #214 toast 弹两条（#856）。 */}
+      {editOpen && (
+        <ProductFormDialog open={editOpen} onOpenChange={setEditOpen} editingProduct={product} />
+      )}
+
+      <ConfirmDialog
+        open={toggleOpen}
+        onOpenChange={setToggleOpen}
+        title={product.is_active ? "停用产品" : "启用产品"}
+        description={
+          product.is_active
+            ? DEACTIVATE_HINT
+            : "启用后可恢复新建该产品的买入/卖出记录。"
+        }
+        confirmText={product.is_active ? "停用" : "启用"}
+        onConfirm={() => {
+          setToggleOpen(false);
+          updateProduct.mutate({
+            code: product.code,
+            market: product.market,
+            data: { is_active: !product.is_active },
+          });
+        }}
+      />
+
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="删除产品"
+        description="确定要删除该产品吗？已被持仓或交易引用的产品无法删除。"
+        confirmText="删除"
+        onConfirm={() => {
+          setDeleteOpen(false);
+          deleteProduct.mutate(
+            { code: product.code, market: product.market },
+            { onSuccess: () => router.push(`${basePath}/products`) }
+          );
+        }}
+      />
     </div>
   );
 }

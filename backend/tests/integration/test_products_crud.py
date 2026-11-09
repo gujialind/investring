@@ -7,6 +7,8 @@
 #   - TestConfirmDaysAndNavLagDays（#228）：confirm_days / nav_lag_days 更新纯显式（is_qdii 不再联动重算），
 #     创建时仍保留默认推导器
 
+import pytest
+
 from tests.factories import create_product, create_asset_classification
 from app.schemas.product import ProductResponse
 
@@ -144,3 +146,65 @@ class TestConfirmDaysAndNavLagDays:
         assert data["confirm_days"] == 2
         # nav_lag_days 不做推导：创建未传即 0，需显式设置（迁移只回填存量场外 QDII）
         assert data["nav_lag_days"] == 0
+
+
+class TestProductIsActive:
+    """issue #856：产品停用标记 is_active 的更新/显式 null 收口/虚拟产品守卫"""
+
+    def test_update_deactivate_and_reactivate(self, client, admin_headers, test_db):
+        """PUT is_active=false → 200 且持久化；再 PUT true 恢复（停用可逆）"""
+        create_product(test_db, code="ACT001.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/ACT001.OF/CN_OTC", json={"is_active": False}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["is_active"] is False
+        got = client.get("/api/products/ACT001.OF/CN_OTC", headers=admin_headers)
+        assert got.json()["is_active"] is False
+
+        resp2 = client.put(
+            "/api/products/ACT001.OF/CN_OTC", json={"is_active": True}, headers=admin_headers
+        )
+        assert resp2.status_code == 200, resp2.json()
+        assert resp2.json()["is_active"] is True
+
+    def test_update_null_rejected(self, client, admin_headers, test_db):
+        """PUT is_active=null → 422 INVALID_PARAM（null_guard 收口，列 NOT NULL）"""
+        create_product(test_db, code="ACT002.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/ACT002.OF/CN_OTC", json={"is_active": None}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+
+    def test_deactivate_keeps_other_fields(self, client, admin_headers, test_db):
+        """停用是纯显式单字段更新：confirm_days / nav_lag_days 不传不改"""
+        create_product(test_db, code="ACT003.OF", market="CN_OTC", confirm_days=1, nav_lag_days=0)
+        resp = client.put(
+            "/api/products/ACT003.OF/CN_OTC", json={"is_active": False}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["is_active"] is False
+        assert resp.json()["confirm_days"] == 1
+        assert resp.json()["nav_lag_days"] == 0
+
+    @pytest.mark.parametrize("ptype", ["CASH", "IN_TRANSIT"])
+    def test_virtual_deactivate_protected(self, client, admin_headers, test_db, ptype):
+        """虚拟产品（CASH/IN_TRANSIT）停用 → 422 SYSTEM_PRODUCT_PROTECTED，写库前拒绝仍 active"""
+        create_product(test_db, code=f"V{ptype}", market="CN_OTC", product_type=ptype)
+        resp = client.put(
+            f"/api/products/V{ptype}/CN_OTC", json={"is_active": False}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "SYSTEM_PRODUCT_PROTECTED"
+        got = client.get(f"/api/products/V{ptype}/CN_OTC", headers=admin_headers)
+        assert got.json()["is_active"] is True
+
+    def test_virtual_other_edits_not_blocked(self, client, admin_headers, test_db):
+        """守卫只挡停用，不扩及虚拟产品其他编辑（name 改照常 200）"""
+        create_product(test_db, code="VCASH_EDIT", market="CN_OTC", product_type="CASH")
+        resp = client.put(
+            "/api/products/VCASH_EDIT/CN_OTC", json={"name": "改名现金"}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["name"] == "改名现金"

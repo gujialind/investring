@@ -55,6 +55,31 @@ class TestShareChangeEventCreate:
         assert data["event_type"] == "cash_dividend"
         assert data["status"] == "pending"
 
+    def test_create_event_on_inactive_product_unaffected(self, client, admin_headers, test_db):
+        """issue #856：停用只挡 create_trade，份额变动事件创建不受影响
+        （清盘分配等持仓了结仍可经份额事件登记，与现金分红同路径）"""
+        create_portfolio(test_db, code="SCE_IA", status="active")
+        create_product(test_db, code="FUND_IA", market="CN_OTC",
+                       product_type="OEF", asset_class_code="ASSET_STOCK", is_active=False)
+        ensure_trading_day(test_db, date(2025, 12, 8), is_open=True)
+        resp = client.post(
+            "/api/share-change-events",
+            json={
+                "portfolio_code": "SCE_IA",
+                "product_code": "FUND_IA",
+                "market": "CN_OTC",
+                "event_type": "cash_dividend",
+                "ex_date": "2025-12-10",
+                "entitlement_date": "2025-12-08",
+                "event_source": "manual",
+                "div_cash": 0.5,
+                "platform_code": "MYCF",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        assert resp.json()["status"] == "pending"
+
     def test_create_reinvest_dividend_event(self, client, admin_headers, test_db):
         """创建分红再投资事件"""
         create_portfolio(test_db, code="SCE_P2", status="active")

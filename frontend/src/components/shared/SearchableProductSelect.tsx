@@ -28,6 +28,8 @@ interface SearchableProductSelectProps {
   placeholder?: string;
   /** 触发按钮 id，供外层 Label htmlFor 关联（可访问性） */
   id?: string;
+  /** #856：仅列启用产品（is_active=true）。调仓表单启用；份额变动事件表单不启用——清盘了结仍需选到停用产品 */
+  activeOnly?: boolean;
 }
 
 /** 选项回显缓存项（#705）：名称与显示码都只来自产品列表结果集 */
@@ -52,6 +54,7 @@ export default function SearchableProductSelect({
   onChange,
   placeholder = "请选择产品",
   id,
+  activeOnly = false,
 }: SearchableProductSelectProps) {
   const [open, setOpen] = useState(false);
   // 懒加载（#165）：首次打开后才挂产品查询；sticky 不回落，避免关闭后缓存丢弃
@@ -69,7 +72,7 @@ export default function SearchableProductSelect({
   const [market, setMarket] = useState<string | undefined>(undefined);
 
   const { data, isLoading, isFetching } = useProductList(
-    { page_size: 50, keyword: keyword || undefined, market: market || undefined },
+    { page_size: 50, keyword: keyword || undefined, market: market || undefined, is_active: activeOnly ? true : undefined },
     { enabled: hasOpened }
   );
   const items = useMemo(() => data?.items ?? [], [data?.items]);
