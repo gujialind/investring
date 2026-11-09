@@ -126,7 +126,7 @@ commit）。
 | 0022 | `share_change_event.share_confirm_date`（#743 再投资份额确认日，可空新列，无数据回填） | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提（与 0019 同族）：downgrade 先探测「存在非空 `share_confirm_date`」，命中即 `RuntimeError` 且拒绝发生在任何 DDL 之前——该列一旦被使用即承载「份额在哪一天到账」的记账事实，删列等于销毁，只能走前滚（§4.1）或 RDS 快照恢复；未使用的库（含 CI 空库往返）完整可逆，列不存在时空转 |
 | 0023 | `trading_calendar` 单列唯一 → `(calendar_date, exchange)` 联合唯一 + `exchange` NOT NULL/server_default 'SSE'（#777 双市场日历）；upgrade 含一步参考数据 UPDATE（NULL/空串 exchange 归一为 SSE） | 已实现，**有条件拒绝（探测先行、零写入中止）** | 无损：downgrade 删除非 SSE 行——日历是可经 `calendar_sync` 重新同步的参考数据，无账务后果；恢复单列唯一前先探测 SSE 行同日重复，命中即 `RuntimeError` 且发生在任何删改之前。回退后需重跑同步才能再拿回 HKEX 行；SSE 原始行全程不动。升级/回退两端幂等（已是目标态空转，仿 0016 三分支） |
 | 0024 | 自动分红存量改为 `event_type="dividend_pending"`（#775，接 0023，纯数据迁移，无列结构变化） | **有条件拒绝（零写入整体中止）**；没有新类型时 no-op | 只要存在任何 `dividend_pending`（包括 cancelled、任何来源），downgrade 即列 ID 并在任何 DML 前拒绝；未知方式不能逆推成再投资。完全没有该类型时可安全空转回退；存在时走前滚（§4.1）或另行授权的数据处置，禁止批量猜方式或 stamp 旧 revision |
-| 0025 | 持久化密码会话、代理 API Key 与审计凭证身份（#797） | 已实现，**有条件拒绝（零写入整体中止）** | 存在**保留期内**的会话/Key 记录，或审计凭证身份列存在非空值，即在任何写入前拒绝。`log_cleanup` 按 90 天保留期删除失效凭证属于例行生命周期（见[认证规则](../reference/business-constraints.md#rule-auth)），不改变本条判据；手工提前删除撤销记录仍属绕过保护。仅无保留记录的空凭证结构允许降级 |
+| 0025 | 持久化密码会话、代理 API Key 与审计凭证身份（#797） | 已实现，**有条件拒绝（零写入整体中止）** | `auth_session` / `api_key` 表内存在**任何记录**（含已撤销、已过期或历史遗留），或审计凭证身份列存在非空值，即在任何写入前拒绝——判据只看表内有无行，与 `expires_at` / `revoked_at` 无关。`log_cleanup` 按 90 天保留期回收失效凭证属于例行生命周期（见[认证规则](../reference/business-constraints.md#rule-auth)），回收后表逐步变空、判据随时间自然放宽；手工提前删除记录仍属绕过保护。仅 `auth_session` 与 `api_key` 两表均为空、且审计无凭证身份时允许降级 |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 
