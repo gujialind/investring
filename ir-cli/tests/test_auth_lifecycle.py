@@ -18,6 +18,28 @@ def credential(token="old", hours=1):
             "user": {"code": "ADMIN", "name": "Admin", "role": "admin"}}
 
 
+def _cli_runner() -> CliRunner:
+    """click < 8.2 需显式分离 stderr；8.2+ 默认分离。"""
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
+
+
+def _key_metadata(key_id="kid", **overrides):
+    data = {
+        "id": key_id,
+        "investor_code": "ADMIN",
+        "label": "Analyst",
+        "scopes": ["ledger:write"],
+        "created_at": "2026-10-31T00:00:00",
+        "expires_at": None,
+        "revoked_at": None,
+    }
+    data.update(overrides)
+    return data
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(config.Path, "home", lambda: tmp_path)
@@ -249,19 +271,98 @@ def test_key_commands_use_metadata_and_one_time_secret(monkeypatch):
     calls = []
     def post(self, path, json_data=None):
         calls.append((path, json_data))
-        return {"data": {"key": {"id": "kid"}, "token": "one-time"} if path.endswith("keys") else {"id": "kid", "revoked_at": "now"}}
+        payload = {"key": {"id": "kid"}, "token": "one-time"} if path.endswith("keys") else {"id": "kid", "revoked_at": "now"}
+        return {"data": payload}
     monkeypatch.setattr(APIClient, "post", post)
-    monkeypatch.setattr(APIClient, "get", lambda self, path: {"data": [{"id": "kid"}]})
+    monkeypatch.setattr(APIClient, "get", lambda self, path: {"data": [_key_metadata()]})
     runner = CliRunner()
     created = runner.invoke(app, ["auth", "key-create", "--label", "Analyst", "--scope", "ledger:write"])
     assert created.exit_code == 0
     assert json.loads(created.stdout)["data"]["token"] == "one-time"
     assert calls[0] == ("/api/auth/keys", {"label": "Analyst", "scopes": ["ledger:write"]})
     listing = runner.invoke(app, ["auth", "key-list"])
-    revoked = runner.invoke(app, ["auth", "key-revoke", "kid"])
+    revoked = runner.invoke(app, ["auth", "key-revoke", "kid", "--yes"])
     assert listing.exit_code == revoked.exit_code == 0
     assert "one-time" not in listing.stdout + revoked.stdout
     assert calls[-1][0] == "/api/auth/keys/kid/revoke"
+
+
+def test_key_revoke_rejects_self_credential_without_request(monkeypatch):
+    key_id = "a" * 32
+    monkeypatch.setenv("IR_TOKEN", f"ir_key_{key_id}.{'s' * 43}")
+    calls = []
+    monkeypatch.setattr(APIClient, "get", lambda self, path: calls.append(("get", path)) or {})
+    monkeypatch.setattr(APIClient, "post", lambda self, path, json_data=None: calls.append(("post", path)) or {})
+    result = CliRunner().invoke(app, ["auth", "key-revoke", key_id])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["error"]["code"] == "SELF_REVOKE_FORBIDDEN"
+    assert "IR_TOKEN" in payload["error"]["message"]
+    assert calls == []
+
+
+def test_key_revoke_without_yes_shows_impact_and_requires_confirm(monkeypatch):
+    config.save_token(credential("local", 168))
+    posted = []
+    monkeypatch.setattr(APIClient, "post", lambda self, path, json_data=None: posted.append(path) or {})
+    gets = []
+    keys = [_key_metadata("kid"), _key_metadata("other", label="Other")]
+    monkeypatch.setattr(APIClient, "get", lambda self, path: gets.append(path) or {"data": keys})
+    result = _cli_runner().invoke(app, ["auth", "key-revoke", "kid"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["error"]["code"] == "CONFIRM_REQUIRED"
+    assert payload["error"]["details"]["label"] == "Analyst"
+    assert payload["error"]["details"]["expires_at"] is None
+    assert gets == ["/api/auth/keys"]
+    assert posted == []
+    assert "Analyst" in result.stderr
+    assert "ledger:write" in result.stderr
+    assert "永久" in result.stderr
+    assert "2026-10-31T00:00:00" in result.stderr
+    assert "不可逆" in result.stderr
+
+
+def test_key_revoke_with_yes_revokes_after_impact(monkeypatch):
+    config.save_token(credential("local", 168))
+    posted = []
+    monkeypatch.setattr(
+        APIClient, "post",
+        lambda self, path, json_data=None: posted.append(path) or {"data": _key_metadata(revoked_at="now")},
+    )
+    monkeypatch.setattr(APIClient, "get", lambda self, path: {"data": [_key_metadata()]})
+    result = _cli_runner().invoke(app, ["auth", "key-revoke", "kid", "--yes"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 0
+    assert payload["data"]["revoked_at"] == "now"
+    assert posted == ["/api/auth/keys/kid/revoke"]
+    assert "不可逆" in result.stderr
+
+
+def test_key_revoke_shows_already_revoked_notice(monkeypatch):
+    config.save_token(credential("local", 168))
+    revoked_at = "2026-11-01T00:00:00"
+    monkeypatch.setattr(APIClient, "get", lambda self, path: {"data": [_key_metadata(revoked_at=revoked_at)]})
+    monkeypatch.setattr(
+        APIClient, "post",
+        lambda self, path, json_data=None: {"data": _key_metadata(revoked_at=revoked_at)},
+    )
+    result = _cli_runner().invoke(app, ["auth", "key-revoke", "kid", "--yes"])
+    assert result.exit_code == 0
+    assert f"已于 {revoked_at} 撤销" in result.stderr
+    assert "重复撤销幂等" in result.stderr
+
+
+def test_key_revoke_unknown_key_fails_locally_without_revoke(monkeypatch):
+    config.save_token(credential("local", 168))
+    posted = []
+    monkeypatch.setattr(APIClient, "post", lambda self, path, json_data=None: posted.append(path) or {})
+    monkeypatch.setattr(APIClient, "get", lambda self, path: {"data": [_key_metadata("other")]})
+    result = _cli_runner().invoke(app, ["auth", "key-revoke", "kid", "--yes"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["error"]["code"] == "NOT_FOUND"
+    assert posted == []
 
 
 def test_cross_process_credential_compare_swap(tmp_path):
