@@ -36,6 +36,7 @@ import { test, expect, type Locator, type Page, type TestInfo } from "@playwrigh
 import {
   E2E_ACTIVE,
   collectPageErrors,
+  expectSingleLine,
   gotoPortfolioSubpage,
   openFilterPanelIfMobile,
   openPopover,
@@ -87,20 +88,11 @@ function realCashSubRows(rows: RespTrade[]) {
 }
 
 /**
- * 子行首列标签「只占一行」（#733）。
- * 判据取**盒高 vs 行高**而不是 `getClientRects().length`：行盒数随引擎与文本节点数变化
- * （同一行里 `{label}{platformName}` 两个文本节点在 chromium 下就回 2 个 rect），
- * 只有高度是两端一致的事实。折行时高度是行高的整数倍（实测 2 行 35px、3 行 55px）。
+ * 子行首列标签「只占一行」（#733）：`nowrap` 是本用例的既有口径，
+ * 单行判据与取数理由统一由 helpers.ts::expectSingleLine 持有（#853）。
  */
 async function expectSingleLineLabel(label: Locator, what: string) {
-  await expect(label).toHaveCSS("white-space", "nowrap");
-  const box = await label.boundingBox();
-  expect(box, `${what}：标签应有可见盒`).not.toBeNull();
-  const lineHeight = await label.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
-  expect(
-    box!.height,
-    `${what}：首列标签应只占一行（实测高 ${box!.height}px、行高 ${lineHeight}px）`,
-  ).toBeLessThanOrEqual(lineHeight * 1.5);
+  await expectSingleLine(label, `${what}：首列标签`, { nowrap: true });
 }
 
 /** 按状态下筛并返回该次响应行集（waiter 先于点击挂上：换键请求可能早于下一行完成） */

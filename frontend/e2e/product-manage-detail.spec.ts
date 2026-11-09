@@ -1,5 +1,5 @@
 import { test, expect, type Locator } from "@playwright/test";
-import { collectPageErrors } from "./helpers";
+import { collectPageErrors, expectSingleLine } from "./helpers";
 
 /**
  * #824 产品管理页列合并与净值型产品详情页。
@@ -89,31 +89,13 @@ const LAYOUT_ROWS = [
 
 async function expectProductMetaLayout(row: Locator, label: string) {
   const meta = row.getByTestId("product-cell-meta");
-  await expect(meta).toBeVisible();
-
-  const box = await meta.boundingBox();
-  if (!box) throw new Error(`${label}：次行没有可见盒`);
-
-  const metrics = await meta.evaluate((el) => {
-    const style = getComputedStyle(el);
-    return {
-      lineHeight: parseFloat(style.lineHeight),
-      scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth,
-    };
-  });
-  expect(metrics.lineHeight, `${label}：line-height 应为正数`).toBeGreaterThan(0);
-
-  // A：次行只占一行（2 行文本必然超过 1.5 倍行高）
-  expect(
-    box.height,
-    `${label}：次行应单行（高 ${box.height}px，行高 ${metrics.lineHeight}px）`
-  ).toBeLessThanOrEqual(metrics.lineHeight * 1.5);
+  // A：次行只占一行，由公共 helper 统一断言（#853）
+  const single = await expectSingleLine(meta, `${label}：次行`);
 
   // B：次行自身不横向溢出（scrollWidth 含 overflow:hidden/ellipsis 的内容宽）
   expect(
-    metrics.scrollWidth - metrics.clientWidth,
-    `${label}：次行 scrollWidth=${metrics.scrollWidth} 应 ≤ clientWidth=${metrics.clientWidth}`
+    single.scrollWidth - single.clientWidth,
+    `${label}：次行 scrollWidth=${single.scrollWidth} 应 ≤ clientWidth=${single.clientWidth}`
   ).toBeLessThanOrEqual(1);
 
   // C：首列不窄于该行次行内容宽（关系式，不写死像素阈值）
@@ -121,8 +103,8 @@ async function expectProductMetaLayout(row: Locator, label: string) {
   if (!cell) throw new Error(`${label}：首列没有可见盒`);
   expect(
     cell.width,
-    `${label}：首列宽 ${cell.width}px 应 ≥ 次行内容宽 ${metrics.scrollWidth}px`
-  ).toBeGreaterThanOrEqual(metrics.scrollWidth - 1);
+    `${label}：首列宽 ${cell.width}px 应 ≥ 次行内容宽 ${single.scrollWidth}px`
+  ).toBeGreaterThanOrEqual(single.scrollWidth - 1);
 }
 
 test.describe("产品管理表格列合并（#824 Part 1）", () => {

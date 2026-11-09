@@ -1,5 +1,5 @@
 /**
- * 前端 E2E 共享导航 / 断言 / 选择框交互 helper（#354 导航；#372 选择框弹层）。
+ * 前端 E2E 共享导航 / 断言 / 选择框交互 helper（#354 导航；#372 选择框弹层；#853 单行布局判据）。
  *
  * 设计原则：spec 按组合 code 直达，不再经组合列表 `.first()`——list_portfolios
  * 无 ORDER BY，种子新增 E2E_ACTIVE 后「首个组合」不确定（曾使全部业务 spec 命中
@@ -530,6 +530,55 @@ export async function expectFilteredPlatformOptions(
     }
   }).toPass();
   return options;
+}
+
+/** 单行布局的测量结果；调用方用 scrollWidth/clientWidth 追加各自判据，避免把 B/C 锁进公共 helper */
+export type SingleLineMetrics = {
+  height: number;
+  lineHeight: number;
+  scrollWidth: number;
+  clientWidth: number;
+};
+
+/**
+ * 断言元素按单行渲染（判据 A，#829 / #733）：可见盒 + line-height 为正 + 盒高 ≤ 1.5×行高。
+ *
+ * 取**盒高 vs 计算行高**而不是 `getClientRects().length`：行盒数随引擎与文本节点数变化
+ * （同一行里 `{label}{platformName}` 两个文本节点在 chromium 下可能回 2 个 rect），
+ * 只有高度是双端一致的事实；折行时高度是行高的整数倍（实测 2 行 35px、3 行 55px）。
+ *
+ * `nowrap` 是调用方口径而非公共判据：`trade-cash-pairing` 的子行标签明确要求 nowrap（#733），
+ * 产品列表次行只断单行/不溢出、不锁 `white-space`，故默认不查 CSS（#829 取舍）。
+ * 返回测量值，B（不横向溢出）与 C（首列不窄于内容宽）由调用方继续断言。
+ */
+export async function expectSingleLine(
+  locator: Locator,
+  label: string,
+  options: { nowrap?: boolean } = {}
+): Promise<SingleLineMetrics> {
+  await expect(locator).toBeVisible();
+  if (options.nowrap) {
+    await expect(locator).toHaveCSS('white-space', 'nowrap');
+  }
+
+  const box = await locator.boundingBox();
+  if (!box) throw new Error(`${label} 没有可见盒`);
+
+  const metrics = await locator.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      lineHeight: parseFloat(style.lineHeight),
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    };
+  });
+  expect(metrics.lineHeight, `${label} line-height 应为正数`).toBeGreaterThan(0);
+  expect(
+    box.height,
+    `${label} 应单行（高 ${box.height}px，行高 ${metrics.lineHeight}px）`
+  ).toBeLessThanOrEqual(metrics.lineHeight * 1.5);
+
+  return { height: box.height, ...metrics };
 }
 
 /**
