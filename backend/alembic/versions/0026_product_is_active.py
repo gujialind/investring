@@ -10,7 +10,10 @@ is_active（server_default 1），存量行由 ADD COLUMN 的默认值回填为 
 与净值同步不受影响；虚拟产品（CASH/IN_TRANSIT）禁止停用（product_service 守卫）。
 
 可逆：downgrade 直接删列。列是生命周期标记（无外键引用、无账务下游），删列即回到
-「全部 active」的旧行为，无数据被销毁。
+「全部 active」的旧行为，无账务数据被销毁。但「可逆」指 schema 可往返、非停用状态无损：
+downgrade 丢弃所有 is_active=false 标记，回滚发布后再 upgrade 时列以 server_default 1
+重建，曾停用的产品全部变回 active、create_trade 闸门随之放开。回滚后如需维持停用须人工
+重新停用；旧镜像不感知该列、按全 active 处理。
 
 幂等：pytest 会话以 Base.metadata create_all 建库（已含本列），_has_column 守卫跳过
 （仿 0021）。自包含：不 import app 代码（#128 教训）。
