@@ -221,7 +221,7 @@ def test_key_route_matrix_defaults_to_deny(client, admin_headers, scope):
     import re
     from app.main import app
     from app.constants.api_key_scopes import (
-        READ_PATHS, SNAPSHOT_OPS_OPERATIONS, WRITE_OPERATIONS, key_allows,
+        READ_PATHS, SNAPSHOT_OPS_OPERATIONS, WRITE_OPERATIONS,
     )
 
     operations = {(method.upper(), path) for path, methods in app.openapi()["paths"].items()
@@ -237,7 +237,13 @@ def test_key_route_matrix_defaults_to_deny(client, admin_headers, scope):
     for method, path in sorted(operations):
         if not path.startswith("/api/") or path == "/api/auth/login":
             continue
-        allowed = key_allows([scope], method, path)
+        # 期望值由三张白名单独立拼装，不调用 key_allows——否则与 get_current_user
+        # 同源，误扩 SNAPSHOT_OPS_OPERATIONS 时断言会同步变绿，守门失效。
+        allowed = (
+            ((method, path) in SNAPSHOT_OPS_OPERATIONS and scope == "snapshot:ops")
+            or (method == "GET" and path in READ_PATHS and scope in {"ledger:read", "ledger:write"})
+            or (scope == "ledger:write" and (method, path) in WRITE_OPERATIONS)
+        )
         concrete = re.sub(r"\{([^}]+)\}", lambda m: "999999999" if m[1] in {"id", "job_id"} else "MISSING_KEY_TEST", path)
         result = client.request(method, concrete, headers=headers(key["token"]), json={})
         if allowed:
@@ -448,9 +454,13 @@ def test_snapshot_ops_key_slide_is_throttled_and_expired_key_not_refreshed(clien
     expired_at = auth_service.utcnow() - timedelta(minutes=1)
     row.expires_at = expired_at
     test_db.flush()
+    # MySQL DATETIME(0) 落库截断微秒、SQLite 保留，故以回读值为基线做等值断言，
+    # 不拿内存中含微秒的 expired_at 比较（否则只在 MySQL CI 失败）。
+    test_db.refresh(row)
+    expired_stored = row.expires_at
     assert client.get("/api/auth/status", headers=headers(key["token"])).status_code == 401
     test_db.refresh(row)
-    assert row.expires_at == expired_at, "过期 Key 不得被顺延复活"
+    assert row.expires_at == expired_stored, "过期 Key 不得被顺延复活"
 
 
 def test_plain_key_never_slides(client, test_db, admin_headers):
