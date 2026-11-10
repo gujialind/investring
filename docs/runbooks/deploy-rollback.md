@@ -127,6 +127,7 @@ commit）。
 | 0023 | `trading_calendar` 单列唯一 → `(calendar_date, exchange)` 联合唯一 + `exchange` NOT NULL/server_default 'SSE'（#777 双市场日历）；upgrade 含一步参考数据 UPDATE（NULL/空串 exchange 归一为 SSE） | 已实现，**有条件拒绝（探测先行、零写入中止）** | 无损：downgrade 删除非 SSE 行——日历是可经 `calendar_sync` 重新同步的参考数据，无账务后果；恢复单列唯一前先探测 SSE 行同日重复，命中即 `RuntimeError` 且发生在任何删改之前。回退后需重跑同步才能再拿回 HKEX 行；SSE 原始行全程不动。升级/回退两端幂等（已是目标态空转，仿 0016 三分支） |
 | 0024 | 自动分红存量改为 `event_type="dividend_pending"`（#775，接 0023，纯数据迁移，无列结构变化） | **有条件拒绝（零写入整体中止）**；没有新类型时 no-op | 只要存在任何 `dividend_pending`（包括 cancelled、任何来源），downgrade 即列 ID 并在任何 DML 前拒绝；未知方式不能逆推成再投资。完全没有该类型时可安全空转回退；存在时走前滚（§4.1）或另行授权的数据处置，禁止批量猜方式或 stamp 旧 revision |
 | 0025 | 持久化密码会话、代理 API Key 与审计凭证身份（#797） | 已实现，**有条件拒绝（零写入整体中止）** | `auth_session` / `api_key` 表内存在**任何记录**（含已撤销、已过期或历史遗留），或审计凭证身份列存在非空值，即在任何写入前拒绝——判据只看表内有无行，与 `expires_at` / `revoked_at` 无关。`log_cleanup` 按 90 天保留期回收失效凭证属于例行生命周期（见[认证规则](../reference/business-constraints.md#rule-auth)），回收后表逐步变空、判据随时间自然放宽；手工提前删除记录仍属绕过保护。仅 `auth_session` 与 `api_key` 两表均为空、且审计无凭证身份时允许降级 |
+| 0026 | `product.is_active` 停用标记（#856，`NOT NULL` + `server_default 1` 回填存量 true） | 已实现 | 无损（账务）但有前提：downgrade 直接 `drop_column`，**丢弃所有 `is_active=false` 标记**——「可逆」指 schema 往返、非停用状态无损；回滚后再 upgrade 列以 `server_default 1` 重建，曾停用产品全部变回 active、`create_trade` 闸门放开，如需维持停用须人工重新停用。列无外键引用、无账务下游；旧镜像不感知该列、按全 active 处理。`_has_column` 守卫幂等（仿 0021） |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 

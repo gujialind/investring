@@ -76,7 +76,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 /**
  * #824 产品管理-净值型产品详情页（双端共享）：从产品管理表格点击产品名进入，
  * 路由 /products/{code}?market={market}（移动端 /m 前缀）。
- * 概览：基本信息卡（元信息）+ 分类维度卡（五维码值经字典映射中文名）+ 同步操作区（同步价格/历史），
+ * 概览：基本信息卡（元信息）+ 分类维度卡（五维码值经字典映射中文名）+ 同步操作区（同步历史），
  * 并复用 ProductNavCards 的净值三卡（累计净值走势 / 区间收益率 / 历史净值）——与组合详情-产品
  * 详情卡同一组件、同一口径。数据源：GET /products/{code}/{market}（useProduct）、维度字典、
  * nav-analysis/nav-history（经 ProductNavCards）。虚拟产品（CASH/IN_TRANSIT）隐藏净值三卡与同步。
