@@ -7,7 +7,9 @@ name = "investring-cli"
 version = "0.2.0"
 description = "InvestRing lightweight HTTP client CLI"
 requires-python = ">=3.10"
-dependencies = ["typer>=0.9.0", "httpx>=0.27.0"]
+# typer 0.29.0 重构参数内省（type_descriptor 取代 .type），schema.py 读 param.type.name
+# 抛 AttributeError，CLI 契约门禁全红；上限暂钉 <0.29.0（0.28.x 已验证），适配新版另跟。
+dependencies = ["typer>=0.9.0,<0.29.0", "httpx>=0.27.0"]
 
 [project.scripts]
 ir = "ir_cli.main:app"
