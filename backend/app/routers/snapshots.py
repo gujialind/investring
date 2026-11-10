@@ -100,7 +100,8 @@ def recalculate(
     """
     重算指定时间区间的快照（同步模式）
 
-    必须显式传 confirm=true，否则返回 422 CONFIRM_REQUIRED + 零副作用的区间预览
+    必须显式传 confirm=true，否则返回 422 CONFIRM_REQUIRED + 区间预览：不改写快照
+    与账务数据，但代理 Key 的滑动续期会在认证阶段顺延 expires_at 并落库
     （交易张数为工作量上界，不预校验 NAV）。
 
     单一事务（issue #58）：无 errors 时统一 commit；任一日失败则整体 rollback，

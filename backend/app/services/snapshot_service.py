@@ -451,8 +451,10 @@ def preview_recalculate_range(
     start_date: date,
     end_date: date,
 ) -> Dict[str, Any]:
-    """重算影响面预览（纯 SELECT、零副作用、不预校验 NAV）。
+    """重算影响面预览（纯 SELECT、不改写快照与账务数据、不预校验 NAV）。
 
+    含 snapshot:ops 的代理 Key 在认证阶段会顺延 expires_at（由依赖层提交），
+    那是凭证字段而非业务数据；本函数不改写快照与账务数据。
     trading_days 为区间内已同步交易日张数（工作量上界），不是成功承诺。
     组合不存在与执行侧同抛 ValueError（router 映射为 422 VALIDATION_FAILED）。
     """

@@ -7047,7 +7047,7 @@
           "快照管理"
         ],
         "summary": "Recalculate",
-        "description": "重算指定时间区间的快照（同步模式）\n\n必须显式传 confirm=true，否则返回 422 CONFIRM_REQUIRED + 零副作用的区间预览\n（交易张数为工作量上界，不预校验 NAV）。\n\n单一事务（issue #58）：无 errors 时统一 commit；任一日失败则整体 rollback，\n被删快照与级联回退状态完整复原，对外「要么完整成功，要么无变化」。\n\n大区间重算易触发客户端 HTTP 超时（issue #89），建议改用\nPOST /snapshots/recalculate-async 提交后台任务并轮询终态。\n\n权限：仅admin；代理 Key 另须 snapshot:ops 且强制指定 portfolio_code",
+        "description": "重算指定时间区间的快照（同步模式）\n\n必须显式传 confirm=true，否则返回 422 CONFIRM_REQUIRED + 区间预览：不改写快照\n与账务数据，但代理 Key 的滑动续期会在认证阶段顺延 expires_at 并落库\n（交易张数为工作量上界，不预校验 NAV）。\n\n单一事务（issue #58）：无 errors 时统一 commit；任一日失败则整体 rollback，\n被删快照与级联回退状态完整复原，对外「要么完整成功，要么无变化」。\n\n大区间重算易触发客户端 HTTP 超时（issue #89），建议改用\nPOST /snapshots/recalculate-async 提交后台任务并轮询终态。\n\n权限：仅admin；代理 Key 另须 snapshot:ops 且强制指定 portfolio_code",
         "operationId": "recalculate_api_snapshots_recalculate_post",
         "security": [
           {

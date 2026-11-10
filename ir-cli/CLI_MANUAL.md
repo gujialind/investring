@@ -1252,7 +1252,7 @@ ir snapshot generate --portfolio-code <组合> --target-date YYYY-MM-DD
 
 区间重算快照。大区间重算耗时长，建议加 `--async` 提交后台任务，避免客户端超时后无法判定终态（issue #89）。
 
-同步路径须显式 `--yes`：未带时后端返回 422 `CONFIRM_REQUIRED` 与零副作用区间预览（`details` 含各组合实际改写终点与交易日张数上界），CLI 原样透传，核对后带 `--yes` 重跑。异步路径不校验 `--yes`。
+同步路径须显式 `--yes`：未带时后端返回 422 `CONFIRM_REQUIRED` 与区间预览（`details` 含各组合实际改写终点与交易日张数上界；不改写快照与账务数据，代理 Key 的滑动续期会顺延 `expires_at`），CLI 原样透传，核对后带 `--yes` 重跑。异步路径不校验 `--yes`。
 
 ```bash
 ir snapshot recalculate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--portfolio-code <组合>] [--yes]
