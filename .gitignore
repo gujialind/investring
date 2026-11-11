@@ -144,5 +144,8 @@ docs/plans/
 # Local agent handoff notes (task-level transient state, not version-controlled)
 docs/handoffs/
 
+# Local evaluation drafts (preventive registration; finalized conclusions write back to issue/spec body, not version-controlled; #862)
+docs/evaluations/
+
 # DSH agent scratch space (env-specific ops artifacts, e.g. generated migration SQL)
 .dsh/
