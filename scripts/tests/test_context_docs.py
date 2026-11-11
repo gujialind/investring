@@ -158,7 +158,8 @@ def test_section_reference_inside_a_fence_is_not_checked(doc_tree):
 
 
 def test_section_references_outside_managed_docs_are_not_checked(doc_tree):
-    _append(doc_tree / "docs/design/visual-spec.md", "见 §9.9 的说明。\n")
+    # #862 扩表后 visual-spec 已受管；改用仍未受管的 CLI_MANUAL 验证「受管外 § 引用不校验」。
+    _append(doc_tree / "ir-cli/CLI_MANUAL.md", "见 §9.9 的说明。\n")
     assert docs.check(doc_tree) == []
 
 
