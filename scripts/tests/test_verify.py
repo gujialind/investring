@@ -291,6 +291,40 @@ def test_env_check_accepts_no_arguments_and_exits_by_status(verify, repo, monkey
         verify.run_check(root, "env", ["--install"], "HEAD")
 
 
+def test_plan_and_env_run_without_fcntl(repo):
+    """#861: plan/env must import and run with fcntl unavailable (Windows).
+
+    Spawns an isolated subprocess that blocks `import fcntl`, then imports verify
+    and exercises plan + env. Fails on the old module-level `from local_stack
+    import owned_process` (ModuleNotFoundError at import); passes with the lazy
+    proxy because neither plan nor env reaches the local_stack import.
+    """
+    root, _ = repo
+    write_requirements(root, "fastapi==0.141.1")
+    code = (
+        "import sys\n"
+        "class _BlockFcntl:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'fcntl':\n"
+        "            raise ModuleNotFoundError(\"No module named 'fcntl'\")\n"
+        "sys.meta_path.insert(0, _BlockFcntl())\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from pathlib import Path\n"
+        "import verify\n"
+        "verify.ROOT = Path(sys.argv[2])\n"
+        "assert verify.plan(verify.ROOT, 'HEAD')['kind'] == 'plan'\n"
+        "result = verify.run_check(verify.ROOT, 'env', [], 'HEAD')\n"
+        "assert result['kind'] == 'result' and result['status'] in ('pass', 'fail')\n"
+        "assert 'fcntl' not in sys.modules\n"
+        "print('OK')\n"
+    )
+    output = subprocess.check_output(
+        [sys.executable, "-I", "-B", "-c", code, str(ROOT / "scripts"), str(root)],
+        text=True,
+    )
+    assert "OK" in output
+
+
 def test_check_arguments_are_forwarded_as_argv(verify, repo):
     root, _ = repo
     arguments = ["--backend-port", "18001", "--", "--grep", "literal; text"]

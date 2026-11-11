@@ -12,7 +12,19 @@ import sys
 import tempfile
 
 import ci_gate
-from local_stack import owned_process
+
+
+def owned_process(command, **kwargs):
+    """Lazy proxy to local_stack.owned_process (POSIX-only).
+
+    local_stack imports fcntl at module load. Deferring the import to call time
+    keeps plan/env importable and runnable without fcntl (#861): run_check
+    early-returns for env before reaching this call, and plan never calls it.
+    Only contract/e2e/visual invoke it, on POSIX (Linux/macOS/WSL).
+    """
+    from local_stack import owned_process as _owned_process
+    return _owned_process(command, **kwargs)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKS = ("contract", "e2e", "visual", "env")

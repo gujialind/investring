@@ -35,6 +35,8 @@
 
 本节是 E2E 与[目检](../AGENTS.md#5-目检视觉验证)共用的本地栈前提——两者都经 `scripts/local_stack.py` 起独占栈。
 
+**平台口径（#861）**：`local_stack.py` 依赖 `fcntl` 与 `os.killpg`（POSIX-only），故 `contract`/`e2e`/`visual` 以 **POSIX（Linux/macOS/WSL）** 为准；Windows 原生不支持这三项，改用 WSL 或 CI。`verify.py plan`/`run env` 经懒加载（#861，`owned_process` 推迟到调用时才导入 `local_stack`）不依赖 fcntl，跨平台可用。Windows 本地实跑按维护者定案为**显式豁免**（#861 第 2 项验收断言），未实跑不写通过。
+
 先安装当前 worktree 的后端依赖与前端 lockfile 依赖、Playwright 浏览器；runner 不自动安装。端口被占用即拒绝，不因 cwd 相同或 HTTP 200 就复用，也不杀未知进程；并行 worktree 显式选择不同 `--backend-port` / `--frontend-port`。
 
 同 worktree 的 `verify-frontend.sh` 与本地 runner 共用构建锁，持有至服务退出；构建失败不启动旧 `.next`。构建期 `API_BASE_URL` 固定到本次后端，`NEXT_PUBLIC_API_URL` 显式置空，避免绕过同源代理。日志、数据库、认证和截图留在输出的本次产物目录（默认 `.cache/verification/` 下），按运行保留供排查，不作为下一次验证的缓存。
