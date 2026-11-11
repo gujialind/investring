@@ -22,14 +22,17 @@ export const snapshotApi = {
     }),
 
   // 区间重算（同步模式，大区间易超时；前端页面已改用 recalculateAsync，此入口留给 CLI 以外的小区间调用）
+  // confirm 必须由调用方显式传入：后端未收到 confirm=true 时只返回 422 CONFIRM_REQUIRED 与区间预览（#855）
   recalculate: (
     portfolioCode: string | null,
     startDate: string,
-    endDate: string
+    endDate: string,
+    confirm: boolean
   ) =>
     request<RecalculationResult>({
       method: "POST",
       url: "/snapshots/recalculate",
+      params: { confirm },
       data: {
         portfolio_code: portfolioCode,
         start_date: startDate,

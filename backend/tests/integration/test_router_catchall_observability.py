@@ -149,8 +149,11 @@ class TestSnapshotCatchAllOutlets:
         monkeypatch.setattr("app.error_reporting.record_system_error", spy)
         monkeypatch.setattr(target, _boom(RuntimeError(BOOM_MESSAGE)))
 
-        resp = client.request(method, url, headers=admin_headers, json=payload) if payload else client.request(
-            method, url, headers=admin_headers
+        # recalculate 的 confirm 闸门先于 try（#855）：须显式确认才会走到被 monkeypatch
+        # 的执行体；查询串只用于发请求，日志断言的 request_path 仍是路由模板
+        request_url = f"{url}?confirm=true" if case == "recalculate" else url
+        resp = client.request(method, request_url, headers=admin_headers, json=payload) if payload else client.request(
+            method, request_url, headers=admin_headers
         )
 
         # 响应契约不变：仍是 {error, message} 与既有错误码（#553 的硬约束）

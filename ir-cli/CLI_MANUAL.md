@@ -247,16 +247,19 @@ IR_TOKEN 优先于本地文件。它由外部管理，CLI 不自动续期、不�
 
 ```bash
 ir auth key-create --label Analyst --scope ledger:write
+
+# 历史补录闭环：读写 + 快照批删/重算，必须设到期时间（≤90 天）
+ir auth key-create --label Recorder --scope ledger:write --scope snapshot:ops --expires-at 2026-12-31T00:00:00+08:00
 ```
 
 | 参数 | 必填 | 说明 |
 |------|:----:|------|
 | `--label` | 是 | 凭证标签 |
-| `--scope` | 否 | 默认 ledger:read；ledger:write 包含白名单读操作及账务写操作，可重复 |
+| `--scope` | 否 | 默认 ledger:read；ledger:write 包含白名单读操作及账务写操作；snapshot:ops 只放行快照批量删除与同步重算，可重复 |
 | `--investor` | 否 | 所属用户，默认当前管理员；仍受该用户角色与资源权限约束 |
-| `--expires-at` | 否 | 含时区的 ISO 时间；省略即无到期日 |
+| `--expires-at` | 否 | 含时区的 ISO 时间；省略即无到期日。含 snapshot:ops 时必填且不超过 90 天 |
 
-代理通过安全注入 IR_TOKEN 使用 Key。读权限包含确认预览；写权限覆盖申赎、调仓、份额事件及现金转移生命周期，不含删除、快照修改、系统管理或凭证管理。完整白名单见 [api_key_scopes.py](../backend/app/constants/api_key_scopes.py)，工作流中的快照/行情管理步骤仍需管理员会话。
+代理通过安全注入 IR_TOKEN 使用 Key。读权限包含确认预览；写权限覆盖申赎、调仓、份额事件及现金转移生命周期，不含删除、快照修改、系统管理或凭证管理。`snapshot:ops` 只放行 `ir snapshot delete-bulk` 与同步 `ir snapshot recalculate`，不追加任何 GET 读权限；补录闭环须与 `ledger:read` / `ledger:write` 同持。含该 scope 的 Key 每次成功认证把到期时间顺延至 90 天后（剩余超过 89 天时跳过，即 24h 节流）。完整白名单见 [api_key_scopes.py](../backend/app/constants/api_key_scopes.py)，工作流中的行情管理等其余步骤仍需管理员会话。
 
 #### `ir auth key-list`
 
@@ -1249,8 +1252,10 @@ ir snapshot generate --portfolio-code <组合> --target-date YYYY-MM-DD
 
 区间重算快照。大区间重算耗时长，建议加 `--async` 提交后台任务，避免客户端超时后无法判定终态（issue #89）。
 
+同步路径须显式 `--yes`：未带时后端返回 422 `CONFIRM_REQUIRED` 与区间预览（`details` 含各组合实际改写终点与交易日张数上界；不改写快照与账务数据，代理 Key 的滑动续期会顺延 `expires_at`），CLI 原样透传，核对后带 `--yes` 重跑。异步路径不校验 `--yes`。
+
 ```bash
-ir snapshot recalculate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--portfolio-code <组合>] [--force]
+ir snapshot recalculate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--portfolio-code <组合>] [--yes]
 
 # 异步模式（issue #89）
 ir snapshot recalculate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--portfolio-code <组合>] --async
@@ -1259,12 +1264,15 @@ ir snapshot recalculate ... --wait [--poll-interval 5]   # 提交后轮询至终
 
 | 参数 | 说明 |
 |------|------|
-| `--portfolio-code` | 指定组合（不传则重算所有活跃组合） |
+| `--portfolio-code` | 指定组合（不传则重算所有活跃组合；代理 Key 必填） |
 | `--start-date` | 起始日期（必填） |
 | `--end-date` | 截止日期（必填） |
+| `--yes` | 确认执行同步重算；缺省 false 时只取后端影响面预览，不改写快照 |
 | `--force` | 跳过校验强制重算 |
 | `--async` | 提交后台任务立即返回 job_id，用 `ir sync-job status <id>` 轮询终态（success=已提交 / failed=已整体回滚） |
 | `--wait` | 隐含 `--async`，提交后轮询至终态再返回；每次轮询都是短请求，不受长事务超时影响 |
+
+> 代理 Key 须持 `snapshot:ops` 且必须指定 `--portfolio-code`（禁止一把 Key 全量重建）。`end_date` 之后已有快照时实际重算终点自动扩展到最新快照日，响应逐组合回显 `end_date_extended_to`。代理 Key 不能走 `--async`（对异步端点 403），同步重算又受 nginx 60s 上限约束，深区间补录须按区间分段执行。
 
 > 异步模式事务语义与同步一致：后台按 errors 统一 commit/rollback，对外仍是「要么完整成功，要么无变化」；已有重算任务在跑时返回 409 `RECALC_JOB_CONFLICT`。
 

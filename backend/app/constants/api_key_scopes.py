@@ -44,8 +44,18 @@ WRITE_OPERATIONS = frozenset({
     ("POST", "/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/cancel"),
 })
 
+# snapshot:ops 只放行「历史补录闭环」必需的 2 个端点：批量删除（打开写入窗口）
+# 与同步重算（重建区间）。单日删除、generate/generate-next/catch-up、异步重算、
+# sync-jobs 与全部 GET 读路由均不在本集合内，默认拒绝（#855）。
+SNAPSHOT_OPS_OPERATIONS = frozenset({
+    ("DELETE", "/api/snapshots/{portfolio_code}/bulk/{from_date}"),
+    ("POST", "/api/snapshots/recalculate"),
+})
+
 
 def key_allows(scopes: list[str], method: str, route_path: str) -> bool:
+    if (method, route_path) in SNAPSHOT_OPS_OPERATIONS:
+        return "snapshot:ops" in scopes
     if method == "GET" and route_path in READ_PATHS:
         return "ledger:read" in scopes or "ledger:write" in scopes
     return "ledger:write" in scopes and (method, route_path) in WRITE_OPERATIONS

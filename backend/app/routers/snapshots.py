@@ -2,7 +2,7 @@
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -29,6 +29,7 @@ from app.services.snapshot_service import (
     generate_daily_snapshots,
     generate_next_snapshot,
     list_portfolio_snapshots,
+    preview_recalculate_range,
     recalculate_snapshots,
     validate_snapshot_dependencies,
 )
@@ -91,20 +92,65 @@ def generate_snapshot(
 @router.post("/recalculate", response_model=RecalculationResult)
 def recalculate(
     request: SnapshotRecalculateRequest,
+    http_request: Request,
+    confirm: bool = Query(False, description="必须显式传 confirm=true 才执行重算"),
     db: Session = Depends(get_db),
     current_user: Investor = Depends(get_current_admin),
 ):
     """
     重算指定时间区间的快照（同步模式）
-    
+
+    必须显式传 confirm=true，否则返回 422 CONFIRM_REQUIRED + 区间预览：不改写快照
+    与账务数据，但代理 Key 的滑动续期会在认证阶段顺延 expires_at 并落库
+    （交易张数为工作量上界，不预校验 NAV）。
+
     单一事务（issue #58）：无 errors 时统一 commit；任一日失败则整体 rollback，
     被删快照与级联回退状态完整复原，对外「要么完整成功，要么无变化」。
-    
+
     大区间重算易触发客户端 HTTP 超时（issue #89），建议改用
     POST /snapshots/recalculate-async 提交后台任务并轮询终态。
-    
-    权限：仅admin
+
+    权限：仅admin；代理 Key 另须 snapshot:ops 且强制指定 portfolio_code
     """
+    # 闸门 1：代理 Key 不得对「全部 active 组合」批量重算（历史补录须明确作用域）。
+    # 两道闸门都必须在 try 之前——HTTPException 是 Exception 子类，落入 try 会被
+    # catch-all 吞成 500 RECALCULATION_FAILED。
+    if (
+        getattr(http_request.state, "credential_type", None) == "api_key"
+        and not (request.portfolio_code and request.portfolio_code.strip())
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "INVALID_PARAM",
+                "message": "代理凭证重算必须指定 portfolio_code",
+            },
+        )
+
+    # 闸门 2：全局 confirm（管理员会话同样适用，与批量删除同口径）。未确认时
+    # 顺带返回区间预览，供核对影响面后带 confirm=true 重跑。
+    if not confirm:
+        try:
+            preview = preview_recalculate_range(
+                db, request.portfolio_code, request.start_date, request.end_date
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "VALIDATION_FAILED", "message": str(e)},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "CONFIRM_REQUIRED",
+                "message": (
+                    f"将重算 {preview['total_trading_days']} 个交易日"
+                    f"（{len(preview['portfolios'])} 个组合），请携带 confirm=true 确认"
+                ),
+                "details": preview,
+            },
+        )
+
     try:
         result = recalculate_snapshots(
             db=db,

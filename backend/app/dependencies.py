@@ -67,8 +67,9 @@ def get_current_user(
         )
 
     token = credentials.credentials
+    key_refreshed = False
     if token.startswith(API_KEY_PREFIX):
-        credential = authenticate_api_key(db, token)
+        credential, key_refreshed = authenticate_api_key(db, token)
         investor_code = credential.investor_code
         request.state.credential_type = "api_key"
     else:
@@ -122,6 +123,10 @@ def get_current_user(
             raise HTTPException(status_code=403, detail={
                 "error": "FORBIDDEN", "message": "代理凭证无权执行此操作",
             })
+        if key_refreshed:
+            # 滑动窗口顺延的落库点（service 只 flush，见 auth_service.authenticate_api_key）；
+            # 授权通过后提交，与 record_login_log 同为先例。此前只有读与本条 UPDATE。
+            db.commit()
     return investor
 
 

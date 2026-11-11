@@ -93,6 +93,12 @@ def create_api_key(db: Session, *, investor_code: str, label: str, scopes: list[
         expires_at = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
         if expires_at <= utcnow():
             raise BusinessError("INVALID_PARAM", "凭证到期时间必须晚于当前时间")
+    if "snapshot:ops" in scopes:
+        # 可改写历史的 Key 不允许「永久闲置」：到期时间必填且窗口有上限（#855）。
+        if expires_at is None:
+            raise BusinessError("INVALID_PARAM", "含 snapshot:ops 的凭证必须设置到期时间")
+        if expires_at > utcnow() + timedelta(days=90):
+            raise BusinessError("INVALID_PARAM", "含 snapshot:ops 的凭证到期时间不能超过 90 天")
     key_id = uuid4().hex
     secret = secrets.token_urlsafe(32)
     key = ApiKey(
@@ -108,14 +114,33 @@ def create_api_key(db: Session, *, investor_code: str, label: str, scopes: list[
     return key, f"{API_KEY_PREFIX}{key_id}.{secret}"
 
 
-def authenticate_api_key(db: Session, token: str) -> ApiKey:
+def authenticate_api_key(db: Session, token: str) -> tuple[ApiKey, bool]:
+    """认证代理 Key；返回 (Key 行, 是否顺延了滑动窗口)。
+
+    expires_at 对含 snapshot:ops 的 Key 是「闲置截止时间」：每次成功认证顺延至
+    now+90 天（剩余 >89 天时跳过，即 24h 节流）。NULL 视为需要补设——先判空再
+    算差，避免 None - datetime 抛 TypeError 让整把 Key 每请求 500。刷新只 flush，
+    commit 归依赖层（#855）。
+    """
     value = token.removeprefix(API_KEY_PREFIX)
     key_id, separator, secret = value.partition(".")
     key = db.get(ApiKey, key_id, populate_existing=True) if separator and len(key_id) == 32 and len(secret) == 43 else None
     if (key is None or not hmac.compare_digest(key.secret_hash, hashlib.sha256(secret.encode()).hexdigest())
             or key.revoked_at is not None or (key.expires_at is not None and key.expires_at <= utcnow())):
         raise BusinessError("AUTH_REQUIRED", "代理凭证无效、已过期或已撤销，请联系管理员", http_status=401)
-    return key
+    return key, _refresh_sliding_expiry(db, key)
+
+
+def _refresh_sliding_expiry(db: Session, key: ApiKey) -> bool:
+    """含 snapshot:ops 的 Key 认证成功后顺延闲置窗口；返回是否实际刷新。"""
+    if "snapshot:ops" not in key.scopes:
+        return False
+    now = utcnow()
+    if key.expires_at is not None and key.expires_at - now > timedelta(days=89):
+        return False
+    key.expires_at = now + timedelta(days=90)
+    db.flush()
+    return True
 
 
 def revoke_api_key(db: Session, key_id: str) -> ApiKey:

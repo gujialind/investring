@@ -33,19 +33,22 @@ def generate(
 def recalculate(
     start_date: str = typer.Option(..., "--start-date", help="开始日期(YYYY-MM-DD)"),
     end_date: str = typer.Option(..., "--end-date", help="结束日期(YYYY-MM-DD)"),
-    portfolio_code: Optional[str] = typer.Option(None, "--portfolio-code", help="组合代码(不传则所有)"),
+    portfolio_code: Optional[str] = typer.Option(None, "--portfolio-code", help="组合代码；代理 Key 必填，不传仅管理员会话可用（全部 active）"),
+    yes: bool = typer.Option(False, "--yes", help="确认执行重算；未提供则返回区间预览并拒绝"),
     async_mode: bool = typer.Option(False, "--async", help="提交后台任务立即返回 job_id，免 HTTP 长连接超时（issue #89）"),
     wait: bool = typer.Option(False, "--wait", help="配合 --async：提交后轮询至终态再返回（隐含 --async）"),
     poll_interval: int = typer.Option(5, "--poll-interval", help="--wait 轮询间隔秒数"),
 ):
-    """区间重算快照（大区间建议 --async，避免超时后无法判定终态）"""
+    """区间重算快照（同步路径须 --yes；大区间建议 --async，避免超时后无法判定终态）"""
     client = APIClient.from_config()
     body = {"start_date": start_date, "end_date": end_date}
     if portfolio_code is not None:
         body["portfolio_code"] = portfolio_code
 
     if not (async_mode or wait):
-        result = client.post(f"{PREFIX}/recalculate", json_data=body)
+        # 不做本地闸门：未带 --yes 时由后端返回 422 CONFIRM_REQUIRED + 区间预览
+        # （零副作用），CLI 透传 details，用户核对后带 --yes 重跑（#855）。
+        result = client.post(f"{PREFIX}/recalculate", json_data=body, params={"confirm": yes})
         success(data=result["data"])
         return
 

@@ -14,6 +14,7 @@
 """
 import json
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -56,6 +57,20 @@ class _RecordingClient:
 
 def _patch_client(monkeypatch) -> _RecordingClient:
     client = _RecordingClient()
+    monkeypatch.setattr(
+        APIClient, "from_config", classmethod(lambda cls, require_auth=True: client)
+    )
+    return client
+
+
+def _patch_error_client(monkeypatch, status_code: int, payload: dict) -> APIClient:
+    """用真实 APIClient + MockTransport 返回错误响应，走真实 _handle_response 出口"""
+    client = APIClient("http://testserver", token="ir_key_test")
+    client._client = httpx.Client(
+        base_url="http://testserver",
+        transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=payload)),
+        trust_env=False,
+    )
     monkeypatch.setattr(
         APIClient, "from_config", classmethod(lambda cls, require_auth=True: client)
     )
@@ -134,6 +149,79 @@ class TestDeleteBulkRegression:
         assert doc["error"]["code"] == "CONFIRM_REQUIRED"
         assert any("--dry-run" in h for h in doc["error"]["hints"])
         assert client.calls == []
+
+
+class TestRecalculateRemoteConfirm:
+    """同步重算不做本地闸门（#855）：未带 --yes 也发请求，由后端返回零副作用预览"""
+
+    ARGS = [
+        "snapshot", "recalculate",
+        "--start-date", "2026-01-05", "--end-date", "2026-01-06", "--portfolio-code", "P1",
+    ]
+    BODY = {"start_date": "2026-01-05", "end_date": "2026-01-06", "portfolio_code": "P1"}
+
+    def test_without_yes_sends_confirm_false_without_local_gate(self, monkeypatch, cli):
+        """请求形状断言（假客户端恒 2xx）：未带 --yes 也要发请求，不在本地拦下"""
+        client = _patch_client(monkeypatch)
+        code, _, raw = _run(cli, self.ARGS)
+        assert code == 0, raw
+        assert client.calls == [{
+            "method": "POST",
+            "path": "/api/snapshots/recalculate",
+            "params": {"confirm": False},
+            "json": self.BODY,
+        }]
+
+    def test_without_yes_surfaces_backend_preview(self, monkeypatch, cli):
+        """真实后端在 confirm=false 时返回 422 + details 预览，CLI 须原样透传给用户"""
+        preview = {
+            "portfolios": [{
+                "portfolio_code": "P1", "start_date": "2026-01-05", "end_date": "2026-01-06",
+                "effective_end_date": "2026-01-06", "trading_days": 2,
+            }],
+            "total_trading_days": 2,
+        }
+        _patch_error_client(monkeypatch, 422, {
+            "detail": {
+                "error": "CONFIRM_REQUIRED",
+                "message": "将重算 2 个交易日（1 个组合），请携带 confirm=true 确认",
+                "details": preview,
+            },
+        })
+        code, doc, raw = _run(cli, self.ARGS)
+        assert code == 1, raw
+        assert doc["ok"] is False
+        assert doc["error"]["code"] == "CONFIRM_REQUIRED"
+        assert doc["error"]["details"]["http_status"] == 422
+        assert doc["error"]["details"]["total_trading_days"] == 2
+        assert doc["error"]["details"]["portfolios"][0]["effective_end_date"] == "2026-01-06"
+
+    def test_with_yes_confirms(self, monkeypatch, cli):
+        client = _patch_client(monkeypatch)
+        code, _, raw = _run(cli, self.ARGS + ["--yes"])
+        assert code == 0, raw
+        assert client.calls == [{
+            "method": "POST",
+            "path": "/api/snapshots/recalculate",
+            "params": {"confirm": True},
+            "json": self.BODY,
+        }]
+
+    def test_async_path_carries_no_confirm(self, monkeypatch, cli):
+        client = _patch_client(monkeypatch)
+        code, _, raw = _run(cli, self.ARGS + ["--yes", "--async"])
+        assert code == 0, raw
+        assert client.calls == [{
+            "method": "POST",
+            "path": "/api/snapshots/recalculate-async",
+            "params": {},
+            "json": self.BODY,
+        }]
+
+    def test_help_lists_yes(self, cli):
+        result = _runner().invoke(cli, ["snapshot", "recalculate", "--help"])
+        assert result.exit_code == 0
+        assert "--yes" in result.stdout.split("Options:", 1)[1]
 
 
 @pytest.fixture()

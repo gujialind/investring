@@ -157,6 +157,7 @@ class TestSnapshotContinuity:
                 "start_date": self.D0.isoformat(),
                 "end_date": self.NEXT_DAY.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -260,6 +261,7 @@ class TestRecalculateAtomicity:
                 "start_date": self.D0.isoformat(),
                 "end_date": self.D0.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 422
@@ -291,6 +293,7 @@ class TestRecalculateAtomicity:
                 "start_date": self.D0.isoformat(),
                 "end_date": self.NEXT_DAY.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -320,6 +323,7 @@ class TestRecalculateAtomicity:
                 "start_date": self.D0.isoformat(),
                 "end_date": self.NEXT_DAY.isoformat(),
             },
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert resp.status_code == 200
@@ -387,6 +391,7 @@ class TestCompleteBusinessAtomicity:
             "/api/snapshots/recalculate",
             json={"portfolio_code": code, "start_date": EX_DAY.isoformat(),
                   "end_date": REBUILD_END.isoformat()},
+            params={"confirm": True},
             headers=admin_headers,
         )
         assert response.status_code == 200, response.text

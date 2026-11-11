@@ -720,6 +720,8 @@ class TestSnapshotAudit:
         summary = new["portfolios"][0]
         assert summary["portfolio_code"] == port
         assert summary["processed_dates"] == [D0.isoformat(), EX_DAY.isoformat()]
+        # 未扩展时实际改写终点恒等于请求 end_date（#855 审计契约）
+        assert summary["effective_end_date"] == EX_DAY.isoformat()
         assert summary["cascaded_unconfirmed"] >= 1
         # 级联回退的申购由 unconfirm_single_subscription 逐条留痕，不重复记 cascade
         assert _rows(test_db, action=ACTION_CASCADE_UNCONFIRM,
@@ -727,6 +729,30 @@ class TestSnapshotAudit:
         assert _rows(test_db, action=ACTION_UNCONFIRM,
                      resource_type=RESOURCE_SUBSCRIPTION,
                      resource_id=str(sub.id))
+
+    def test_recalculate_audit_records_effective_end_when_extended(self, test_db):
+        """end_date 早于最新快照日时，审计逐组合记录实际改写终点（#855）。
+
+        扩展是既有行为（#180 之后一直如此），此前审计只记请求区间，事后无法判断
+        到底重建到了哪一天；审计记录 effective_end_date 后两态都可追溯。
+        """
+        port = "AUD_SNP_EXT"
+        inv = "AUD_SNP_EXT_INV"
+        _setup_real_history(test_db, port, inv)
+        # 先补齐 EX_DAY 快照（_setup_real_history 只生成 D0），制造「end 之后还有快照」
+        assert generate_daily_snapshots(test_db, port, EX_DAY)["success"] is True
+        test_db.commit()
+
+        with _as():
+            result = recalculate_snapshots(test_db, port, D0, D0)
+            test_db.flush()
+
+        assert result["success"] is True, result
+        assert result["results"][0]["effective_end_date"] == EX_DAY.isoformat()
+        row = _one(test_db, action=ACTION_RECALCULATE,
+                   resource_type=RESOURCE_SNAPSHOT,
+                   resource_id=f"{D0.isoformat()}..{D0.isoformat()}")
+        assert _payload(row)[1]["portfolios"][0]["effective_end_date"] == EX_DAY.isoformat()
 
 
 class TestRecalculateAuditFlushGuard:
@@ -767,6 +793,7 @@ class TestRecalculateAuditFlushGuard:
         resp = client.post(
             "/api/snapshots/recalculate",
             headers=admin_headers,
+            params={"confirm": True},
             json={
                 "portfolio_code": port,
                 "start_date": D0.isoformat(),

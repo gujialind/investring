@@ -45,7 +45,7 @@ class ApiKeyCreate(BaseModel):
 
     label: str = Field(min_length=1, max_length=100)
     investor_code: Optional[str] = Field(default=None, min_length=1, max_length=20)
-    scopes: list[Literal["ledger:read", "ledger:write"]] = Field(default=["ledger:read"], min_length=1, max_length=2)
+    scopes: list[Literal["ledger:read", "ledger:write", "snapshot:ops"]] = Field(default=["ledger:read"], min_length=1, max_length=3)
     expires_at: Optional[AwareDatetime] = None
 
     @field_validator("label")

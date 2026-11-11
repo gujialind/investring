@@ -1,5 +1,5 @@
 """持久化会话、独立代理 Key 与权限边界（#797）。"""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -216,20 +216,34 @@ def test_key_financial_create_preview_confirm_audit(client, test_db, admin_heade
     assert key["token"] not in repr(log_lines(json_log_capture))
 
 
-@pytest.mark.parametrize("scope", ["ledger:read", "ledger:write"])
+@pytest.mark.parametrize("scope", ["ledger:read", "ledger:write", "snapshot:ops"])
 def test_key_route_matrix_defaults_to_deny(client, admin_headers, scope):
     import re
     from app.main import app
-    from app.constants.api_key_scopes import READ_PATHS, WRITE_OPERATIONS
+    from app.constants.api_key_scopes import (
+        READ_PATHS, SNAPSHOT_OPS_OPERATIONS, WRITE_OPERATIONS,
+    )
 
     operations = {(method.upper(), path) for path, methods in app.openapi()["paths"].items()
                   for method in methods if method.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE"}}
-    assert {("GET", path) for path in READ_PATHS} | WRITE_OPERATIONS <= operations
-    key = issue_key(client, admin_headers, scopes=[scope])
+    assert {("GET", path) for path in READ_PATHS} | WRITE_OPERATIONS | SNAPSHOT_OPS_OPERATIONS <= operations
+    overrides = {}
+    if scope == "snapshot:ops":
+        # 该 scope 创建时强制到期时间（≤90 天）；其余 scope 保持 helper 默认的 None
+        overrides["expires_at"] = (
+            auth_service.utcnow() + timedelta(days=30)
+        ).replace(tzinfo=timezone.utc).isoformat()
+    key = issue_key(client, admin_headers, scopes=[scope], **overrides)
     for method, path in sorted(operations):
         if not path.startswith("/api/") or path == "/api/auth/login":
             continue
-        allowed = (method == "GET" and path in READ_PATHS) or (scope == "ledger:write" and (method, path) in WRITE_OPERATIONS)
+        # 期望值由三张白名单独立拼装，不调用 key_allows——否则与 get_current_user
+        # 同源，误扩 SNAPSHOT_OPS_OPERATIONS 时断言会同步变绿，守门失效。
+        allowed = (
+            ((method, path) in SNAPSHOT_OPS_OPERATIONS and scope == "snapshot:ops")
+            or (method == "GET" and path in READ_PATHS and scope in {"ledger:read", "ledger:write"})
+            or (scope == "ledger:write" and (method, path) in WRITE_OPERATIONS)
+        )
         concrete = re.sub(r"\{([^}]+)\}", lambda m: "999999999" if m[1] in {"id", "job_id"} else "MISSING_KEY_TEST", path)
         result = client.request(method, concrete, headers=headers(key["token"]), json={})
         if allowed:
@@ -306,3 +320,225 @@ engine.dispose()
     engine.dispose()
     assert fresh_process() == [False, False]
     assert fresh_process() == [False, False]
+
+
+# ---------------------------------------------------------------------------
+# snapshot:ops 历史补录闭环（#855）
+# ---------------------------------------------------------------------------
+
+def _expiry_iso(days: int) -> str:
+    return (auth_service.utcnow() + timedelta(days=days)).replace(tzinfo=timezone.utc).isoformat()
+
+
+def _ops_key(client, admin_headers, **overrides):
+    options = {"scopes": ["ledger:write", "snapshot:ops"], "expires_at": _expiry_iso(30)}
+    options.update(overrides)
+    return issue_key(client, admin_headers, **options)
+
+
+def _seed_cash_snapshots(test_db, portfolio_code: str, days):
+    from tests.factories import create_investor_holding, create_position_snapshot, create_value_snapshot
+
+    for snapshot_date, amount in days:
+        create_position_snapshot(
+            test_db, portfolio_code, "CASH", "", snapshot_date=snapshot_date,
+            cash_amount=amount, unit_price=None, cost_price=None,
+            market_value=amount, platform_code="MYCF",
+        )
+        create_value_snapshot(test_db, portfolio_code, snapshot_date, amount, amount, 1.0)
+        create_investor_holding(test_db, portfolio_code, "VIEWER", snapshot_date, shares=amount)
+
+
+def test_snapshot_ops_key_full_backfill_loop(client, test_db, admin_headers):
+    """读写 + snapshot:ops 打通「删窗→预览→重算」闭环，且不借任何白名单外路由。"""
+    from app.models import PortfolioValueSnapshot
+    from tests.factories import create_portfolio, ensure_trading_day
+
+    key = _ops_key(client, admin_headers)
+    auth = headers(key["token"])
+    start, end = date(2025, 5, 6), date(2025, 5, 7)
+    for day in (start, end):
+        ensure_trading_day(test_db, day, is_open=True)
+    create_portfolio(test_db, code="OPS_PORT", status="active")
+    _seed_cash_snapshots(test_db, "OPS_PORT", [(start, 10000.0), (end, 12000.0)])
+
+    def snapshot_count() -> int:
+        return test_db.query(PortfolioValueSnapshot).filter_by(portfolio_code="OPS_PORT").count()
+
+    dry_run = client.delete(f"/api/snapshots/OPS_PORT/bulk/{end.isoformat()}?dry_run=true", headers=auth)
+    assert dry_run.status_code == 200, dry_run.text
+    assert snapshot_count() == 2
+    deleted = client.delete(f"/api/snapshots/OPS_PORT/bulk/{end.isoformat()}?confirm=true", headers=auth)
+    assert deleted.status_code == 200, deleted.text
+    assert snapshot_count() == 1
+
+    body = {"portfolio_code": "OPS_PORT", "start_date": end.isoformat(), "end_date": end.isoformat()}
+    preview = client.post("/api/snapshots/recalculate", headers=auth, json=body)
+    assert preview.status_code == 422
+    detail = preview.json()["detail"]
+    assert detail["error"] == "CONFIRM_REQUIRED"
+    assert detail["details"]["total_trading_days"] == 1
+    assert detail["details"]["portfolios"][0]["effective_end_date"] == end.isoformat()
+
+    done = client.post("/api/snapshots/recalculate", headers=auth, params={"confirm": True}, json=body)
+    assert done.status_code == 200, done.text
+    assert done.json()["results"][0]["processed_dates"] == [end.isoformat()]
+    test_db.expire_all()
+    assert snapshot_count() == 2
+
+
+def test_snapshot_ops_key_requires_expiry_and_window_cap(client, admin_headers):
+    missing = client.post(
+        "/api/auth/keys", headers=admin_headers,
+        json={"label": "ops", "scopes": ["ledger:write", "snapshot:ops"]},
+    )
+    assert missing.status_code == 422
+    assert missing.json()["detail"]["error"] == "INVALID_PARAM"
+
+    over = client.post(
+        "/api/auth/keys", headers=admin_headers,
+        json={"label": "ops", "scopes": ["ledger:write", "snapshot:ops"], "expires_at": _expiry_iso(91)},
+    )
+    assert over.status_code == 422
+    assert over.json()["detail"]["error"] == "INVALID_PARAM"
+
+    # 89 天在窗口内；三 scope 组合合法
+    issued = issue_key(
+        client, admin_headers,
+        scopes=["ledger:read", "ledger:write", "snapshot:ops"],
+        expires_at=_expiry_iso(89),
+    )
+    assert issued["key"]["expires_at"] is not None
+
+
+def test_snapshot_ops_key_accepts_exact_90_day_window(test_db, monkeypatch):
+    """90 天边界在 service 层用冻结时钟验证（HTTP 层有毫秒级误差，不做等值断言）。"""
+    from app.services.exceptions import BusinessError
+
+    fixed = datetime(2026, 1, 1, 0, 0, 0)
+    monkeypatch.setattr(auth_service, "utcnow", lambda: fixed)
+    edge = (fixed + timedelta(days=90)).replace(tzinfo=timezone.utc)
+    key, _ = auth_service.create_api_key(
+        test_db, investor_code="ADMIN", label="edge", scopes=["snapshot:ops"], expires_at=edge,
+    )
+    assert key.expires_at == fixed + timedelta(days=90)
+
+    with pytest.raises(BusinessError) as exc:
+        auth_service.create_api_key(
+            test_db, investor_code="ADMIN", label="over", scopes=["snapshot:ops"],
+            expires_at=(fixed + timedelta(days=91)).replace(tzinfo=timezone.utc),
+        )
+    assert exc.value.code == "INVALID_PARAM"
+
+
+def test_snapshot_ops_key_slides_idle_window(client, test_db, admin_headers):
+    key = _ops_key(client, admin_headers, expires_at=_expiry_iso(1))
+    row = test_db.get(ApiKey, key["key"]["id"])
+    before = row.expires_at
+    assert client.get("/api/auth/status", headers=headers(key["token"])).status_code == 200
+    test_db.refresh(row)
+    assert row.expires_at > before
+    assert row.expires_at >= auth_service.utcnow() + timedelta(days=89)
+
+
+def test_snapshot_ops_key_slide_is_throttled_and_expired_key_not_refreshed(client, test_db, admin_headers):
+    key = _ops_key(client, admin_headers, expires_at=_expiry_iso(1))
+    row = test_db.get(ApiKey, key["key"]["id"])
+    assert client.get("/api/auth/status", headers=headers(key["token"])).status_code == 200
+    test_db.refresh(row)
+    first = row.expires_at
+    assert client.get("/api/auth/status", headers=headers(key["token"])).status_code == 200
+    test_db.refresh(row)
+    assert row.expires_at == first, "24h 内二次认证不得重复顺延"
+
+    expired_at = auth_service.utcnow() - timedelta(minutes=1)
+    row.expires_at = expired_at
+    test_db.flush()
+    # MySQL DATETIME(0) 落库截断微秒、SQLite 保留，故以回读值为基线做等值断言，
+    # 不拿内存中含微秒的 expired_at 比较（否则只在 MySQL CI 失败）。
+    test_db.refresh(row)
+    expired_stored = row.expires_at
+    assert client.get("/api/auth/status", headers=headers(key["token"])).status_code == 401
+    test_db.refresh(row)
+    assert row.expires_at == expired_stored, "过期 Key 不得被顺延复活"
+
+
+def test_plain_key_never_slides(client, test_db, admin_headers):
+    key = issue_key(client, admin_headers, expires_at=_expiry_iso(1))
+    row = test_db.get(ApiKey, key["key"]["id"])
+    before = row.expires_at
+    assert client.get("/api/auth/status", headers=headers(key["token"])).status_code == 200
+    test_db.refresh(row)
+    assert row.expires_at == before, "无 snapshot:ops 的 Key 不做滑动顺延"
+
+
+def test_recalculate_proxy_key_requires_portfolio_code(client, admin_headers):
+    key = _ops_key(client, admin_headers)
+    for payload in (
+        {"start_date": "2025-05-06", "end_date": "2025-05-07"},
+        {"portfolio_code": None, "start_date": "2025-05-06", "end_date": "2025-05-07"},
+        {"portfolio_code": "", "start_date": "2025-05-06", "end_date": "2025-05-07"},
+        {"portfolio_code": "   ", "start_date": "2025-05-06", "end_date": "2025-05-07"},
+    ):
+        resp = client.post(
+            "/api/snapshots/recalculate", headers=headers(key["token"]),
+            params={"confirm": True}, json=payload,
+        )
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+
+
+def test_recalculate_snapshot_ops_key_requires_admin_role(client, admin_headers):
+    key = _ops_key(client, admin_headers, investor_code="VIEWER")
+    resp = client.post(
+        "/api/snapshots/recalculate", headers=headers(key["token"]), params={"confirm": True},
+        json={"portfolio_code": "ANY", "start_date": "2025-05-06", "end_date": "2025-05-06"},
+    )
+    assert resp.status_code == 403
+
+
+def test_recalculate_without_confirm_returns_preview_and_never_executes(client, test_db, admin_headers, monkeypatch):
+    from unittest.mock import MagicMock
+    from tests.factories import create_portfolio, ensure_trading_day
+
+    day = date(2025, 5, 6)
+    ensure_trading_day(test_db, day, is_open=True)
+    create_portfolio(test_db, code="PREVIEW_PORT", status="active")
+    execute = MagicMock(side_effect=AssertionError("confirm 未通过时不得执行重算"))
+    monkeypatch.setattr("app.routers.snapshots.recalculate_snapshots", execute)
+
+    resp = client.post(
+        "/api/snapshots/recalculate", headers=admin_headers,
+        json={"portfolio_code": "PREVIEW_PORT", "start_date": day.isoformat(), "end_date": day.isoformat()},
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "CONFIRM_REQUIRED"
+    assert "1 个交易日" in detail["message"] and "1 个组合" in detail["message"]
+    assert detail["details"] == {
+        "portfolios": [{
+            "portfolio_code": "PREVIEW_PORT",
+            "start_date": day.isoformat(),
+            "end_date": day.isoformat(),
+            "effective_end_date": day.isoformat(),
+            "trading_days": 1,
+        }],
+        "total_trading_days": 1,
+    }
+    execute.assert_not_called()
+
+
+def test_recalculate_admin_session_empty_portfolio_code_means_all_active(client, test_db, admin_headers):
+    """管理员会话传空串仍按全部 active 处理（守 `if portfolio_code:` 真值判断）。"""
+    from tests.factories import create_portfolio, ensure_trading_day
+
+    day = date(2025, 5, 6)
+    ensure_trading_day(test_db, day, is_open=True)
+    create_portfolio(test_db, code="ADMIN_ALL", status="active")
+    for portfolio_code in ("", None):
+        resp = client.post(
+            "/api/snapshots/recalculate", headers=admin_headers, params={"confirm": True},
+            json={"portfolio_code": portfolio_code, "start_date": day.isoformat(), "end_date": day.isoformat()},
+        )
+        assert resp.status_code == 200, resp.text
+        assert [item["portfolio_code"] for item in resp.json()["results"]] == ["ADMIN_ALL"]
