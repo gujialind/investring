@@ -23,11 +23,11 @@
 
 | 任务 | 默认加载 | 验证入口 |
 | --- | --- | --- |
-| 后端业务 | [后端指南](backend/AGENTS.md)、[对应领域规则](docs/reference/business-constraints.md)、目标服务及相关测试 | 后端指南“跑测试”的影响面表 |
+| 后端业务 | [后端指南](backend/AGENTS.md)、[对应领域规则](docs/reference/business-constraints.md)、目标服务及相关测试；DB 迁移加读 [deploy-rollback](docs/runbooks/deploy-rollback.md) §4.3 | 后端指南“跑测试”的影响面表 |
 | 前端交互 | [前端指南](frontend/AGENTS.md)、目标页面与 API 契约；涉及业务时读对应规则；改 E2E 或做纯测试重构加读 [E2E 指南](frontend/e2e/AGENTS.md) | 前端指南的质量门禁与影响面 E2E |
 | 前端视觉 | 前端交互的入口 + [visual-spec](docs/design/visual-spec.md)；目检与 E2E 共用本地栈，运行前提见 [E2E 指南](frontend/e2e/AGENTS.md#2-运行前置检查) | [前端指南](frontend/AGENTS.md#5-目检视觉验证)的双端目检 |
 | CLI | [CLI 指南](ir-cli/AGENTS.md)、[手册对应命令组](ir-cli/CLI_MANUAL.md)（先 `ir schema --index`） | CLI 单测与响应字段契约检查 |
-| 发布与运维 | [versioning](docs/reference/versioning.md)、目标 workflow、相关 runbook | 版本/契约验证及 runbook 的成功与恢复判据 |
+| 发布与运维 | [versioning](docs/reference/versioning.md)、目标 workflow、相关 runbook；依赖升级（[后端指南](backend/AGENTS.md) §6、[前端指南](frontend/AGENTS.md) §3 vitest 同版约束）；CI 门禁/策略脚本（[ci_policy.json](scripts/ci_policy.json)、[scripts/tests/](scripts/tests/)，跨栈非仅前端 E2E）；一次性操作 [server-init](docs/runbooks/server-init.md)、安全扫描响应 [security-scan-response](docs/runbooks/security-scan-response.md) | 版本/契约验证及 runbook 的成功与恢复判据；CI 门禁合入条件见 [code-review](docs/reference/code-review.md) §5.3 |
 | 日志与任务记录 | 模块指南 + [logging](docs/reference/logging.md) | 对应服务/任务日志测试 |
 | 代码审查 | [code-review](docs/reference/code-review.md)、本次变更涉及的规则 | L2 语义审查，不重复 CI 的 L1 检查 |
 | 文档变更 | [documentation](docs/reference/documentation.md)、持有正文的专题及其引用方 | `python scripts/check_context_docs.py` 与相关契约/测试 |

@@ -10,7 +10,8 @@
 | 根 [AGENTS.md](../../AGENTS.md) | 项目地图、任务路由、跨域不变量摘要、动作边界 | 完整领域规则、长操作手册 |
 | 各模块 AGENTS.md | 局部架构约束、验证入口、必要例外 | 已由专题持有的完整说明 |
 | `docs/reference/` | 业务意图、规范正文、边界与设计理由 | 会话过程、临时实施计划 |
-| `docs/runbooks/` | 操作前提、步骤、成功判据、失败恢复 | 与参考规范重复的业务公式 |
+| `docs/design/` | 视觉/交互口径与验收判据（[visual-spec](../design/visual-spec.md) 持有） | 组件实现细节、临时设计稿、与 visual-spec 重复的业务规则 |
+| `docs/runbooks/` | 操作前提、步骤、成功判据、失败恢复；一次性 how-to、排障流程（现象 → 诊断 → 恢复） | 与参考规范重复的业务公式 |
 | `docs/reviews/` | 评审与度量复盘的批次存档（含明细数据），不进默认加载 | 业务规则正文；仍有效的条款归 `docs/reference/` |
 | [CLI_MANUAL.md](../../ir-cli/CLI_MANUAL.md) | CLI 的用户操作、参数与示例 | 另一份后端业务规则 |
 | 生成契约 | 生成器负责的接口事实 | 手工修补的生成内容 |
@@ -20,6 +21,8 @@
 - 优先修改已有承载文件。确需新文档时，先确认没有同主题正文，再补入口，不创建孤立规范。
 - 源码说明当前实现，规范表达已批准的业务意图。二者冲突时列明差异和证据，暂停相关语义修改并询问用户；不得默默改规范迎合缺陷，也不得仅凭文档擅改实现。
 - 业务规则正文由 [business-constraints.md](business-constraints.md) 持有；日志、版本、审查分别由 [logging.md](logging.md)、[versioning.md](versioning.md)、[code-review.md](code-review.md) 持有。
+- **目录登记（doc-ownership，#862 第 9 项）**：在 `docs/` 下新增子目录须同批登记——受管内容在职责表补行并挂入口；仅本地使用的临时区在 `.gitignore` 登记（先例：`previews/`、`plans/`、`handoffs/`、`evaluations/`）。不留未跟踪也未忽略的中间态。临时稿结论定稿后的回写优先级：**长期有效的规则结论进规范正文，issue 持决策过程**（不写成「或」；维护者第 4 项定案「硬化且只管被触碰的规则」）。
+- **runbooks 命名与生命周期（#862 第 8 项）**：issue 号前缀 = 一次性 issue 驱动操作记录（如 `493-`）；带执行留痕的 runbook 头部须标生命周期状态（已执行 / 部分完成+豁免清单 / 长期有效），只陈述现状、不代维护者打勾。
 
 <a id="doc-content"></a>
 ## 内容与表达
@@ -75,6 +78,7 @@ PR 必须说明“已同步文档及位置”或“无需同步及理由”。�
 - 核对完整 diff：规则无遗漏、引用可定位、例外未丢失、生成产物没有手改。
 - 从仓库运行 `python scripts/check_context_docs.py`；自测为 `python -m pytest scripts/tests/test_context_docs.py scripts/tests/test_ci_path_mapping.py -q`。受管文档与源码引用文件明确列在[检查器](../../scripts/check_context_docs.py)的 `MANAGED_DOCS` / `SOURCE_REFERENCES`，不递归扩展目标、不访问外部网站，也不涵盖被忽略的本地工具规则；目前识别普通行内 Markdown 链接、引用式链接定义、显式 ID、ATX 标题与散文章节引用 `§N.M`，代码围栏中的示例不当作入口。
 - CI 的 changes job 在 checkout 后无条件运行此检查，docs-only PR 也不绕过；自测复用 Run scripts tests。错误码总表及源码符号继续由已有后端测试守门，不复制 AST 逻辑。
+- **受管集合扩表评估（doc-verification，#862 第 9 项）**：承载跨文件 `§N.M` 引用或被入口按路径引用的长期文档，**在新增受管内容登记时同批评估**是否纳入 `MANAGED_DOCS`；`docs/reviews/` 批次存档不进受管集合。不设独立定期巡检。
 - 运行本次影响面的契约检查及相关测试；检查范围和局限必须明示。机械检查不能证明业务语义正确，仍需对照实现与测试核实。
 - 分别报告通过、失败、未运行和无法验证，不能把计划执行写成执行完成，不能用 AI 自评代替证据。
 - 不将凭证、真实投资数据、完整运行日志或会话转录写入文档。任务授权和临时例外不自动升级为永久权限或全项目规则。
