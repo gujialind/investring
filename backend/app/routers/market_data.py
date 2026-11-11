@@ -11,6 +11,7 @@ from app.schemas.market_data import (
     NavCurvePoint,
     PriceDataResponse,
     PriceDataSyncRequest,
+    SyncHistoryRequest,
     ProductIntervalReturns,
     ProductNavAnalysis,
 )
@@ -142,7 +143,7 @@ def get_nav_coverage_endpoint(
     return get_nav_coverage(db, code, market, start_date, end_date or date.today())
 
 
-@router.post("/products/{code}/{market}/sync-price-data")
+@router.post("/products/{code}/{market}/sync-price-data", deprecated=True)
 def sync_price_data_endpoint(
     code: str,
     market: str,
@@ -180,13 +181,19 @@ def sync_price_data_endpoint(
 def sync_history(
     code: str,
     market: str,
+    request: Optional[SyncHistoryRequest] = None,
     db: Session = Depends(get_db),
     current_user: Investor = Depends(get_current_admin),
 ):
-    end_date = date.today()
+    # issue #856：可选周期 body。全不传 = 成立以来全量（修复 CLI {}→422 形态）；
+    # end 缺省今天；start > end（含未来 start）→ 400，沿用本 router 裸字符串错误形状。
+    start_date = request.start_date if request else None
+    end_date = (request.end_date if request and request.end_date is not None else date.today())
+    if start_date is not None and start_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
 
     try:
-        result = sync_price_data(db, code, market, None, end_date)
+        result = sync_price_data(db, code, market, start_date, end_date)
         # 同 sync_price_data_endpoint：先提交再判 success，保留失败标记
         db.commit()
         if result["success"]:

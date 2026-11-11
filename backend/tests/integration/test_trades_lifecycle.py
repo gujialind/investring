@@ -346,3 +346,108 @@ class TestUpdateAmountSyncCashLeg:
         assert float(paired_after.amount) == 8000.0
         assert float(paired_after.actual_amount) == 8000.0
         assert float(paired_after.amount) != original_paired_amount
+
+
+class TestProductInactiveGate:
+    """issue #856：停用产品禁止新建调仓（买/卖同挡，PRODUCT_INACTIVE）；
+    闸门只在 create_trade 单点——存量 pending 的 confirm/cancel/PUT 不受影响，重新启用即恢复。"""
+
+    def _setup_inactive(self, test_db, tag, trade_type="buy"):
+        port, prod, plat = f"IA_P_{tag}", f"ETF_IA_{tag}", f"IA_PLAT_{tag}"
+        create_portfolio(test_db, code=port, status="active")
+        create_product(test_db, code=prod, market="CN_EXCHANGE", product_type="ETF",
+                       asset_class_code="ASSET_STOCK", confirm_days=0, is_active=False)
+        create_platform(test_db, code=plat)
+        ensure_trading_day(test_db, date(2025, 10, 6), is_open=True)
+        return port, prod, plat
+
+    def _buy_body(self, port, prod, plat, trade_type="buy"):
+        return {
+            "portfolio_code": port, "product_code": prod, "market": "CN_EXCHANGE",
+            "trade_type": trade_type, "amount": 10000.0, "price": 1.5,
+            "platform_code": plat, "trade_date": "2025-10-06",
+        }
+
+    def test_buy_blocked(self, client, admin_headers, test_db):
+        """停用产品买入 → 422 PRODUCT_INACTIVE，中文 message（闸门在现金检查前，无需资金）"""
+        port, prod, plat = self._setup_inactive(test_db, "B")
+        resp = client.post("/api/trades", json=self._buy_body(port, prod, plat), headers=admin_headers)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "PRODUCT_INACTIVE"
+        assert "已停用" in resp.json()["detail"]["message"]
+
+    def test_sell_blocked(self, client, admin_headers, test_db):
+        """停用产品卖出 → 422 PRODUCT_INACTIVE（闸门在持仓检查前，买/卖同挡）"""
+        port, prod, plat = self._setup_inactive(test_db, "S")
+        resp = client.post(
+            "/api/trades", json=self._buy_body(port, prod, plat, "sell"), headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "PRODUCT_INACTIVE"
+
+    def _pending_buy(self, test_db, client, admin_headers, tag):
+        """产品 active 时经 API 建一笔 pending 买入（含配对现金腿），返回 (trade_id, product_code)"""
+        port, prod, plat = f"IA_P_{tag}", f"ETF_IA_{tag}", f"IA_PLAT_{tag}"
+        create_portfolio(test_db, code=port, status="active")
+        create_product(test_db, code=prod, market="CN_EXCHANGE", product_type="ETF",
+                       asset_class_code="ASSET_STOCK", confirm_days=0)
+        create_platform(test_db, code=plat)
+        ensure_trading_day(test_db, date(2025, 10, 6), is_open=True)
+        create_trade(test_db, port, "CASH", "", trade_type="buy", amount=50000.0, price=None,
+                     platform_code=plat, trade_date=date(2025, 10, 3),
+                     confirm_date=date(2025, 10, 3), status="confirmed")
+        resp = client.post("/api/trades", json=self._buy_body(port, prod, plat), headers=admin_headers)
+        assert resp.status_code in (200, 201), resp.json()
+        return resp.json()["id"], prod
+
+    def test_pending_cancel_unaffected(self, client, admin_headers, test_db):
+        # 用场外 OEF：场内 cancel 被既有规则 CANNOT_CANCEL_EXCHANGE 挡（与 #856 无关），
+        # 唯有场外能真正走通 cancel 路径，验证停用不影响存量 pending 的取消。
+        port, prod, plat = "IA_P_CAN", "FUND_IA_CAN", "IA_PLAT_CAN"
+        create_portfolio(test_db, code=port, status="active")
+        create_product(test_db, code=prod, market="CN_OTC", product_type="OEF",
+                       asset_class_code="ASSET_STOCK", confirm_days=1)
+        create_platform(test_db, code=plat)
+        ensure_trading_day(test_db, date(2025, 10, 6), is_open=True)
+        ensure_trading_day(test_db, date(2025, 10, 7), is_open=True)
+        create_trade(test_db, port, "CASH", "", trade_type="buy", amount=50000.0, price=None,
+                     platform_code=plat, trade_date=date(2025, 10, 3),
+                     confirm_date=date(2025, 10, 3), status="confirmed")
+        created = client.post("/api/trades", json={
+            "portfolio_code": port, "product_code": prod, "market": "CN_OTC",
+            "trade_type": "buy", "amount": 10000.0, "platform_code": plat,
+            "trade_date": "2025-10-06",
+        }, headers=admin_headers)
+        assert created.status_code in (200, 201), created.json()
+        trade_id = created.json()["id"]
+        client.put(f"/api/products/{prod}/CN_OTC", json={"is_active": False}, headers=admin_headers)
+        resp = client.post(f"/api/trades/{trade_id}/cancel", headers=admin_headers)
+        assert resp.status_code == 200, resp.json()
+
+    def test_pending_update_unaffected(self, client, admin_headers, test_db):
+        trade_id, prod = self._pending_buy(test_db, client, admin_headers, "UPD")
+        client.put(f"/api/products/{prod}/CN_EXCHANGE", json={"is_active": False}, headers=admin_headers)
+        resp = client.put(f"/api/trades/{trade_id}", json={"notes": "停用后编辑"}, headers=admin_headers)
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["notes"] == "停用后编辑"
+
+    def test_pending_confirm_unaffected(self, client, admin_headers, test_db):
+        trade_id, prod = self._pending_buy(test_db, client, admin_headers, "CONF")
+        deact = client.put(f"/api/products/{prod}/CN_EXCHANGE", json={"is_active": False}, headers=admin_headers)
+        assert deact.status_code == 200
+        resp = client.post(f"/api/trades/{trade_id}/confirm", headers=admin_headers)
+        assert resp.status_code == 200, resp.json()
+
+    def test_reenable_restores_create(self, client, admin_headers, test_db):
+        """停用挡买入；重新启用后同一买入恢复成功（停用可逆，闸门只读当前 is_active）"""
+        port, prod, plat = self._setup_inactive(test_db, "R")
+        create_trade(test_db, port, "CASH", "", trade_type="buy", amount=50000.0, price=None,
+                     platform_code=plat, trade_date=date(2025, 10, 3),
+                     confirm_date=date(2025, 10, 3), status="confirmed")
+        body = self._buy_body(port, prod, plat)
+        blocked = client.post("/api/trades", json=body, headers=admin_headers)
+        assert blocked.status_code == 422
+        assert blocked.json()["detail"]["error"] == "PRODUCT_INACTIVE"
+        client.put(f"/api/products/{prod}/CN_EXCHANGE", json={"is_active": True}, headers=admin_headers)
+        ok = client.post("/api/trades", json=body, headers=admin_headers)
+        assert ok.status_code in (200, 201), ok.json()

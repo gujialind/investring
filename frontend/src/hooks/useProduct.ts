@@ -128,56 +128,24 @@ export function useDeleteProduct() {
   });
 }
 
-// 产品价格/净值历史 Hook（后端路径要求 market 必填）
-export function useProductPrices(code?: string, market?: string, limit = 30) {
-  return useQuery({
-    queryKey: [PRODUCT_QUERY_KEY, "prices", code, market],
-    queryFn: () => productApi.getPriceData(code!, market!, { limit }),
-    enabled: !!code && !!market,
-    staleTime: 5 * 60 * 1000,
-  });
-}
-
-// 同步最新价格 Hook
-export function useSyncProductPrice() {
-  const queryClient = useQueryClient();
-  const addToast = useUIStore((state) => state.addToast);
-
-  return useMutation({
-    mutationFn: ({ code, market }: { code: string; market?: string }) =>
-      productApi.syncPrice(code, market),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [PRODUCT_QUERY_KEY] });
-      addToast({
-        type: "success",
-        title: "同步成功",
-        message: `已同步 ${data.synced_count || 0} 条价格数据`,
-      });
-    },
-    onError: (error: unknown) => {
-      addToast({
-        type: "error",
-        title: "同步失败",
-        message: getErrorMessage(error, "请检查数据源配置"),
-      });
-    },
-  });
-}
-
-// 同步历史价格 Hook
+// 同步历史价格 Hook（#856：可选周期；无日期=成立以来全量、不发请求体）
 export function useSyncProductHistory() {
   const queryClient = useQueryClient();
   const addToast = useUIStore((state) => state.addToast);
 
   return useMutation({
-    mutationFn: ({ code, market }: { code: string; market?: string }) =>
-      productApi.syncHistory(code, market),
+    mutationFn: ({ code, market, start_date, end_date }: { code: string; market?: string; start_date?: string; end_date?: string }) =>
+      productApi.syncHistory(
+        code,
+        market,
+        start_date === undefined && end_date === undefined ? undefined : { start_date, end_date }
+      ),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [PRODUCT_QUERY_KEY] });
       addToast({
         type: "success",
         title: "同步成功",
-        message: `已同步 ${data.synced_count || 0} 条历史价格数据`,
+        message: `同步 ${data.synced_count || 0} 条（新增 ${data.new_count || 0} 条）`,
       });
     },
     onError: (error: unknown) => {

@@ -1062,7 +1062,7 @@ ir market nav-coverage <PRODUCT_CODE> <MARKET> --start-date YYYY-MM-DD [--end-da
 
 #### `ir market sync`
 
-从 Tushare 同步产品价格数据。
+同步产品价格数据。**#856 起改调 `sync-history` 端点**（请求体可空）：不传日期即成立以来全量（上界为今天），传 `--start-date` / `--end-date` 限定区间，`end-date` 缺省为今天；`start-date` 晚于 `end-date` 时后端返回 400。此前无日期/单日期会命中 `PriceDataSyncRequest` 必填校验 422，现已修复。与 `ir market sync-history`（始终全量、不带请求体）的区别仅在于本命令可带区间。
 
 ```bash
 ir market sync <PRODUCT_CODE> <MARKET> [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
@@ -1158,7 +1158,7 @@ ir product get <CODE> [MARKET]
 
 ```bash
 ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [--is-qdii/--no-qdii] \
-  [--confirm-days N] [--nav-lag-days N] [--asset-class-code <类别>] [--data-source <数据源>]
+  [--is-active/--no-is-active] [--confirm-days N] [--nav-lag-days N] [--asset-class-code <类别>] [--data-source <数据源>]
 ```
 
 > **issue #228 语义**：
@@ -1170,6 +1170,10 @@ ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [-
 > - `--product-type` 可纠错产品类型（合法值 `ETF`/`OEF`/`LOF`/`CASH`/`IN_TRANSIT`，非法值 422）；存在 pending 交易/事件时拒绝修改
 > - `market` 变更须用 `--json '{"market": "CN_OTC"}'`：**仅限无交易/事件/持仓引用的产品**（有引用返回 `MARKET_CHANGE_REFERENCED` 及各表计数）；已有行情随行迁移并提示重新 `sync-history`；未显式传 `--confirm-days` 时按新市场重推导默认值
 > - 请求体含未声明字段一律 422（此前会被静默忽略、返回 ok 却不生效）
+>
+> **issue #856 语义**：
+> - `--is-active` / `--no-is-active` 启用/停用产品（不传不改）。停用后不可再新建该产品的买入/卖出记录（`create_trade` → 422 `PRODUCT_INACTIVE`，买/卖同挡），存量待确认记录的确认/取消/编辑与份额变动事件不受影响；清盘分配等持仓了结走份额变动事件。重新启用（`--is-active`）后创建恢复
+> - 虚拟产品（`CASH`/`IN_TRANSIT`）禁止停用：`--no-is-active` → 422 `SYSTEM_PRODUCT_PROTECTED`；显式传 null（`--json '{"is_active": null}'`）→ 422 `INVALID_PARAM`
 
 #### `ir product delete`
 

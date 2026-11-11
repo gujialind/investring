@@ -390,3 +390,44 @@ class TestProductListOrder:
         # 重复请求顺序稳定（确定性排序）
         resp2 = client.get("/api/products?page_size=100", headers=admin_headers)
         assert [i["code"] for i in resp2.json()["items"]] == codes
+
+
+class TestProductListIsActiveFilter:
+    """issue #856：is_active 等值筛选。False 是合法筛选值（router 判 is not None），
+    覆盖「if is_active: 假值陷阱」回归；断言风格同 TestProductListAttrFilter。"""
+
+    def test_is_active_false_only_inactive(self, client, admin_headers, test_db):
+        """?is_active=false → 结果每项 is_active False，自建停用 code 在列、启用 code 不在"""
+        create_product(test_db, code="IA001.OF", market="CN_OTC", is_active=False)
+        create_product(test_db, code="IA002.OF", market="CN_OTC", is_active=True)
+        resp = client.get("/api/products?is_active=false", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        items = data["items"]
+        assert len(items) > 0
+        assert data["total"] == len(items)
+        assert all(i["is_active"] is False for i in items)
+        codes = [i["code"] for i in items]
+        assert "IA001.OF" in codes
+        assert "IA002.OF" not in codes
+
+    def test_is_active_true_excludes_inactive(self, client, admin_headers, test_db):
+        """?is_active=true → 谓词成立，自建停用 code 不在列"""
+        create_product(test_db, code="IA003.OF", market="CN_OTC", is_active=False)
+        create_product(test_db, code="IA004.OF", market="CN_OTC", is_active=True)
+        resp = client.get("/api/products?is_active=true", headers=admin_headers)
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert resp.json()["total"] == len(items)
+        assert all(i["is_active"] is True for i in items)
+        codes = [i["code"] for i in items]
+        assert "IA004.OF" in codes
+        assert "IA003.OF" not in codes
+
+    def test_no_is_active_param_includes_inactive(self, client, admin_headers, test_db):
+        """不传 is_active 不过滤：停用产品也在列（与虚拟产品默认排除是两回事）"""
+        create_product(test_db, code="IA005.OF", market="CN_OTC", is_active=False)
+        resp = client.get("/api/products?page_size=100", headers=admin_headers)
+        assert resp.status_code == 200
+        codes = [i["code"] for i in resp.json()["items"]]
+        assert "IA005.OF" in codes

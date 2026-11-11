@@ -19,6 +19,8 @@ export interface Product {
   nav_lag_days: number;
   /** 展示标签（issue #228 起不参与快照取价判断，取价看 nav_lag_days） */
   is_qdii: boolean;
+  /** issue #856：停用标记（false 只挡新建调仓；存量记录/份额事件/净值同步不受影响） */
+  is_active: boolean;
   data_source?: string;
   /** 列可空：迁移 0006 裸 SQL 种入的 IN_TRANSIT 行恒为 null（#487 评审订正） */
   data_source_status: string | null;
@@ -62,4 +64,6 @@ export interface ProductUpdate {
   /** issue #228：纯显式更新（不传不改） */
   nav_lag_days?: number;
   is_qdii?: boolean;
+  /** issue #856：停用/启用（不传不改；虚拟产品禁止停用，后端守卫） */
+  is_active?: boolean;
 }

@@ -17,7 +17,6 @@ export type {
   NavCurvePoint,
   NavHistoryItem,
   NavHistoryPage,
-  PriceDataPoint,
   ProductIntervalReturns,
   ProductListParams,
   ProductNavAnalysis,

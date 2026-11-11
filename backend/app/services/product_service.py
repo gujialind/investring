@@ -571,6 +571,16 @@ def update_product(
         },
     )
 
+    # issue #856：虚拟产品（CASH/IN_TRANSIT）禁止停用——其份额只由业务流程生成、
+    # 不走 create_trade，停用标记会造成「已停用却仍在记账」误读。null 收口之后、
+    # 写库之前拒绝（is_active=null 已由上一步收口为 INVALID_PARAM）。
+    if updates.get("is_active") is False and product.product_type in VIRTUAL_PRODUCT_TYPES:
+        raise BusinessError(
+            "SYSTEM_PRODUCT_PROTECTED",
+            f"系统虚拟产品 {product.code} 禁止停用",
+            details={"code": product.code},
+        )
+
     # 维度标签按合并后结果校验适用矩阵（部分更新不允许造成非法组合）；
     # is_active 仅对实际变化的字段校验（#135：存量引用停用值不阻断其他编辑）
     if any(f in updates for f in DIMENSION_FIELDS):
