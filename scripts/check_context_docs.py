@@ -21,6 +21,9 @@ MANAGED_DOCS = (
     "docs/reference/code-review.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
     "docs/runbooks/493-model-cutover.md",
+    "docs/reference/versioning.md",
+    "docs/design/visual-spec.md",
+    "docs/runbooks/deploy-rollback.md",
 )
 SOURCE_REFERENCES = (
     "backend/app/services/snapshot_service.py",
