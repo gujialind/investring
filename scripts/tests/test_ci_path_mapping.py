@@ -27,8 +27,15 @@ def outputs(paths, event="pull_request", **kwargs):
 PROBES = [
     ("backend/app/services/trade_service.py", "backend"),
     ("backend/tests/integration/test_trades.py", "backend"),
+    # #861 第4项/D2：仅 bc 触发 backend（test_error_codes_doc_sync.py 的断言输入，pre-#587
+    # ci.yml 头注释点名的设计意图）；此探针钉住「bc 必触发 backend」硬约束，不只靠 PR 说明。
     ("docs/reference/business-constraints.md", "backend"),
-    ("docs/reference/documentation.md", "backend"),
+    # D2：documentation.md 原断言 backend 是钉宽 prefix 当前映射的行为探针（全仓无可执行
+    # 测试消费者），非专门设计意图；收窄后同步更新为空 scope。
+    ("docs/reference/documentation.md", ""),
+    # 硬约束：docs/ prefix→[] 必须保留——docs/reviews/*.jsonl 非 .md，删 docs/ 规则会使其
+    # unmapped→保守点亮四栈（回归）；此探针钉住 docs/ 非 backend 文档仍 mapped 且空 scope。
+    ("docs/reviews/x.jsonl", ""),
     ("backend/tests/seed_base.py", "backend frontend e2e_morph"),
     ("backend/scripts/seed_e2e.py", "backend frontend e2e_morph"),
     ("frontend/src/app/page.tsx", "frontend"),
