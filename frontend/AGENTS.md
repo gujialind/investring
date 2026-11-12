@@ -18,6 +18,8 @@
 
 * 复用三层：完全共享（`hooks/`、`stores/`、`components/ui/`、`types/`）→ 共享业务组件（`components/shared/`，以 `variant: "desktop" | "mobile"` + `basePath` 适配双端）→ 端侧独立（`components/mobile/`、`desktop/`、`layout/`、`charts/`）。
 
+* **主题（#872 PR2）**：偏好仅经 `next-themes`（`attribute="class"`、`defaultTheme="system"`、`storageKey="theme"`、`disableTransitionOnChange`），**不进 zustand、不与 #68 水合门耦合**；`suppressHydrationWarning` 仅挂 `<html>`（内联脚本首绘前加 `.dark` 属预期差异）。组件取图表色经 `hooks/useChartTheme` → `lib/colors.ts` theme 访问器（默认 light）；浮层/Tooltip 表面走 popover/border token（recharts 默认轴色 `#666` 与白底 Tooltip 是库默认值，grep 抓不到，须显式主题化，visual-spec §2）。light 33 token 逐字节不变由 `e2e/theme.spec.ts` golden 守卫钉住；改 light 值须先走口径决策。
+
 * **`basePath` 是「前缀不带尾斜杠」，类型为 `"" | "/m"`**（#658）：数据里的路径自带前导 `/`，`${basePath}${href}` 若 `basePath="/" ` 会拼成 `"//dashboard"`——浏览器按**协议相对 URL** 解析成名为 `dashboard` 的 host，链接离开本站、`pathname === href` 的激活判定也恒假。这类错误 lint/tsc/build/E2E 四层都碰不到（chromium project 固定 1280 宽、该导航 `lg:hidden`；mobile project 走 `/m` 拼接恰好正确），故把契约写进**类型**而不是注释，并在 `e2e/regression.spec.ts` 的「桌面窄屏底部导航」用例里以 900px 视口钉住。新增分端前缀时沿用 `"" | "/m"`，不要接受任意字符串。
 
 * API 层 `src/lib/api/` 按域拆分、经 `index.ts` barrel 统一导出（`@/lib/api`）；`next.config.js` 将 `/api/:path*` rewrite 到 `API_BASE_URL`（默认 localhost:8000）。
@@ -79,6 +81,8 @@ E2E 的运行入口与验收命令、本地栈前置检查、种子契约的 E2E
 ```bash
 ../scripts/visual-verify.sh                                              # 双端截三个流水列表（默认 E2E_ACTIVE，恒有行）
 ../scripts/visual-verify.sh --device mobile --path /portfolio/E2E_PORT/positions   # 参数原样转给 visual-shot.mjs
+../scripts/visual-verify.sh --theme both                                 # 双端 × 浅/暗双主题（#872 PR2；dark 文件名加 -dark）
+../scripts/visual-verify.sh --theme dark --scenario snapshot-delete-confirm --path /portfolio/E2E_ACTIVE/snapshots   # 打开态浮层取证
 ```
 
 - **第三条验证层**：§2 门禁（lint/tsc/build）看不到运行时，§3 单测只覆盖 lib 纯函数，E2E 断言定位与文本、**不断言像素**——列宽挤压、CJK 竖排换行、双行单元格错位、结对行 `colSpan` 对不齐这类问题只有人眼看图能拦（#355「市场」列窄到「A股场内」四字竖排是 issue 里人眼发现的，e2e 全程绿灯）。改 `components/shared/*Content.tsx` 的表格/图表列结构时按本节目检。

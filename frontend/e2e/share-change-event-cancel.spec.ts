@@ -118,7 +118,7 @@ test.describe('份额变动事件行级取消二次确认（#845）', () => {
       expect(cancelCalls).toBe(0);
       // §14：危险操作确认按钮 solid destructive
       const confirmBtn = dlg.getByRole('button', { name: '确认' });
-      await expect(confirmBtn).toHaveClass(/bg-destructive/);
+      await expect(confirmBtn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
       await expect(confirmBtn).toHaveClass(/text-white/);
 
       await confirmBtn.click();

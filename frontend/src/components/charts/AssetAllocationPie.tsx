@@ -55,6 +55,13 @@ export default function AssetAllocationPie({ items, height = 180, forceColumn = 
                 `${formatNumber(Number(value))} 元`,
                 name,
               ]}
+              contentStyle={{
+                backgroundColor: "hsl(var(--popover))",
+                border: "1px solid hsl(var(--border))",
+                color: "hsl(var(--popover-foreground))",
+              }}
+              labelStyle={{ color: "hsl(var(--foreground-secondary))" }}
+              itemStyle={{ color: "hsl(var(--popover-foreground))" }}
             />
           </PieChart>
         </ResponsiveContainer>

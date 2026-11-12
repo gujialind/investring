@@ -19,7 +19,7 @@
    二者从不出现在同一上下文；绛红永远伴随「失败/异常」文字，不靠颜色单独表意。
 3. **success ≠ 绿**。绿色被「跌」独占后，完成/确认语义移交**靛蓝 `#2B5CD7`，并兼任品牌主色 primary**（链接、主按钮、focus 环同源）。完成态是系统里出现频率最高的状态，让默认观感就是「一切正常」，减少色彩噪音。
 4. **cancelled / closed / draft / 停用 → neutral 灰 badge**。用户主动撤销 ≠ 系统异常，不再用红。
-5. **dark mode 启用实施中（#872）**：PR1 已完成双通道对齐与对比度实测回填（§17），dark 终值见 §1.2/§1.4；生产代码仍未启用暗色（无 `dark` 类/`dark:` 变体消费），启用实施待 PR2（主题库/设置入口/图表消费）。再启动条件 = PR2 合入，无其他悬空前置。
+5. **dark mode 已启用（#872 PR2）**：三档偏好（浅色/深色/跟随系统，默认 system，D2 已批）；next-themes class 通道 + 内联脚本首屏不闪白；双端同源 token，无端侧独有配色。实测对比度与闭合证据见 §17；回退＝revert PR2（整体回浅色，PR1/#874 清理留存）。
 
 ### 1.2 语义色 token 色值表（配色方案 v1）
 
@@ -91,6 +91,7 @@
 
 1. **调色板类名**：禁止 `(text|bg|border)-(red|green|yellow|blue|amber|emerald|orange|purple|indigo|pink|teal|cyan)-<数字>`。新增颜色需求一律先加语义 token。
 2. **任意值类名**（2026-08-29 起）：禁止 `text-[…]`（§5 四档之外）、`p/px/py/pt/pb/pl/pr-[…]`、`gap/gap-x/gap-y-[…]`、`rounded-[…]`（§7 派生档之外）。m 系 / space 系 / w·h 系任意值**暂不拦截**（多为视口比例或一次性尺寸，如 `h-[60vh]`、`sm:max-w-[500px]`，是否纳入待后续评估）。
+3. **中性色 ratchet**（2026-11-13，#872 PR2，D6 已批）：禁止 `(text|bg|border)-(slate|gray|zinc|neutral|stone)-<数字>`（字符串与模板字符串同拦）。中性色硬编码已于 PR1/#874 清零，本道防回流；`white`/`black` 为刻意例外（solid 危险载体白字、Dialog/AlertDialog scrim）不在本规则面；渐变端点色 `from-`/`to-` 不在 D6 已批范围、未拦截（扩面须维护者另行批准）。
 
 另有 `no-restricted-imports`（error，2026-09-01 #349 起）：业务代码禁止从 `@/lib/utils` import 裸 `formatShares`——份额上屏一律 `formatSharesUnit`（§3/§12），`formatShares` 仅供其内部实现。成因：#249 全站清零手工扫描仍漏掉三个确认弹窗，证明纯约定不可持续，升级为编译期门禁。
 
@@ -148,7 +149,7 @@
 
 色相核对：dark H = 222.7/35.8/201.6/251.5/326.7/27.9/217.1/224.7，避开 gain 8°/loss 151°/destructive 350° 占用色相；NAV_LINE dark 仍非红绿；「超 6 类合并其他」「两个其他色不可混用」规则不变。
 
-**recharts 默认色治理结论（#872 A③，PR2 落地）**：库默认轴色 `#666` 在暗卡仅 2.91:1（12px tick 不达标）、Tooltip 默认白底 `#fff` + `#ccc` 边框属 C1 禁止的浅底残留——两者是库默认值，仓内 hex grep 抓不到。PR2 须对 NavCurve/AssetAllocationPie 显式主题化：轴 tick fill 走 foreground-secondary token、轴线走 muted/border token、Tooltip `contentStyle`/`itemStyle`/`labelStyle` 走 popover/border token；`CartesianGrid` 已用 `stroke-muted` 自动随主题。
+**recharts 默认色治理结论（#872 A③，已于 PR2 落地）**：库默认轴色 `#666` 在暗卡仅 2.91:1（12px tick 不达标）、Tooltip 默认白底 `#fff` + `#ccc` 边框属 C1 禁止的浅底残留——两者是库默认值，仓内 hex grep 抓不到。已于 #872 PR2 对 NavCurve/AssetAllocationPie 显式主题化：轴 tick fill 走 foreground-secondary token、轴线走 border token、Tooltip `contentStyle`/`itemStyle`/`labelStyle` 走 popover/border token；`CartesianGrid` 用 `stroke-muted` 自动随主题。
 
 ---
 
@@ -306,22 +307,23 @@
 - 图标默认继承文字色（不加颜色类）；需要语义时与同行文字共用同一 token：成功 `text-success`、警告 `text-warning`、失败 `text-destructive`、涨跌图标随数值走 `getReturnColorClass`。
 - 状态指示小圆点（通知级别、交易日标记、方向标识）用对应 token 的 solid 色（`bg-success` / `bg-warning` / `bg-destructive`）或 `lib/colors.ts` 分类色，不用 `-soft`。
 
-## 17. Dark mode 启用条件（#872 PR1 已闭合，启用待 PR2）
+## 17. Dark mode 启用条件（#872 已启用：PR1 闭合前置、PR2 启用）
 
-四项前置条件已于 #872 PR1 闭合；**暗色未启用**——生产代码无 `dark` 类/`dark:` 变体消费（基件 `alert.tsx` 自带的 `dark:border-destructive` 为既存唯一例外，保留），启用实施待 PR2。中间态措辞（E1 判据）：本节 = 「⓪①②③ 已闭合，启用待 PR2」；§1.1 第 5 条 = 「启用实施中」。PR2 合入时两处同批翻「已启用（#872）」。
+四项前置条件已于 #872 PR1 闭合、PR2 完成启用；**暗色已生效**（默认 system，D2）。历史中间态（PR1 合入至 PR2 合入之间「⓪①② 已闭合、启用待 PR2」）措辞已归档于 issue #872 评估结论；现态：本节 = 「已闭合 + 已启用」，§1.1 第 5 条 = 「已启用」。
 
 - ⓪ **双通道对齐（已闭合）**：`.dark` 全量按 §1.2/§1.4 登记 hex 以 HSL 2 位小数精确往返重写（含语义色 ±1–2/255 舍入漂移修正，17 对照项中 12 项）；light `:root` 既有 33 个色彩 token 零改动（新增 destructive-solid 属 D3 批准的新增，非修改）。
 - ① **对比度实测（已闭合，数字如下）**：WCAG 2.x 相对亮度公式计算，可复现脚本见 issue #872 评估结论（SPEC 附录 A）。文本阈值 4.5:1，对暗卡 `#171E2C`（注明者除外）：foreground 14.22 / foreground(页面底) 15.68 / foreground-secondary 7.67 / muted-foreground(卡) 5.49 / muted-foreground(页面底) 6.05 / muted-foreground(muted 底) **4.65（最劣，禁止再深）** / primary 6.67 / gain 5.82 / gain(页面底) 6.42 / loss 6.72 / warning 8.21 / destructive 5.60 / success 6.67；soft 底上 foreground：gain 7.51 / loss 7.50 / success 7.30 / warning 8.02 / destructive 7.00；primary-foreground/primary 7.14；**白字/destructive-solid(dark) 5.50**——原白字/destructive `#EE6B80` 仅 2.98 不达标，故新增 destructive-solid 载体（D3），light 渲染逐字节不变（白字/实际 light 渲染 `#C42746` = 5.64）。非文本阈值 3:1（R1 口径 = 识别组件/状态所必需元素）：ring/卡 6.67、ring/页面底 7.36、input/卡 3.26、input/页面底 3.60、destructive-solid/卡 3.03；装饰性 border/卡 1.34（light 1.24 同态，不设硬线）。图表暗色板 8 色对暗卡 ≥3:1（§2 表）。
 - ② **存量清理（已闭合）**：18 处硬编码中性类名逐条处置——7 处替换语义 token（登录页 4 + 饼图图例 1 + 原生 checkbox 边界 2；后者经 chromium/webkit 双引擎像素实测零渲染变化，Tailwind v4 preflight `border: 0 solid` 且无 border-width utility）；9 处 `text-white` 保留、载体换 `bg-destructive-solid`（白字 5.50:1）；2 处 `bg-black/80` 遮罩保留（scrim 职责即压暗底层，非信息载体）。任意值色 `[#xxx]` 全仓为零（grep 核实）。逐条清单见 issue #872 评估结论（SPEC §7.3），grep 复核与清单一致。
 - ③ **图表暗色评审（已闭合）**：结论 = 独立提亮暗色板（§2），红涨绿跌与 NAV_LINE 约束在暗色下仍成立；recharts 默认色治理结论见 §2（PR2 落地）。
 
-门禁顺序：任一条件未闭合不得在代码中加 `dark` 类或 `dark:` 变体；PR2 的前置 = 本节四项闭合证据在案。
+门禁顺序（已执行完毕）：PR1 未引入 `dark` 类/`dark:` 变体；PR2 在四项闭合证据在案后引入 ThemeProvider（基件 `alert.tsx` 自带 `dark:border-destructive` 为既存例外，保留）。
 
 ## 18. 存量债与迁移策略
 
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
 - 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（1 处 / 1 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件；#872 PR1 仅替换其 border 色为 token，基件收敛仍按顺手原则）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
-- **中性色硬编码已清零（#872 PR1）**：18 处处置完毕（7 替换 / 9 白字载体换 destructive-solid / 2 遮罩保留），`slate/gray` 类名不再属渐进存量。**刻意例外**：`text-white`（solid 危险载体与未读气泡，双主题白字）与 `bg-black/80`（Dialog/AlertDialog scrim，双主题同值）——回流判定以 issue #872 处置清单为准，不得一律当违规清理。中性色 ESLint ratchet（D6 已批准）随 PR2 落地；落地前回流由人工评审兜底。
+- **中性色硬编码已清零（#872 PR1）**：18 处处置完毕（7 替换 / 9 白字载体换 destructive-solid / 2 遮罩保留），`slate/gray` 类名不再属渐进存量。**刻意例外**：`text-white`（solid 危险载体与未读气泡，双主题白字）与 `bg-black/80`（Dialog/AlertDialog scrim，双主题同值）——回流判定以 issue #872 处置清单为准，不得一律当违规清理。中性色 ESLint ratchet 已于 #872 PR2 落地（§1.5 第 3 道）。
+- **登录页渐变端点色已 token 化（#872 PR2）**：`from-blue-50 to-indigo-100` → `from-success-soft to-secondary`（light 浅靛→浅灰蓝，dark 自动随 token），消除暗色整页浅底残留（C1）。渐变端点色 from-/to- 的 ESLint 拦截不在 D6 已批范围，未加（扩面须维护者另行批准）。
 - **危险载体/前景配对缺陷家族已归零（#874）**：PR1 迁移 9 处 `bg-destructive text-white` 载体后，#874 再迁移 4 处 `bg-destructive text-destructive-foreground`（PortfolioListContent/TradesContent/SubscriptionsContent/DeletePortfolioDialog；light 1.59:1、dark 预案 1.51:1——前景 token 本为 soft 底定义，压 solid 底属配对错误）至同一分工，白字 light 5.64:1 / dark 5.50:1。`--destructive-foreground` 仅用于 soft 底（badge/Alert/错误块）；全仓剩余 `bg-destructive` 仅 NotificationBell 状态圆点（非文字载体）。
 - 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
 - **无定义的类名不照抄**（#650 登记，#658 核对）：`BottomNav` 的 `safe-area-pb` 是全仓无定义的空类名（Tailwind 无该 utility、`globals.css` 无该定义），既存而非 #658 引入；它已从「取较新一套样式」的理由里撤下。改动该组件或照它的写法复制时**不得**把它当既有约定扩散到别处——空类名不报错、lint/tsc/build 都抓不到，只会静默失效。
@@ -342,3 +344,4 @@
 8. 状态徽标一律 `Badge` + variant；无手写 `bg-*-100 text-*-800` 件；弹窗走 `Dialog` / `AlertDialog`，提示走 toast / `Alert`（§13/§14）。
 9. 图表：色板按序消费、净值主线 `NAV_LINE` 不用红绿、超 6 类合并「其他」（场景用色见 §15）、图表元素本身不着涨跌色（§2/§15）。
 10. 双端同语义：共享组件 + `variant` 适配，未发明端侧独有色彩或字号，信息列的增删双端一致（§6）。
+11. 暗色（#872）：无硬编码中性色与渐变端点色；图表取色走 `lib/colors.ts` theme 访问器；浮层（Dialog/Popover/Tooltip）表面走 popover/border token；主题偏好仅经 next-themes（storageKey=theme），不进 zustand、不与 #68 水合门耦合。

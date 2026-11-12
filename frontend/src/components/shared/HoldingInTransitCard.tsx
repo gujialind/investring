@@ -1,6 +1,7 @@
 "use client";
 
-import { IN_TRANSIT_COLOR } from "@/lib/colors";
+import { inTransitColor } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { formatCurrency } from "@/lib/utils";
 
 /**
@@ -16,6 +17,7 @@ export default function HoldingInTransitCard({
   /** 行级占比（百分数，来自 buildCardPercentMap，含全部产品卡与在途卡） */
   percent: number;
 }) {
+  const theme = useChartTheme();
   return (
     <div
       data-testid="holding-intransit-card"
@@ -25,7 +27,7 @@ export default function HoldingInTransitCard({
         <span className="flex items-center text-sm font-semibold">
           <span
             className="mr-1.5 h-2 w-2 rounded-sm"
-            style={{ background: IN_TRANSIT_COLOR }}
+            style={{ background: inTransitColor(theme) }}
           />
           在途资金
         </span>
