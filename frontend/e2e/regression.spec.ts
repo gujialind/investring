@@ -15,11 +15,13 @@ import {
   gotoPortfolioDetail,
   gotoPortfolioSubpage,
   isolatedPortfolioCode,
+  nearestTradingDay,
   openAppAndAuth,
   openFilterPanelIfMobile,
   openPopover,
   portfolioPath,
   settlePopovers,
+  type PortfolioCode,
 } from './helpers';
 // 运行时导入导航单源：断言清单与返回出口由同一份数据派生，不在 spec 里抄第三份（#650）
 import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
@@ -709,5 +711,69 @@ test.describe('统计卡栅格窄桌面档（#774，1024 视口）', () => {
     expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+});
+
+// #874 常驻护栏：四处 solid 危险确认按钮的载体/前景分工。防复发缺陷＝
+// `bg-destructive text-destructive-foreground`（foreground 本为 soft 底定义，压 solid 底
+// light 1.59:1 / dark 1.51:1）。正则收紧到 /bg-destructive-solid/：裸 -destructive 与
+// -soft 都能匹配 /bg-destructive/，单独用证明不了 solid 载体。
+// 删除组合/删除交易两弹窗的护栏在 portfolio-delete.spec.ts 与 trade-buy-amount-linkage.spec.ts
+// 既有用例内；本 describe 补申赎删除与重新激活两弹窗（此前无常驻覆盖）。
+test.describe('危险确认按钮 solid 载体护栏（#874）', () => {
+  test('申赎删除确认按钮：bg-destructive-solid + 白字（防 foreground 压 solid 底复发）', async ({
+    page,
+  }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('S874', testInfo, 'S');
+    await createPortfolioViaApi(page, headers, code);
+    const applyDate = await nearestTradingDay(page, headers);
+    const sub = await page.request.post('/api/subscriptions', {
+      headers,
+      data: {
+        portfolio_code: code,
+        investor_code: 'ADMIN',
+        platform_code: 'HBZQ',
+        sub_type: 'subscribe',
+        amount: 10000,
+        apply_date: applyDate,
+      },
+    });
+    expect(sub.status(), await sub.text()).toBe(200);
+    const { id } = (await sub.json()) as { id: number };
+    try {
+      // 删除入口仅 pending 行存在（后端 CANNOT_DELETE_CONFIRMED），自建 pending 夹具
+      await gotoPortfolioSubpage(page, code as PortfolioCode, 'subscriptions');
+      await page.locator('button[title="删除"]').first().click();
+      const dlg = page.getByRole('alertdialog').filter({ hasText: '删除申请' });
+      await expect(dlg).toBeVisible();
+      const btn = dlg.getByRole('button', { name: '确认' });
+      await expect(btn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
+      await expect(btn).toHaveClass(/text-white/);
+      await dlg.getByRole('button', { name: '取消' }).click();
+      await expect(dlg).toHaveCount(0);
+    } finally {
+      await page.request.delete(`/api/subscriptions/${id}`, { headers });
+      await page.request.delete(`/api/portfolios/${code}`, { headers });
+    }
+  });
+
+  test('重新激活确认按钮：bg-destructive-solid + 白字（防 foreground 压 solid 底复发）', async ({
+    page,
+  }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('S874', testInfo, 'R');
+    await createPortfolioViaApi(page, headers, code);
+    await activatePortfolioViaApi(page, headers, code);
+    await closePortfolioViaApi(page, headers, code);
+    await page.goto('/portfolio');
+    await page.locator('button[title="重新激活"]').first().click();
+    const dlg = page.getByRole('alertdialog').filter({ hasText: '重新激活组合' });
+    await expect(dlg).toBeVisible();
+    const btn = dlg.getByRole('button', { name: '确认' });
+    await expect(btn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
+    await expect(btn).toHaveClass(/text-white/);
+    await dlg.getByRole('button', { name: '取消' }).click();
+    await expect(dlg).toHaveCount(0);
   });
 });

@@ -58,7 +58,7 @@ export default function DeletePortfolioDialog({
               onConfirm();
             }}
             disabled={isPending}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
           >
             确认删除
           </AlertDialogAction>

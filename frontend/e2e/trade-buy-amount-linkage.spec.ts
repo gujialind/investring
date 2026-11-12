@@ -286,6 +286,10 @@ test.describe('买入金额双字段联动（#193）', () => {
     await row.locator('button[title="删除"]').click();
     const deleteDlg = page.getByRole('alertdialog').filter({ hasText: '删除交易' });
     await deleteDlg.waitFor();
+    // #874 常驻护栏：solid 危险载体分工（正则收紧到 -solid）
+    const deleteConfirmBtn = deleteDlg.getByRole('button', { name: '确认' });
+    await expect(deleteConfirmBtn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
+    await expect(deleteConfirmBtn).toHaveClass(/text-white/);
     await deleteDlg.getByRole('button', { name: '确认' }).click();
     await expect(row).toBeHidden({ timeout: 15_000 });
 

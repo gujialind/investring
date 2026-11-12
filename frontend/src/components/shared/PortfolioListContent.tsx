@@ -321,7 +321,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                 e.preventDefault();
                 handleActivate();
               }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
             >
               确认
             </AlertDialogAction>
