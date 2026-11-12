@@ -29,7 +29,7 @@
 | CLI | [CLI 指南](ir-cli/AGENTS.md)（短，整份）；[CLI 手册](ir-cli/CLI_MANUAL.md) 对应命令组（先 `ir schema --index` 定位，不整份加载） | CLI 单测与响应字段契约检查 |
 | 发布与运维 | [versioning](docs/reference/versioning.md) §4（发布流程）/§5（镜像标签）；目标 workflow、相关 runbook；依赖升级（[后端指南](backend/AGENTS.md) §6、[前端指南](frontend/AGENTS.md) §3 vitest 同版约束）；CI 门禁/策略脚本（[ci_policy.json](scripts/ci_policy.json)、[scripts/tests/](scripts/tests/)，跨栈非仅前端 E2E）；一次性操作 [server-init](docs/runbooks/server-init.md)、安全扫描响应 [security-scan-response](docs/runbooks/security-scan-response.md) | 版本/契约验证及 runbook 的成功与恢复判据；CI 门禁合入条件见 [code-review](docs/reference/code-review.md) §5.3 |
 | 日志与任务记录 | 模块指南 + [logging](docs/reference/logging.md) 对应锚点（logging-runtime / logging-audit / logging-tasks） | 对应服务/任务日志测试 |
-| 代码审查 | [code-review](docs/reference/code-review.md) §1–§3（边界·输入·五问）+ §4 命中风险项 + §5 判定处置；本次变更涉及的规则 | L2 语义审查，不重复 CI 的 L1 检查 |
+| 代码审查 | [code-review](docs/reference/code-review.md) §1–§3（边界·输入·五问）+ §4 命中风险项 + §5 判定与合入条件 + §6.1 结论字段 + §6.2 修后复核；本次变更涉及的规则 | L2 语义审查，不重复 CI 的 L1 检查 |
 | 文档变更 | [documentation](docs/reference/documentation.md)（短，整份）；持有正文的专题及其引用方 | `python scripts/check_context_docs.py` 与相关契约/测试 |
 
 ### 本地验证入口
