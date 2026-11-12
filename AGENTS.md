@@ -23,18 +23,18 @@
 
 | 任务 | 默认加载 | 验证入口 |
 | --- | --- | --- |
-| 后端业务 | [后端指南](backend/AGENTS.md)、[对应领域规则](docs/reference/business-constraints.md)、目标服务及相关测试；DB 迁移加读 [deploy-rollback](docs/runbooks/deploy-rollback.md) §4.3 | 后端指南“跑测试”的影响面表 |
-| 前端交互 | [前端指南](frontend/AGENTS.md)、目标页面与 API 契约；涉及业务时读对应规则；改 E2E 或做纯测试重构加读 [E2E 指南](frontend/e2e/AGENTS.md) | 前端指南的质量门禁与影响面 E2E |
-| 前端视觉 | 前端交互的入口 + [visual-spec](docs/design/visual-spec.md)；目检与 E2E 共用本地栈，运行前提见 [E2E 指南](frontend/e2e/AGENTS.md#2-运行前置检查) | [前端指南](frontend/AGENTS.md#5-目检视觉验证)的双端目检 |
-| CLI | [CLI 指南](ir-cli/AGENTS.md)、[手册对应命令组](ir-cli/CLI_MANUAL.md)（先 `ir schema --index`） | CLI 单测与响应字段契约检查 |
-| 发布与运维 | [versioning](docs/reference/versioning.md)、目标 workflow、相关 runbook；依赖升级（[后端指南](backend/AGENTS.md) §6、[前端指南](frontend/AGENTS.md) §3 vitest 同版约束）；CI 门禁/策略脚本（[ci_policy.json](scripts/ci_policy.json)、[scripts/tests/](scripts/tests/)，跨栈非仅前端 E2E）；一次性操作 [server-init](docs/runbooks/server-init.md)、安全扫描响应 [security-scan-response](docs/runbooks/security-scan-response.md) | 版本/契约验证及 runbook 的成功与恢复判据；CI 门禁合入条件见 [code-review](docs/reference/code-review.md) §5.3 |
-| 日志与任务记录 | 模块指南 + [logging](docs/reference/logging.md) | 对应服务/任务日志测试 |
-| 代码审查 | [code-review](docs/reference/code-review.md)、本次变更涉及的规则 | L2 语义审查，不重复 CI 的 L1 检查 |
-| 文档变更 | [documentation](docs/reference/documentation.md)、持有正文的专题及其引用方 | `python scripts/check_context_docs.py` 与相关契约/测试 |
+| 后端业务 | [后端指南](backend/AGENTS.md) §1.2（路由 API）+ §1.3 目标服务条目 + §2（影响面表）；[业务规则](docs/reference/business-constraints.md) 对应 rule-* 锚点；目标服务及相关测试；DB 迁移加读 [deploy-rollback](docs/runbooks/deploy-rollback.md) §4.3 | [后端指南](backend/AGENTS.md) §2 的影响面表 |
+| 前端交互 | [前端指南](frontend/AGENTS.md) §1.2（组件复用）+ §2（质量门禁）+ §4（E2E）/§5（目检），§3 单测仅改测试时读；目标页面与 API 契约；涉及业务时读对应规则；改 E2E 或纯测试重构加读 [E2E 指南](frontend/e2e/AGENTS.md) | [前端指南](frontend/AGENTS.md) §2 质量门禁与影响面 E2E |
+| 前端视觉 | 前端交互的入口 + [visual-spec](docs/design/visual-spec.md) 相关节（如 §14 交互反馈，按任务取节）；目检与 E2E 共用本地栈，运行前提见 [E2E 指南](frontend/e2e/AGENTS.md) §2 | [前端指南](frontend/AGENTS.md) §5 的双端目检 |
+| CLI | [CLI 指南](ir-cli/AGENTS.md)（短，整份）；[CLI 手册](ir-cli/CLI_MANUAL.md) 对应命令组（先 `ir schema --index` 定位，不整份加载） | CLI 单测与响应字段契约检查 |
+| 发布与运维 | [versioning](docs/reference/versioning.md) §4（发布流程）/§5（镜像标签）；目标 workflow、相关 runbook；依赖升级（[后端指南](backend/AGENTS.md) §6、[前端指南](frontend/AGENTS.md) §3 vitest 同版约束）；CI 门禁/策略脚本（[ci_policy.json](scripts/ci_policy.json)、[scripts/tests/](scripts/tests/)，跨栈非仅前端 E2E）；一次性操作 [server-init](docs/runbooks/server-init.md)、安全扫描响应 [security-scan-response](docs/runbooks/security-scan-response.md) | 版本/契约验证及 runbook 的成功与恢复判据；CI 门禁合入条件见 [code-review](docs/reference/code-review.md) §5.3 |
+| 日志与任务记录 | 模块指南 + [logging](docs/reference/logging.md) 对应锚点（logging-runtime / logging-audit / logging-tasks） | 对应服务/任务日志测试 |
+| 代码审查 | [code-review](docs/reference/code-review.md) §1–§3（边界·输入·五问）+ §4 命中风险项 + §5 判定与合入条件 + §6.1 结论字段 + §6.2 修后复核；本次变更涉及的规则 | L2 语义审查，不重复 CI 的 L1 检查 |
+| 文档变更 | [documentation](docs/reference/documentation.md)（短，整份）；持有正文的专题及其引用方 | `python scripts/check_context_docs.py` 与相关契约/测试 |
 
 ### 本地验证入口
 
-从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`run env` 核对当前解释器已装包与 `backend/requirements.txt` 声明钉版的漂移，`--json` 输出机器可读结果（#619）。E2E 的运行前提与参数入口见 [E2E 指南](frontend/e2e/AGENTS.md)，两者共用的本地栈前提在其[运行前置检查](frontend/e2e/AGENTS.md#2-运行前置检查)，目检入口见[前端指南](frontend/AGENTS.md#5-目检视觉验证)。
+从仓库根运行 `.venv/bin/python scripts/verify.py plan --base origin/main` 查看既有 CI 策略的影响面；`run contract`、`run e2e -- <参数>`、`run visual -- <参数>` 分别执行契约、隔离 E2E 与截图，`run env` 核对当前解释器已装包与 `backend/requirements.txt` 声明钉版的漂移，`--json` 输出机器可读结果（#619）。E2E 的运行前提与参数入口见 [E2E 指南](frontend/e2e/AGENTS.md)，两者共用的本地栈前提在其[运行前置检查](frontend/e2e/AGENTS.md#2-运行前置检查)，目检入口见[前端指南](frontend/AGENTS.md#5-目检视觉验证)。**平台口径**：`contract`/`e2e`/`visual` 以 POSIX 为准、`plan`/`env` 跨平台，Windows 本地限制与豁免见 [E2E 指南](frontend/e2e/AGENTS.md) §2。
 
 `plan` 不是验证，单次 `run` 不是全任务验收；每次真实执行、不缓存跳测，输出范围、状态和日志引用，不替代对应业务测试、人工看图或必需 CI。`scripts/check_openapi_stop.py` 仅提供契约 Stop 适配；宿主接线需单独确认，不自动修改私有配置。
 
@@ -67,8 +67,8 @@
 
 - `main` 是唯一长期分支与生产交付线，受 ruleset 保护：禁删除/强推、require PR、required check `CI OK`。
 - 一切改动从最新 `origin/main` 拉短命分支，经 PR 合入 main；不从本地旧 ref 重建。命名用 `feature/<issue号>-<简述>`、`hotfix/<issue号>-<简述>`；按下方 Issue 约定免开 issue 的小修可用 `hotfix/<简述>`。AI 可用 `trae/`、`codex/` 前缀；多 Agent 隔离并行开发用 `agent/<简述>`（由 `scripts/agent-spin` 建，worktree 落点 `<repo>/.worktrees/`，回收用 `scripts/agent-clean`，#793）。
-- 合入 main 触发 CI → CD 自动部署，**纯文档例外**（#456）：ci.yml 的 push 触发器忽略 `**/*.md` 与 `docs/**`，纯文档合入不重建镜像、不重部署。`deploy/YYYYMMDD-SHA` 标签因此不随每次文档合入推进，见版本规范。
-- **PR 触发器禁止添加 paths-ignore**：docs-only PR 仍须产出 CI OK，否则 required check 永久等待（#377）。路径模式只按后缀/目录精确匹配，不能扩大到漏掉代码；合入前验证不减，完整执行策略见 ci.yml 与[审查规范的合入条件](docs/reference/code-review.md#review-merge)。
+- 合入 main 触发 CI → CD；纯文档合入不重建镜像、不重部署、不推进 deploy 标签（机制见 [code-review](docs/reference/code-review.md) §5.3）。
+- PR 触发器禁止添加 paths-ignore（docs-only PR 仍须产出 CI OK）；路径模式只按后缀/目录精确匹配，不扩大到漏掉代码（机制见 [code-review](docs/reference/code-review.md) §5.3）。
 - 手动部署（deploy.yml workflow_dispatch）只对服务器已保留的发布（release-id）操作，显式区分 redeploy / rollback / migrate；migrate 须附服务器 `bootstrap status` 的 DB 状态指纹授权。
 
 ### 3.2 Issue 约定
@@ -83,7 +83,7 @@
 - 使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)。同目标、可共同验收的小改可合并，不要求一 issue 一 PR，不按行数或每日数量凑批。
 - 审查标准、分级处置与规模护栏见 [code-review](docs/reference/code-review.md)。CI 已强制的 lint、类型、构建、测试和契约漂移属 L1，审查不重复。
 - L2 审查由维护者发起、结论以 PR 评论留痕，PR 正文不写审查结论，见[合入条件](docs/reference/code-review.md#review-merge)（#633）。
-- **改 PR base 不触发 CI**：默认 opened/synchronize/reopened 不包含 edited；retarget 后须 close/reopen 或推新 commit 触发，不能等待空 checks 自行补齐（#377）。
+- 改 PR base 不触发 CI：retarget 后须 close/reopen 或推新 commit 触发，不等空 checks 自行补齐（机制见 [code-review](docs/reference/code-review.md) §5.3）。
 
 ### 3.4 commit 信息
 
