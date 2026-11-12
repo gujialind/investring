@@ -65,7 +65,7 @@
 | pending / running / partial_success / 在途 | `warning` | 待确认申赎/trade、跨天转移在途、运行中任务 |
 | failed / error | `destructive` | 失败任务、数据缺失告警、校验未通过 |
 | closed / draft / cancelled / 停用 | `neutral` | 已关闭组合、草稿、已撤销、禁用 |
-| （操作型危险按钮，非 badge） | solid `bg-destructive text-white` | 删除、关闭组合等确认按钮 |
+| （操作型危险按钮，非 badge） | solid `bg-destructive-solid text-white` | 删除、关闭组合等确认按钮 |
 
 **无状态语义的标识**（买卖方向、管理员角色、资产名目 chip）不许占用状态色：方向/角色用「neutral badge + 彩色小圆点」或 `default` variant，圆点色取自 `lib/colors.ts`（见 §2）。
 
@@ -288,8 +288,8 @@
 - **操作区按钮层级**：每卡片/区块主操作唯一（`default` primary solid），其余 `outline`/`ghost`；危险操作与主操作分区放置，不与主操作并排。
 - **错误提示分工**：操作结果（增删改/同步/确认的成败）用 **toast**（success/error/warning/info 四型，映射 success/destructive/warning/success 色系，info 不单独设色）；表单校验、数据完整性、阻断性提示用 **inline Alert**（`default` / `destructive` 两 variant；校验通过/警告用 success/warning 的 `bg-*-soft` + `border-*/30` 组合，不新增 Alert variant）。
 - **后台任务进度**（sync-job 类，#146 起）：进行中 = 状态 Badge（`running`→`warning`，§1.3）+ `Loader2` + 文案的行内区块；不引入 Progress 条组件（任务无可靠百分比，YAGNI）。终态反馈仍走上述 toast 分工，页面数据随之刷新。
-- **危险操作**（删除、关闭组合、强制操作）统一 `AlertDialog` 二次确认，确认按钮 solid `bg-destructive text-white`；普通确认走 `default`（primary 靛蓝）。
-- **破坏性操作两段式确认**（dry_run → confirm，#146 起）：第一步预览 AlertDialog 列出影响范围，文案模板「将删除 X 张快照（YYYY-MM-DD ~ YYYY-MM-DD），此操作不可恢复」；确认按钮沿用 solid `bg-destructive text-white`；拿不到预览结果时禁止直接执行。
+- **危险操作**（删除、关闭组合、强制操作）统一 `AlertDialog` 二次确认，确认按钮 solid `bg-destructive-solid text-white`；普通确认走 `default`（primary 靛蓝）。
+- **破坏性操作两段式确认**（dry_run → confirm，#146 起）：第一步预览 AlertDialog 列出影响范围，文案模板「将删除 X 张快照（YYYY-MM-DD ~ YYYY-MM-DD），此操作不可恢复」；确认按钮沿用 solid `bg-destructive-solid text-white`；拿不到预览结果时禁止直接执行。
 - **动效（现状登记，2026-08-29；克制原则）**：全站仅三类动效——① 加载 spinner（`Loader2 animate-spin`）；② toast 滑入（globals.css `slideIn` keyframes，唯一消费点 ToastContainer）；③ 基件内置过渡（tailwindcss-animate `animate-in/out`、hover/状态切换 `transition-colors`）。不新造关键帧、不引入滚动/视差动效——金融界面以静为默认。
 
 ## 15. 图表表达规范
@@ -322,6 +322,7 @@
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
 - 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（1 处 / 1 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件；#872 PR1 仅替换其 border 色为 token，基件收敛仍按顺手原则）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
 - **中性色硬编码已清零（#872 PR1）**：18 处处置完毕（7 替换 / 9 白字载体换 destructive-solid / 2 遮罩保留），`slate/gray` 类名不再属渐进存量。**刻意例外**：`text-white`（solid 危险载体与未读气泡，双主题白字）与 `bg-black/80`（Dialog/AlertDialog scrim，双主题同值）——回流判定以 issue #872 处置清单为准，不得一律当违规清理。中性色 ESLint ratchet（D6 已批准）随 PR2 落地；落地前回流由人工评审兜底。
+- **危险载体/前景配对缺陷家族已归零（#874）**：PR1 迁移 9 处 `bg-destructive text-white` 载体后，#874 再迁移 4 处 `bg-destructive text-destructive-foreground`（PortfolioListContent/TradesContent/SubscriptionsContent/DeletePortfolioDialog；light 1.59:1、dark 预案 1.51:1——前景 token 本为 soft 底定义，压 solid 底属配对错误）至同一分工，白字 light 5.64:1 / dark 5.50:1。`--destructive-foreground` 仅用于 soft 底（badge/Alert/错误块）；全仓剩余 `bg-destructive` 仅 NotificationBell 状态圆点（非文字载体）。
 - 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
 - **无定义的类名不照抄**（#650 登记，#658 核对）：`BottomNav` 的 `safe-area-pb` 是全仓无定义的空类名（Tailwind 无该 utility、`globals.css` 无该定义），既存而非 #658 引入；它已从「取较新一套样式」的理由里撤下。改动该组件或照它的写法复制时**不得**把它当既有约定扩散到别处——空类名不报错、lint/tsc/build 都抓不到，只会静默失效。
 
