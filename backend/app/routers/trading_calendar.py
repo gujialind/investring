@@ -2,6 +2,7 @@ from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -111,7 +112,14 @@ def get_trading_calendar(
         is_open=is_open,
         exchange=exchange,
     )
-    return query.all()
+    try:
+        return query.all()
+    except (OperationalError, InterfaceError) as exc:
+        # 仅瞬时连接/DBAPI 级可恢复错误转可诊断 503（#867）；ProgrammingError/IntegrityError 等
+        # 确定性错误不在此列，仍冒泡走全局 500。不是把 500 藏起来——503 仍是错误状态，
+        # report_unexpected 保留原始异常类型与堆栈 + system_error_log，status_code 与响应一致。
+        report_unexpected(exc, operation="get_trading_calendar", status_code=503)
+        raise HTTPException(status_code=503, detail="交易日历查询遇数据库故障，请稍后重试") from exc
 
 
 @router.post("/sync", response_model=TradingCalendarSyncResponse)
