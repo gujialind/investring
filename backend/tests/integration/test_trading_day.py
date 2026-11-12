@@ -541,20 +541,22 @@ class TestCalendarListExchangeDefault:
 class TestCalendarQueryDbGuard:
     """#867：GET /api/trading-calendar 查询遇瞬时 DB 故障的防护口径。
 
-    复现：模拟 query.all() 抛 OperationalError（CI 曾因此冒泡成裸 500）。
-    修复后应转可诊断的 503 + report_unexpected 留痕（原始异常类型 + operation），
-    正常查询路径不受影响。
+    仅 OperationalError/InterfaceError（连接/DBAPI 级可恢复）转 503 + 真实留痕；
+    ProgrammingError 等确定性错误仍走全局 500。留痕用例 spy record_system_error
+    并校验 ERROR 日志行与 X-Request-ID 对齐（不 mock report_unexpected）。
     """
 
-    def test_db_failure_returns_503_and_reports(self, client, viewer_headers, monkeypatch):
+    def test_db_failure_returns_503_with_real_logging(
+        self, client, viewer_headers, monkeypatch, json_log_capture,
+    ):
+        from unittest.mock import MagicMock
         import app.routers.trading_calendar as tc_module
         from sqlalchemy.exc import OperationalError
+        from app.request_context import REQUEST_ID_HEADER
+        from tests.conftest import log_lines
 
-        reported = []
-        monkeypatch.setattr(
-            tc_module, "report_unexpected",
-            lambda exc, **kw: reported.append((type(exc).__name__, kw.get("operation"))),
-        )
+        spy = MagicMock()
+        monkeypatch.setattr("app.error_reporting.record_system_error", spy)
 
         class _FailingQuery:
             def all(self):
@@ -564,8 +566,44 @@ class TestCalendarQueryDbGuard:
         resp = client.get("/api/trading-calendar", params={"year": 2026}, headers=viewer_headers)
         assert resp.status_code == 503, resp.text
         assert "数据库故障" in resp.json()["detail"]
-        # 留痕出口被调用，且保留原始异常类型与端点操作名（不是把 500 藏起来）
-        assert reported == [("OperationalError", "get_trading_calendar")]
+
+        # 真实留痕：record_system_error 拿到原始 OperationalError（不 mock report_unexpected）
+        spy.assert_called_once()
+        kwargs = spy.call_args.kwargs
+        assert kwargs["error_type"] == "OperationalError"
+        assert "connection reset by peer" in kwargs["error_message"]
+        assert "OperationalError" in kwargs["error_stack"]
+        assert kwargs["request_path"] == "/api/trading-calendar"
+        assert kwargs["request_method"] == "GET"
+
+        # ERROR 日志行与响应 X-Request-ID 对齐，status_code 与响应一致（503 非 500）
+        request_id = resp.headers[REQUEST_ID_HEADER]
+        errors = [
+            line for line in log_lines(json_log_capture)
+            if line.get("level") == "ERROR" and line.get("operation") == "get_trading_calendar"
+        ]
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == request_id
+        assert errors[0]["status_code"] == 503
+        assert errors[0]["logger"] == "app.error_reporting"
+
+    def test_programming_error_still_returns_500(self, client, viewer_headers, monkeypatch):
+        from unittest.mock import MagicMock
+        import app.routers.trading_calendar as tc_module
+        from sqlalchemy.exc import ProgrammingError
+
+        # 全局 Exception handler 经 app.main.record_system_error 留痕；mock 掉避免测试 SQLite 锁
+        monkeypatch.setattr("app.main.record_system_error", MagicMock())
+
+        class _BadQuery:
+            def all(self):
+                raise ProgrammingError("SELECT bad_column", {}, Exception("column does not exist"))
+
+        monkeypatch.setattr(tc_module, "get_calendar_query", lambda **kwargs: _BadQuery())
+        # 确定性错误不被 guard 捕获转 503，而是原样冒泡（生产经全局 handler → 500）。
+        # TestClient 默认 raise_server_exceptions 会抛出未处理异常，故断言其原样冒泡而非被转 503。
+        with pytest.raises(ProgrammingError):
+            client.get("/api/trading-calendar", params={"year": 2026}, headers=viewer_headers)
 
     def test_normal_query_unaffected(self, client, viewer_headers):
         resp = client.get("/api/trading-calendar", params={"year": 2026}, headers=viewer_headers)
