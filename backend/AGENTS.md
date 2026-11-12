@@ -2,6 +2,10 @@
 
 > 先按[根指南](../AGENTS.md#2-按任务加载)定位任务；改 services/routers 前读[业务规则](../docs/reference/business-constraints.md)的对应领域与错误码。日志改动读[日志规范](../docs/reference/logging.md)，文档改动读[AI 文档规范](../docs/reference/documentation.md)。本文件持有后端分层、事务、迁移兼容与操作边界。
 
+> **小节索引**：§1 架构（§1.1 分层 · §1.2 路由 API · §1.3 核心服务 · §1.4 数据模型 · §1.5 配置运行）
+> §2 跑测试（影响面表）· §3 种子数据 · §4 本地启动
+> §5 迁移 · §6 依赖 · §7 E2E 脚本 · §8 OpenAPI 契约
+
 ## 1. 架构
 
 ### 1.1 分层目录与职责
