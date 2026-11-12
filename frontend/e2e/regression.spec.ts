@@ -748,7 +748,7 @@ test.describe('危险确认按钮 solid 载体护栏（#874）', () => {
       const dlg = page.getByRole('alertdialog').filter({ hasText: '删除申请' });
       await expect(dlg).toBeVisible();
       const btn = dlg.getByRole('button', { name: '确认' });
-      await expect(btn).toHaveClass(/bg-destructive-solid/);
+      await expect(btn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
       await expect(btn).toHaveClass(/text-white/);
       await dlg.getByRole('button', { name: '取消' }).click();
       await expect(dlg).toHaveCount(0);
@@ -771,7 +771,7 @@ test.describe('危险确认按钮 solid 载体护栏（#874）', () => {
     const dlg = page.getByRole('alertdialog').filter({ hasText: '重新激活组合' });
     await expect(dlg).toBeVisible();
     const btn = dlg.getByRole('button', { name: '确认' });
-    await expect(btn).toHaveClass(/bg-destructive-solid/);
+    await expect(btn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
     await expect(btn).toHaveClass(/text-white/);
     await dlg.getByRole('button', { name: '取消' }).click();
     await expect(dlg).toHaveCount(0);

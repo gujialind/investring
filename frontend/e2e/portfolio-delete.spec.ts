@@ -81,7 +81,7 @@ test.describe('组合删除闭环（#820）', () => {
 
     // #874 常驻护栏：solid 危险载体分工（正则收紧到 -solid，裸 -destructive/-soft 不算证明）
     const confirmBtn = dialog.getByRole('button', { name: '确认删除' });
-    await expect(confirmBtn).toHaveClass(/bg-destructive-solid/);
+    await expect(confirmBtn).toHaveClass(/(?:^|\s)bg-destructive-solid(?:\s|$)/);
     await expect(confirmBtn).toHaveClass(/text-white/);
 
     await dialog.getByRole('button', { name: '确认删除' }).click();
