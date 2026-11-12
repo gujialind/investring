@@ -19,15 +19,15 @@
    二者从不出现在同一上下文；绛红永远伴随「失败/异常」文字，不靠颜色单独表意。
 3. **success ≠ 绿**。绿色被「跌」独占后，完成/确认语义移交**靛蓝 `#2B5CD7`，并兼任品牌主色 primary**（链接、主按钮、focus 环同源）。完成态是系统里出现频率最高的状态，让默认观感就是「一切正常」，减少色彩噪音。
 4. **cancelled / closed / draft / 停用 → neutral 灰 badge**。用户主动撤销 ≠ 系统异常，不再用红。
-5. **dark mode 暂缓**：token 已写 light + dark 双套预案值（下同），但代码不启用暗色；启用前必须实测对比度（当前 dark 值为同构推算，未实测）。
+5. **dark mode 启用实施中（#872）**：PR1 已完成双通道对齐与对比度实测回填（§17），dark 终值见 §1.2/§1.4；生产代码仍未启用暗色（无 `dark` 类/`dark:` 变体消费），启用实施待 PR2（主题库/设置入口/图表消费）。再启动条件 = PR2 合入，无其他悬空前置。
 
 ### 1.2 语义色 token 色值表（配色方案 v1）
 
-> 对比度为对 light 页面底（白卡）的近似值。主色全部落在 5.1–6.0:1 区间（14px 正文数字直用合规）；foreground 对各自 soft 底全部 ≥6.5:1。
+> 对比度为对 light 页面底（白卡）的近似值。主色全部落在 5.1–6.0:1 区间（14px 正文数字直用合规）；foreground 对各自 soft 底全部 ≥6.5:1。Dark 列已为 #872 PR1 实测定稿值（对暗卡/暗底的实测数字见 §17）。表中 hex 是 HSL 声明的近似标注（±2/255 舍入），渲染色以代码声明为准（如 destructive `348 67% 46%` 渲染 `#C42746`，白字实测 5.64:1）。
 
 #### 涨跌（金融方向色，专属数值场景）
 
-| Token | 用途 | 色名 | Light | Dark 预案 |
+| Token | 用途 | 色名 | Light | Dark 终值（#872） |
 |---|---|---|---|---|
 | `--color-gain` | 上涨数值、正向收益 | 朱红 | `#CF3526` hsl(5,69%,48%) ≈5.1:1 | `#F0735F` hsl(8,83%,66%) |
 | `--color-gain-soft` | 涨相关浅底（高亮行、盈亏卡片底） | 浅朱 | `#FBEBE8` hsl(9,70%,95%) | `#3B2420` |
@@ -38,7 +38,7 @@
 
 #### 状态色（业务状态语义，禁用于涨跌数值）
 
-| Token | 用途 | 色名 | Light | Dark 预案 |
+| Token | 用途 | 色名 | Light | Dark 终值（#872） |
 |---|---|---|---|---|
 | `--color-success` | 完成/确认/启用；**兼品牌主色 primary / ring** | 靛蓝 | `#2B5CD7` hsl(223,68%,51%) ≈5.8:1 | `#7FA3F0` |
 | `--color-success-soft` | 成功态 badge/提示底 | 浅靛 | `#E8EEFA` hsl(220,64%,95%) | `#22304F` |
@@ -48,11 +48,12 @@
 | `--color-warning-foreground` | warning-soft 上文字 | 深珀 | `#7C4A03` hsl(35,95%,25%) | `#EBC88A` |
 | `--color-destructive` | 异常/失败文字、危险按钮底 | 绛红 | `#C22745` hsl(348,67%,46%) ≈5.7:1 | `#EE6B80` |
 | `--color-destructive-soft` | 失败 badge 底、错误提示底 | 浅绛 | `#FAE8EC` hsl(347,64%,95%) | `#42242C` |
-| `--color-destructive-foreground` | destructive-soft 上文字（solid 危险按钮上的文字用纯白 `text-white`） | 深绛 | `#8F1A33` hsl(347,69%,33%) | `#F2A3B1` |
+| `--color-destructive-foreground` | destructive-soft 上文字（solid 危险载体上的文字用纯白 `text-white`，载体见下行） | 深绛 | `#8F1A33` hsl(347,69%,33%) | `#F2A3B1` |
+| `--color-destructive-solid` | solid 危险载体底（危险按钮/未读气泡，配纯白文字）；#872 D3 新增，light 与 `--destructive` 同声明、渲染逐字节不变 | 绛红（深） | = `--destructive` `348 67% 46%`（渲染 `#C42746`，白字 5.64:1） | `#C52B4A` hsl(347.92,64.17%,47.06%)（白字 5.50:1，vs 暗卡 3.03:1） |
 
 **选色逻辑（为什么不是正红/草绿/正黄）**：涨红取朱红（5° 偏橙）——正红刺眼且与错误红同色相，朱红是账房/印章的传统「喜色」，69% 饱和度压住攻击性；跌绿取松绿（150°、27% 低明度）——鲜绿廉价感重且与「成功绿」国际惯例撞车；warning 压成赭珀（31% 明度）——正黄在白底上对比度无法达标（amber-500 仅 ~2:1），深琥珀棕是可读性达标的最浅解；绛红偏品红 17°——与朱红并置冷暖可辨，且品红向在国际上更常用于 error，双重线索。
 
-**明度三轨**：① 信号主色统一 L 27–51% / 对比度 5–6:1（红绿并排视觉重量拉平）；② soft 底统一 L 93–95%（只给色相暗示，不抢内容）；③ soft 上 foreground 统一 L 21–40%，对底 ≥6.5:1。Dark 预案即三轨反转（主色 L 49–66%、soft 深色底、foreground 提浅），启用时按轨换算即可，不需重新设计。
+**明度三轨**：① 信号主色统一 L 27–51% / 对比度 5–6:1（红绿并排视觉重量拉平）；② soft 底统一 L 93–95%（只给色相暗示，不抢内容）；③ soft 上 foreground 统一 L 21–40%，对底 ≥6.5:1。Dark 终值即三轨反转（主色 L 49–66%、soft 深色底、foreground 提浅），#872 PR1 已按轨落地并实测（§17）；solid 危险载体因白字对比度另走 destructive-solid 深绛轨（D3）。
 
 ### 1.3 状态 → Badge variant 映射
 
@@ -70,18 +71,19 @@
 
 ### 1.4 中性色体系（蓝灰底，冷静/可信）
 
-| Token | 用途 | Light | Dark 预案 |
+| Token | 用途 | Light | Dark 终值（#872） |
 |---|---|---|---|
 | `--background` | 页面底 | `#F7F8FA` hsl(220,23%,97%) | `#0F1420` |
 | `--card` / `--popover` | 卡片/浮层底 | `#FFFFFF`（白卡浮于灰底，明度差第一层） | `#171E2C` |
 | `--muted` | 次级底、neutral badge 底、hover 底 | `#EFF1F6` hsl(223,28%,95%) | `#232B3D` |
-| `--border` / `--input` | 边框、分隔线 | `#E3E7EF` hsl(220,28%,91.5%) | `#2B3448` |
+| `--border` | 边框、分隔线（装饰性，R1 口径不设 3:1 硬线） | `#E3E7EF` hsl(220,28%,91.5%) | `#2B3448` |
+| `--input` | 输入框边界（识别组件所必需，≥3:1） | 同 border | `#606E8C` hsl(220.91,18.64%,46.27%)，vs 暗卡 3.26:1（#872 起与 border 解耦） |
 | `--foreground` | 一级文字 | `#1A2333` hsl(218,32%,15%) ≈15.9:1 | `#E9EDF5` |
 | `--color-foreground-secondary` | 二级文字（表头、标签） | `#5A6577` hsl(217,14%,41%) ≈5.9:1 | `#A6B0C6` |
-| `--muted-foreground` | 三级文字（12px 辅助、占位符） | `#64708A` hsl(221,16%,47%) ≈5.0:1（为 12px 辅助文字守 4.5 底线，**禁止再浅**） | `#8A94AB` |
+| `--muted-foreground` | 三级文字（12px 辅助、占位符） | `#64708A` hsl(221,16%,47%) ≈5.0:1（为 12px 辅助文字守 4.5 底线，**禁止再浅**） | `#8A94AB`（最劣 muted 底 4.65:1，**禁止再深**） |
 | `--primary` / `--ring` | 主按钮、链接、选中态、focus 环 | = success `#2B5CD7` | `#7FA3F0` |
 
-> 目标值已于 2026-08-29 一次性切换落地（此前为「shadcn 默认 slate 现状值 → 目标值」双轨渐进）；`--secondary` / `--accent` 底与 muted 同源同值。层级策略：页面灰底 → 白卡浮起 → 边框轻勾勒，三级明度差小、扁平金融风；文字三级 15/41/47% 明度。
+> 目标值已于 2026-08-29 一次性切换落地（此前为「shadcn 默认 slate 现状值 → 目标值」双轨渐进）；`--secondary` / `--accent` 底与 muted 同源同值。层级策略：页面灰底 → 白卡浮起 → 边框轻勾勒，三级明度差小、扁平金融风；文字三级 15/41/47% 明度。Dark 终值于 #872 PR1 落地（HSL 2 位小数精确往返登记 hex，实测数字见 §17）；card/popover/secondary/accent 的 `-foreground` 变体与 foreground 同值（沿 light 模式）；`--primary-foreground` dark = `#0F172A`（深字配亮靛蓝底，7.14:1）。
 
 ### 1.5 护栏（ESLint）
 
@@ -130,6 +132,23 @@
 **两个「其他」色，不可混用**（2026-08-29 评审补登）：通用多序列合并项用 `CHART_OTHER`（C7 灰蓝）；资产分布的「其他」伪大类用 `OTHER_COLOR`（C8 深灰蓝，#128）。边界原因：**现金大类色 = C7**——资产饼图若合并项也用 C7，会与现金切片同色无法区分。故资产维度一律走 `assetClassColor` / `OTHER_COLOR`，`CHART_OTHER` 只用于无「现金」语义的普通多序列。
 
 **已知耦合（#128 登记）**：`assetClassColor` 以 `ASSET_CLASS_PALETTE` 序位绑定 asset_class 字典 `sort_order`——**调整字典排序即换色**。改 sort_order 前须评估饼图/分区配色连续性；新增第 5 大类时序位超出现有 4 色将兜底 C8（与「其他」同色），届时须先扩 `ASSET_CLASS_PALETTE`。
+
+**暗色色板与 theme 访问器（#872 PR1 就绪，PR2 消费）**：`DARK_CHART_COLORS` 仅提亮 C1/C4/C8，其余沿用 light hex（最小化双套差异）；对暗卡 `#171E2C` 实测全部 ≥3:1。访问器 `chartPalette` / `navLineColor` / `chartOtherColor` / `inTransitColor` / `otherColor` / `assetClassColor(sortOrder, theme?)` / `tradeDirectionColors` 默认 `"light"`，返回值与既有常量全等；`buildAllocation` / `cashFlowDotColor` 带可选 theme 参数透传（vitest 双态覆盖）。组件在 PR2 经 `useTheme().resolvedTheme` 传入；涨跌色永不走色板（§1.1）。
+
+| 序位 | Light | Dark | 暗卡对比度 |
+|---|---|---|---|
+| C1 靛蓝 | `#2F5FD0` | **`#5C82E0`** | 4.55（light 值 2.92 不达标，提亮；NAV_LINE dark 同值） |
+| C2 琥珀金 | `#E8A33D` | 沿用 | 7.74 |
+| C3 天蓝 | `#56B4E9` | 沿用 | 7.23 |
+| C4 堇紫 | `#7E69D8` | **`#9C8AE8`** | 5.73（light 值 3.89 余量 <1，提亮留余量） |
+| C5 玫紫 | `#CC79A7` | 沿用 | 5.45 |
+| C6 赭橙 | `#C9762E` | 沿用 | 4.86（与 C2 明度差 9.0pp 保持） |
+| C7 灰蓝 | `#8A97AC` | 沿用 | 5.64 |
+| C8 深灰蓝 | `#4A5578` | **`#7A87AD`** | 4.69（light 值 2.27 不达标，提亮） |
+
+色相核对：dark H = 222.7/35.8/201.6/251.5/326.7/27.9/217.1/224.7，避开 gain 8°/loss 151°/destructive 350° 占用色相；NAV_LINE dark 仍非红绿；「超 6 类合并其他」「两个其他色不可混用」规则不变。
+
+**recharts 默认色治理结论（#872 A③，PR2 落地）**：库默认轴色 `#666` 在暗卡仅 2.91:1（12px tick 不达标）、Tooltip 默认白底 `#fff` + `#ccc` 边框属 C1 禁止的浅底残留——两者是库默认值，仓内 hex grep 抓不到。PR2 须对 NavCurve/AssetAllocationPie 显式主题化：轴 tick fill 走 foreground-secondary token、轴线走 muted/border token、Tooltip `contentStyle`/`itemStyle`/`labelStyle` 走 popover/border token；`CartesianGrid` 已用 `stroke-muted` 自动随主题。
 
 ---
 
@@ -287,14 +306,22 @@
 - 图标默认继承文字色（不加颜色类）；需要语义时与同行文字共用同一 token：成功 `text-success`、警告 `text-warning`、失败 `text-destructive`、涨跌图标随数值走 `getReturnColorClass`。
 - 状态指示小圆点（通知级别、交易日标记、方向标识）用对应 token 的 solid 色（`bg-success` / `bg-warning` / `bg-destructive`）或 `lib/colors.ts` 分类色，不用 `-soft`。
 
-## 17. Dark mode 启用条件（暂缓）
+## 17. Dark mode 启用条件（#872 PR1 已闭合，启用待 PR2）
 
-token 已备双套值，启用前必须完成：⓪ **先对齐双通道**——`globals.css` `.dark` 的中性色现状仍为 shadcn 默认 slate 值（如 muted `217.2 32.6% 17.5%`），**并非** §1.2/§1.4 登记的 dark 预案值，须先按预案值改写 `.dark` 再进入实测；① 实测全部 dark 预案值对比度（当前为同构推算）；② 存量 `slate/gray` 中性类名与任意值色（`[#xxx]`）清理；③ 图表色板暗色适配评审。未满足前禁止在代码中加 `dark` 类或 `dark:` 变体。
+四项前置条件已于 #872 PR1 闭合；**暗色未启用**——生产代码无 `dark` 类/`dark:` 变体消费（基件 `alert.tsx` 自带的 `dark:border-destructive` 为既存唯一例外，保留），启用实施待 PR2。中间态措辞（E1 判据）：本节 = 「⓪①②③ 已闭合，启用待 PR2」；§1.1 第 5 条 = 「启用实施中」。PR2 合入时两处同批翻「已启用（#872）」。
+
+- ⓪ **双通道对齐（已闭合）**：`.dark` 全量按 §1.2/§1.4 登记 hex 以 HSL 2 位小数精确往返重写（含语义色 ±1–2/255 舍入漂移修正，17 对照项中 12 项）；light `:root` 既有 33 个色彩 token 零改动（新增 destructive-solid 属 D3 批准的新增，非修改）。
+- ① **对比度实测（已闭合，数字如下）**：WCAG 2.x 相对亮度公式计算，可复现脚本见 issue #872 评估结论（SPEC 附录 A）。文本阈值 4.5:1，对暗卡 `#171E2C`（注明者除外）：foreground 14.22 / foreground(页面底) 15.68 / foreground-secondary 7.67 / muted-foreground(卡) 5.49 / muted-foreground(页面底) 6.05 / muted-foreground(muted 底) **4.65（最劣，禁止再深）** / primary 6.67 / gain 5.82 / gain(页面底) 6.42 / loss 6.72 / warning 8.21 / destructive 5.60 / success 6.67；soft 底上 foreground：gain 7.51 / loss 7.50 / success 7.30 / warning 8.02 / destructive 7.00；primary-foreground/primary 7.14；**白字/destructive-solid(dark) 5.50**——原白字/destructive `#EE6B80` 仅 2.98 不达标，故新增 destructive-solid 载体（D3），light 渲染逐字节不变（白字/实际 light 渲染 `#C42746` = 5.64）。非文本阈值 3:1（R1 口径 = 识别组件/状态所必需元素）：ring/卡 6.67、ring/页面底 7.36、input/卡 3.26、input/页面底 3.60、destructive-solid/卡 3.03；装饰性 border/卡 1.34（light 1.24 同态，不设硬线）。图表暗色板 8 色对暗卡 ≥3:1（§2 表）。
+- ② **存量清理（已闭合）**：18 处硬编码中性类名逐条处置——7 处替换语义 token（登录页 4 + 饼图图例 1 + 原生 checkbox 边界 2；后者经 chromium/webkit 双引擎像素实测零渲染变化，Tailwind v4 preflight `border: 0 solid` 且无 border-width utility）；9 处 `text-white` 保留、载体换 `bg-destructive-solid`（白字 5.50:1）；2 处 `bg-black/80` 遮罩保留（scrim 职责即压暗底层，非信息载体）。任意值色 `[#xxx]` 全仓为零（grep 核实）。逐条清单见 issue #872 评估结论（SPEC §7.3），grep 复核与清单一致。
+- ③ **图表暗色评审（已闭合）**：结论 = 独立提亮暗色板（§2），红涨绿跌与 NAV_LINE 约束在暗色下仍成立；recharts 默认色治理结论见 §2（PR2 落地）。
+
+门禁顺序：任一条件未闭合不得在代码中加 `dark` 类或 `dark:` 变体；PR2 的前置 = 本节四项闭合证据在案。
 
 ## 18. 存量债与迁移策略
 
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
-- 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（1 处 / 1 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、`slate/gray` 中性类名、快照页原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
+- 已登记、渐进收敛的存量：中间档字号与 `text-[Npx]` 任意值（1 处 / 1 文件，ESLint ratchet 豁免见 §1.5）、w·h 系一次性尺寸任意值（如 `h-[60vh]`、`sm:max-w-[500px]`，未拦截、不强制清理）、原生 `<input type="checkbox">` 手写件（#146 收敛为 §13 登记的 checkbox 基件；#872 PR1 仅替换其 border 色为 token，基件收敛仍按顺手原则）。原则：**改动到该页面时顺手替换，不单独开重构 issue**。
+- **中性色硬编码已清零（#872 PR1）**：18 处处置完毕（7 替换 / 9 白字载体换 destructive-solid / 2 遮罩保留），`slate/gray` 类名不再属渐进存量。**刻意例外**：`text-white`（solid 危险载体与未读气泡，双主题白字）与 `bg-black/80`（Dialog/AlertDialog scrim，双主题同值）——回流判定以 issue #872 处置清单为准，不得一律当违规清理。中性色 ESLint ratchet（D6 已批准）随 PR2 落地；落地前回流由人工评审兜底。
 - 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
 - **无定义的类名不照抄**（#650 登记，#658 核对）：`BottomNav` 的 `safe-area-pb` 是全仓无定义的空类名（Tailwind 无该 utility、`globals.css` 无该定义），既存而非 #658 引入；它已从「取较新一套样式」的理由里撤下。改动该组件或照它的写法复制时**不得**把它当既有约定扩散到别处——空类名不报错、lint/tsc/build 都抓不到，只会静默失效。
 

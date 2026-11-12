@@ -7,7 +7,7 @@ import {
   PSEUDO_IN_TRANSIT_CODE,
   PSEUDO_OTHER_CODE,
 } from "@/lib/allocation";
-import { assetClassColor, IN_TRANSIT_COLOR, OTHER_COLOR } from "@/lib/colors";
+import { assetClassColor, DARK_CHART_COLORS, IN_TRANSIT_COLOR, OTHER_COLOR } from "@/lib/colors";
 import type { Position } from "@/types/position";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 
@@ -137,5 +137,32 @@ describe("buildAllocation", () => {
     const items = buildAllocation(positions, DICT);
     expect(items.map((i) => i.key)).toEqual(["股票", "其他"]);
     expect(items[1].value).toBe(300);
+  });
+});
+
+describe("buildAllocation theme（#872 PR1，默认 light 行为不变）", () => {
+  const positions = [
+    makePosition({ market_value: 600, asset_class_code: "ASSET_STOCK" }),
+    makePosition({ product_code: "CASH", cash_amount: 300, asset_class_code: "ASSET_CASH" }),
+    makePosition({ product_code: "IN_TRANSIT_BUY", cash_amount: 200 }),
+    makePosition({ market_value: 100, asset_class_code: null }),
+  ];
+
+  it("dark：大类/在途/其他全走暗色板，序位、金额与占比与 light 完全一致", () => {
+    const light = buildAllocation(positions, DICT);
+    const dark = buildAllocation(positions, DICT, "dark");
+    expect(dark.map((i) => [i.key, i.code, i.value, i.percent])).toEqual(
+      light.map((i) => [i.key, i.code, i.value, i.percent])
+    );
+    expect(dark.map((i) => i.color)).toEqual([
+      DARK_CHART_COLORS[0], // 股票 C1
+      DARK_CHART_COLORS[6], // 现金 C7
+      DARK_CHART_COLORS[2], // 在途 C3
+      DARK_CHART_COLORS[7], // 其他 C8
+    ]);
+  });
+
+  it("显式 light 与默认调用结果全等", () => {
+    expect(buildAllocation(positions, DICT, "light")).toEqual(buildAllocation(positions, DICT));
   });
 });

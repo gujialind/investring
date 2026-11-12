@@ -3,7 +3,7 @@ import type {
   CashFlowStatusFilter,
   CashFlowType,
 } from "@/types/cash-flow";
-import { CHART_COLORS } from "@/lib/colors";
+import { CHART_COLORS, chartPalette, type ChartTheme } from "@/lib/colors";
 import { formatCurrency, formatNumber, formatSignedCurrency } from "@/lib/utils";
 
 /**
@@ -86,13 +86,14 @@ export function sameDayOthersCount(row: CashFlowRow, rows: CashFlowRow[]): numbe
 /**
  * dot 色（从带符号 amount + settled + is_override 派生，与 flow_type 解耦）：
  * 重估（is_override）= 灰蓝非流量；未生效 = 天蓝在途；已生效按金额正负取靛蓝/赭橙。
+ * theme 默认 light（与 CASH_FLOW_DOT_COLORS 全等）；PR2 由组件传 resolvedTheme（#872）。
  */
-export function cashFlowDotColor(row: CashFlowRow): string {
-  if (row.is_override) return CASH_FLOW_DOT_COLORS.neutral;
-  if (!row.settled) return CASH_FLOW_DOT_COLORS.inTransit;
-  return toAmount(row.amount) < 0
-    ? CASH_FLOW_DOT_COLORS.outflow
-    : CASH_FLOW_DOT_COLORS.inflow;
+export function cashFlowDotColor(row: CashFlowRow, theme: ChartTheme = "light"): string {
+  // 序位与 CASH_FLOW_DOT_COLORS 一致：C7 重估 / C3 在途 / C6 流出 / C1 流入
+  const palette = chartPalette(theme);
+  if (row.is_override) return palette[6];
+  if (!row.settled) return palette[2];
+  return toAmount(row.amount) < 0 ? palette[5] : palette[0];
 }
 
 /**
