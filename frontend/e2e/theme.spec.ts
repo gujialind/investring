@@ -142,6 +142,8 @@ async function expectFourCarriers(page: Page, testInfo: TestInfo, bg: string, ta
 }
 
 test('默认浅色：html 无 .dark，33+1 个 light token 逐字节等于 golden（B3/D1）', async ({ page }) => {
+  // 显式注入 light 偏好，解除对运行器默认 colorScheme 的隐式耦合（playwright.config use 未设 colorScheme）
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/dashboard');
   await expect(page.locator('html')).not.toHaveClass(/dark/);
   for (const [name, value] of Object.entries(LIGHT_TOKENS)) {
@@ -150,12 +152,14 @@ test('默认浅色：html 无 .dark，33+1 个 light token 逐字节等于 golde
   const bodyBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   // hsl(220,23%,97%) 实际渲染 #F6F7F9（规范 hex #F7F8FA 为近似标注，±1/255）；以渲染值为准
   expect(bodyBg).toBe('rgb(246, 247, 249)');
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
 });
 
 test('深色生效：html.dark + 页面底/卡底/辅助文字/涨跌数值计算色（B1/D1）', async ({ page }) => {
   await initTheme(page, 'dark');
   await page.goto('/dashboard');
   await expect(page.locator('html')).toHaveClass(/dark/);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(DARK_BG);
   expect(await cssVar(page, '--card')).toBe('220 31.34% 13.14%');
   const muted = page.locator('p.text-muted-foreground, span.text-muted-foreground').first();
@@ -237,8 +241,25 @@ test('首屏不闪白代理事实 + 无水合报错 + SSR 含主题内联脚本�
   expect(hydration, hydration.join(' | ')).toHaveLength(0);
   const ssr = await page.request.get('/dashboard');
   const html = await ssr.text();
-  expect(html).toContain('documentElement');
-  expect(html).toContain('theme');
+  // 可证伪：提取 SSR 内联脚本并断言其确为 next-themes 首绘机制（documentElement + classList +
+  // localStorage + storageKey），而非任意含词串的 HTML。移除 ThemeProvider 时该脚本消失→本断言红。
+  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const themeScript = scripts.find(
+    (s) =>
+      s.includes('document.documentElement') &&
+      s.includes('classList') &&
+      s.includes('localStorage.getItem') &&
+      s.includes('"theme"'),
+  );
+  expect(themeScript, 'SSR 必须含 next-themes 首绘内联脚本（移除 ThemeProvider 应使本断言红）').toBeTruthy();
+  // 功能证明：执行提取出的内联脚本（先移除 .dark），断言它真的给 documentElement 加回 .dark
+  await page.evaluate((src) => {
+    document.documentElement.classList.remove('dark');
+    (0, eval)(src);
+  }, themeScript!);
+  expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(true);
+  // colorScheme 属性传播（next-themes enableColorScheme 注入 style.colorScheme）；原生控件实际渲染仍列未覆盖
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
 });
 
 test('浮层暗色：确认弹窗与日期区间浮层表面走暗 popover，日历文字可读（C1/D1）', async ({ page }, testInfo) => {
@@ -278,5 +299,7 @@ test('四处 solid 危险载体暗色 computed style（#874 常驻收口）', as
 
 test('四处 solid 危险载体浅色 computed style（#874 常驻收口）', async ({ page }, testInfo) => {
   test.setTimeout(90_000);
+  // 显式注入 light 偏好，解除对运行器默认 colorScheme 的隐式耦合
+  await page.emulateMedia({ colorScheme: 'light' });
   await expectFourCarriers(page, testInfo, SOLID_LIGHT, 'L');
 });
