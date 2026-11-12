@@ -24,13 +24,13 @@ const paletteColorSelectors = [
 const neutralColorSelectors = [
   {
     selector:
-      "Literal[value=/(?:^|\\s)(?:text|bg|border)-(?:slate|gray|zinc|neutral|stone)-\\d+/]",
+      "Literal[value=/(?:^|\\s|:)(?:text|bg|border)-(?:slate|gray|zinc|neutral|stone)-\\d+/]",
     message:
       "禁止硬编码中性色类名（如 text-gray-500）。中性色已清零（#872 PR1/#874），请用语义 token（text-foreground/text-muted-foreground/border-input 等），见 docs/design/visual-spec.md §1.5/§18。",
   },
   {
     selector:
-      "TemplateElement[value.cooked=/(?:^|\\s)(?:text|bg|border)-(?:slate|gray|zinc|neutral|stone)-\\d+/]",
+      "TemplateElement[value.cooked=/(?:^|\\s|:)(?:text|bg|border)-(?:slate|gray|zinc|neutral|stone)-\\d+/]",
     message:
       "禁止硬编码中性色类名（如 text-gray-500）。中性色已清零（#872 PR1/#874），请用语义 token（text-foreground/text-muted-foreground/border-input 等），见 docs/design/visual-spec.md §1.5/§18。",
   },

@@ -19,7 +19,7 @@
    二者从不出现在同一上下文；绛红永远伴随「失败/异常」文字，不靠颜色单独表意。
 3. **success ≠ 绿**。绿色被「跌」独占后，完成/确认语义移交**靛蓝 `#2B5CD7`，并兼任品牌主色 primary**（链接、主按钮、focus 环同源）。完成态是系统里出现频率最高的状态，让默认观感就是「一切正常」，减少色彩噪音。
 4. **cancelled / closed / draft / 停用 → neutral 灰 badge**。用户主动撤销 ≠ 系统异常，不再用红。
-5. **dark mode 已启用（#872 PR2）**：三档偏好（浅色/深色/跟随系统，默认 system，D2 已批）；next-themes class 通道 + 内联脚本首屏不闪白；双端同源 token，无端侧独有配色。实测对比度与闭合证据见 §17；回退＝revert PR2（整体回浅色，PR1/#874 清理留存）。
+5. **dark mode 已启用（#872 PR2）**：三档偏好（浅色/深色/跟随系统，默认 system，D2 已批）；next-themes class 通道 + 内联脚本首屏不闪白；双端同源 token，无端侧独有配色。实测对比度与闭合证据见 §17；回退＝revert PR2（整体回浅色，PR1/#874 清理留存）。**已登记例外（暗色首绘瞬态，非全量达成）**：分类/方向/现金/在途 dot 为 SSR 下发的内联 style 取色，`useChartTheme` 未挂载时回落 light，next-themes 首绘脚本只翻 `.dark`（背景与 token 正确）、管不到这些内联值的取色时刻 ⇒ 暗色用户在水合前短暂看到暗底上的浅色板圆点（C1 light 对暗卡 2.92:1），水合后翻暗；影响面、量化与判定见 §17/§19 及 issue #872 B4/C1 回填。
 
 ### 1.2 语义色 token 色值表（配色方案 v1）
 
@@ -318,6 +318,8 @@
 
 门禁顺序（已执行完毕）：PR1 未引入 `dark` 类/`dark:` 变体；PR2 在四项闭合证据在案后引入 ThemeProvider（基件 `alert.tsx` 自带 `dark:border-destructive` 为既存例外，保留）。
 
+- **已登记例外（暗色首绘内联 style 瞬态，非全量达成）**：`hooks/useChartTheme` 未挂载时回落 light，而分类/方向/现金/在途 dot 是 SSR 下发的内联 style 取色（TradesContent/SubscriptionsContent 列表+编辑、PlatformDetailContent、ProductDetailContent、PlatformProductDetailContent、CashFlowsContent、HoldingInTransitCard、PortfolioHoldings/ProductSections，8 组件约 9 处）；next-themes 首绘脚本只翻 `.dark`（背景与 token 正确），管不到内联取色时刻 ⇒ 暗色用户水合前短暂见暗底浅色板圆点（C1 light `#2F5FD0` 对暗卡 `#171E2C` = **2.92:1，<3**），水合后翻暗。recharts 图表（NavCurve/AssetAllocationPie）ResponsiveContainer 客户端测量后才渲染，非 SSR 首绘问题。路线 A（dot 改 CSS 变量驱动）会破坏 §2「lib/colors.ts 唯一来源」造成第二事实源，无低成本等效；按 AGENTS 铁律 7 登记为**已知限制 + 未覆盖项**，交维护者判定接受或要求消除，**不写「已解决」**。背景/文字/浮层达成不受此例外影响。
+
 ## 18. 存量债与迁移策略
 
 - 本规范落地时已完成：语义 token、Badge variant、盈亏色函数、图表色板、全部 `(text|bg|border)-调色板-数字` 类名清零（#127）；中性色目标值一次性切换（2026-08-29，§1.4）。
@@ -344,4 +346,4 @@
 8. 状态徽标一律 `Badge` + variant；无手写 `bg-*-100 text-*-800` 件；弹窗走 `Dialog` / `AlertDialog`，提示走 toast / `Alert`（§13/§14）。
 9. 图表：色板按序消费、净值主线 `NAV_LINE` 不用红绿、超 6 类合并「其他」（场景用色见 §15）、图表元素本身不着涨跌色（§2/§15）。
 10. 双端同语义：共享组件 + `variant` 适配，未发明端侧独有色彩或字号，信息列的增删双端一致（§6）。
-11. 暗色（#872）：无硬编码中性色与渐变端点色；图表取色走 `lib/colors.ts` theme 访问器；浮层（Dialog/Popover/Tooltip）表面走 popover/border token；主题偏好仅经 next-themes（storageKey=theme），不进 zustand、不与 #68 水合门耦合。
+11. 暗色（#872）：无硬编码中性色与渐变端点色；图表取色走 `lib/colors.ts` theme 访问器；浮层表面：Dialog/AlertDialog 走 `bg-background`（与 light 侧同 token parity）、Popover/Tooltip 走 popover/border token；主题偏好仅经 next-themes（storageKey=theme），不进 zustand、不与 #68 水合门耦合。**已知例外**：SSR 内联 style 取色 dot 存在水合前瞬态（暗底浅色板圆点 2.92:1，水合后翻暗），见 §1.1 第 5 条/§17 登记，非全量达成。
