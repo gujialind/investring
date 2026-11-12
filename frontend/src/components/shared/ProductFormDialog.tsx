@@ -372,7 +372,7 @@ export default function ProductFormDialog({
                       : {}),
                   });
                 }}
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded border-input"
               />
               <Label htmlFor="is_qdii">QDII基金</Label>
             </div>

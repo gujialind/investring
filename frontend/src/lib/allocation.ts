@@ -1,6 +1,6 @@
 import type { Position } from "@/types/position";
 import type { AssetClassificationItem } from "@/types/asset-classification";
-import { assetClassColor, IN_TRANSIT_COLOR, OTHER_COLOR } from "@/lib/colors";
+import { assetClassColor, inTransitColor, otherColor, type ChartTheme } from "@/lib/colors";
 import { largestRemainderPercents } from "@/lib/utils";
 
 /**
@@ -56,10 +56,12 @@ export function buildRowPercents(positions: Position[]): number[] {
 /**
  * 按资产大类聚合持仓（大类占比 = 行级占比加总，与分区头/卡片严格自洽）。
  * assetClasses：asset_class 维度字典（入参顺序不限，内部按 sort_order 排序）。
+ * theme：图表色主题（#872），默认 light 保持既有行为；PR2 由页面传 resolvedTheme。
  */
 export function buildAllocation(
   positions: Position[],
-  assetClasses: AssetClassificationItem[]
+  assetClasses: AssetClassificationItem[],
+  theme: ChartTheme = "light"
 ): AllocationItem[] {
   const rowPercents = buildRowPercents(positions);
   const byCode = new Map<string, { value: number; percent: number }>();
@@ -84,7 +86,7 @@ export function buildAllocation(
       code: PSEUDO_IN_TRANSIT_CODE,
       value: inTransitAgg.value,
       percent: inTransitAgg.percent,
-      color: IN_TRANSIT_COLOR,
+      color: inTransitColor(theme),
     };
   }
 
@@ -97,7 +99,7 @@ export function buildAllocation(
         code: ac.code,
         value: agg.value,
         percent: agg.percent,
-        color: assetClassColor(ac.sort_order),
+        color: assetClassColor(ac.sort_order, theme),
       });
     }
     if (ac.code === "ASSET_CASH" && inTransitItem) {
@@ -123,7 +125,7 @@ export function buildAllocation(
       code: PSEUDO_OTHER_CODE,
       value: otherValue,
       percent: otherPercent,
-      color: OTHER_COLOR,
+      color: otherColor(theme),
     });
   }
   return items;

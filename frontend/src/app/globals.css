@@ -42,6 +42,7 @@
   --color-warning-soft: hsl(var(--warning-soft));
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-destructive-soft: hsl(var(--destructive-soft));
+  --color-destructive-solid: hsl(var(--destructive-solid));
   /* 二级文字（表头、标签） */
   --color-foreground-secondary: hsl(var(--foreground-secondary));
 
@@ -74,6 +75,9 @@
   --destructive: 348 67% 46%;
   --destructive-soft: 347 64% 95%;
   --destructive-foreground: 347 69% 33%;
+  /* solid 危险载体（按钮/未读气泡）底：与 --destructive 同声明，light 渲染逐字节不变；
+     dark 用更深绛红保白字对比度 ≥4.5（#872 D3，visual-spec §1.2） */
+  --destructive-solid: 348 67% 46%;
   --border: 220 28% 91.5%; /* #E3E7EF */
   --input: 220 28% 91.5%;
   --ring: 223 68% 51%;
@@ -94,42 +98,48 @@
   --radius: 0.5rem;
 }
 
+/* Dark 通道终值（#872 PR1）：按 visual-spec §1.2/§1.4 登记 hex 对齐，HSL 2 位小数精确往返；
+   实测对比度与闭合证据见 visual-spec §17。尚未启用——生产代码无 dark 类/dark: 变体，
+   启用实施待 PR2（主题库/设置入口/图表消费）。 */
 .dark {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  --card: 222.2 84% 4.9%;
-  --card-foreground: 210 40% 98%;
-  --popover: 222.2 84% 4.9%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 221 79% 72%;
-  --primary-foreground: 222.2 47.4% 11.2%;
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --accent: 217.2 32.6% 17.5%;
-  --accent-foreground: 210 40% 98%;
-  --destructive: 350 79% 68%;
-  --destructive-soft: 344 29% 20%;
-  --destructive-foreground: 349 75% 79%;
-  --border: 217.2 32.6% 17.5%;
-  --input: 217.2 32.6% 17.5%;
-  --ring: 221 79% 72%;
-  /* 语义色 dark 预案值（未启用、未实测；本 .dark 中性色仍为 shadcn 默认 slate 值，
-     启用前须先按 visual-spec §1.2/§1.4 预案值对齐双通道再实测，见 visual-spec §17） */
-  --gain: 8 83% 66%;
-  --gain-soft: 9 30% 18%;
-  --gain-foreground: 9 82% 78%;
-  --loss: 151 49% 49%;
-  --loss-soft: 154 32% 17%;
-  --loss-foreground: 150 49% 71%;
-  --success: 221 79% 72%;
-  --success-soft: 221 40% 22%;
-  --success-foreground: 220 80% 81%;
-  --warning: 38 75% 59%;
-  --warning-soft: 33 31% 18%;
-  --warning-foreground: 38 71% 73%;
-  --foreground-secondary: 221 22% 71%;
+  /* 中性色：§1.4 终值；-foreground 变体与 foreground 同值（沿 light 侧模式） */
+  --background: 222.35 36.17% 9.22%; /* #0F1420 */
+  --foreground: 220 37.5% 93.73%; /* #E9EDF5 */
+  --card: 220 31.34% 13.14%; /* #171E2C */
+  --card-foreground: 220 37.5% 93.73%; /* #E9EDF5 */
+  --popover: 220 31.34% 13.14%; /* #171E2C */
+  --popover-foreground: 220 37.5% 93.73%; /* #E9EDF5 */
+  --primary: 220.88 79.02% 71.96%; /* #7FA3F0 */
+  --primary-foreground: 222.22 47.37% 11.18%; /* #0F172A 深字，对 primary 7.14:1 */
+  --secondary: 221.54 27.08% 18.82%; /* #232B3D */
+  --secondary-foreground: 220 37.5% 93.73%; /* #E9EDF5 */
+  --muted: 221.54 27.08% 18.82%; /* #232B3D */
+  --muted-foreground: 221.82 16.42% 60.59%; /* #8A94AB 最劣 muted 底 4.65:1，禁止再深 */
+  --accent: 221.54 27.08% 18.82%; /* #232B3D */
+  --accent-foreground: 220 37.5% 93.73%; /* #E9EDF5 */
+  /* 异常红族：destructive 本体保持亮绛红（文字/badge 语义）；solid 载体走 destructive-solid（白字 5.50:1） */
+  --destructive: 350.38 79.39% 67.65%; /* #EE6B80 */
+  --destructive-soft: 344 29.41% 20%; /* #42242C */
+  --destructive-foreground: 349.37 75.24% 79.41%; /* #F2A3B1 */
+  --destructive-solid: 347.92 64.17% 47.06%; /* #C52B4A */
+  /* border 装饰性（R1：不设 3:1 硬线）；input 独立提亮保组件识别（vs card 3.26:1） */
+  --border: 221.38 25.22% 22.55%; /* #2B3448 */
+  --input: 220.91 18.64% 46.27%; /* #606E8C */
+  --ring: 220.88 79.02% 71.96%; /* #7FA3F0 */
+  /* 语义色：§1.2 终值（文本实测全 ≥4.5，见 §17）；红涨绿跌/双红分离语义不变 */
+  --gain: 8.28 82.86% 65.69%; /* #F0735F */
+  --gain-soft: 8.89 29.67% 17.84%; /* #3B2420 */
+  --gain-foreground: 8.67 81.82% 78.43%; /* #F5A89B */
+  --loss: 151.48 49.19% 48.63%; /* #3FB97F */
+  --loss-soft: 154.29 31.82% 17.25%; /* #1E3A2E */
+  --loss-foreground: 150 49.33% 70.59%; /* #8FD9B4 */
+  --success: 220.88 79.02% 71.96%; /* #7FA3F0 */
+  --success-soft: 221.33 39.82% 22.16%; /* #22304F */
+  --success-foreground: 219.74 79.38% 80.98%; /* #A8C2F5 */
+  --warning: 37.94 74.88% 59.41%; /* #E5AC4A */
+  --warning-soft: 33.1 31.18% 18.24%; /* #3D3020 */
+  --warning-foreground: 38.35 70.8% 73.14%; /* #EBC88A */
+  --foreground-secondary: 221.25 21.92% 71.37%; /* #A6B0C6 */
 }
 
 @layer base {

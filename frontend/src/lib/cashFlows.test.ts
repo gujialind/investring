@@ -16,6 +16,7 @@ import {
   CASH_FLOW_TYPE_OPTIONS,
   CASH_FLOW_STATUS_OPTIONS,
 } from "@/lib/cashFlows";
+import { DARK_CHART_COLORS } from "@/lib/colors";
 import type { CashFlowRow } from "@/types/cash-flow";
 
 let seq = 1;
@@ -131,6 +132,29 @@ describe("cashFlowDotColor", () => {
     expect(cashFlowDotColor(makeRow({ settled: true, amount: "0" }))).toBe(
       CASH_FLOW_DOT_COLORS.inflow
     );
+  });
+});
+
+describe("cashFlowDotColor theme（#872 PR1，默认 light 行为不变）", () => {
+  it("dark 四态走暗色板，序位与 light 映射一致", () => {
+    expect(cashFlowDotColor(makeRow({ is_override: true, settled: true, amount: "5000" }), "dark")).toBe(
+      DARK_CHART_COLORS[6]
+    );
+    expect(cashFlowDotColor(makeRow({ settled: false, amount: "1000" }), "dark")).toBe(
+      DARK_CHART_COLORS[2]
+    );
+    expect(cashFlowDotColor(makeRow({ settled: true, amount: "-1000" }), "dark")).toBe(
+      DARK_CHART_COLORS[5]
+    );
+    expect(cashFlowDotColor(makeRow({ settled: true, amount: "1000" }), "dark")).toBe(
+      DARK_CHART_COLORS[0]
+    );
+  });
+
+  it("显式 light 与默认调用结果全等", () => {
+    const row = makeRow({ settled: true, amount: "-1000" });
+    expect(cashFlowDotColor(row, "light")).toBe(cashFlowDotColor(row));
+    expect(cashFlowDotColor(row, "light")).toBe(CASH_FLOW_DOT_COLORS.outflow);
   });
 });
 

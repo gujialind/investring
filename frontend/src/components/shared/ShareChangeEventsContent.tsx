@@ -954,7 +954,7 @@ export default function ShareChangeEventsContent({
             <AlertDialogCancel>取消</AlertDialogCancel>
             {/* #845：危险操作确认按钮标 solid destructive（visual-spec §14），行为不变 */}
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
               onClick={() => {
                 if (forceCoverData) {
                   submitCreate(forceCoverData, true);
@@ -984,7 +984,7 @@ export default function ShareChangeEventsContent({
             <AlertDialogCancel>取消</AlertDialogCancel>
             {/* #845：危险操作确认按钮标 solid destructive（visual-spec §14），行为不变 */}
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
               onClick={() => {
                 if (unconfirmEventId !== null) {
                   unconfirmEvent.mutate(unconfirmEventId, {
@@ -1014,7 +1014,7 @@ export default function ShareChangeEventsContent({
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
               onClick={() => {
                 if (cancelEventId !== null) {
                   cancelEvent.mutate(cancelEventId, {

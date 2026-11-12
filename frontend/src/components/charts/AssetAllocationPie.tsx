@@ -66,7 +66,7 @@ export default function AssetAllocationPie({ items, height = 180, forceColumn = 
               className="w-2 h-2 rounded-sm mr-2 shrink-0"
               style={{ background: item.color }}
             />
-            <span className="text-slate-700 whitespace-nowrap">{item.key}</span>
+            <span className="text-foreground-secondary whitespace-nowrap">{item.key}</span>
             <span className="ml-auto font-semibold tabular-nums whitespace-nowrap">
               {item.percent.toFixed(1)}%
             </span>

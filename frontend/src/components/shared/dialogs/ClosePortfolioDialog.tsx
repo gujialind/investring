@@ -84,7 +84,7 @@ export default function ClosePortfolioDialog({
               onConfirm();
             }}
             disabled={isPending || checking}
-            className="bg-destructive text-white hover:bg-destructive/90"
+            className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
           >
             {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             确认关闭

@@ -231,7 +231,7 @@ export default function SettingsContent({ variant = "desktop" }: SettingsContent
                       onChange={(e) =>
                         setDataSourceConfig({ ...dataSourceConfig, akshare_enabled: e.target.checked })
                       }
-                      className="h-4 w-4 rounded border-gray-300"
+                      className="h-4 w-4 rounded border-input"
                     />
                     <Label htmlFor="akshare_enabled">启用AkShare</Label>
                   </div>

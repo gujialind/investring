@@ -731,7 +731,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
                 !recalcAck ||
                 recalculateAsync.isPending
               }
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
             >
               {recalculateAsync.isPending ? (
                 <>
@@ -847,7 +847,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
               <Button
                 onClick={handleBulkConfirm}
                 disabled={!bulkAck || bulkDelete.isPending}
-                className="bg-destructive text-white hover:bg-destructive/90"
+                className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
               >
                 {bulkDelete.isPending ? (
                   <>
@@ -875,7 +875,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive-solid text-white hover:bg-destructive-solid/90"
               onClick={() => {
                 if (pendingDeleteDate) {
                   deleteSnapshot.mutate({ portfolioCode: code, snapshotDate: pendingDeleteDate });
