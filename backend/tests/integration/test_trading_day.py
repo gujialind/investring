@@ -535,3 +535,39 @@ class TestCalendarListExchangeDefault:
             assert {r["exchange"] for r in rows_hk} == {"HKEX"}
         finally:
             remove_hkex_calendar(test_db, start, end)
+
+
+
+class TestCalendarQueryDbGuard:
+    """#867：GET /api/trading-calendar 查询遇瞬时 DB 故障的防护口径。
+
+    复现：模拟 query.all() 抛 OperationalError（CI 曾因此冒泡成裸 500）。
+    修复后应转可诊断的 503 + report_unexpected 留痕（原始异常类型 + operation），
+    正常查询路径不受影响。
+    """
+
+    def test_db_failure_returns_503_and_reports(self, client, viewer_headers, monkeypatch):
+        import app.routers.trading_calendar as tc_module
+        from sqlalchemy.exc import OperationalError
+
+        reported = []
+        monkeypatch.setattr(
+            tc_module, "report_unexpected",
+            lambda exc, **kw: reported.append((type(exc).__name__, kw.get("operation"))),
+        )
+
+        class _FailingQuery:
+            def all(self):
+                raise OperationalError("SELECT trading_calendar", {}, Exception("connection reset by peer"))
+
+        monkeypatch.setattr(tc_module, "get_calendar_query", lambda **kwargs: _FailingQuery())
+        resp = client.get("/api/trading-calendar", params={"year": 2026}, headers=viewer_headers)
+        assert resp.status_code == 503, resp.text
+        assert "数据库故障" in resp.json()["detail"]
+        # 留痕出口被调用，且保留原始异常类型与端点操作名（不是把 500 藏起来）
+        assert reported == [("OperationalError", "get_trading_calendar")]
+
+    def test_normal_query_unaffected(self, client, viewer_headers):
+        resp = client.get("/api/trading-calendar", params={"year": 2026}, headers=viewer_headers)
+        assert resp.status_code == 200, resp.text
+        assert isinstance(resp.json(), list)
