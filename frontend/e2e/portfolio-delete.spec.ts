@@ -79,6 +79,11 @@ test.describe('组合删除闭环（#820）', () => {
     await expect(dialog.getByText(name, { exact: false })).toBeVisible();
     await expect(dialog.getByText('不可恢复', { exact: false })).toBeVisible();
 
+    // #874 常驻护栏：solid 危险载体分工（正则收紧到 -solid，裸 -destructive/-soft 不算证明）
+    const confirmBtn = dialog.getByRole('button', { name: '确认删除' });
+    await expect(confirmBtn).toHaveClass(/bg-destructive-solid/);
+    await expect(confirmBtn).toHaveClass(/text-white/);
+
     await dialog.getByRole('button', { name: '确认删除' }).click();
     // modal Dialog 开着时按 role 找 toast 恒 0 命中（Radix 把外部子树置 aria-hidden），
     // 故按 testid 定位（frontend/AGENTS.md §1.2 的实测口径）

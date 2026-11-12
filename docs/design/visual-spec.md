@@ -46,7 +46,7 @@
 | `--color-warning` | 待定/进行中 | 赭珀 | `#96620A` hsl(38,88%,31%) ≈5.2:1 | `#E5AC4A` |
 | `--color-warning-soft` | 待定 badge/提示底 | 浅珀 | `#FBF3E2` hsl(41,76%,94%) | `#3D3020` |
 | `--color-warning-foreground` | warning-soft 上文字 | 深珀 | `#7C4A03` hsl(35,95%,25%) | `#EBC88A` |
-| `--color-destructive` | 异常/失败文字、危险按钮底 | 绛红 | `#C22745` hsl(348,67%,46%) ≈5.7:1 | `#EE6B80` |
+| `--color-destructive` | 异常/失败文字、状态圆点；solid 危险载体底见 `--color-destructive-solid` 行 | 绛红 | `#C22745` hsl(348,67%,46%) ≈5.7:1 | `#EE6B80` |
 | `--color-destructive-soft` | 失败 badge 底、错误提示底 | 浅绛 | `#FAE8EC` hsl(347,64%,95%) | `#42242C` |
 | `--color-destructive-foreground` | destructive-soft 上文字（solid 危险载体上的文字用纯白 `text-white`，载体见下行） | 深绛 | `#8F1A33` hsl(347,69%,33%) | `#F2A3B1` |
 | `--color-destructive-solid` | solid 危险载体底（危险按钮/未读气泡，配纯白文字）；#872 D3 新增，light 与 `--destructive` 同声明、渲染逐字节不变 | 绛红（深） | = `--destructive` `348 67% 46%`（渲染 `#C42746`，白字 5.64:1） | `#C52B4A` hsl(347.92,64.17%,47.06%)（白字 5.50:1，vs 暗卡 3.03:1） |
