@@ -1,7 +1,9 @@
 {
   "version": 1,
   "rules": [
-    {"kind": "prefix", "paths": ["backend/", "docs/"], "scopes": ["backend"], "reason": "backend or documentation contract"},
+    {"kind": "prefix", "paths": ["backend/"], "scopes": ["backend"], "reason": "backend"},
+    {"kind": "exact", "paths": ["docs/reference/business-constraints.md"], "scopes": ["backend"], "reason": "error-code doc-sync assertion input (test_error_codes_doc_sync.py)"},
+    {"kind": "prefix", "paths": ["docs/"], "scopes": [], "reason": "docs outside affected stacks (keep mapped; unmapped falls back to full)"},
     {"kind": "prefix", "paths": ["frontend/"], "scopes": ["frontend"], "reason": "frontend"},
     {"kind": "prefix", "paths": ["ir-cli/"], "scopes": ["cli"], "reason": "CLI"},
     {"kind": "prefix", "paths": ["scripts/"], "scopes": ["scripts"], "reason": "scripts"},
