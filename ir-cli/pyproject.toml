@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "investring-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "InvestRing lightweight HTTP client CLI"
 requires-python = ">=3.10"
 # typer 0.29.0 重构参数内省（type_descriptor 取代 .type），schema.py 读 param.type.name
