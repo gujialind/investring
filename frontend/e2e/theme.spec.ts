@@ -236,11 +236,34 @@ test('首屏不闪白代理事实 + 无水合报错 + SSR 含主题内联脚本�
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
   // 首绘代理：domcontentloaded 时 .dark 已就位（内联脚本早于应用内容）
   expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(true);
+  // 首绘无内联取色圆点常驻护栏①（守 visual-spec §1.1 第 5 条 / §17 已验证结论）：
+  // 内联取色圆点（style={{ background }}）只应在客户端取数后渲染；若服务端预取
+  // （dehydrate/HydrationBoundary）使它们回到首绘 DOM，本断言变红。
+  const firstPaintInlineBg = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[style]'))
+      .filter((el) => /background(-color)?\s*:/i.test(el.getAttribute('style') ?? ''))
+      .map((el) => el.outerHTML.slice(0, 120)),
+  );
+  expect(firstPaintInlineBg, 'domcontentloaded 不得存在内联 background 取色元素（§1.1/§17）').toHaveLength(0);
   await page.waitForLoadState('load');
   const hydration = errors.filter((e) => /hydrat|Minified React error/i.test(e));
   expect(hydration, hydration.join(' | ')).toHaveLength(0);
   const ssr = await page.request.get('/dashboard');
   const html = await ssr.text();
+  // 首绘无内联取色圆点常驻护栏②（同 §1.1/§17）：SSR HTML 不得含内联 background/background-color
+  // 取色 style——圆点实际序列化形态，属性锚定（不命中 background-image/background-size 等非取色属性）。
+  // 覆盖 /dashboard 与圆点实际所在的三个页面（组合详情含饼图图例 / trades / cash-flows 含在途卡）；
+  // 裸 HTTP 取 HTML、不经浏览器渲染，直接守服务端预取回归。
+  for (const path of [
+    '/dashboard',
+    `/portfolio/${E2E_ACTIVE}`,
+    `/portfolio/${E2E_ACTIVE}/trades`,
+    `/portfolio/${E2E_ACTIVE}/cash-flows`,
+  ]) {
+    const body = path === '/dashboard' ? html : await (await page.request.get(path)).text();
+    const inlineBg = body.match(/style="[^"]*background(-color)?\s*:[^"]*"/i);
+    expect(inlineBg, `SSR ${path} 不得含内联 background 取色 style（§1.1/§17）: ${inlineBg?.[0] ?? ''}`).toBeNull();
+  }
   // 可证伪：提取 SSR 内联脚本并断言其确为 next-themes 首绘机制（documentElement + classList +
   // localStorage + storageKey），而非任意含词串的 HTML。移除 ThemeProvider 时该脚本消失→本断言红。
   const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
