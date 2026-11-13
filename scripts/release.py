@@ -59,7 +59,7 @@ CHANGELOG_HEADER = (
 )
 GROUP_ORDER = [("feat", "Features"), ("fix", "Bug Fixes")]
 OTHER_GROUP = "Other"
-OTHER_TYPES = {"chore", "docs", "refactor", "test", "perf", "ci", "build", "style", "revert"}
+OTHER_TYPES = {"chore", "docs", "refactor", "test", "perf", "ci", "build", "style", "revert", "merge"}
 
 
 def fail(msg: str) -> None:
