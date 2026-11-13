@@ -302,7 +302,7 @@
 
 ## 16. 图标体系与着色
 
-- **图标库**：全站统一 `lucide-react`（49 处消费，唯一图标来源）；不引入第二图标库、不内联自绘 SVG 图标。
+- **图标库**：全站统一 `lucide-react`（49 处消费，唯一图标来源）；不引入第二图标库、不内联自绘 SVG 图标。**刻意例外**：品牌标识 `BrandLogo`（环 + 突破箭头）是品牌资产而非 UI 图标，内联 SVG 且随主题 token 取色（`hsl(var(--primary))` / `hsl(var(--foreground))`），规格见 §20.5；不得据此把普通 UI 图标也改成自绘 SVG。
 - **尺寸档（现状登记，2026-08-29）**：默认 `h-4 w-4`（16px，与 14px 正文配套）；移动端导航/大触面 `h-5 w-5`（20px）；紧凑徽章内 `h-3.5 w-3.5`（14px）。三档之外不新造。
 - 图标默认继承文字色（不加颜色类）；需要语义时与同行文字共用同一 token：成功 `text-success`、警告 `text-warning`、失败 `text-destructive`、涨跌图标随数值走 `getReturnColorClass`。
 - 状态指示小圆点（通知级别、交易日标记、方向标识）用对应 token 的 solid 色（`bg-success` / `bg-warning` / `bg-destructive`）或 `lib/colors.ts` 分类色，不用 `-soft`。
@@ -347,3 +347,39 @@
 9. 图表：色板按序消费、净值主线 `NAV_LINE` 不用红绿、超 6 类合并「其他」（场景用色见 §15）、图表元素本身不着涨跌色（§2/§15）。
 10. 双端同语义：共享组件 + `variant` 适配，未发明端侧独有色彩或字号，信息列的增删双端一致（§6）。
 11. 暗色（#872）：无硬编码中性色与渐变端点色；图表取色走 `lib/colors.ts` theme 访问器；浮层表面：Dialog/AlertDialog 走 `bg-background`（与 light 侧同 token parity）、Popover/Tooltip 走 popover/border token；主题偏好仅经 next-themes（storageKey=theme），不进 zustand、不与 #68 水合门耦合。新增内联 style 取色元素须说明其出现时机（客户端取数后）；首绘无内联取色圆点已验证（§1.1 第 5 条/§17）。
+
+---
+
+## 20. 导航壳 / 品牌标识 / 设置页结构（#878）
+
+> 本节记录 #878 导航与设置重构的**结构决策与理由**（尺寸/状态等读代码可得的事实以组件为准，这里只钉跨文件约定与取舍）。承继 #650 导航单源。
+
+### 20.1 导航单源与语境分布
+
+- **唯一来源仍是 `components/shared/navItems.ts`**（#650）。`NavItem` 在 #878 增加 `inNav`（是否进桌面侧栏主导航）；`mobileTab` / `mobileEntryHost` 沿用 #650 语义。派生函数：`sidebarItemsForRole`（角色过滤后再剔 `inNav:false`）、`mobileTabPaths` / `mobileExitPaths`（移动底部 Tab 与站内出口）。**新增导航项必须同时决定 `inNav` / `mobileTab`，填 `false` 就得补页内入口 + 返回宿主**，否则「可达即被困」（#650 验收第 4 条）。
+- **管理入口走语境分布，不堆进设置页**（#878 拍板，入口式不删页）：投资人管理入口在**组合页头部**（admin-only，`PortfolioListContent`），平台管理 + 资产分类管理入口在**产品页头部**（双端，`ProductsContent`，`${basePath}/platforms`、`${basePath}/asset-classifications`）。三项 `inNav:false` / `mobileTab:false`，路由本身保留；`mobileEntryHost` 分别为 `/portfolio`、`/products`、`/products`。理由：管理动作发生在其宿主语境（看组合时管投资人、看产品时管平台/分类），比收进设置页更近；移动端底部 Tab 位宽有限（#650 口径），同样走页内入口。
+- 设置页**不再承载**平台/投资人管理入口（原移动设置页的平台管理块已移除）；设置 = 纯系统设置（§20.4）。
+
+### 20.2 桌面侧栏尺寸与收起
+
+- 侧栏 `components/layout/Sidebar.tsx`：展开 **224px（`w-56`）** / 收起 **56px（`w-14`）**，`transition-[width]`。宽度事实以组件 + `e2e/cash-flows.spec.ts`「sidebar 保 224px」用例为准（**不是 §5**，§5 是字号四级）。
+- 收起偏好持久化在 `uiStore.sidebarCollapsed`（persist name `ui-storage`），`toggleSidebarCollapse` 切换；收起态主导航仅图标 + 右侧 Tooltip 补标签，顶部 Logo 仅 mark。
+- **原顶部 `Navbar` 整体移除**：Logo / 账户 / 通知都收进侧栏。桌面窄屏（`<lg`，侧栏 `hidden lg:flex`）由 `MainLayout` 的 `lg:hidden` 紧凑头部（`h-14`：Logo + 通知铃铛 + 账户菜单）兜底账户可达；任意宽度下「用户菜单」触发器恰好一个可见（宽屏在侧栏、窄屏在头部），E2E `getByRole` 不歧义。
+
+### 20.3 账户区位置
+
+- 账户区在**侧栏最底部**（`border-t`，贴底）：`AccountMenu`（头像 + 姓名/角色，菜单向上开 `side="top"`）+ `NotificationBell`；收起态竖排堆叠。这是 #878 最终拍板位置（左下角），非顶部。
+- 移动端首页（`app/m/dashboard`）底部新增「账户」卡，内嵌 `AccountMenu`，补齐移动端原先无退出登录入口的缺口（修改密码 / 退出登录，全角色）。
+- `AccountMenu` / `ChangePasswordDialog` / `BrandLogo` 放 `components/shared/`，双端共用同一份。
+
+### 20.4 设置页结构（桌面三 Tab / 移动分组列表）
+
+- **桌面**（`SettingsContent.tsx`，仅桌面）：三 Tab——**通用**（合并 外观与主题 / 账户安全 / 数据源 / 系统信息 四卡）、**交易日历同步**、**日志管理**（admin-only，水合前按非 admin 不渲染，承继 #715）。分区卡片在 `settingsSections.tsx`（`AppearanceCard` / `PasswordCard` / `DataSourceCard` / `SystemInfoCard` / `CalendarSyncCard`）。
+- **移动**（`app/m/settings`）：分组列表 `MobileSettingsList`——**通用**组（外观与主题 / 数据源 / 修改密码 / 系统信息）+ **系统维护**组（交易日历同步 / 日志管理 admin-only）。行级钻取到 `app/m/settings/[section]`（appearance / datasource / system / calendar / logs），子页自带「返回设置」链接、**不渲染底部 Tab**（`MobileLayout` 只在一级 Tab 页显示底部导航，子页既非一级 Tab 也非 `mobileExitPaths` 出口）。非法/越权 section `router.replace("/m/settings")`。
+- **修改密码 = 弹窗，双入口**（`ChangePasswordDialog`）：用户菜单（全角色）+ 设置通用（桌面 `PasswordCard` / 移动列表行）。新密码长度规则 **≥6 位**（前端既有校验；后端 `schemas/auth.py` 无长度约束，issue #878 验收原写 ≥8 已回填订正为 ≥6）。弹窗触发器与提交按钮同名「修改密码」，模态 aria-hide 背景下 `getByRole` 同一时刻只解析到一个，E2E 顺序同名点击成立。
+- 主题选择 `data-testid="theme-select"` 保留在 `AppearanceCard`（`e2e/theme.spec.ts` golden 依赖）；light token 逐字节不变（§17）。
+
+### 20.5 品牌标识
+
+- 品牌 Logo 组件 `components/shared/BrandLogo.tsx`：开口环 + 破环箭头（`LogoMark`），环 = `hsl(var(--primary))`、箭头 = `hsl(var(--foreground))`，**双主题随 token 自适应**（token 是裸 HSL 三元组，须 `hsl()` 包裹才是合法颜色，直接 `var(--primary)` 会落回 `stroke:none` 不可见）；`mono` 变体两者皆 `currentColor`。字标 Invest = foreground、Ring = primary。
+- 静态资产：`src/app/icon.svg`（渐变 favicon，Next 自动识别）、`src/app/apple-icon.png`、`public/logo.svg` / `logo-mono.svg` / `logo-app.svg`、`public/icon-192.png` / `icon-512.png`（PWA，manifest 已引用）。app-icon 渐变 `#3D6FE0→#1E3FA8` + 白色 mark，是品牌固定资产色，**不随主题 token**（与 §16 「图标继承文字色」分工不同：品牌标识非 UI 图标，见 §16 例外）。

@@ -19,6 +19,7 @@ import {
   openAppAndAuth,
   openFilterPanelIfMobile,
   openPopover,
+  openSettingsSection,
   portfolioPath,
   settlePopovers,
   type PortfolioCode,
@@ -314,8 +315,7 @@ test.describe('日志管理 Tab 与批量同步迁移（#715）', () => {
         json: { detail: { error: 'INTERNAL', message: '登录日志服务暂不可用' } },
       }),
     );
-    await page.goto('/settings');
-    await page.getByRole('tab', { name: '日志管理' }).click();
+    await openSettingsSection(page, '日志管理', '日志管理');
     const card = page.getByTestId('login-logs-card');
     await expect(card).toContainText('加载失败：登录日志服务暂不可用', { timeout: 10_000 });
     // 承重负向：失败不得伪装成空态（这是迁移前 TasksContent/日志读侧的病）
@@ -334,8 +334,7 @@ test.describe('日志管理 Tab 与批量同步迁移（#715）', () => {
   test('执行历史子 Tab 可达：卡片、task 过滤、「立即清理」按钮均在（log_cleanup 迁移后入口）', async ({
     page,
   }) => {
-    await page.goto('/settings');
-    await page.getByRole('tab', { name: '日志管理' }).click();
+    await openSettingsSection(page, '日志管理', '日志管理');
     await page.getByRole('tab', { name: '执行历史' }).click();
     const card = page.getByTestId('executions-card');
     await expect(card).toBeVisible({ timeout: 10_000 });
@@ -395,7 +394,8 @@ test.describe('移动端非 Tab 管理页的站内出口（#658 L2 Blocker 2 回
     );
 
     // 先走一遍真实入口：钉住组件里的 /m/* 字面量与 navItems 的 mobileEntryHost 仍对齐
-    await page.goto('/m/settings');
+    // （#878 平台管理入口从设置页迁到产品页头部）
+    await page.goto('/m/products');
     await page.getByRole('link', { name: '平台管理' }).click();
     await page.waitForURL('**/m/platforms');
 

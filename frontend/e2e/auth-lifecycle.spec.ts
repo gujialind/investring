@@ -174,8 +174,8 @@ test.describe('凭证生命周期', () => {
     expect(businessRequests).toBe(0);
   });
 
-  test('登出立即返回登录页，迟到回执不打断新登录', async ({ page, isMobile }) => {
-    test.skip(isMobile, '移动端没有 Navbar 的退出登录入口；双端存储竞态由续期用例覆盖');
+  test('登出立即返回登录页，迟到回执不打断新登录', async ({ page }) => {
+    // #878：移动端首页底部账户区补了退出入口（AccountMenu），双端均可登出，不再 skip
     const original = await ownSession(page, false);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -220,7 +220,9 @@ test.describe('凭证生命周期', () => {
       await route.fulfill({ status: 200, json: { message: '密码修改成功' } });
     });
     await page.goto('/settings');
-    await page.getByRole('tab', { name: '修改密码', exact: true }).click();
+    // #878：修改密码改为弹窗——桌面「通用」Tab / 移动分组列表里的「修改密码」按钮触发；
+    // 弹窗打开后触发器被 modal aria-hidden，下面的提交按钮同名定位唯一命中弹窗内 submit
+    await page.getByRole('button', { name: '修改密码', exact: true }).click();
     await page.getByLabel('原密码', { exact: true }).fill('admin@2026');
     await page.getByLabel('新密码', { exact: true }).fill('test-next-password');
     await page.getByLabel('确认新密码', { exact: true }).fill('test-next-password');

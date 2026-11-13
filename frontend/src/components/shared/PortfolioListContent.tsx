@@ -119,7 +119,15 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
           <p className="text-muted-foreground">管理投资组合和查看收益</p>
         </div>
         {isAdmin && (
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <div className="flex items-center gap-2">
+            {/* 投资人管理语境入口（#878）：投资人不再进侧栏/底部 Tab，从组合页头部到达 */}
+            <Button asChild variant="outline">
+              <Link href={variant === "mobile" ? "/m/investors" : "/investors"}>
+                <Users className="mr-2 h-4 w-4" />
+                投资人管理
+              </Link>
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
@@ -172,6 +180,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
               </form>
             </DialogContent>
           </Dialog>
+          </div>
         )}
       </div>
 

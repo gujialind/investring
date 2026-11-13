@@ -6,7 +6,7 @@ import SettingsContent from "@/components/shared/SettingsContent";
 export default function SettingsPage() {
   return (
     <MainLayout>
-      <SettingsContent variant="desktop" />
+      <SettingsContent />
     </MainLayout>
   );
 }
