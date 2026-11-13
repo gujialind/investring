@@ -8,7 +8,8 @@ import {
   useHoldingsByPlatform,
   useHoldingsByProduct,
 } from "@/hooks/usePosition";
-import { assetClassColor, OTHER_COLOR } from "@/lib/colors";
+import { assetClassColor, otherColor } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import {
   buildCardPercentMap,
@@ -81,13 +82,14 @@ function ProductSections({
   /** 产品卡跳转前缀：`${basePath}/${portfolioCode}/product`（market 走 ?market=，现金卡步骤⑤已接线） */
   productLinkPrefix: string;
 }) {
+  const theme = useChartTheme();
   return (
     <>
       {sections.map((section) => {
         const color =
           section.sortOrder !== null
-            ? assetClassColor(section.sortOrder)
-            : OTHER_COLOR;
+            ? assetClassColor(section.sortOrder, theme)
+            : otherColor(theme);
         const sectionPercent = section.groups.reduce(
           (s, g) => s + sumGroupPercent(g.products, percentOf),
           0

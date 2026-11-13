@@ -45,7 +45,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, getTradeStatusLabel, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { tradeDirectionColors } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
 import Link from "next/link";
@@ -162,6 +163,7 @@ export default function TradesContent({
   initialTradeType,
   initialAction,
 }: TradesContentProps) {
+  const theme = useChartTheme();
   const params = useParams();
   const code = params.code as string;
   const router = useRouter();
@@ -641,7 +643,7 @@ export default function TradesContent({
         <Badge variant="neutral">
           <span
             className="mr-1.5 h-1.5 w-1.5 rounded-full"
-            style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
+            style={{ background: tradeDirectionColors(theme)[trade.trade_type === "buy" ? "buy" : "sell"] }}
           />
           {trade.trade_type === "buy" ? "买入" : "卖出"}
         </Badge>
@@ -1233,7 +1235,7 @@ export default function TradesContent({
                     <Badge variant="neutral">
                       <span
                         className="mr-1.5 h-1.5 w-1.5 rounded-full"
-                        style={{ background: TRADE_DIRECTION_COLORS[editingTrade.trade_type === "buy" ? "buy" : "sell"] }}
+                        style={{ background: tradeDirectionColors(theme)[editingTrade.trade_type === "buy" ? "buy" : "sell"] }}
                       />
                       {editingTrade.trade_type === "buy" ? "买入" : "卖出"}
                     </Badge>

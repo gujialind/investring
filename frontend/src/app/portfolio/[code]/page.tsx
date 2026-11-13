@@ -32,6 +32,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
 import { buildAllocation } from "@/lib/allocation";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { parseHoldingsView, type HoldingsView } from "@/types/holding";
 
 function PortfolioDetailInner() {
@@ -66,6 +67,8 @@ function PortfolioDetailInner() {
   const activatePortfolio = useActivatePortfolio();
   const deletePortfolio = useDeletePortfolio();
   const { isAdmin } = useRoleCheck();
+  // 主题 hook 须在早退（isLoading/!portfolio）之前调用（rules-of-hooks）
+  const theme = useChartTheme();
 
   // 绩效指标（后端计算）：draft 组合无快照，不请求
   const isDraftStatus = portfolio?.status === "draft";
@@ -114,7 +117,7 @@ function PortfolioDetailInner() {
   const isDraft = portfolio.status === "draft";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
-  const allocation = buildAllocation(positions, assetClasses);
+  const allocation = buildAllocation(positions, assetClasses, theme);
 
   return (
     <MainLayout>

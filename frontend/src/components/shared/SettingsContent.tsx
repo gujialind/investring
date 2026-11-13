@@ -8,6 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useTheme } from "next-themes";
+import {
   Table,
   TableBody,
   TableCell,
@@ -32,6 +40,8 @@ export default function SettingsContent({ variant = "desktop" }: SettingsContent
   const addToast = useUIStore((state) => state.addToast);
   const changePassword = useChangePassword();
   const { isAdmin } = useRoleCheck();
+  // #872 PR2（D2）：三档偏好，默认 system；theme 为偏好值（非 resolvedTheme）
+  const { theme, setTheme } = useTheme();
 
   // tushare_token 仅在用户输入时提交（服务端只返回脱敏值，不回填输入框，避免脱敏串覆盖真实 token）；
   // akshare_enabled 从服务端回填
@@ -189,6 +199,7 @@ export default function SettingsContent({ variant = "desktop" }: SettingsContent
           <TabsTrigger value="calendar">交易日历同步</TabsTrigger>
           <TabsTrigger value="password">修改密码</TabsTrigger>
           <TabsTrigger value="system">系统信息</TabsTrigger>
+          <TabsTrigger value="appearance">外观</TabsTrigger>
           {/* 日志管理 admin-only（#715）：水合前 useRoleCheck 按非 admin，Tab 不渲染，
               与 navItems 的角色门控同口径；viewer 永远看不到触发器与内容 */}
           {isAdmin && <TabsTrigger value="logs">日志管理</TabsTrigger>}
@@ -452,6 +463,30 @@ export default function SettingsContent({ variant = "desktop" }: SettingsContent
                 <span className="text-muted-foreground">数据库</span>
                 <span>SQLite</span>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="appearance" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>外观</CardTitle>
+              <CardDescription>选择浅色、深色或跟随系统</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Select value={theme ?? "system"} onValueChange={setTheme}>
+                <SelectTrigger data-testid="theme-select" className="w-full sm:w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="light">浅色</SelectItem>
+                  <SelectItem value="dark">深色</SelectItem>
+                  <SelectItem value="system">跟随系统</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">
+                跟随系统将根据设备外观自动切换。
+              </p>
             </CardContent>
           </Card>
         </TabsContent>

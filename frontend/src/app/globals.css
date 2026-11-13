@@ -99,8 +99,8 @@
 }
 
 /* Dark 通道终值（#872 PR1）：按 visual-spec §1.2/§1.4 登记 hex 对齐，HSL 2 位小数精确往返；
-   实测对比度与闭合证据见 visual-spec §17。尚未启用——生产代码无 dark 类/dark: 变体，
-   启用实施待 PR2（主题库/设置入口/图表消费）。 */
+   实测对比度与闭合证据见 visual-spec §17。已由 PR2 启用：ThemeProvider（next-themes，
+   storageKey=theme）在 <html> 挂 .dark；alert.tsx 是 §17 登记的既存唯一 dark: 变体例外。 */
 .dark {
   /* 中性色：§1.4 终值；-foreground 变体与 foreground 同值（沿 light 侧模式） */
   --background: 222.35 36.17% 9.22%; /* #0F1420 */

@@ -76,6 +76,7 @@ import {
   sameDayOthersCount,
   toAmount,
 } from "@/lib/cashFlows";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { useCashFlowDay, useCashFlowList } from "@/hooks/useCashFlow";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { useConfirmCashTransfer } from "@/hooks/useCashTransfer";
@@ -116,6 +117,7 @@ function rowKey(row: CashFlowRow): string {
  * 取同 (平台, 日) 全组行（解除类型筛选），故在类型筛选态下也能自证日终余额。
  */
 export default function CashFlowsContent({ basePath, variant = "desktop" }: CashFlowsContentProps) {
+  const theme = useChartTheme();
   const params = useParams();
   const code = params.code as string;
   const isMobile = variant === "mobile";
@@ -338,7 +340,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     <Badge variant="neutral">
       <span
         className="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{ background: cashFlowDotColor(row) }}
+        style={{ background: cashFlowDotColor(row, theme) }}
       />
       {row.flow_type_label}
     </Badge>

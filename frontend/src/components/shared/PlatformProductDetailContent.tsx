@@ -14,7 +14,8 @@ import ProductNavCards from "./ProductNavCards";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
-import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { tradeDirectionColors } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import { cashRowLabel, isCashLeg, tradeCardDetailLine } from "@/lib/tradePairs";
 import {
@@ -59,6 +60,7 @@ export default function PlatformProductDetailContent({
   basePath,
   variant,
 }: PlatformProductDetailContentProps) {
+  const theme = useChartTheme();
   const params = useParams();
   const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
@@ -260,7 +262,7 @@ export default function PlatformProductDetailContent({
                 <div className="flex items-center gap-1.5 text-sm">
                   <span
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
+                    style={{ background: tradeDirectionColors(theme)[trade.trade_type === "buy" ? "buy" : "sell"] }}
                   />
                   <span className="truncate">
                     {/* 现金行：本页平台与产品都已固定，`卖出` 读不出任何信息 →

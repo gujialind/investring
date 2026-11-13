@@ -4,8 +4,8 @@
   "description": "资产组合管理系统",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#0f172a",
+  "background_color": "#F7F8FA",
+  "theme_color": "#2B5CD7",
   "orientation": "portrait-primary",
   "icons": [
     {

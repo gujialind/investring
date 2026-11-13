@@ -46,7 +46,8 @@ import {
 import { formatCurrency, formatSharesUnit, formatNav, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
 import { validatePlatformCode, parsePositiveNumber } from "@/lib/validation";
 import { Badge } from "@/components/ui/badge";
-import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { tradeDirectionColors } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
 import Link from "next/link";
@@ -114,6 +115,7 @@ function isDefaultApplyRange(range: DateRange | undefined): boolean {
  * 用 AlertDialog 替换原生 confirm/alert，删除成功改用 toast 提示。
  */
 export default function SubscriptionsContent({ basePath, variant = "desktop" }: SubscriptionsContentProps) {
+  const theme = useChartTheme();
   const params = useParams();
   const router = useRouter();
   const code = params.code as string;
@@ -626,7 +628,7 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                       <Badge variant="neutral">
                         <span
                           className="mr-1.5 h-1.5 w-1.5 rounded-full"
-                          style={{ background: TRADE_DIRECTION_COLORS[sub.sub_type === "subscribe" ? "buy" : "sell"] }}
+                          style={{ background: tradeDirectionColors(theme)[sub.sub_type === "subscribe" ? "buy" : "sell"] }}
                         />
                         {sub.sub_type === "subscribe" ? "申购" : "赎回"}
                       </Badge>
@@ -758,7 +760,7 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                     <Badge variant="neutral">
                       <span
                         className="mr-1.5 h-1.5 w-1.5 rounded-full"
-                        style={{ background: TRADE_DIRECTION_COLORS[editingSub.sub_type === "subscribe" ? "buy" : "sell"] }}
+                        style={{ background: tradeDirectionColors(theme)[editingSub.sub_type === "subscribe" ? "buy" : "sell"] }}
                       />
                       {editingSub.sub_type === "subscribe" ? "申购" : "赎回"}
                     </Badge>

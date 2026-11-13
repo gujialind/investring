@@ -12,7 +12,8 @@ import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import HoldingProductCard from "./HoldingProductCard";
 import { cardGridClass } from "./PortfolioHoldings";
-import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { tradeDirectionColors } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import {
   groupTradeRows,
@@ -54,6 +55,7 @@ interface PlatformDetailContentProps {
  * 交易记录经 groupTradeRows 结对展示（CASH 腿折叠为子行，与 TradesContent 同口径）。
  */
 export default function PlatformDetailContent({ basePath, variant }: PlatformDetailContentProps) {
+  const theme = useChartTheme();
   const params = useParams();
   const portfolioCode = params.code as string;
   const platformCode = params.platformCode as string;
@@ -289,7 +291,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
         <div className="flex items-center gap-1.5 text-sm">
           <span
             className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
+            style={{ background: tradeDirectionColors(theme)[trade.trade_type === "buy" ? "buy" : "sell"] }}
           />
           <span className="truncate">
             {/* 现金行走资金流向标注（#719）：本页取数只按平台，平台名恒等于页头，

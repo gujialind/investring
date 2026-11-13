@@ -18,6 +18,24 @@ const paletteColorSelectors = [
   },
 ];
 
+// 2026-11-13（#872 PR2，D6 已批）：中性色硬编码清零后的防回流 ratchet（visual-spec §1.5/§18）。
+// 只拦 slate/gray/zinc/neutral/stone 数字档；white/black 为刻意例外（solid 危险载体白字、
+// Dialog/AlertDialog scrim），不在本规则面。渐变端点色 from-/to- 不在 D6 已批范围，不拦。
+const neutralColorSelectors = [
+  {
+    selector:
+      "Literal[value=/(?:^|\\s|:)(?:text|bg|border)-(?:slate|gray|zinc|neutral|stone)-\\d+/]",
+    message:
+      "禁止硬编码中性色类名（如 text-gray-500）。中性色已清零（#872 PR1/#874），请用语义 token（text-foreground/text-muted-foreground/border-input 等），见 docs/design/visual-spec.md §1.5/§18。",
+  },
+  {
+    selector:
+      "TemplateElement[value.cooked=/(?:^|\\s|:)(?:text|bg|border)-(?:slate|gray|zinc|neutral|stone)-\\d+/]",
+    message:
+      "禁止硬编码中性色类名（如 text-gray-500）。中性色已清零（#872 PR1/#874），请用语义 token（text-foreground/text-muted-foreground/border-input 等），见 docs/design/visual-spec.md §1.5/§18。",
+  },
+];
+
 // 2026-08-29：禁止任意值类名（visual-spec §1.5 第 2 道）。
 // 范围：text-[…]（§5 四档之外）、p/px/py/pt/pb/pl/pr-[…]、gap/gap-x/gap-y-[…]、rounded-[…]（§7 派生档之外）。
 // m 系 / space 系 / w·h 系任意值暂不拦截（多为视口比例或一次性尺寸，见 §1.5）。
@@ -149,6 +167,7 @@ const eslintConfig = [
       "no-restricted-syntax": [
         "error",
         ...paletteColorSelectors,
+        ...neutralColorSelectors,
         ...arbitraryValueSelectors,
         ...numberDisplaySelectors,
       ],
@@ -198,7 +217,7 @@ const eslintConfig = [
   {
     files: ["src/components/ui/**"],
     rules: {
-      "no-restricted-syntax": ["error", ...paletteColorSelectors],
+      "no-restricted-syntax": ["error", ...paletteColorSelectors, ...neutralColorSelectors],
     },
   },
   // 临时（ratchet，只减不增）：存量 text-[Npx] 豁免，改动页面顺手收敛后从此清单移出。
@@ -206,7 +225,7 @@ const eslintConfig = [
   {
     files: ["src/components/layout/NotificationBell.tsx"],
     rules: {
-      "no-restricted-syntax": ["error", ...paletteColorSelectors],
+      "no-restricted-syntax": ["error", ...paletteColorSelectors, ...neutralColorSelectors],
     },
   },
   // e2e 定位器契约（#217/#382）：此前所有 no-restricted-syntax 块均为 src/** 作用域，

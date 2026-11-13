@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
-import { TRADE_DIRECTION_COLORS } from "@/lib/colors";
+import { tradeDirectionColors } from "@/lib/colors";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
 import { cashRowLabel, isCashLeg, tradeCardDetailLine } from "@/lib/tradePairs";
 import {
@@ -64,6 +65,7 @@ interface ProductDetailContentProps {
  * from/to 由用户选择），市值更新打开 CashMarketValueUpdateDialog。
  */
 export default function ProductDetailContent({ basePath, variant }: ProductDetailContentProps) {
+  const theme = useChartTheme();
   const params = useParams();
   const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
@@ -272,7 +274,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
                 <div className="flex items-center gap-1.5 text-sm">
                   <span
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ background: TRADE_DIRECTION_COLORS[trade.trade_type === "buy" ? "buy" : "sell"] }}
+                    style={{ background: tradeDirectionColors(theme)[trade.trade_type === "buy" ? "buy" : "sell"] }}
                   />
                   <span className="truncate">
                     {/* 现金腿：主行是产品页，平台列才是变量 → 用资金流向 + 本平台
