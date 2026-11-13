@@ -133,9 +133,12 @@
 - test(verify): 守门把住 main() CLI 入口（fcntl 阻断+反证），防 POSIX-only 依赖潜入 (#861) (106c6dd9)
 - docs: 收敛 backend 指南与 bc 双份口径，完整正文只留 bc（L2 返工，#862） (ad330747)
 - docs: 重算条日期键引用改按标题定位（见本节），消除「见上条」脆弱指向 (#862) (09656937)
+- merge: 合入 main d1c19ad（#866 扩表 15 份）使 PR-4 跑扩表后门禁 (#862) (3ab6e9b6)
 - docs(refactor): 日期键/闸门/失败态口径收敛单一持有，backend/frontend 留实现入口 (#862) (bf8e4933)
+- merge: 合入 main 52ae13b（PR-2 #865）再推基线 (#861) (a4069d80)
 - docs(checker): MANAGED_DOCS 扩至 15 份并修 versioning §7 写法、同步守卫测试 (#862) (4abf2f4b)
 - docs(governance): 职责表补 design/runbooks 准入、runbook 生命周期状态、根路由缺口与两条治理条款 (#862) (55d00015)
+- merge: 合入 main a5fb3df9（PR-1 #863）推进基线 (#861) (7693097e)
 - docs(runbooks): 订正 deploy-rollback 日志名/MODE 与 dividend-detection 行号锚点，预防性登记 docs/evaluations (#862) (4d9025a0)
 - docs(code-review): 同步「L2 通过，合入门禁未满足」状态枚举 (0faa9be4)
 - docs(product): 回填回滚速查表 0026 行与详情页同步注释 (#856) (68ed3ffb)
@@ -155,6 +158,7 @@
 - docs: 修正日志轮转口径以匹配 dev compose 移除 (#489) (54460c7d)
 - chore: 移除不再维护的 dev compose (#489) (8285ddfb)
 - chore(cli): USAGE_ERROR 提示覆盖 #808 取值冲突场景 (#822) (1be4d71a)
+- merge: 同步 main 并保留 #836 与 #837 两套同日 pending 用例 (#836) (26576be2)
 - docs(runbook): 补分红检测持仓前提与快照回退 confirm 步骤 (#838) (d9552a83)
 - docs(business-constraints): 澄清解除冻结依靠守卫失配而非状态回退 (#836) (f96b57ae)
 - test(position): 评审处置——聚合层查询钉子与 pay 日口径 docstring (#837) (6188b944)
@@ -168,6 +172,8 @@
 - Merge branch main into feature/820-draft-portfolio-delete (4c1d11e8)
 - docs(frontend): 订正组合列表注释，删除确认指向共享弹窗 (#820) (b3bc3b1c)
 - chore(cli): 恢复 CLI_MANUAL 既有行尾，不夹带无关空白改动 (#820) (7e782ea5)
+- merge: 合入 main 同步 #818 日历跨月翻页修复（E2E 前置） (5edfa8eb)
+- merge: 合入 main 解决 PR 冲突（含 #818 跨月翻页修复、#819 页头入口） (4c1ca805)
 - test(e2e): 日历选日翻页方向按展示月判断，修复跨月静默点错月 (#808) (e163cf74)
 - test(frontend): #819 L2 处置——补 draft/closed 去重边界反例用例，订正现金流水入口注释 (#786) (c8c96057)
 - test(e2e): 恢复跨月回归用例运行日分支阈值，移除误提交的 TEMP-FORCE (#818) (5c9cc233)
@@ -249,10 +255,12 @@
 - test(trade): #721 配对子行用例行数改由响应推导，不锚种子绝对日期 (#719) (74d4e6e6)
 - docs(trade): #721 配对子行注释去掉已裁剪的现金筛选前提 (#719) (e9f726a4)
 - refactor(trade): #721 裁剪为仅保留配对子行 (#719) (f829b16c)
+- merge: 合入 origin/main（解决 visual-spec changelog 追加冲突，两侧均保留） (daecc669)
 - Merge remote-tracking branch 'origin/feature/725-cash-flows-api' into feature/725-cash-flows-ui (76a8d98f)
 - chore(task): 复审建议补强——计数依赖串联用例 + 复查窗口说明 (#715) (6e9535da)
 - test(trade): 平台详情页交易卡单独钉住现金行不渲 -- @ 1.0000 (#719) (b57ce42d)
 - docs(market-data): 净值增量窗口口径补窗内人工修正会被回看重放覆盖 (#698) (bd3f0034)
+
 ## v0.2.0 - 2026-10-15
 
 ### Features
