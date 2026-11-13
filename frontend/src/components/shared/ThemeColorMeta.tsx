@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useTheme } from "next-themes";
 
 /**
- * 浏览器/Android chrome 的 theme-color 随 resolvedTheme 更新（#872 PR2，visual-spec §8 B5）。
+ * 浏览器/Android chrome 的 theme-color 随 resolvedTheme 更新（#872 PR2，issue #872 B5 断言 / visual-spec §17）。
  * manifest 的 theme_color/background_color 是构建期静态值（启动屏 fallback），
  * 动态 chrome 由本组件覆盖；iOS standalone 状态栏为静态配置平台限制（R2 登记）。
  */

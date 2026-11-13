@@ -172,7 +172,8 @@ for (const device of opts.devices) {
       if (opts.scenario && !loginOnly) {
         const handle = await runScenario(page, opts.scenario, device);
         await page.waitForTimeout(300); // 浮层入场收尾
-        const overlay = resolve(opts.out, `overlay-${opts.scenario}-${device}${suffix}.png`);
+        // 复用 shotName 带 path slug，避免多 --path 时场景图静默互相覆盖（#876 L2 S2）
+        const overlay = resolve(opts.out, `overlay-${opts.scenario}-${shotName(path, device, theme)}`);
         await page.screenshot({ path: overlay, fullPage: true });
         written.push(overlay);
         await handle.close();
