@@ -1130,7 +1130,7 @@ ir product create --code <代码> --market <市场> --name <名称> --product-ty
 | `--confirm-days` | 否 | 确认天数（#231/#236/#241）：显式传入优先（>=0；场内 `CN_EXCHANGE` 必须 0，否则 422 `INVALID_CONFIRM_DAYS`）；不传按下表推导 |
 | `--nav-lag-days` | 否 | 快照估值取价滞后交易日数（issue #228）：默认 `0` 取当日净值，`N` 取前第 N 个交易日净值；场外 QDII / 香港互认基金填 `1` |
 | `--is-qdii` | 否 | 是否为 QDII 产品（默认 false）；**纯展示标签**，仅在创建时参与 `confirm_days` 默认值推导，不影响快照取价 |
-| `--data-source` | 否 | 数据源（如 `tushare`） |
+| `--data-source` | 否 | 数据源：`tushare` / `akshare`（默认 `tushare`）。港互认（`HK_MUTUAL`）只 `akshare`（tushare 不支持，422 `INVALID_DATA_SOURCE`）。**创建前置连通检测**（#880）：对目标源取一条真实净值，取不到拒绝创建（422 `DATA_SOURCE_PROBE_FAILED`）；切 tushare 需已配置 token |
 | `--sync` | 否 | 创建后立即回填历史净值（issue #90）；同步结果在响应 `sync_result`，失败不阻断创建 |
 
 **未传 `--confirm-days` 时的自动推导规则（创建后需要其它值用 `ir product update --confirm-days`）：**
@@ -1174,6 +1174,14 @@ ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [-
 > **issue #856 语义**：
 > - `--is-active` / `--no-is-active` 启用/停用产品（不传不改）。停用后不可再新建该产品的买入/卖出记录（`create_trade` → 422 `PRODUCT_INACTIVE`，买/卖同挡），存量待确认记录的确认/取消/编辑与份额变动事件不受影响；清盘分配等持仓了结走份额变动事件。重新启用（`--is-active`）后创建恢复
 > - 虚拟产品（`CASH`/`IN_TRANSIT`）禁止停用：`--no-is-active` → 422 `SYSTEM_PRODUCT_PROTECTED`；显式传 null（`--json '{"is_active": null}'`）→ 422 `INVALID_PARAM`
+>
+> **issue #880 语义（数据源切换）**：
+> - `--data-source` 切换数据源（`tushare` / `akshare`，不传不改）。港互认只 `akshare`；非法值/虚拟产品 → 422 `INVALID_DATA_SOURCE`；显式传 null → 422 `INVALID_PARAM`
+> - **创建/换源净值型必须指定 `--market`**：省略 market 创建净值型 → 422 `INVALID_DATA_SOURCE`（reason=market_missing，契约收紧；旧版曾允许落 market="" 的净值型，现拒绝）
+> - **切换前置连通检测**：仅值实际变化时对目标源取一条真实净值，取不到 → 422 `DATA_SOURCE_PROBE_FAILED` 且零写入；无强制保存。切 tushare 需已配置 token（无 token → 422 `INVALID_DATA_SOURCE`，reason=token_missing）
+> - 切换成功后产品数据源状态置「待验证」（`data_source_status=pending`）、清错误信息，最后同步时间保留；下次净值同步按新源路由。日涨跌列口径随源变化仅适用场外（CN_OTC）（tushare 累计净值总收益口径 / akshare 单位净值口径）；场内两源均用上游收盘价涨跌幅、港互认只 akshare，无此差异。属展示口径差异非账务变化
+> - **分红后果**：切到 `akshare` 的场外产品不再自动检测分红（检测仅筛 tushare），现金分红/红利再投资需按公告手工录入；akshare 分红检测见 PR3 #881
+> - **硬拦例外**：「港互认只 akshare」仅作用于显式传 `--data-source` 的创建/换源；仅改 market（`--json '{"market":...}'`）不带 data_source 不触发源组合校验（已披露取舍）
 
 #### `ir product delete`
 

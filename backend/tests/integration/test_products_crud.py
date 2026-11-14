@@ -11,6 +11,8 @@ import pytest
 
 from tests.factories import create_product, create_asset_classification
 from app.schemas.product import ProductResponse
+# 模块导入期 autouse mock 尚未生效，此处捕获真实探测函数，供「窗外净值零写入」反例恢复真实探测
+from app.services.data_source_probe import probe_data_source as _real_probe
 
 
 class TestProductCRUD:
@@ -208,3 +210,261 @@ class TestProductIsActive:
         )
         assert resp.status_code == 200, resp.json()
         assert resp.json()["name"] == "改名现金"
+
+
+class TestProductDataSource:
+    """issue #880：数据源切换（校验/连通检测前置/审计/状态重置/创建收紧）。
+
+    连通检测由 integration/conftest.py autouse mock 为通过；失败用例自行覆写。
+    """
+
+    def test_switch_success_and_status_reset(self, client, admin_headers, test_db):
+        from datetime import datetime
+
+        from app.models.product import Product
+
+        p = create_product(test_db, code="DS001.OF", market="CN_OTC")
+        p.data_source_status = "success"
+        p.sync_error = "旧错误"
+        p.last_sync_at = datetime(2026, 11, 10, 7, 0, 0)
+        test_db.commit()
+        resp = client.put(
+            "/api/products/DS001.OF/CN_OTC", json={"data_source": "akshare"}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["data_source"] == "akshare"
+        assert resp.json()["data_source_status"] == "pending"
+        got = test_db.query(Product).filter_by(code="DS001.OF", market="CN_OTC").first()
+        assert got.data_source_status == "pending"
+        assert got.sync_error is None
+        # last_sync_at 保留（旧源历史事实，V5）
+        assert got.last_sync_at == datetime(2026, 11, 10, 7, 0, 0)
+
+    def test_switch_audit_diff_only(self, client, admin_headers, test_db):
+        import json as _json
+
+        from app.models.audit_log import AuditLog
+
+        create_product(test_db, code="DS002.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/DS002.OF/CN_OTC", json={"data_source": "akshare"}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        rows = test_db.query(AuditLog).filter(AuditLog.resource_type == "product").all()
+        assert len(rows) == 1
+        assert rows[0].action == "update"
+        assert _json.loads(rows[0].old_value) == {"data_source": "tushare"}
+        assert _json.loads(rows[0].new_value) == {"data_source": "akshare"}
+
+    def test_same_value_noop_no_audit(self, client, admin_headers, test_db):
+        from app.models.audit_log import AuditLog
+
+        create_product(test_db, code="DS003.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/DS003.OF/CN_OTC", json={"data_source": "tushare"}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        assert test_db.query(AuditLog).filter(AuditLog.resource_type == "product").count() == 0
+
+    def test_null_rejected(self, client, admin_headers, test_db):
+        create_product(test_db, code="DS004.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/DS004.OF/CN_OTC", json={"data_source": None}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_PARAM"
+
+    def test_invalid_enum_rejected(self, client, admin_headers, test_db):
+        create_product(test_db, code="DS005.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/DS005.OF/CN_OTC", json={"data_source": "foo"}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+
+    def test_hk_tushare_rejected(self, client, admin_headers, test_db):
+        # 真换源到 tushare（HK 现值 akshare → tushare）仍被硬拦（F1 后同值 no-op 不放宽真实换源）
+        from app.models.product import Product
+
+        p = create_product(test_db, code="DS006", market="HK_MUTUAL")
+        p.data_source = "akshare"
+        test_db.commit()
+        resp = client.put(
+            "/api/products/DS006/HK_MUTUAL", json={"data_source": "tushare"}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+        assert test_db.query(Product).filter_by(code="DS006", market="HK_MUTUAL").first().data_source == "akshare"
+
+    def test_hk_existing_tushare_row_rename_noop(self, client, admin_headers, test_db):
+        """#880 L2 F1 反例：存量 HK_MUTUAL+tushare 行只改名（传原值/不传）→ 200、源不变、无审计、无状态重置。"""
+        import json as _json
+
+        from app.models.audit_log import AuditLog
+        from app.models.product import Product
+
+        p = create_product(test_db, code="DSHK1", market="HK_MUTUAL")
+        p.data_source = "tushare"
+        p.data_source_status = "skipped"
+        p.sync_error = "tushare 不支持 HK_MUTUAL"
+        test_db.commit()
+        for payload in ({"name": "改名A", "data_source": "tushare"}, {"name": "改名B"}):
+            resp = client.put("/api/products/DSHK1/HK_MUTUAL", json=payload, headers=admin_headers)
+            assert resp.status_code == 200, resp.json()
+            got = test_db.query(Product).filter_by(code="DSHK1", market="HK_MUTUAL").first()
+            assert got.data_source == "tushare"
+            assert got.data_source_status == "skipped"  # 无状态重置
+            assert got.sync_error == "tushare 不支持 HK_MUTUAL"
+        assert test_db.query(AuditLog).filter(AuditLog.resource_type == "product").count() == 0
+
+    def test_same_value_probe_not_called(self, client, admin_headers, test_db, monkeypatch):
+        """#880 L2 F2 反例：同值重提交即使探测被覆写为失败也 200（不探）、无状态重置、无审计。"""
+        from app.models.audit_log import AuditLog
+        from app.models.product import Product
+        from app.services.exceptions import BusinessError
+
+        def _fail(db, code, market, data_source):
+            raise BusinessError("DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达", details={"reason": "unreachable"})
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _fail)
+        p = create_product(test_db, code="DSSV1.OF", market="CN_OTC")
+        p.data_source_status = "success"
+        test_db.commit()
+        resp = client.put(
+            "/api/products/DSSV1.OF/CN_OTC", json={"data_source": "tushare"}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        got = test_db.query(Product).filter_by(code="DSSV1.OF", market="CN_OTC").first()
+        assert got.data_source_status == "success"  # 无状态重置
+        assert test_db.query(AuditLog).filter(AuditLog.resource_type == "product").count() == 0
+
+    def test_virtual_rejected(self, client, admin_headers, test_db):
+        create_product(test_db, code="DSCASH", market="CN_OTC", product_type="CASH")
+        resp = client.put(
+            "/api/products/DSCASH/CN_OTC", json={"data_source": "akshare"}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+
+    def test_probe_failed_zero_write(self, client, admin_headers, test_db, monkeypatch):
+        from app.services.exceptions import BusinessError
+
+        def _fail(db, code, market, data_source):
+            raise BusinessError(
+                "DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达，请稍后重试",
+                details={"reason": "unreachable"},
+            )
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _fail)
+        create_product(test_db, code="DS007.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/DS007.OF/CN_OTC", json={"data_source": "akshare"}, headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "DATA_SOURCE_PROBE_FAILED"
+        got = client.get("/api/products/DS007.OF/CN_OTC", headers=admin_headers)
+        assert got.json()["data_source"] == "tushare"  # 零写入
+
+    def test_viewer_cannot_switch(self, client, viewer_headers, test_db):
+        create_product(test_db, code="DS008.OF", market="CN_OTC")
+        resp = client.put(
+            "/api/products/DS008.OF/CN_OTC", json={"data_source": "akshare"}, headers=viewer_headers
+        )
+        assert resp.status_code == 403
+
+    def test_create_invalid_data_source_rejected(self, client, admin_headers, test_db):
+        resp = client.post(
+            "/api/products",
+            json={"code": "DS009.OF", "market": "CN_OTC", "name": "x", "product_type": "OEF", "data_source": "foo"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+
+    def test_create_hk_tushare_rejected(self, client, admin_headers, test_db, monkeypatch):
+        # 港互认创建先经代码归一（akshare 排名表），mock 掉以隔离网络；数据源校验随后拒绝
+        monkeypatch.setattr(
+            "app.services.akshare_client.resolve_hk_code_pair", lambda code: (code, None)
+        )
+        resp = client.post(
+            "/api/products",
+            json={"code": "9680500001", "market": "HK_MUTUAL", "name": "x", "product_type": "OEF", "data_source": "tushare"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+
+    def test_create_akshare_otc_out_of_window_zero_write(self, client, admin_headers, test_db, monkeypatch):
+        """Blocker 集成反例：akshare 场外仅窗外有正净值 → 创建 422 no_data 且零写入。"""
+        from datetime import date
+
+        import akshare as ak
+        import pandas as pd
+
+        from app.models.product import Product
+        from app.services import data_source_probe as probe_mod
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _real_probe)
+        monkeypatch.setattr(probe_mod.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(probe_mod, "business_today", lambda: date(2026, 11, 13))
+        monkeypatch.setattr(
+            probe_mod, "try_get_prev_trading_day",
+            lambda db, d, days=1, exchange="SSE": date(2026, 11, 1),
+        )
+        monkeypatch.setattr(
+            ak, "fund_open_fund_info_em",
+            lambda **kw: pd.DataFrame({"净值日期": ["2026-09-28"], "单位净值": [1.0]}),
+        )
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSW1.OF", "market": "CN_OTC", "name": "窗外净值",
+                  "product_type": "OEF", "data_source": "akshare"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422, resp.json()
+        assert resp.json()["detail"]["error"] == "DATA_SOURCE_PROBE_FAILED"
+        assert resp.json()["detail"]["details"]["reason"] == "no_data"
+        assert test_db.query(Product).filter_by(code="DSW1.OF", market="CN_OTC").count() == 0
+
+    def test_create_probe_failed_zero_write(self, client, admin_headers, test_db, monkeypatch):
+        """#880 L2 S3：创建路径探测失败 → 422 且零写入（反例把守「create 必探」）。
+
+        integration/conftest.py 的 autouse fixture 把探测整体 mock 成通过，
+        本用例必须在用例内显式覆写为抛 DATA_SOURCE_PROBE_FAILED。
+        有效性自证：临时移除 create_product 的探测调用后本用例须变红。
+        """
+        from app.models.product import Product
+        from app.services.exceptions import BusinessError
+
+        def _fail(db, code, market, data_source):
+            raise BusinessError(
+                "DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达，请稍后重试",
+                details={"reason": "unreachable"},
+            )
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _fail)
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSP01.OF", "market": "CN_OTC", "name": "探测失败建档",
+                  "product_type": "OEF", "data_source": "akshare"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "DATA_SOURCE_PROBE_FAILED"
+        assert test_db.query(Product).filter_by(code="DSP01.OF", market="CN_OTC").count() == 0
+
+    def test_create_nav_without_market_rejected_accurate_message(self, client, admin_headers, test_db):
+        """#880 L2 S5：缺市场创建净值型 → 422 且归因准确（不得误报「现金/虚拟」）。"""
+        from app.models.product import Product
+
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSM01.OF", "name": "缺市场", "product_type": "OEF"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "INVALID_DATA_SOURCE"
+        assert "市场" in detail["message"]
+        assert "现金" not in detail["message"]
+        assert test_db.query(Product).filter_by(code="DSM01.OF").count() == 0

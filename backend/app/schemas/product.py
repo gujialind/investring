@@ -29,7 +29,10 @@ class ProductBase(BaseModel):
     # schema 层不加 ge=0，避免同一业务规则两种 422 形状（pydantic 列表形状无 error 码）
     nav_lag_days: int = 0
     is_qdii: bool = False
-    data_source: Optional[str] = "tushare"
+    # issue #880：默认 None（=未指定），使 REST/CLI「省略 data_source」真正到达
+    # service 的按市场推导分支（HK→akshare 其余→tushare）；列默认 tushare 保留给
+    # 工厂/裸插入。显式 null 与省略同义（均推导），显式值才校验/探测。
+    data_source: Optional[str] = None
 
 
 class ProductCreate(ProductBase):
@@ -64,6 +67,11 @@ class ProductUpdate(BaseModel):
     # issue #856：停用/启用（不传不改，显式 null 由 null_guard 拒绝）；
     # 虚拟产品停用由 product_service.update_product 守卫（SYSTEM_PRODUCT_PROTECTED）
     is_active: Optional[bool] = None
+    # issue #880：数据源切换（不传不改）。枚举/市场兼容/虚拟产品由服务层
+    # validate_data_source 单一实现（INVALID_DATA_SOURCE），连通检测前置
+    # （DATA_SOURCE_PROBE_FAILED）；显式 null 由 null_guard 拒绝（不进 allow 清单）。
+    # schema 层不加枚举约束，避免同一业务规则两种 422 形状（#240 决策）
+    data_source: Optional[str] = None
 
 
 class ProductResponse(ProductBase):

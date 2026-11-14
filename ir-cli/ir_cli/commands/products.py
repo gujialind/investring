@@ -43,6 +43,7 @@ def create(
     confirm_days: Optional[int] = typer.Option(None, "--confirm-days", help="确认天数(不传按市场+QDII推导：场内0/场外QDII 2/其余1)"),
     nav_lag_days: int = typer.Option(0, "--nav-lag-days", help="快照估值取价滞后交易日数(0=当日，场外QDII/互认基金常为1)"),
     is_qdii: bool = typer.Option(False, "--is-qdii/--no-qdii", help="是否QDII(纯展示标签)"),
+    data_source: Optional[str] = typer.Option(None, "--data-source", help="数据源(tushare/akshare；港互认只akshare；创建前置连通检测，取不到净值则拒绝)"),
     sync: bool = typer.Option(False, "--sync", help="创建后立即回填历史净值"),
     json_body: Optional[str] = typer.Option(None, "--json", help="完整 JSON 请求体，优先于逐项参数"),
 ):
@@ -59,6 +60,7 @@ def create(
         confirm_days=confirm_days,
         nav_lag_days=nav_lag_days,
         is_qdii=is_qdii,
+        data_source=data_source,
         sync_history=sync,
     )
     result = client.post("/api/products", json_data=body)
@@ -88,6 +90,7 @@ def update(
     nav_lag_days: Optional[int] = typer.Option(None, "--nav-lag-days", help="快照估值取价滞后交易日数(0=当日，互认基金设1)"),
     is_qdii: Optional[bool] = typer.Option(None, "--is-qdii/--no-qdii", help="是否QDII(纯展示标签，不影响取价与确认天数)"),
     is_active: Optional[bool] = typer.Option(None, "--is-active/--no-is-active", help="启用/停用产品(停用后不可新建调仓，虚拟产品禁止停用)"),
+    data_source: Optional[str] = typer.Option(None, "--data-source", help="数据源(tushare/akshare；港互认只akshare；切换前置连通检测，仅实际变化时探测；不传不改)"),
     json_body: Optional[str] = typer.Option(None, "--json", help="完整 JSON 请求体，优先于逐项参数"),
 ):
     """更新产品（#232：product_type 可改；market 变更须 --json '{"market": ...}'，仅限无交易/事件/持仓引用的产品）"""
@@ -101,6 +104,7 @@ def update(
         nav_lag_days=nav_lag_days,
         is_qdii=is_qdii,
         is_active=is_active,
+        data_source=data_source,
     )
     if not body:
         error("VALIDATION_ERROR", "未提供任何更新字段")

@@ -162,3 +162,35 @@ class TestEnvWriteValueGuard:
         assert len(env_writer) == 1
         _env_file, key, value = env_writer[0]
         assert (key, value) == ("TUSHARE_TOKEN", token)
+
+
+class TestAkshareDefaultSingleSource:
+    """issue #880（f）：AKSHARE_ENABLED 默认值单一事实源 = settings.akshare_enabled。
+
+    该开关纯展示、不闸门同步；env 未设置时回读 settings 默认（config.py 默认 False），
+    env 显式设置时优先（PUT 写入后即时回显）。
+    """
+
+    def test_env_unset_follows_settings_default(self, client, admin_headers, monkeypatch):
+        monkeypatch.delenv("AKSHARE_ENABLED", raising=False)
+
+        class _S:
+            akshare_enabled = False
+
+        monkeypatch.setattr("app.routers.data_sources.get_settings", lambda: _S())
+        resp = client.get("/api/system/data-sources", headers=admin_headers)
+        assert resp.status_code == 200
+        ak = next(s for s in resp.json() if s["name"] == "akshare")
+        assert ak["is_enabled"] is False
+
+    def test_env_overrides_settings(self, client, admin_headers, monkeypatch):
+        monkeypatch.setenv("AKSHARE_ENABLED", "true")
+
+        class _S:
+            akshare_enabled = False
+
+        monkeypatch.setattr("app.routers.data_sources.get_settings", lambda: _S())
+        resp = client.get("/api/system/data-sources", headers=admin_headers)
+        assert resp.status_code == 200
+        ak = next(s for s in resp.json() if s["name"] == "akshare")
+        assert ak["is_enabled"] is True

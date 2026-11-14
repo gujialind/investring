@@ -306,6 +306,49 @@ def validate_confirm_days(market: Optional[str], confirm_days: Optional[int]) ->
         )
 
 
+# issue #880：数据源合法枚举（create/update 共用校验）；tushare 不支持港互认（取数能力事实，
+# market_data_service.sync_product_prices 对 tushare+HK_MUTUAL 静默 skip，故须在写入口硬拦）
+VALID_DATA_SOURCES = ("tushare", "akshare")
+
+
+def validate_data_source(
+    market: Optional[str], product_type: str, data_source: Optional[str]
+) -> None:
+    """issue #880：数据源业务校验（create/update 共用单一实现，统一 INVALID_DATA_SOURCE 形状）。
+
+    枚举 → 虚拟产品不适用 → 市场兼容（tushare 仅 CN_EXCHANGE/CN_OTC，港互认只 akshare）。
+    校验收在服务层（#240 决策：schema 层不加枚举，避免同一业务规则两种 422 形状）。
+    连通检测（probe_data_source）由调用方在校验通过后另行触发，不在本函数内。
+    """
+    if data_source not in VALID_DATA_SOURCES:
+        raise BusinessError(
+            "INVALID_DATA_SOURCE",
+            f"非法数据源：{data_source}",
+            details={"valid": list(VALID_DATA_SOURCES), "data_source": data_source},
+        )
+    if product_type in VIRTUAL_PRODUCT_TYPES:
+        raise BusinessError(
+            "INVALID_DATA_SOURCE",
+            "现金/虚拟产品无数据源概念，不支持设置数据源",
+            details={"product_type": product_type, "data_source": data_source},
+        )
+    if not market:
+        # #880 L2 S5：缺市场与虚拟产品是两类不同拒绝原因，文案不得误报成「现金/虚拟」。
+        # 同码同 422 形状（不造第二种形状）；净值型建档/换源必须指定 market 才能推导
+        # 默认源与校验市场兼容（契约收紧，已在 PR 正文/CLI_MANUAL/业务规则披露）。
+        raise BusinessError(
+            "INVALID_DATA_SOURCE",
+            "净值型产品必须指定市场（market），否则无法推导数据源默认与校验市场兼容",
+            details={"product_type": product_type, "data_source": data_source, "reason": "market_missing"},
+        )
+    if data_source == "tushare" and market == "HK_MUTUAL":
+        raise BusinessError(
+            "INVALID_DATA_SOURCE",
+            "tushare 不支持港互认基金，请选择 akshare",
+            details={"market": market, "data_source": data_source},
+        )
+
+
 def _validate_identity_change(db: Session, product: Product, updates: dict) -> None:
     """issue #232：product_type / market 修改守卫（按值**实际变化**触发——
     前端编辑恒带 product_type，显式传原值不进门禁）。
@@ -497,6 +540,16 @@ def create_product(
         validate_confirm_days(market or "CN_OTC", confirm_days)
     else:
         confirm_days = calculate_confirm_days(market or "CN_OTC", is_qdii)
+    # issue #880（h/c）：省略/显式 null 均按市场推导默认（HK→akshare 其余→tushare），
+    # 使 REST/CLI「不传 data_source」真正到达推导（schema 默认已改 None，L2 Blocker 修复）。
+    # 虚拟产品无数据源概念，跳过校验/探测（推导默认 tushare，不阻断既有现金/在途创建）。
+    if data_source is None:
+        data_source = "akshare" if (market or "") == "HK_MUTUAL" else "tushare"
+    if product_type not in VIRTUAL_PRODUCT_TYPES:
+        validate_data_source(market or "", product_type, data_source)
+        from app.services.data_source_probe import probe_data_source
+
+        probe_data_source(db, code, market or "", data_source)
     product = Product(
         code=code,
         market=market or "",
@@ -615,6 +668,19 @@ def update_product(
     else:
         effective_confirm_days = product.confirm_days
     validate_confirm_days(effective_market, effective_confirm_days)
+    # issue #880（c/h + L2 F1）：仅当 data_source 显式传入且**值实际变化**时按合并终态
+    # （market+product_type+data_source）校验 + 连通检测；同值重提交整体 no-op（不校验/不探/
+    # 不审计/不重置），使存量 HK_MUTUAL+tushare 行改无关字段不被硬拦误伤（方案 A：不迁移不后门，
+    # 真实换源到 tushare 仍被 validate_data_source 拦）。全部先于写库（含 market 迁移），拒绝即零写入。
+    # 口径收窄（L2 Suggestion 1 处置）：market/product_type 单独变更（不带 data_source）
+    # 不触发源组合校验——该旁路（零引用产品改 market 到 HK 落 tushare+HK 静默不同步）已知、待存量口径一并处置。
+    old_data_source = product.data_source
+    if "data_source" in updates and updates["data_source"] != old_data_source:
+        effective_type = updates.get("product_type", product.product_type)
+        validate_data_source(effective_market, effective_type, updates["data_source"])
+        from app.services.data_source_probe import probe_data_source
+
+        probe_data_source(db, code, effective_market, updates["data_source"])
     if market_change:
         # market 是复合主键：price_record 随行迁移（删→改父→重插），不走 setattr；
         # confirm_days 未显式传入时按创建时规则重推导（场内 0 天残留到场外会造成
@@ -625,4 +691,23 @@ def update_product(
 
     for field, value in updates.items():
         setattr(product, field, value)
+    # issue #880（e/V5）：数据源实际变化 → 状态重置 + diff-only 审计。
+    # data_source_status=pending（前端「待验证」）、清 sync_error；last_sync_at 保留
+    # （旧源上一次成功同步的历史事实）。探测通过 ≠ 同步成功，故不设 success。
+    # create 不埋审计（无旧值可比，e 项已定）；同值重提交不留痕（logging.md diff-only）。
+    if "data_source" in updates and updates["data_source"] != old_data_source:
+        product.data_source_status = "pending"
+        product.sync_error = None
+        from app.constants.audit_actions import ACTION_UPDATE, RESOURCE_PRODUCT
+        from app.services.audit_service import record_audit
+
+        record_audit(
+            db,
+            action=ACTION_UPDATE,
+            resource_type=RESOURCE_PRODUCT,
+            resource_id=f"{code}({product.market})",
+            resource_name=product.name,
+            old_value={"data_source": old_data_source},
+            new_value={"data_source": updates["data_source"]},
+        )
     return product

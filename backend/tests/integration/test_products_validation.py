@@ -284,7 +284,10 @@ class TestConfirmDaysValidation:
         assert resp.json()["confirm_days"] == 1
 
     def test_create_hk_mutual_confirm_days_omitted_derived(self, client, admin_headers):
-        """创建互认基金不传 confirm_days → 推导 1（其他市场分支，与 QDII=2 分支互补）"""
+        """创建互认基金不传 confirm_days → 推导 1（其他市场分支，与 QDII=2 分支互补）。
+
+        #880 L2 Blocker 回归：不传 data_source 须按市场推导落 akshare（原语义，不得改写为显式传值）。
+        """
         resp = client.post(
             "/api/products",
             json={"code": "CD012.HK", "market": "HK_MUTUAL", "name": "创建互认",
@@ -293,6 +296,60 @@ class TestConfirmDaysValidation:
         )
         assert resp.status_code in (200, 201), resp.json()
         assert resp.json()["confirm_days"] == 1
+        assert resp.json()["data_source"] == "akshare"
+
+
+class TestCreateDataSourceDerivation:
+    """#880 L2 Blocker 反例：省略/显式 null 的 data_source 须到达按市场推导分支。"""
+
+    def test_create_otc_omitted_source_derives_tushare(self, client, admin_headers):
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSO01.OF", "market": "CN_OTC", "name": "省略源场外", "product_type": "OEF"},
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        assert resp.json()["data_source"] == "tushare"
+
+    def test_create_exchange_omitted_source_derives_tushare(self, client, admin_headers):
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSO02.SH", "market": "CN_EXCHANGE", "name": "省略源场内", "product_type": "ETF"},
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        assert resp.json()["data_source"] == "tushare"
+
+    def test_create_hk_explicit_null_derives_akshare(self, client, admin_headers):
+        # 显式 null 与省略同义（均推导），消除「省略失败、显式 null 成功」的反常契约
+        resp = client.post(
+            "/api/products",
+            json={"code": "CD013.HK", "market": "HK_MUTUAL", "name": "null源互认",
+                  "product_type": "OEF", "data_source": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        assert resp.json()["data_source"] == "akshare"
+
+    def test_create_otc_explicit_null_derives_tushare(self, client, admin_headers):
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSO03.OF", "market": "CN_OTC", "name": "null源场外",
+                  "product_type": "OEF", "data_source": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        assert resp.json()["data_source"] == "tushare"
+
+    def test_create_hk_explicit_akshare_ok(self, client, admin_headers):
+        resp = client.post(
+            "/api/products",
+            json={"code": "CD014.HK", "market": "HK_MUTUAL", "name": "显式akshare互认",
+                  "product_type": "OEF", "data_source": "akshare"},
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.json()
+        assert resp.json()["data_source"] == "akshare"
 
 
 class TestExplicitNullRejection:

@@ -12642,8 +12642,7 @@
                 "type": "null"
               }
             ],
-            "title": "Data Source",
-            "default": "tushare"
+            "title": "Data Source"
           },
           "sync_history": {
             "anyOf": [
@@ -13108,6 +13107,17 @@
               }
             ],
             "title": "Is Active"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Source"
           }
         },
         "additionalProperties": false,
