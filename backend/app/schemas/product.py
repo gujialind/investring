@@ -29,7 +29,10 @@ class ProductBase(BaseModel):
     # schema 层不加 ge=0，避免同一业务规则两种 422 形状（pydantic 列表形状无 error 码）
     nav_lag_days: int = 0
     is_qdii: bool = False
-    data_source: Optional[str] = "tushare"
+    # issue #880：默认 None（=未指定），使 REST/CLI「省略 data_source」真正到达
+    # service 的按市场推导分支（HK→akshare 其余→tushare）；列默认 tushare 保留给
+    # 工厂/裸插入。显式 null 与省略同义（均推导），显式值才校验/探测。
+    data_source: Optional[str] = None
 
 
 class ProductCreate(ProductBase):

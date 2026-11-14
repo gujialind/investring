@@ -134,3 +134,103 @@ def test_akshare_unreachable_retries(monkeypatch):
         probe.probe_data_source("000001", "CN_OTC", "akshare")
     assert e.value.details["reason"] == "unreachable"
     assert fetch.call_count == probe.PROBE_MAX_ATTEMPTS
+
+
+class TestFetchFunctions:
+    """直调 _fetch_tushare_values / _fetch_akshare_values（L2 CI 红① diff coverage 缺口）。
+
+    stub 上游（假 pro / monkeypatch akshare 与 akshare_client HK helper），不跑真实网络；
+    覆盖 CN_OTC / CN_EXCHANGE / HK_MUTUAL / 空 df / None df / 非法 market 各分支。
+    """
+
+    def test_tushare_otc_returns_unit_nav(self, monkeypatch):
+        import pandas as pd
+
+        df = pd.DataFrame({"unit_nav": [1.0, 1.01]})
+
+        class Pro:
+            def fund_nav(self, **kw):
+                return df
+
+        monkeypatch.setattr("app.services.tushare_client._get_tushare_pro", lambda: Pro())
+        assert probe._fetch_tushare_values("CN_OTC", "000001.OF", "20261101", "20261113") == [1.0, 1.01]
+
+    def test_tushare_exchange_returns_close(self, monkeypatch):
+        import pandas as pd
+
+        df = pd.DataFrame({"close": [4.083]})
+
+        class Pro:
+            def fund_daily(self, **kw):
+                return df
+
+        monkeypatch.setattr("app.services.tushare_client._get_tushare_pro", lambda: Pro())
+        assert probe._fetch_tushare_values("CN_EXCHANGE", "510300.SH", "20261101", "20261113") == [4.083]
+
+    def test_tushare_empty_df_returns_empty(self, monkeypatch):
+        import pandas as pd
+
+        class Pro:
+            def fund_nav(self, **kw):
+                return pd.DataFrame()
+
+        monkeypatch.setattr("app.services.tushare_client._get_tushare_pro", lambda: Pro())
+        assert probe._fetch_tushare_values("CN_OTC", "000001.OF", "20261101", "20261113") == []
+
+    def test_tushare_none_df_returns_empty(self, monkeypatch):
+        class Pro:
+            def fund_nav(self, **kw):
+                return None
+
+        monkeypatch.setattr("app.services.tushare_client._get_tushare_pro", lambda: Pro())
+        assert probe._fetch_tushare_values("CN_OTC", "000001.OF", "20261101", "20261113") == []
+
+    def test_tushare_invalid_market_raises(self, monkeypatch):
+        class Pro:
+            pass
+
+        monkeypatch.setattr("app.services.tushare_client._get_tushare_pro", lambda: Pro())
+        with pytest.raises(ValueError):
+            probe._fetch_tushare_values("HK_MUTUAL", "1001767344", "20261101", "20261113")
+
+    def test_akshare_otc_returns_unit_nav(self, monkeypatch):
+        import akshare as ak
+        import pandas as pd
+
+        df = pd.DataFrame({"单位净值": [0.988]})
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: df)
+        assert probe._fetch_akshare_values("CN_OTC", "000001", "20261101", "20261113") == [0.988]
+
+    def test_akshare_exchange_returns_close(self, monkeypatch):
+        import akshare as ak
+        import pandas as pd
+
+        df = pd.DataFrame({"收盘": [4.083]})
+        monkeypatch.setattr(ak, "fund_etf_hist_em", lambda **kw: df)
+        assert probe._fetch_akshare_values("CN_EXCHANGE", "510300", "20261101", "20261113") == [4.083]
+
+    def test_akshare_hk_returns_nav(self, monkeypatch):
+        monkeypatch.setattr("app.services.akshare_client._resolve_hk10", lambda code: "1001767344")
+        monkeypatch.setattr(
+            "app.services.akshare_client._hk_nav_request_page",
+            lambda *a, **kw: {"Data": [{"NAV": 1.0}]},
+        )
+        assert probe._fetch_akshare_values("HK_MUTUAL", "1001767344", "20261101", "20261113") == [1.0]
+
+    def test_akshare_empty_df_returns_empty(self, monkeypatch):
+        import akshare as ak
+        import pandas as pd
+
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: pd.DataFrame())
+        assert probe._fetch_akshare_values("CN_OTC", "000001", "20261101", "20261113") == []
+
+    def test_akshare_exchange_empty_df_returns_empty(self, monkeypatch):
+        import akshare as ak
+        import pandas as pd
+
+        monkeypatch.setattr(ak, "fund_etf_hist_em", lambda **kw: pd.DataFrame())
+        assert probe._fetch_akshare_values("CN_EXCHANGE", "510300", "20261101", "20261113") == []
+
+    def test_akshare_invalid_market_raises(self, monkeypatch):
+        with pytest.raises(ValueError):
+            probe._fetch_akshare_values("UNKNOWN", "000001", "20261101", "20261113")

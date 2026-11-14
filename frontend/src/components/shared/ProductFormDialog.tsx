@@ -169,9 +169,14 @@ export default function ProductFormDialog({
         confirm_days: formData.confirm_days,
         nav_lag_days: formData.nav_lag_days,
         is_qdii: formData.is_qdii,
-        // #880：净值型才下发数据源（默认 tushare）；虚拟产品不下发
+        // #880：净值型才下发数据源；未 touched 时按市场推导默认（HK→akshare），
+        // 与后端省略推导同口径，避免 HK 创建被带成 tushare（L2 Blocker 前端面）
         ...(!VIRTUAL_PRODUCT_TYPES.includes(formData.product_type ?? "")
-          ? { data_source: formData.data_source ?? "tushare" }
+          ? {
+              data_source:
+                formData.data_source ??
+                (formData.market === "HK_MUTUAL" ? "akshare" : "tushare"),
+            }
           : {}),
         ...(formData.market ? { market: formData.market } : {}),
         ...(formData.asset_class_code ? { asset_class_code: formData.asset_class_code } : {}),

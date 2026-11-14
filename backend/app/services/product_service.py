@@ -531,13 +531,12 @@ def create_product(
         validate_confirm_days(market or "CN_OTC", confirm_days)
     else:
         confirm_days = calculate_confirm_days(market or "CN_OTC", is_qdii)
-    # issue #880（h/c）：数据源校验 + 连通检测（create 必探），先于写库与 sync_history。
-    # 虚拟产品无数据源概念，跳过校验/探测（保持列默认值，不阻断既有现金/在途产品创建）。
-    # service 层 data_source=None（内部调用/未指定）按市场推导默认：港互认只 akshare，
-    # 其余 tushare——与前端市场过滤同口径，避免港互认落 tushare 后静默不同步（c 项硬拦）。
+    # issue #880（h/c）：省略/显式 null 均按市场推导默认（HK→akshare 其余→tushare），
+    # 使 REST/CLI「不传 data_source」真正到达推导（schema 默认已改 None，L2 Blocker 修复）。
+    # 虚拟产品无数据源概念，跳过校验/探测（推导默认 tushare，不阻断既有现金/在途创建）。
+    if data_source is None:
+        data_source = "akshare" if (market or "") == "HK_MUTUAL" else "tushare"
     if product_type not in VIRTUAL_PRODUCT_TYPES:
-        if data_source is None:
-            data_source = "akshare" if (market or "") == "HK_MUTUAL" else "tushare"
         validate_data_source(market or "", product_type, data_source)
         from app.services.data_source_probe import probe_data_source
 
@@ -660,9 +659,12 @@ def update_product(
     else:
         effective_confirm_days = product.confirm_days
     validate_confirm_days(effective_market, effective_confirm_days)
-    # issue #880（c/h）：数据源切换校验合并终态（market+product_type+data_source）；
-    # 仅值实际变化时连通检测。全部先于写库（含 market 迁移），拒绝即零写入。
+    # issue #880（c/h）：仅当 data_source 显式传入时按合并终态（market+product_type+
+    # data_source）校验；仅值实际变化时连通检测。全部先于写库（含 market 迁移），拒绝即零写入。
     # 同值重提交不探（下方审计/状态重置亦按实际变化触发，与身份守卫同模式）。
+    # 口径收窄（L2 Suggestion 1 处置）：market/product_type 单独变更（不带 data_source）
+    # 不触发源组合校验——存量 HK_MUTUAL+tushare 行的处置口径维护者未定，本 PR 不提前定口径；
+    # 该旁路（零引用产品改 market 到 HK 落 tushare+HK 静默不同步）已知、待存量口径一并处置。
     old_data_source = product.data_source
     if "data_source" in updates:
         effective_type = updates.get("product_type", product.product_type)

@@ -12642,8 +12642,7 @@
                 "type": "null"
               }
             ],
-            "title": "Data Source",
-            "default": "tushare"
+            "title": "Data Source"
           },
           "sync_history": {
             "anyOf": [
