@@ -44,7 +44,7 @@ export interface ProductCreate {
   /** issue #228：快照估值取价滞后交易日数（默认 0） */
   nav_lag_days?: number;
   is_qdii?: boolean;
-  /** 数据源（后端默认 tushare） */
+  /** 数据源（后端按市场推导：HK→akshare，其余→tushare；显式传入优先） */
   data_source?: string;
   /** issue #90：创建后立即回填历史净值（同步失败不阻断创建） */
   sync_history?: boolean;

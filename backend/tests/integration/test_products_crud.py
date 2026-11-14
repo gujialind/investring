@@ -343,3 +343,46 @@ class TestProductDataSource:
         )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+
+    def test_create_probe_failed_zero_write(self, client, admin_headers, test_db, monkeypatch):
+        """#880 L2 S3：创建路径探测失败 → 422 且零写入（反例把守「create 必探」）。
+
+        integration/conftest.py 的 autouse fixture 把探测整体 mock 成通过，
+        本用例必须在用例内显式覆写为抛 DATA_SOURCE_PROBE_FAILED。
+        有效性自证：临时移除 create_product 的探测调用后本用例须变红。
+        """
+        from app.models.product import Product
+        from app.services.exceptions import BusinessError
+
+        def _fail(code, market, data_source):
+            raise BusinessError(
+                "DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达，请稍后重试",
+                details={"reason": "unreachable"},
+            )
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _fail)
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSP01.OF", "market": "CN_OTC", "name": "探测失败建档",
+                  "product_type": "OEF", "data_source": "akshare"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "DATA_SOURCE_PROBE_FAILED"
+        assert test_db.query(Product).filter_by(code="DSP01.OF", market="CN_OTC").count() == 0
+
+    def test_create_nav_without_market_rejected_accurate_message(self, client, admin_headers, test_db):
+        """#880 L2 S5：缺市场创建净值型 → 422 且归因准确（不得误报「现金/虚拟」）。"""
+        from app.models.product import Product
+
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSM01.OF", "name": "缺市场", "product_type": "OEF"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "INVALID_DATA_SOURCE"
+        assert "市场" in detail["message"]
+        assert "现金" not in detail["message"]
+        assert test_db.query(Product).filter_by(code="DSM01.OF").count() == 0

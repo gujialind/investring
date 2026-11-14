@@ -41,3 +41,6 @@ def test_empty_market_rejected():
     with pytest.raises(BusinessError) as e:
         ps.validate_data_source("", "OEF", "tushare")
     assert e.value.code == "INVALID_DATA_SOURCE"
+    # #880 L2 S5：缺市场归因准确，不得误报成「现金/虚拟产品」
+    assert "市场" in e.value.message
+    assert "现金" not in e.value.message

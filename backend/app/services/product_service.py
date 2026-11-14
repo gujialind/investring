@@ -326,11 +326,20 @@ def validate_data_source(
             f"非法数据源：{data_source}",
             details={"valid": list(VALID_DATA_SOURCES), "data_source": data_source},
         )
-    if product_type in VIRTUAL_PRODUCT_TYPES or not market:
+    if product_type in VIRTUAL_PRODUCT_TYPES:
         raise BusinessError(
             "INVALID_DATA_SOURCE",
             "现金/虚拟产品无数据源概念，不支持设置数据源",
             details={"product_type": product_type, "data_source": data_source},
+        )
+    if not market:
+        # #880 L2 S5：缺市场与虚拟产品是两类不同拒绝原因，文案不得误报成「现金/虚拟」。
+        # 同码同 422 形状（不造第二种形状）；净值型建档/换源必须指定 market 才能推导
+        # 默认源与校验市场兼容（契约收紧，已在 PR 正文/CLI_MANUAL/业务规则披露）。
+        raise BusinessError(
+            "INVALID_DATA_SOURCE",
+            "净值型产品必须指定市场（market），否则无法推导数据源默认与校验市场兼容",
+            details={"product_type": product_type, "data_source": data_source, "reason": "market_missing"},
         )
     if data_source == "tushare" and market == "HK_MUTUAL":
         raise BusinessError(

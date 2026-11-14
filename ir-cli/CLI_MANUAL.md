@@ -1177,8 +1177,11 @@ ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [-
 >
 > **issue #880 语义（数据源切换）**：
 > - `--data-source` 切换数据源（`tushare` / `akshare`，不传不改）。港互认只 `akshare`；非法值/虚拟产品 → 422 `INVALID_DATA_SOURCE`；显式传 null → 422 `INVALID_PARAM`
+> - **创建/换源净值型必须指定 `--market`**：省略 market 创建净值型 → 422 `INVALID_DATA_SOURCE`（reason=market_missing，契约收紧；旧版曾允许落 market="" 的净值型，现拒绝）
 > - **切换前置连通检测**：仅值实际变化时对目标源取一条真实净值，取不到 → 422 `DATA_SOURCE_PROBE_FAILED` 且零写入；无强制保存。切 tushare 需已配置 token（无 token → 422 `INVALID_DATA_SOURCE`，reason=token_missing）
 > - 切换成功后产品数据源状态置「待验证」（`data_source_status=pending`）、清错误信息，最后同步时间保留；下次净值同步按新源路由。日涨跌列口径随源变化（tushare 累计净值总收益口径 / akshare 单位净值口径），属展示口径差异非账务变化
+> - **分红后果**：切到 `akshare` 的场外产品不再自动检测分红（检测仅筛 tushare），现金分红/红利再投资需按公告手工录入；akshare 分红检测见 PR3 #881
+> - **硬拦例外**：「港互认只 akshare」仅作用于显式传 `--data-source` 的创建/换源；仅改 market（`--json '{"market":...}'`）不带 data_source 不触发源组合校验（已披露取舍）
 
 #### `ir product delete`
 
