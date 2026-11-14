@@ -202,15 +202,87 @@ class TestFetchFunctions:
         import akshare as ak
         import pandas as pd
 
-        df = pd.DataFrame({"单位净值": [0.988]})
+        df = pd.DataFrame({"净值日期": ["2026-11-12"], "单位净值": [0.988]})
         monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: df)
         assert probe._fetch_akshare_values("CN_OTC", "000001", "20261101", "20261113") == [0.988]
+
+    def test_akshare_otc_out_of_window_nav_rejected(self, monkeypatch):
+        """Blocker 反例：仅窗外（2026-09-28）有正净值 → no_data 拒绝，不得因历史净值放行。"""
+        import akshare as ak
+        import pandas as pd
+
+        monkeypatch.setattr(
+            probe, "try_get_prev_trading_day",
+            lambda db, d, days=1, exchange="SSE": date(2026, 11, 1),
+        )
+        df = pd.DataFrame({"净值日期": ["2026-09-28"], "单位净值": [1.0]})
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: df)
+        with pytest.raises(BusinessError) as e:
+            probe.probe_data_source(None, "000001.OF", "CN_OTC", "akshare")
+        assert e.value.code == "DATA_SOURCE_PROBE_FAILED"
+        assert e.value.details["reason"] == "no_data"
+
+    def test_akshare_otc_in_window_nav_passes(self, monkeypatch):
+        import akshare as ak
+        import pandas as pd
+
+        monkeypatch.setattr(
+            probe, "try_get_prev_trading_day",
+            lambda db, d, days=1, exchange="SSE": date(2026, 11, 1),
+        )
+        df = pd.DataFrame({"净值日期": ["2026-11-12"], "单位净值": [1.0]})
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: df)
+        assert probe.probe_data_source(None, "000001.OF", "CN_OTC", "akshare") is None
+
+    def test_akshare_otc_missing_date_column_rejected(self, monkeypatch):
+        """净值日期列缺失 → 保守拒绝（no_data），不得默认通过（无法确认落在窗口内）。"""
+        import akshare as ak
+        import pandas as pd
+
+        df = pd.DataFrame({"单位净值": [1.0]})
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: df)
+        with pytest.raises(BusinessError) as e:
+            probe.probe_data_source(None, "000001.OF", "CN_OTC", "akshare")
+        assert e.value.details["reason"] == "no_data"
+
+    def test_akshare_otc_unparseable_date_rejected(self, monkeypatch):
+        """净值日期整列不可解析 → 保守拒绝（no_data），不得默认通过。"""
+        import akshare as ak
+        import pandas as pd
+
+        df = pd.DataFrame({"净值日期": ["not-a-date"], "单位净值": [1.0]})
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", lambda **kw: df)
+        with pytest.raises(BusinessError) as e:
+            probe.probe_data_source(None, "000001.OF", "CN_OTC", "akshare")
+        assert e.value.details["reason"] == "no_data"
+
+    def test_akshare_exchange_out_of_window_rejected(self, monkeypatch):
+        """场内：上游即使忽略日期参数返回窗外行，本地二次过滤仍拒绝（窗口口径不依赖上游）。"""
+        import akshare as ak
+        import pandas as pd
+
+        df = pd.DataFrame({"日期": ["2026-09-28"], "收盘": [4.0]})
+        monkeypatch.setattr(ak, "fund_etf_hist_em", lambda **kw: df)
+        with pytest.raises(BusinessError) as e:
+            probe.probe_data_source(None, "510300", "CN_EXCHANGE", "akshare")
+        assert e.value.details["reason"] == "no_data"
+
+    def test_akshare_hk_out_of_window_rejected(self, monkeypatch):
+        """港互认：上游即使返回窗外行，本地按 PDATE 二次过滤仍拒绝。"""
+        monkeypatch.setattr("app.services.akshare_client._resolve_hk10", lambda code: "1001767344")
+        monkeypatch.setattr(
+            "app.services.akshare_client._hk_nav_request_page",
+            lambda *a, **kw: {"Data": [{"PDATE": "2026-09-28", "NAV": 1.0}]},
+        )
+        with pytest.raises(BusinessError) as e:
+            probe.probe_data_source(None, "1001767344", "HK_MUTUAL", "akshare")
+        assert e.value.details["reason"] == "no_data"
 
     def test_akshare_exchange_returns_close(self, monkeypatch):
         import akshare as ak
         import pandas as pd
 
-        df = pd.DataFrame({"收盘": [4.083]})
+        df = pd.DataFrame({"日期": ["2026-11-12"], "收盘": [4.083]})
         monkeypatch.setattr(ak, "fund_etf_hist_em", lambda **kw: df)
         assert probe._fetch_akshare_values("CN_EXCHANGE", "510300", "20261101", "20261113") == [4.083]
 
@@ -218,7 +290,7 @@ class TestFetchFunctions:
         monkeypatch.setattr("app.services.akshare_client._resolve_hk10", lambda code: "1001767344")
         monkeypatch.setattr(
             "app.services.akshare_client._hk_nav_request_page",
-            lambda *a, **kw: {"Data": [{"NAV": 1.0}]},
+            lambda *a, **kw: {"Data": [{"PDATE": "2026-11-12", "NAV": 1.0}]},
         )
         assert probe._fetch_akshare_values("HK_MUTUAL", "1001767344", "20261101", "20261113") == [1.0]
 

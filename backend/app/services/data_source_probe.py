@@ -55,8 +55,31 @@ def _fetch_tushare_values(market, code, start_str, end_str):
     return [row.get(key) for row in df.to_dict("records")]
 
 
+def _filter_by_date(rows, date_key, start_str, end_str):
+    """本地按日期把行过滤到 [start_str, end_str]（与同步回看窗同口径，解析复用
+    akshare_client._compact_date，不另造一套）。
+
+    **保守拒绝**：日期列缺失或整列不可解析时返回 []（上层判 no_data 拒绝），不得默认
+    通过——无法确认净值落在窗口内时放行，会让「窗口内取到合格净值否则拒绝」的闸门假
+    通过（外部评审 Blocker：akshare 场外全量下载曾忽略窗口，任意历史正净值即放行）。
+    场内/港互认上游虽已带日期参数，仍本地二次过滤，保证窗口口径不依赖上游过滤行为。
+    """
+    from app.services.akshare_client import _compact_date
+
+    out = []
+    for row in rows:
+        td = _compact_date(row.get(date_key))
+        if td is not None and start_str <= td <= end_str:
+            out.append(row)
+    return out
+
+
 def _fetch_akshare_values(market, code, start_str, end_str):
-    """akshare 净值/收盘价原值列表。场外全量下载取最新行；场内/港互认窄窗。"""
+    """akshare 净值/收盘价原值列表，**统一按 [start_str,end_str] 窗口过滤**。
+
+    场外全量下载后本地按净值日期过滤（上游该接口不接受日期参数）；场内/港互认上游带
+    日期参数但仍本地二次过滤（口径不依赖上游）。日期列缺失/不可解析保守返回 []。
+    """
     import akshare as ak
 
     from app.services.akshare_client import _hk_nav_request_page, _resolve_hk10
@@ -66,20 +89,22 @@ def _fetch_akshare_values(market, code, start_str, end_str):
         df = ak.fund_open_fund_info_em(symbol=symbol, indicator="单位净值走势")
         if df is None or df.empty:
             return []
-        return [row.get("单位净值") for row in df.to_dict("records")]
+        rows = _filter_by_date(df.to_dict("records"), "净值日期", start_str, end_str)
+        return [row.get("单位净值") for row in rows]
     if market == "CN_EXCHANGE":
         df = ak.fund_etf_hist_em(
             symbol=symbol, period="daily", start_date=start_str, end_date=end_str, adjust=""
         )
         if df is None or df.empty:
             return []
-        return [row.get("收盘") for row in df.to_dict("records")]
+        rows = _filter_by_date(df.to_dict("records"), "日期", start_str, end_str)
+        return [row.get("收盘") for row in rows]
     if market == "HK_MUTUAL":
         hk10 = _resolve_hk10(code)
         d1 = f"{start_str[:4]}-{start_str[4:6]}-{start_str[6:]}"
         d2 = f"{end_str[:4]}-{end_str[4:6]}-{end_str[6:]}"
         payload = _hk_nav_request_page(hk10, 0, d1, d2)
-        rows = payload.get("Data") or []
+        rows = _filter_by_date(payload.get("Data") or [], "PDATE", start_str, end_str)
         return [row.get("NAV") for row in rows]
     raise ValueError(f"akshare 不支持的市场: {market}")
 

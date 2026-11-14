@@ -11,6 +11,8 @@ import pytest
 
 from tests.factories import create_product, create_asset_classification
 from app.schemas.product import ProductResponse
+# 模块导入期 autouse mock 尚未生效，此处捕获真实探测函数，供「窗外净值零写入」反例恢复真实探测
+from app.services.data_source_probe import probe_data_source as _real_probe
 
 
 class TestProductCRUD:
@@ -391,6 +393,38 @@ class TestProductDataSource:
         )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+
+    def test_create_akshare_otc_out_of_window_zero_write(self, client, admin_headers, test_db, monkeypatch):
+        """Blocker 集成反例：akshare 场外仅窗外有正净值 → 创建 422 no_data 且零写入。"""
+        from datetime import date
+
+        import akshare as ak
+        import pandas as pd
+
+        from app.models.product import Product
+        from app.services import data_source_probe as probe_mod
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _real_probe)
+        monkeypatch.setattr(probe_mod.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(probe_mod, "business_today", lambda: date(2026, 11, 13))
+        monkeypatch.setattr(
+            probe_mod, "try_get_prev_trading_day",
+            lambda db, d, days=1, exchange="SSE": date(2026, 11, 1),
+        )
+        monkeypatch.setattr(
+            ak, "fund_open_fund_info_em",
+            lambda **kw: pd.DataFrame({"净值日期": ["2026-09-28"], "单位净值": [1.0]}),
+        )
+        resp = client.post(
+            "/api/products",
+            json={"code": "DSW1.OF", "market": "CN_OTC", "name": "窗外净值",
+                  "product_type": "OEF", "data_source": "akshare"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422, resp.json()
+        assert resp.json()["detail"]["error"] == "DATA_SOURCE_PROBE_FAILED"
+        assert resp.json()["detail"]["details"]["reason"] == "no_data"
+        assert test_db.query(Product).filter_by(code="DSW1.OF", market="CN_OTC").count() == 0
 
     def test_create_probe_failed_zero_write(self, client, admin_headers, test_db, monkeypatch):
         """#880 L2 S3：创建路径探测失败 → 422 且零写入（反例把守「create 必探」）。
