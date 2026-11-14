@@ -13,11 +13,18 @@ const SECTIONS = [
   { key: 'logs', title: '日志管理', tab: '日志管理' },
 ] as const;
 
-/** 换 viewer 会话（沿用 portfolio-delete / cash-flows 的既有形态：清凭证后真实登录流） */
+/** 换 viewer 会话（沿用 portfolio-delete / cash-flows 的既有形态：清凭证后真实登录流）。
+ * 新页默认 about:blank（不透明源），直接 evaluate 读 localStorage 会 SecurityError，
+ * 故先落到同源页再清凭证。 */
 async function loginAsViewer(page: Page): Promise<void> {
+  await page.goto('/');
   await page.context().clearCookies();
   await page.evaluate(() => window.localStorage.clear());
   await page.goto('/login');
+  await page.waitForFunction(() => {
+    const form = document.querySelector('form');
+    return form && Object.keys(form).some((k) => k.startsWith('__reactProps'));
+  });
   await page.getByLabel('用户名').fill('VIEWER');
   await page.getByLabel('密码').fill('viewer123');
   await page.getByRole('button', { name: '登录' }).click();
