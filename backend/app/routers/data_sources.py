@@ -9,6 +9,7 @@ from app.dependencies import get_current_user, get_current_admin
 from app.models.product import Product
 from app.services.exceptions import BusinessError
 from app.services.null_guard import reject_explicit_nulls
+from app.config import get_settings
 
 router = APIRouter()
 
@@ -38,7 +39,9 @@ def _get_data_sources(db: Session) -> List[dict]:
     ).order_by(Product.last_sync_at.desc()).first()
 
     # AkShare 数据源
-    akshare_enabled = os.environ.get("AKSHARE_ENABLED", "true").lower() == "true"
+    # #880（f）：默认值单一事实源 = settings.akshare_enabled（config.py 默认 False）；
+    # 仍读 live env 以便 PUT 写入后即时回显。该开关纯展示，不闸门同步（同步按产品 data_source 路由）。
+    akshare_enabled = os.environ.get("AKSHARE_ENABLED", str(get_settings().akshare_enabled).lower()).lower() == "true"
 
     sources = [
         {
@@ -131,7 +134,7 @@ def update_data_source(
     return {
         "message": message,
         "name": "akshare",
-        "is_enabled": os.environ.get("AKSHARE_ENABLED", "true").lower() == "true",
+        "is_enabled": os.environ.get("AKSHARE_ENABLED", str(get_settings().akshare_enabled).lower()).lower() == "true",
     }
 
 

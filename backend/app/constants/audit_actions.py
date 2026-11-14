@@ -34,6 +34,9 @@ RESOURCE_SNAPSHOT = "snapshot"
 RESOURCE_MANUAL_MARKET_VALUE = "manual_market_value"
 RESOURCE_API_KEY = "api_key"
 RESOURCE_PORTFOLIO = "portfolio"
+# issue #880：产品数据源变更审计（仅 data_source 实际变化埋点，其余产品 CRUD 仍不埋，
+# 见 docs/reference/logging.md 必埋范围）。列宽 String(50)，"product" 远小于上限。
+RESOURCE_PRODUCT = "product"
 
 # ---- sentinel ----
 

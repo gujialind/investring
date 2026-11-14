@@ -288,7 +288,7 @@ class TestConfirmDaysValidation:
         resp = client.post(
             "/api/products",
             json={"code": "CD012.HK", "market": "HK_MUTUAL", "name": "创建互认",
-                  "product_type": "OEF"},
+                  "product_type": "OEF", "data_source": "akshare"},
             headers=admin_headers,
         )
         assert resp.status_code in (200, 201), resp.json()

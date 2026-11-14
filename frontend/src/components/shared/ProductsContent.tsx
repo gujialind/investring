@@ -46,6 +46,7 @@ import {
 } from "@/lib/dimensions";
 import type { DimensionFilters } from "@/lib/dimensions";
 import { MARKET_OPTIONS } from "@/lib/market";
+import { DATA_SOURCE_OPTIONS } from "@/lib/dataSource";
 import type { ProductListParams } from "@/lib/api";
 import { useProductList, useDeleteProduct } from "@/hooks/useProduct";
 import { useRunTask, useWatchedTaskExecution } from "@/hooks/useTask";
@@ -79,7 +80,7 @@ const NAV_LAG_OPTIONS = [
   { value: 1, label: "T-1" },
 ] as const;
 
-const DATA_SOURCE_OPTIONS = ["tushare", "akshare"];
+// DATA_SOURCE_OPTIONS 移至 @/lib/dataSource 共享（#880：产品表单与本筛选共用，避免硬编码漂移）
 
 /**
  * 产品管理页内容（桌面/移动共用，issue #234 真分页 + #238 筛选栏）。

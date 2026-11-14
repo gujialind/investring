@@ -13108,6 +13108,17 @@
               }
             ],
             "title": "Is Active"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Source"
           }
         },
         "additionalProperties": false,

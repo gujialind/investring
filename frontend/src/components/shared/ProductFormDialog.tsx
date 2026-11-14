@@ -19,6 +19,10 @@ import { DIMENSION_FIELDS, DIMENSION_LABELS, RULE_DIMENSIONS } from "@/lib/dimen
 import { MARKET_OPTIONS } from "@/lib/market";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { useCreateProduct, useUpdateProduct } from "@/hooks/useProduct";
+import { availableDataSources, DATA_SOURCE_SWITCH_HINT } from "@/lib/dataSource";
+
+/** 虚拟产品判定（对齐后端 product_service.VIRTUAL_PRODUCT_TYPES）：无数据源概念，不显示控件 */
+const VIRTUAL_PRODUCT_TYPES = ["CASH", "IN_TRANSIT"];
 
 /** 创建态表单初始值（编辑态以 editingProduct 整体回填） */
 const EMPTY_FORM: Partial<Product> = {
@@ -30,6 +34,8 @@ const EMPTY_FORM: Partial<Product> = {
   // issue #228：快照估值取价滞后交易日数（0=当日；QDII/互认基金可设 1）
   nav_lag_days: 0,
   is_qdii: false,
+  // issue #880：数据源默认 tushare（与后端列默认一致）；港互认由市场联动纠正为 akshare
+  data_source: "tushare",
 };
 
 /** 创建态 confirm_days 缺省推导（#231/#236/#241，镜像后端
@@ -141,6 +147,10 @@ export default function ProductFormDialog({
             confirm_days: formData.confirm_days,
             nav_lag_days: formData.nav_lag_days,
             is_qdii: formData.is_qdii,
+            // #880：净值型才下发数据源（虚拟产品无数据源概念，后端会拒绝）
+            ...(!VIRTUAL_PRODUCT_TYPES.includes(formData.product_type ?? "")
+              ? { data_source: formData.data_source }
+              : {}),
           },
         },
         {
@@ -159,6 +169,10 @@ export default function ProductFormDialog({
         confirm_days: formData.confirm_days,
         nav_lag_days: formData.nav_lag_days,
         is_qdii: formData.is_qdii,
+        // #880：净值型才下发数据源（默认 tushare）；虚拟产品不下发
+        ...(!VIRTUAL_PRODUCT_TYPES.includes(formData.product_type ?? "")
+          ? { data_source: formData.data_source ?? "tushare" }
+          : {}),
         ...(formData.market ? { market: formData.market } : {}),
         ...(formData.asset_class_code ? { asset_class_code: formData.asset_class_code } : {}),
         ...(formData.region_code ? { region_code: formData.region_code } : {}),
@@ -210,6 +224,10 @@ export default function ProductFormDialog({
                     // 创建态预填联动：后端显式优先（#231/#236/#241），默认 1 对场内会 422
                     ...(!editingProduct && !confirmDaysTouched
                       ? { confirm_days: deriveConfirmDays(market, formData.is_qdii) }
+                      : {}),
+                    // #880：港互认只 akshare，切到 HK 时把 tushare 纠正为 akshare
+                    ...(market === "HK_MUTUAL" && formData.data_source === "tushare"
+                      ? { data_source: "akshare" }
                       : {}),
                   });
                 }}
@@ -376,6 +394,24 @@ export default function ProductFormDialog({
               />
               <Label htmlFor="is_qdii">QDII基金</Label>
             </div>
+            {!VIRTUAL_PRODUCT_TYPES.includes(formData.product_type ?? "") && (
+              <div className="space-y-2">
+                <Label htmlFor="data_source">数据源</Label>
+                <select
+                  id="data_source"
+                  value={formData.data_source ?? "tushare"}
+                  onChange={(e) => setFormData({ ...formData, data_source: e.target.value })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {availableDataSources(formData.market).map((ds) => (
+                    <option key={ds} value={ds}>
+                      {ds}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">{DATA_SOURCE_SWITCH_HINT}</p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button type="submit" disabled={createProduct.isPending || updateProduct.isPending}>

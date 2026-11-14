@@ -246,6 +246,9 @@ export default function SettingsContent({ variant = "desktop" }: SettingsContent
                     />
                     <Label htmlFor="akshare_enabled">启用AkShare</Label>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    AkShare 免 Token。此开关仅用于状态展示，不控制净值同步——同步按各产品「数据源」字段路由（#880）。
+                  </p>
                   <Button onClick={handleSaveDataSource} disabled={updateDataSource.isPending}>
                     {updateDataSource.isPending ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

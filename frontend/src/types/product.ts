@@ -66,4 +66,6 @@ export interface ProductUpdate {
   is_qdii?: boolean;
   /** issue #856：停用/启用（不传不改；虚拟产品禁止停用，后端守卫） */
   is_active?: boolean;
+  /** issue #880：数据源切换（不传不改；枚举/市场兼容/连通检测后端校验） */
+  data_source?: string;
 }

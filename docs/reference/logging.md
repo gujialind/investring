@@ -80,8 +80,8 @@ client_ip 由 `get_current_user` 在认证成功后写入。排查时先按 `req
 ERROR 并落一条 `system_error_log`，绝不静默）。
 
 **audit_log 的必埋范围**（高风险子集，非全量）：申赎、调仓、跨平台现金转移、份额变动
-事件、快照 generate / recalculate / delete（含级联回退）、现金手动重估，以及代理 API Key 创建/撤销（#797）。成功预览只记访问日志，不产生业务审计或业务写入。产品 / 平台 /
-投资人 / 组合 CRUD 与任务手动触发**不埋**（YAGNI，需要时另开 issue）。
+事件、快照 generate / recalculate / delete（含级联回退）、现金手动重估、代理 API Key 创建/撤销（#797），以及**产品数据源实际变更**（#880，`resource_type=product`、`action=update`，diff-only 记 old/new `data_source`；换源影响估值与分红检测，属高风险配置变更）。成功预览只记访问日志，不产生业务审计或业务写入。产品 / 平台 /
+投资人 / 组合的**其余** CRUD 与任务手动触发**不埋**（YAGNI，需要时另开 issue）；产品创建不埋数据源审计（无旧值可比，创建结果在响应与同步明细可见）。
 
 **action / resource_type 取值**以 `app/constants/audit_actions.py` 为单一事实来源，埋点
 禁止写字面量；列宽是硬约束（`action` 20 / `resource_type` 50 / `investor_code` 20），

@@ -376,9 +376,7 @@ KNOWN_MANUAL_ONLY = {
     },
     "ir share-event update": {"--entitlement-shares": "手册 4.7 update 登记 --entitlement-shares（属 create），实现 update 无此选项"},
     "ir snapshot recalculate": {"--force": "手册登记 --force，实现改为 --async/--wait/--poll-interval 异步重算"},
-    "ir product create": {"--data-source": "手册 4.9 登记 --data-source，实现 create 未开放"},
     "ir product update": {
-        "--data-source": "手册 4.9 登记 --data-source，实现 update 未开放",
         "--no-qdii": "手册写 --is-qdii/--no-qdii 双开关，实现只注册 --is-qdii",
         "--no-is-active": "手册写 --is-active/--no-is-active 双开关（#856），click_command_specs 只读 primary opts 故仅见 --is-active（同 --no-qdii）",
     },
