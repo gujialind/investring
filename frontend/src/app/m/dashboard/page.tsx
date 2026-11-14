@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useDashboardStats } from "@/hooks/useDashboardStats";
 import DashboardStatsCards from "@/components/shared/DashboardStatsCards";
 import LoadingState from "@/components/shared/LoadingState";
+import AccountMenu from "@/components/shared/AccountMenu";
 
 export default function MobileDashboardPage() {
   const {
@@ -131,6 +132,16 @@ export default function MobileDashboardPage() {
           </div>
         </div>
       )}
+
+      {/* 账户区（#878）：移动端此前无退出入口，这里补账户菜单（修改密码/退出登录，全角色） */}
+      <div>
+        <h2 className="text-base font-semibold mb-3">账户</h2>
+        <Card>
+          <CardContent className="p-2">
+            <AccountMenu align="end" />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

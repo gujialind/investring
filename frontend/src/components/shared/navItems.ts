@@ -14,14 +14,17 @@ import {
  * 都从这份数据派生，取代原先三份各自维护的列表（layout/Sidebar、layout/MobileNav、
  * mobile/BottomNav）——改一项导航只改这里。
  *
+ * - `inNav`：是否进桌面侧栏主导航（#878）。false 的项（投资人/平台/分类）改走**语境分布
+ *   入口**：投资人在组合页头部、平台与分类在产品页头部（见 PortfolioListContent /
+ *   ProductsContent），侧栏不再列出，路由本身保留（入口式，不删页）。
  * - `adminOnly`：viewer 角色不出的项（viewer 只见首页/组合）。
- * - `mobileTab`：是否进移动端底部 Tab。false 的项（平台/分类）**不是移动端没有
+ * - `mobileTab`：是否进移动端底部 Tab。false 的项（投资人/平台/分类）**不是移动端没有
  *   该页**，而是底部 Tab 位宽有限——每项 `min-w-[3.5rem]`（56px），iPhone 13 的 390px
  *   宽放到 6 项，8~9 项（admin 全量）需 448px 以上、不可用（口径见 #650），故改走页内
- *   入口：分类在产品页、平台在设置页（见 ProductsContent / SettingsContent 的
- *   `lg:hidden` 入口区块）。把取舍写成显式字段，下一个人不必再猜为什么少两项。
+ *   入口（#878 语境分布：投资人在组合页、平台与分类在产品页）。把取舍写成显式字段，
+ *   下一个人不必再猜为什么少这几项。
  * - `mobileEntryHost`：`mobileTab: false` 时，承载其页内入口的那个移动一级 Tab 路径，
- *   也就是该页的**返回目标**。这两页自身没有返回链接、底部导航也不渲染（`MobileLayout`
+ *   也就是该页的**返回目标**。这几页自身没有返回链接、底部导航也不渲染（`MobileLayout`
  *   只在一级 Tab 页显示它），不写明出口就是「可达即被困」（#650 验收第 4 条）。进 Tab 的
  *   项为 `null`。
  */
@@ -30,27 +33,36 @@ export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  /** 进桌面侧栏主导航（#878）；false = 语境分布入口，侧栏不列出 */
+  inNav: boolean;
   adminOnly: boolean;
   mobileTab: boolean;
   mobileEntryHost: string | null;
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: "/dashboard", label: "首页", icon: LayoutDashboard, adminOnly: false, mobileTab: true, mobileEntryHost: null },
-  { href: "/investors", label: "投资人", icon: Users, adminOnly: true, mobileTab: true, mobileEntryHost: null },
-  { href: "/portfolio", label: "组合", icon: Briefcase, adminOnly: false, mobileTab: true, mobileEntryHost: null },
-  { href: "/products", label: "产品", icon: Package, adminOnly: true, mobileTab: true, mobileEntryHost: null },
-  { href: "/platforms", label: "平台", icon: Building2, adminOnly: true, mobileTab: false, mobileEntryHost: "/settings" },
-  { href: "/asset-classifications", label: "分类", icon: Tags, adminOnly: true, mobileTab: false, mobileEntryHost: "/products" },
+  { href: "/dashboard", label: "首页", icon: LayoutDashboard, inNav: true, adminOnly: false, mobileTab: true, mobileEntryHost: null },
+  // 投资人：语境分布入口在组合页头部（#878），侧栏/底部 Tab 不列出，返回宿主=组合
+  { href: "/investors", label: "投资人", icon: Users, inNav: false, adminOnly: true, mobileTab: false, mobileEntryHost: "/portfolio" },
+  { href: "/portfolio", label: "组合", icon: Briefcase, inNav: true, adminOnly: false, mobileTab: true, mobileEntryHost: null },
+  { href: "/products", label: "产品", icon: Package, inNav: true, adminOnly: true, mobileTab: true, mobileEntryHost: null },
+  // 平台 / 分类：语境分布入口在产品页头部（#878），返回宿主=产品
+  { href: "/platforms", label: "平台", icon: Building2, inNav: false, adminOnly: true, mobileTab: false, mobileEntryHost: "/products" },
+  { href: "/asset-classifications", label: "分类", icon: Tags, inNav: false, adminOnly: true, mobileTab: false, mobileEntryHost: "/products" },
   // 注：日志管理已落地为设置页内 Tab（SettingsContent 的 logs Tab，#715），不建独立
   // /settings/logs 路由，故此处无导航项；任务页（/settings/tasks）已随 #715 下线。
-  // 新增项时必须同时决定 mobileTab，填 false 就得补页内入口 + 这里的返回宿主
-  { href: "/settings", label: "设置", icon: Settings, adminOnly: true, mobileTab: true, mobileEntryHost: null },
+  // 新增项时必须同时决定 inNav / mobileTab，填 false 就得补页内入口 + 这里的返回宿主
+  { href: "/settings", label: "设置", icon: Settings, inNav: true, adminOnly: true, mobileTab: true, mobileEntryHost: null },
 ];
 
 /** 按角色过滤后的导航项（viewer 只见非 adminOnly 项；未登录/水合前按 viewer） */
 export function navItemsForRole(role: string | undefined): NavItem[] {
   return role === "admin" ? NAV_ITEMS : NAV_ITEMS.filter((item) => !item.adminOnly);
+}
+
+/** 桌面侧栏主导航项（#878）：角色过滤后再剔除语境分布入口（inNav:false） */
+export function sidebarItemsForRole(role: string | undefined): NavItem[] {
+  return navItemsForRole(role).filter((item) => item.inNav);
 }
 
 /** 移动端一级 Tab 的完整路径（含 basePath 前缀），供 MobileLayout 判定是否显示底部导航 */

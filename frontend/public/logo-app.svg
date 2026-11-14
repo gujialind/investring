@@ -1,0 +1,15 @@
+<svg width="512" height="512" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="InvestRing">
+  <defs>
+    <linearGradient id="ir-bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3D6FE0"/>
+      <stop offset="1" stop-color="#1E3FA8"/>
+    </linearGradient>
+  </defs>
+  <!-- 全幅不透明底（无预圆角）：maskable 遮罩与 Apple 主屏幕自行裁圆，透明角会露底/黑角。
+       mark 缩放 0.8 收进 maskable 安全区（中心 40% 半径），避免遮罩裁切图形。 -->
+  <rect width="32" height="32" fill="url(#ir-bg)"/>
+  <g transform="translate(16 16) scale(0.8) translate(-16 -16)">
+    <path d="M26.63 13.15A11 11 0 1 1 18.85 5.37" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round"/>
+    <path d="M12.5 19.5 24.5 7.5M17.8 7.5h6.7v6.7" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

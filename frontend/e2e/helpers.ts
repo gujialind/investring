@@ -90,6 +90,26 @@ export async function openFilterPanelIfMobile(page: Page, testInfo: TestInfo): P
   await trigger.click();
 }
 
+/**
+ * 打开设置页某个分区（#878 双端形态分流）：桌面是三 Tab（点 tab），移动是分组列表 +
+ * 行级钻取子页（点行 Link）。`goto('/settings')` 在 mobile project 经 proxy 落到
+ * /m/settings，故按落地 pathname 是否带 /m/ 前缀分流，不依赖 testInfo（调用方未必持有）。
+ * desktopTab / mobileRow 分别给两端可见名：日志管理/交易日历同步两端同名；外观桌面在
+ * 「通用」Tab（默认激活）、移动是「外观与主题」行。
+ */
+export async function openSettingsSection(
+  page: Page,
+  desktopTab: string,
+  mobileRow: string,
+): Promise<void> {
+  await page.goto('/settings');
+  if (new URL(page.url()).pathname.startsWith('/m/')) {
+    await page.getByRole('link', { name: mobileRow }).click();
+  } else {
+    await page.getByRole('tab', { name: desktopTab }).click();
+  }
+}
+
 /** 按弹窗标题定位业务 Dialog（Popover 弹层同样带 role=dialog，需用文案区分） */
 export function dialogByTitle(page: Page, title: string | RegExp): Locator {
   return page.locator('[role="dialog"]').filter({ hasText: title }).first();

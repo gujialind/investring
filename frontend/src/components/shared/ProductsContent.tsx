@@ -28,7 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import Link from "next/link";
-import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter } from "lucide-react";
+import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter, Building2 } from "lucide-react";
 import { Product } from "@/types/product";
 import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
@@ -448,15 +448,22 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
         </div>
       </div>
 
-      {/* 移动端入口：分类矩阵管理页。lg:hidden 按**视口宽度**分流而非按端（桌面窄屏同样
-          显示，靠 proxy.ts 按 UA 决定落哪一端），已知缺口见 #650；返回出口由 MobileLayout
-          按 navItems 的 mobileEntryHost 统一提供 */}
-      <Link href="/m/asset-classifications" className="lg:hidden block">
-        <Button variant="outline" size="sm" className="w-full">
-          <Tags className="mr-2 h-4 w-4" />
-          资产分类管理
+      {/* 语境分布入口（#878）：平台与分类管理从产品页头部到达（双端），不再进侧栏/底部 Tab。
+          返回出口由 MobileLayout 按 navItems.mobileEntryHost（=产品）统一提供 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link href={`${basePath}/platforms`}>
+            <Building2 className="mr-2 h-4 w-4" />
+            平台管理
+          </Link>
         </Button>
-      </Link>
+        <Button asChild variant="outline" size="sm">
+          <Link href={`${basePath}/asset-classifications`}>
+            <Tags className="mr-2 h-4 w-4" />
+            资产分类管理
+          </Link>
+        </Button>
+      </div>
 
       <Card data-testid="products-list-card">
         <CardHeader>
