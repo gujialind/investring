@@ -1,5 +1,7 @@
 "use client";
 
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRoleCheck } from "@/hooks/useAuth";
 import LogsContent from "@/components/shared/LogsContent";
@@ -16,9 +18,15 @@ import {
  * 交易日历同步、日志管理（admin）。原「修改密码」Tab 改为弹窗（PasswordCard 触发），
  * 平台/投资人管理移出设置（语境分布：平台在产品页、投资人在组合页）。
  * 移动端走分组列表 + 钻取子页（MobileSettingsList / app/m/settings/[section]），不用本组件。
+ *
+ * ?tab= 深链（#878 L2 Blocker 2）：移动设置子页在桌面 UA 经 proxy 映射到 /settings?tab=，
+ * 这里据此选中对应分区（calendar/logs，其余落通用）。useSearchParams 需 Suspense 边界。
  */
-export default function SettingsContent() {
+function SettingsTabs() {
   const { isAdmin } = useRoleCheck();
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const defaultTab = tabParam === "calendar" || tabParam === "logs" ? tabParam : "general";
 
   return (
     <div className="space-y-6">
@@ -27,7 +35,7 @@ export default function SettingsContent() {
         <p className="text-muted-foreground">系统设置和配置</p>
       </div>
 
-      <Tabs defaultValue="general" className="space-y-4">
+      <Tabs defaultValue={defaultTab} className="space-y-4">
         <TabsList>
           <TabsTrigger value="general">通用</TabsTrigger>
           <TabsTrigger value="calendar">交易日历同步</TabsTrigger>
@@ -53,5 +61,13 @@ export default function SettingsContent() {
         )}
       </Tabs>
     </div>
+  );
+}
+
+export default function SettingsContent() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsTabs />
+    </Suspense>
   );
 }

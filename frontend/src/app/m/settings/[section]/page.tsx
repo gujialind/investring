@@ -16,15 +16,16 @@ import {
 
 /**
  * 移动设置钻取子页（#878）：/m/settings/[section]。非一级 Tab，MobileLayout 不渲染底部
- * 导航，本页自带「返回设置」出口。section 与 MobileSettingsList 的行一一对应；
- * 日志管理 admin-only，viewer 直达 URL 时弹回设置首页。
+ * 导航，本页自带「返回设置」出口。section 与 MobileSettingsList 的行一一对应。
+ * 设置整体 admin-only（#878 验收：viewer 深链拦截）：viewer 直达任意 section 都弹回
+ * 设置首页，由首页 AdminGuard 呈无权限态；非法 section 同样弹回。
  */
-const SECTIONS: Record<string, { title: string; admin?: boolean }> = {
+const SECTIONS: Record<string, { title: string }> = {
   appearance: { title: "外观与主题" },
   datasource: { title: "数据源" },
   system: { title: "系统信息" },
   calendar: { title: "交易日历同步" },
-  logs: { title: "日志管理", admin: true },
+  logs: { title: "日志管理" },
 };
 
 export default function MobileSettingsSectionPage() {
@@ -33,7 +34,7 @@ export default function MobileSettingsSectionPage() {
   const { isAdmin } = useRoleCheck();
   const section = params.section;
   const meta = SECTIONS[section];
-  const forbidden = !meta || (meta.admin && !isAdmin);
+  const forbidden = !meta || !isAdmin;
 
   useEffect(() => {
     if (forbidden) router.replace("/m/settings");

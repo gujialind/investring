@@ -61,6 +61,7 @@ export default function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-label={item.label}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
                   "flex items-center rounded-lg text-sm font-medium transition-colors",

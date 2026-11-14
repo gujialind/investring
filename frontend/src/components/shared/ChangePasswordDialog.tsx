@@ -32,6 +32,14 @@ export default function ChangePasswordDialog({ open, onOpenChange }: ChangePassw
   const changePassword = useChangePassword();
   const [form, setForm] = useState({ old_password: "", new_password: "", confirm_password: "" });
 
+  // 统一关闭收口：取消/Esc/遮罩/右上角关闭都经此清空表单；提交进行中禁止关闭，
+  // 避免「取消」被误解为撤销已提交的改密（mutation 不可中止，成功后仍会登出）。
+  const requestClose = () => {
+    if (changePassword.isPending) return;
+    setForm({ old_password: "", new_password: "", confirm_password: "" });
+    onOpenChange(false);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (form.new_password !== form.confirm_password) {
@@ -57,8 +65,8 @@ export default function ChangePasswordDialog({ open, onOpenChange }: ChangePassw
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setForm({ old_password: "", new_password: "", confirm_password: "" });
-        onOpenChange(next);
+        if (next) onOpenChange(true);
+        else requestClose();
       }}
     >
       <DialogContent>
@@ -98,7 +106,7 @@ export default function ChangePasswordDialog({ open, onOpenChange }: ChangePassw
             />
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" onClick={requestClose} disabled={changePassword.isPending}>
               取消
             </Button>
             <Button type="submit" disabled={changePassword.isPending}>
