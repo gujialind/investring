@@ -13,5 +13,5 @@ def _mock_data_source_probe(monkeypatch):
     """
     monkeypatch.setattr(
         "app.services.data_source_probe.probe_data_source",
-        lambda code, market, data_source: None,
+        lambda db, code, market, data_source: None,
     )

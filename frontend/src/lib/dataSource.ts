@@ -10,6 +10,14 @@ export function availableDataSources(market: string | undefined): string[] {
   return [...DATA_SOURCE_OPTIONS];
 }
 
-/** 数据源切换后果提示（V1 修订版：日涨跌列系统性口径差，非仅除息日；L2 Suggestion 2 补分红披露）。 */
-export const DATA_SOURCE_SWITCH_HINT =
-  "切换后新净值来自新数据源；历史净值默认保留，最近约 10 个交易日将在下次同步时被新源覆盖。日涨跌列口径随源变化（tushare=累计净值总收益口径，akshare=单位净值口径含除息跳水），该列数字会系统性变化，非数据错误。已生成快照不会自动重算，如需账实一致请手动重算。切到 akshare 的场外产品暂不自动检测分红（akshare 分红检测落地前），请按公告手工录入。";
+/** 数据源切换后果提示（L2 Nit：日涨跌口径差与分红后果仅适用场外 CN_OTC；
+ * 场内两源均用上游收盘价涨跌幅、港互认只 akshare，不存在「tushare 累计 vs akshare 单位」口径差）。 */
+export function dataSourceSwitchHint(market: string | undefined): string {
+  const base =
+    "切换后新净值来自新数据源；历史净值默认保留，最近约 10 个交易日将在下次同步时被新源覆盖。已生成快照不会自动重算，如需账实一致请手动重算。";
+  if (market !== "CN_OTC") return base;
+  return (
+    base +
+    "日涨跌列口径随源变化（tushare=累计净值总收益口径，akshare=单位净值口径含除息跳水），该列数字会系统性变化，非数据错误。切到 akshare 的场外产品暂不自动检测分红（akshare 分红检测落地前），请按公告手工录入。"
+  );
+}

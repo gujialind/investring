@@ -18,6 +18,7 @@ from datetime import timedelta
 
 from app.config import get_settings
 from app.services.exceptions import BusinessError
+from app.services.trading_utils import exchange_for_market, try_get_prev_trading_day
 from app.utils.business_time import business_today
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 # 探测预算（独立于同步重试参数，SPEC v1.1 V3）：最多 2 次尝试，重试间隔 1s。
 PROBE_MAX_ATTEMPTS = 2
 PROBE_RETRY_DELAY_SECONDS = 1.0
-# 窄窗自然日：场内/港互认按此窗口取数；场外 akshare 全量下载取最新行（窗口仅作语义说明）。
+# 日历不足时的兜底自然日窗（S4 修订后主口径为交易日历最近 N 开市日，见 probe_data_source）。
 PROBE_WINDOW_DAYS = 10
 
 
@@ -90,11 +91,22 @@ def _classify_probe_error(exc):
     return "unreachable", "数据源暂时不可达，请稍后重试"
 
 
-def probe_data_source(code, market, data_source):
-    """连通检测单点。通过返回 None；失败抛 BusinessError（阻断保存，零写入）。"""
+def probe_data_source(db, code, market, data_source):
+    """连通检测单点。通过返回 None；失败抛 BusinessError（阻断保存，零写入）。
+
+    S4（维护者授权随本批修）：探测窗与同步回看窗同口径——按交易日历取最近
+    NAV_LOOKBACK_TRADING_DAYS 个开市日（港互认走 HKEX），避免长假后首日叠加披露
+    滞后时自然日窄窗误报 no_data 阻断建档/换源。日历不足时兜底自然日窗（不抛错）。
+    """
+    from app.services.market_data_service import NAV_LOOKBACK_TRADING_DAYS
+
     settings = get_settings()
     end = business_today()
-    start = end - timedelta(days=PROBE_WINDOW_DAYS)
+    start = try_get_prev_trading_day(
+        db, end, days=NAV_LOOKBACK_TRADING_DAYS, exchange=exchange_for_market(market)
+    )
+    if start is None:
+        start = end - timedelta(days=PROBE_WINDOW_DAYS)
     start_str = start.strftime("%Y%m%d")
     end_str = end.strftime("%Y%m%d")
 
@@ -151,6 +163,8 @@ def probe_data_source(code, market, data_source):
                 time.sleep(PROBE_RETRY_DELAY_SECONDS)
 
     reason, message = _classify_probe_error(last_exc)
+    # F3：上游原文只进日志，不回显给 API 客户端（details 仅保留已分类字段）。
+    logger.warning("数据源连通检测重试耗尽（%s）：%s", reason, last_exc)
     raise BusinessError(
         "DATA_SOURCE_PROBE_FAILED",
         message,
@@ -159,6 +173,5 @@ def probe_data_source(code, market, data_source):
             "data_source": data_source,
             "market": market,
             "product_code": code,
-            "error": str(last_exc)[:200],
         },
     )

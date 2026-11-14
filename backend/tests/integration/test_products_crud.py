@@ -281,12 +281,60 @@ class TestProductDataSource:
         assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
 
     def test_hk_tushare_rejected(self, client, admin_headers, test_db):
-        create_product(test_db, code="DS006", market="HK_MUTUAL")
+        # 真换源到 tushare（HK 现值 akshare → tushare）仍被硬拦（F1 后同值 no-op 不放宽真实换源）
+        from app.models.product import Product
+
+        p = create_product(test_db, code="DS006", market="HK_MUTUAL")
+        p.data_source = "akshare"
+        test_db.commit()
         resp = client.put(
             "/api/products/DS006/HK_MUTUAL", json={"data_source": "tushare"}, headers=admin_headers
         )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "INVALID_DATA_SOURCE"
+        assert test_db.query(Product).filter_by(code="DS006", market="HK_MUTUAL").first().data_source == "akshare"
+
+    def test_hk_existing_tushare_row_rename_noop(self, client, admin_headers, test_db):
+        """#880 L2 F1 反例：存量 HK_MUTUAL+tushare 行只改名（传原值/不传）→ 200、源不变、无审计、无状态重置。"""
+        import json as _json
+
+        from app.models.audit_log import AuditLog
+        from app.models.product import Product
+
+        p = create_product(test_db, code="DSHK1", market="HK_MUTUAL")
+        p.data_source = "tushare"
+        p.data_source_status = "skipped"
+        p.sync_error = "tushare 不支持 HK_MUTUAL"
+        test_db.commit()
+        for payload in ({"name": "改名A", "data_source": "tushare"}, {"name": "改名B"}):
+            resp = client.put("/api/products/DSHK1/HK_MUTUAL", json=payload, headers=admin_headers)
+            assert resp.status_code == 200, resp.json()
+            got = test_db.query(Product).filter_by(code="DSHK1", market="HK_MUTUAL").first()
+            assert got.data_source == "tushare"
+            assert got.data_source_status == "skipped"  # 无状态重置
+            assert got.sync_error == "tushare 不支持 HK_MUTUAL"
+        assert test_db.query(AuditLog).filter(AuditLog.resource_type == "product").count() == 0
+
+    def test_same_value_probe_not_called(self, client, admin_headers, test_db, monkeypatch):
+        """#880 L2 F2 反例：同值重提交即使探测被覆写为失败也 200（不探）、无状态重置、无审计。"""
+        from app.models.audit_log import AuditLog
+        from app.models.product import Product
+        from app.services.exceptions import BusinessError
+
+        def _fail(db, code, market, data_source):
+            raise BusinessError("DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达", details={"reason": "unreachable"})
+
+        monkeypatch.setattr("app.services.data_source_probe.probe_data_source", _fail)
+        p = create_product(test_db, code="DSSV1.OF", market="CN_OTC")
+        p.data_source_status = "success"
+        test_db.commit()
+        resp = client.put(
+            "/api/products/DSSV1.OF/CN_OTC", json={"data_source": "tushare"}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.json()
+        got = test_db.query(Product).filter_by(code="DSSV1.OF", market="CN_OTC").first()
+        assert got.data_source_status == "success"  # 无状态重置
+        assert test_db.query(AuditLog).filter(AuditLog.resource_type == "product").count() == 0
 
     def test_virtual_rejected(self, client, admin_headers, test_db):
         create_product(test_db, code="DSCASH", market="CN_OTC", product_type="CASH")
@@ -299,7 +347,7 @@ class TestProductDataSource:
     def test_probe_failed_zero_write(self, client, admin_headers, test_db, monkeypatch):
         from app.services.exceptions import BusinessError
 
-        def _fail(code, market, data_source):
+        def _fail(db, code, market, data_source):
             raise BusinessError(
                 "DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达，请稍后重试",
                 details={"reason": "unreachable"},
@@ -354,7 +402,7 @@ class TestProductDataSource:
         from app.models.product import Product
         from app.services.exceptions import BusinessError
 
-        def _fail(code, market, data_source):
+        def _fail(db, code, market, data_source):
             raise BusinessError(
                 "DATA_SOURCE_PROBE_FAILED", "数据源暂时不可达，请稍后重试",
                 details={"reason": "unreachable"},

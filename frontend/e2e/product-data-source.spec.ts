@@ -23,6 +23,11 @@ const HK_DETAIL = {
   product_type: "OEF", display_code: "968050", hk_sale_code: "968050",
   data_source: "akshare", nav_lag_days: 1, confirm_days: 1,
 };
+const OTC_DETAIL = {
+  ...ETF_DETAIL, code: "000001.OF", market: "CN_OTC", name: "华夏成长混合",
+  product_type: "OEF", display_code: "000001", data_source: "tushare", confirm_days: 1,
+};
+const HK_TUSHARE_DETAIL = { ...HK_DETAIL, data_source: "tushare" };
 
 const ETF_ENDPOINT = /\/api\/products\/510300\.SH\/CN_EXCHANGE(\?|$)/;
 const HK_ENDPOINT = /\/api\/products\/1001767344\/HK_MUTUAL(\?|$)/;
@@ -50,9 +55,43 @@ test.describe("产品数据源切换表单（#880）", () => {
     await expect(ds.locator("option")).toHaveCount(2);
     await expect(ds.locator("option").nth(0)).toHaveText("tushare");
     await expect(ds.locator("option").nth(1)).toHaveText("akshare");
-    // 后果提示（V1 修订版：日涨跌列系统性口径差）
-    await expect(dlg.getByText("日涨跌列口径随源变化")).toBeVisible();
+    // 后果提示：场内（CN_EXCHANGE）不显示日涨跌口径差（Nit 按市场限定），仅通用提示
+    await expect(dlg.getByText("切换后新净值来自新数据源")).toBeVisible();
+    await expect(dlg.getByText("日涨跌列口径随源变化")).toHaveCount(0);
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
+  });
+
+  test("场外（CN_OTC）编辑显示日涨跌口径与分红后果提示", async ({ page }) => {
+    await page.route(/\/api\/products\/000001\.OF\/CN_OTC(\?|$)/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 200, json: OTC_DETAIL })
+        : route.continue()
+    );
+    const dlg = await openEditFromDetail(page, "/products/000001.OF?market=CN_OTC");
+    await expect(dlg.getByText("日涨跌列口径随源变化")).toBeVisible();
+    await expect(dlg.getByText("暂不自动检测分红")).toBeVisible();
+  });
+
+  test("存量 HK+tushare 行只改名：不下发 data_source、保存成功（F1）", async ({ page }) => {
+    let putBody: Record<string, unknown> | null = null;
+    await page.route(/\/api\/products\/1001767344\/HK_MUTUAL(\?|$)/, (route) => {
+      const method = route.request().method();
+      if (method === "GET") return route.fulfill({ status: 200, json: HK_TUSHARE_DETAIL });
+      if (method === "PUT") {
+        putBody = route.request().postDataJSON();
+        return route.fulfill({ status: 200, json: { ...HK_TUSHARE_DETAIL, name: putBody!.name } });
+      }
+      return route.continue();
+    });
+    const dlg = await openEditFromDetail(page, "/products/1001767344?market=HK_MUTUAL");
+    // 当前值 tushare 不在可选列表 → 真实显示「tushare（当前值）」，不误导成 akshare
+    await expect(dlg.locator("select#data_source")).toHaveValue("tushare");
+    await dlg.locator("#name").fill("改名不改源");
+    await dlg.getByRole("button", { name: "保存修改" }).click();
+    await expect(dlg).toHaveCount(0);
+    expect(putBody).not.toBeNull();
+    expect(putBody!.name).toBe("改名不改源");
+    expect("data_source" in putBody!).toBe(false);
   });
 
   test("港互认产品数据源下拉只 akshare（tushare 不支持）", async ({ page }) => {

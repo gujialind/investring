@@ -19,7 +19,7 @@ import { DIMENSION_FIELDS, DIMENSION_LABELS, RULE_DIMENSIONS } from "@/lib/dimen
 import { MARKET_OPTIONS } from "@/lib/market";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { useCreateProduct, useUpdateProduct } from "@/hooks/useProduct";
-import { availableDataSources, DATA_SOURCE_SWITCH_HINT } from "@/lib/dataSource";
+import { availableDataSources, dataSourceSwitchHint } from "@/lib/dataSource";
 
 /** 虚拟产品判定（对齐后端 product_service.VIRTUAL_PRODUCT_TYPES）：无数据源概念，不显示控件 */
 const VIRTUAL_PRODUCT_TYPES = ["CASH", "IN_TRANSIT"];
@@ -75,12 +75,15 @@ export default function ProductFormDialog({
   const [formData, setFormData] = useState<Partial<Product>>(EMPTY_FORM);
   // 创建态：用户手改过确认天数后，market/is_qdii 联动预填不再覆盖
   const [confirmDaysTouched, setConfirmDaysTouched] = useState(false);
+  // #880 L2 F1：编辑态仅用户实际改动数据源才下发，避免存量 HK+tushare 行改无关字段被硬拦误伤
+  const [dataSourceTouched, setDataSourceTouched] = useState(false);
 
   // 打开时按两态初始化表单：编辑回填整个产品，创建回初始值
   useEffect(() => {
     if (open) {
       setFormData(editingProduct ?? EMPTY_FORM);
       setConfirmDaysTouched(false);
+      setDataSourceTouched(false);
     }
   }, [open, editingProduct]);
 
@@ -147,8 +150,10 @@ export default function ProductFormDialog({
             confirm_days: formData.confirm_days,
             nav_lag_days: formData.nav_lag_days,
             is_qdii: formData.is_qdii,
-            // #880：净值型才下发数据源（虚拟产品无数据源概念，后端会拒绝）
-            ...(!VIRTUAL_PRODUCT_TYPES.includes(formData.product_type ?? "")
+            // #880 L2 F1：净值型且用户实际改动才下发数据源（未 touched 不下发，
+            // 存量 HK+tushare 行改无关字段走「不带 data_source」路径，不被硬拦误伤）
+            ...(!VIRTUAL_PRODUCT_TYPES.includes(formData.product_type ?? "") &&
+            dataSourceTouched
               ? { data_source: formData.data_source }
               : {}),
           },
@@ -405,16 +410,29 @@ export default function ProductFormDialog({
                 <select
                   id="data_source"
                   value={formData.data_source ?? "tushare"}
-                  onChange={(e) => setFormData({ ...formData, data_source: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, data_source: e.target.value });
+                    setDataSourceTouched(true);
+                  }}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
+                  {/* 当前值不在可选列表（如存量 HK+tushare）时真实显示，避免「显示 akshare 提交 tushare」误导 */}
+                  {!availableDataSources(formData.market).includes(
+                    formData.data_source ?? "tushare"
+                  ) && (
+                    <option value={formData.data_source ?? "tushare"}>
+                      {formData.data_source ?? "tushare"}（当前值）
+                    </option>
+                  )}
                   {availableDataSources(formData.market).map((ds) => (
                     <option key={ds} value={ds}>
                       {ds}
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-muted-foreground">{DATA_SOURCE_SWITCH_HINT}</p>
+                <p className="text-xs text-muted-foreground">
+                  {dataSourceSwitchHint(formData.market)}
+                </p>
               </div>
             )}
           </div>

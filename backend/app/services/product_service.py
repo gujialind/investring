@@ -549,7 +549,7 @@ def create_product(
         validate_data_source(market or "", product_type, data_source)
         from app.services.data_source_probe import probe_data_source
 
-        probe_data_source(code, market or "", data_source)
+        probe_data_source(db, code, market or "", data_source)
     product = Product(
         code=code,
         market=market or "",
@@ -668,20 +668,19 @@ def update_product(
     else:
         effective_confirm_days = product.confirm_days
     validate_confirm_days(effective_market, effective_confirm_days)
-    # issue #880（c/h）：仅当 data_source 显式传入时按合并终态（market+product_type+
-    # data_source）校验；仅值实际变化时连通检测。全部先于写库（含 market 迁移），拒绝即零写入。
-    # 同值重提交不探（下方审计/状态重置亦按实际变化触发，与身份守卫同模式）。
+    # issue #880（c/h + L2 F1）：仅当 data_source 显式传入且**值实际变化**时按合并终态
+    # （market+product_type+data_source）校验 + 连通检测；同值重提交整体 no-op（不校验/不探/
+    # 不审计/不重置），使存量 HK_MUTUAL+tushare 行改无关字段不被硬拦误伤（方案 A：不迁移不后门，
+    # 真实换源到 tushare 仍被 validate_data_source 拦）。全部先于写库（含 market 迁移），拒绝即零写入。
     # 口径收窄（L2 Suggestion 1 处置）：market/product_type 单独变更（不带 data_source）
-    # 不触发源组合校验——存量 HK_MUTUAL+tushare 行的处置口径维护者未定，本 PR 不提前定口径；
-    # 该旁路（零引用产品改 market 到 HK 落 tushare+HK 静默不同步）已知、待存量口径一并处置。
+    # 不触发源组合校验——该旁路（零引用产品改 market 到 HK 落 tushare+HK 静默不同步）已知、待存量口径一并处置。
     old_data_source = product.data_source
-    if "data_source" in updates:
+    if "data_source" in updates and updates["data_source"] != old_data_source:
         effective_type = updates.get("product_type", product.product_type)
         validate_data_source(effective_market, effective_type, updates["data_source"])
-        if updates["data_source"] != old_data_source:
-            from app.services.data_source_probe import probe_data_source
+        from app.services.data_source_probe import probe_data_source
 
-            probe_data_source(code, effective_market, updates["data_source"])
+        probe_data_source(db, code, effective_market, updates["data_source"])
     if market_change:
         # market 是复合主键：price_record 随行迁移（删→改父→重插），不走 setattr；
         # confirm_days 未显式传入时按创建时规则重推导（场内 0 天残留到场外会造成

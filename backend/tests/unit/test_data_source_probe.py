@@ -1,5 +1,5 @@
 """连通检测单点单测（issue #880，SPEC v1.1 V3）：上游全 mock，CI 不跑真实网络。"""
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,6 +14,11 @@ def _hermetic(monkeypatch):
     """去真实 sleep / 业务日 / settings 依赖。"""
     monkeypatch.setattr(probe.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(probe, "business_today", lambda: date(2026, 11, 13))
+    # S4：日历回看 helper 默认 mock（单测不连库）；长假反例自行覆写
+    monkeypatch.setattr(
+        probe, "try_get_prev_trading_day",
+        lambda db, d, days=1, exchange="SSE": d - timedelta(days=14),
+    )
 
     class _Settings:
         tushare_rate_interval = 0.0
@@ -34,7 +39,7 @@ def test_budget_params_pinned():
 
 def test_invalid_source_rejected():
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001.OF", "CN_OTC", "foo")
+        probe.probe_data_source(None, "000001.OF", "CN_OTC", "foo")
     assert e.value.code == "INVALID_DATA_SOURCE"
 
 
@@ -46,7 +51,7 @@ def test_tushare_no_token_rejected_before_fetch(monkeypatch):
     fetch = MagicMock(side_effect=AssertionError("无 token 不应发起上游取数"))
     monkeypatch.setattr(probe, "_fetch_tushare_values", fetch)
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001.OF", "CN_OTC", "tushare")
+        probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare")
     assert e.value.code == "INVALID_DATA_SOURCE"
     assert e.value.details["reason"] == "token_missing"
     fetch.assert_not_called()
@@ -55,20 +60,20 @@ def test_tushare_no_token_rejected_before_fetch(monkeypatch):
 def test_tushare_otc_success(monkeypatch):
     _token_ok(monkeypatch)
     monkeypatch.setattr(probe, "_fetch_tushare_values", lambda *a: [1.0, 1.01])
-    assert probe.probe_data_source("000001.OF", "CN_OTC", "tushare") is None
+    assert probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare") is None
 
 
 def test_tushare_exchange_success(monkeypatch):
     _token_ok(monkeypatch)
     monkeypatch.setattr(probe, "_fetch_tushare_values", lambda *a: [4.083])
-    assert probe.probe_data_source("510300.SH", "CN_EXCHANGE", "tushare") is None
+    assert probe.probe_data_source(None, "510300.SH", "CN_EXCHANGE", "tushare") is None
 
 
 def test_tushare_no_data(monkeypatch):
     _token_ok(monkeypatch)
     monkeypatch.setattr(probe, "_fetch_tushare_values", lambda *a: [])
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001.OF", "CN_OTC", "tushare")
+        probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare")
     assert e.value.code == "DATA_SOURCE_PROBE_FAILED"
     assert e.value.details["reason"] == "no_data"
 
@@ -77,7 +82,7 @@ def test_tushare_unusable_values_no_data(monkeypatch):
     _token_ok(monkeypatch)
     monkeypatch.setattr(probe, "_fetch_tushare_values", lambda *a: [0.0, None, -1.0])
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001.OF", "CN_OTC", "tushare")
+        probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare")
     assert e.value.details["reason"] == "no_data"
 
 
@@ -85,7 +90,7 @@ def test_tushare_transient_retry_then_success(monkeypatch):
     _token_ok(monkeypatch)
     fetch = MagicMock(side_effect=[ConnectionError("reset"), [1.0]])
     monkeypatch.setattr(probe, "_fetch_tushare_values", fetch)
-    assert probe.probe_data_source("000001.OF", "CN_OTC", "tushare") is None
+    assert probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare") is None
     assert fetch.call_count == 2
 
 
@@ -94,7 +99,7 @@ def test_tushare_unreachable_after_retries(monkeypatch):
     fetch = MagicMock(side_effect=ConnectionError("connection refused"))
     monkeypatch.setattr(probe, "_fetch_tushare_values", fetch)
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001.OF", "CN_OTC", "tushare")
+        probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare")
     assert e.value.code == "DATA_SOURCE_PROBE_FAILED"
     assert e.value.details["reason"] == "unreachable"
     assert fetch.call_count == probe.PROBE_MAX_ATTEMPTS
@@ -106,24 +111,24 @@ def test_tushare_auth_error_classified(monkeypatch):
         probe, "_fetch_tushare_values", MagicMock(side_effect=Exception("token 权限不足"))
     )
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001.OF", "CN_OTC", "tushare")
+        probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare")
     assert e.value.details["reason"] == "auth_error"
 
 
 def test_akshare_otc_success(monkeypatch):
     monkeypatch.setattr(probe, "_fetch_akshare_values", lambda *a: [0.988])
-    assert probe.probe_data_source("000001", "CN_OTC", "akshare") is None
+    assert probe.probe_data_source(None, "000001", "CN_OTC", "akshare") is None
 
 
 def test_akshare_hk_success(monkeypatch):
     monkeypatch.setattr(probe, "_fetch_akshare_values", lambda *a: [1.0])
-    assert probe.probe_data_source("9680500001", "HK_MUTUAL", "akshare") is None
+    assert probe.probe_data_source(None, "9680500001", "HK_MUTUAL", "akshare") is None
 
 
 def test_akshare_no_data(monkeypatch):
     monkeypatch.setattr(probe, "_fetch_akshare_values", lambda *a: [])
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001", "CN_OTC", "akshare")
+        probe.probe_data_source(None, "000001", "CN_OTC", "akshare")
     assert e.value.details["reason"] == "no_data"
 
 
@@ -131,7 +136,7 @@ def test_akshare_unreachable_retries(monkeypatch):
     fetch = MagicMock(side_effect=ConnectionError("reset"))
     monkeypatch.setattr(probe, "_fetch_akshare_values", fetch)
     with pytest.raises(BusinessError) as e:
-        probe.probe_data_source("000001", "CN_OTC", "akshare")
+        probe.probe_data_source(None, "000001", "CN_OTC", "akshare")
     assert e.value.details["reason"] == "unreachable"
     assert fetch.call_count == probe.PROBE_MAX_ATTEMPTS
 
@@ -230,6 +235,43 @@ class TestFetchFunctions:
 
         monkeypatch.setattr(ak, "fund_etf_hist_em", lambda **kw: pd.DataFrame())
         assert probe._fetch_akshare_values("CN_EXCHANGE", "510300", "20261101", "20261113") == []
+
+    def test_probe_window_trading_calendar_long_holiday(self, monkeypatch):
+        """S4 反例：长假后首日自然日窗（10-09−10d=09-29）覆盖不到假期前净值（09-28）→
+        旧自然日口径 no_data；交易日历窗（最近 10 开市日=09-28）覆盖→通过。
+        有效性自证：临时把 probe 窗改回自然日，本用例须红；恢复后绿。"""
+        import pandas as pd
+
+        holiday_first = date(2026, 10, 9)
+        monkeypatch.setattr(probe, "business_today", lambda: holiday_first)
+        cal_start = date(2026, 9, 28)
+        monkeypatch.setattr(
+            probe, "try_get_prev_trading_day",
+            lambda db, d, days=1, exchange="SSE": cal_start,
+        )
+
+        class Pro:
+            def fund_nav(self, ts_code, start_date, end_date):
+                nav = "20260928"
+                if start_date <= nav <= end_date:
+                    return pd.DataFrame({"unit_nav": [1.0]})
+                return pd.DataFrame()
+
+        monkeypatch.setattr("app.services.tushare_client._get_tushare_pro", lambda: Pro())
+        assert probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare") is None
+
+    def test_unreachable_details_no_upstream_raw(self, monkeypatch):
+        """F3：探测失败 422 的 details 不含上游原文（error 键/主机名），原文仅进日志。"""
+        _token_ok(monkeypatch)
+        monkeypatch.setattr(
+            probe, "_fetch_tushare_values",
+            MagicMock(side_effect=Exception("connect to secret-host.example.com failed")),
+        )
+        with pytest.raises(BusinessError) as e:
+            probe.probe_data_source(None, "000001.OF", "CN_OTC", "tushare")
+        assert e.value.code == "DATA_SOURCE_PROBE_FAILED"
+        assert "error" not in e.value.details
+        assert "secret-host" not in str(e.value.details)
 
     def test_akshare_invalid_market_raises(self, monkeypatch):
         with pytest.raises(ValueError):
