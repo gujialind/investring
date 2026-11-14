@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
-import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
+import NotificationBell from "./NotificationBell";
 import BottomNav from "@/components/shared/BottomNav";
+import BrandLogo from "@/components/shared/BrandLogo";
+import AccountMenu from "@/components/shared/AccountMenu";
 
 export default function MainLayout({
   children,
@@ -49,7 +52,17 @@ export default function MainLayout({
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
+      {/* 窄屏（<lg）紧凑顶栏：侧栏此时隐藏，Logo/通知/账户入口收进这里，保证账户可达。
+          宽屏由侧栏承载（#878 移除原常驻 Navbar），本栏 lg:hidden 不渲染可见态。 */}
+      <header className="flex h-14 items-center justify-between border-b bg-background px-4 lg:hidden">
+        <Link href="/dashboard" aria-label="InvestRing 首页">
+          <BrandLogo size={22} withWordmark />
+        </Link>
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <AccountMenu collapsed align="end" />
+        </div>
+      </header>
       <div className="flex">
         <Sidebar />
         {/* min-w-0 解除 flex 子项的内容自动最小宽：否则页内的表/长数值会把 main 顶到

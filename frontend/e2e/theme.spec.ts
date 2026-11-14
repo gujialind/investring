@@ -16,6 +16,7 @@ import {
   nearestTradingDay,
   openAppAndAuth,
   openFilterPanelIfMobile,
+  openSettingsSection,
   settlePopovers,
 } from './helpers';
 
@@ -171,8 +172,8 @@ test('深色生效：html.dark + 页面底/卡底/辅助文字/涨跌数值计�
 });
 
 test('持久化：设置页选深色 → 刷新仍暗 → 新 context 复用 storageState 仍暗（B1）', async ({ page, context, browser }) => {
-  await page.goto('/settings');
-  await page.getByRole('tab', { name: '外观' }).click();
+  // #878：外观并入桌面「通用」Tab / 移动「外观与主题」钻取子页，theme-select 锚点不变
+  await openSettingsSection(page, '通用', '外观与主题');
   await page.getByTestId('theme-select').click();
   await page.getByRole('option', { name: '深色' }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);

@@ -25,7 +25,7 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page, Request } from '@playwright/test';
-import { collectPageErrors } from './helpers';
+import { collectPageErrors, openSettingsSection } from './helpers';
 
 const TASK = 'log_cleanup';
 const RUN_PATH = `/api/system/tasks/${TASK}/run`;
@@ -39,13 +39,12 @@ interface RunOutcome {
 }
 
 /**
- * 导航到手动触发入口（#715）：设置页 → 日志管理 Tab → 执行历史子 Tab。
- * 「立即清理」按钮只在执行历史子 Tab 激活时挂载（Radix Tabs 默认卸载非激活面板），
- * 故三条用例都先走这里，再操作 data-testid="log-cleanup-run"。
+ * 导航到手动触发入口（#715；#878 双端分流）：设置页 → 日志管理（桌面 Tab / 移动钻取子页）
+ * → 执行历史子 Tab。「立即清理」按钮只在执行历史子 Tab 激活时挂载（Radix Tabs 默认卸载
+ * 非激活面板），故三条用例都先走这里，再操作 data-testid="log-cleanup-run"。
  */
 async function gotoExecutionsTab(page: Page) {
-  await page.goto('/settings');
-  await page.getByRole('tab', { name: '日志管理' }).click();
+  await openSettingsSection(page, '日志管理', '日志管理');
   await page.getByRole('tab', { name: '执行历史' }).click();
   await expect(page.getByTestId('log-cleanup-run')).toBeVisible({ timeout: 10_000 });
 }

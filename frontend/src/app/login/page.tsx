@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2 } from "lucide-react";
+import BrandLogo from "@/components/shared/BrandLogo";
 
 export default function LoginPage() {
   const { login } = useAuthStore();
@@ -51,6 +52,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-success-soft to-secondary p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
+          <BrandLogo size={48} className="mx-auto mb-2" />
           <CardTitle className="text-2xl font-bold text-foreground">
             InvestRing
           </CardTitle>
