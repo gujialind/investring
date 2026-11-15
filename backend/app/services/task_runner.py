@@ -475,8 +475,8 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     持仓过滤/div_cash 判据（#771/#766）；akshare 另保留 pay_date 仅供调试/参考，
     建事件不消费（#881；消费属分红方式配置需求 PR2）。akshare 无 div_proc 列——
     该接口只列已实施分红（预案防线见 get_fund_div_otc），div_proc 过滤对 akshare 行
-    天然放行；无效行（缺日期/发放日/金额解析失败）由取数层归一 div_cash=None，
-    走既有 dividends_skipped 留痕。
+    天然放行；无效行（缺发放日/金额解析失败/非现金形态）由取数层归一 div_cash=None，
+    走既有 dividends_skipped 留痕；缺权益登记日的行由日期门静默跳过、无留痕。
 
     逐产品 commit/rollback 是编排层有意的 checkpoint 语义：逐只远程 API 调用，
     部分成功须保留，单产品失败仅回滚该产品。

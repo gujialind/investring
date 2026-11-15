@@ -606,7 +606,7 @@ export default function ShareChangeEventsContent({
                             setDivCashError(null);
                             // `|| 0` 使「留空」落到 0 ⇒ 本弹窗产不出后端刻意放行的 NULL 形态：
                             // NULL 只经 CLI（`ir share-event update <ID> --json '{"div_cash":null}'`）
-                            // 或 tushare 分红检测直造进入，口径见 business-constraints 的 #rule-event。
+                            // 或分红检测（tushare/akshare，#881）直造进入，口径见 business-constraints 的 #rule-event。
                             // 补录场景不走这个弹窗，故这里不区分「留空」与「0」，两者都由 handleSubmit
                             // 的 #764 门禁一并拦成内联错误。
                             setFormData({ ...formData, div_cash: parseFloat(e.target.value) || 0 });

@@ -22,7 +22,7 @@ describe("dataSourceSwitchHint", () => {
   it("场外 CN_OTC 含日涨跌口径差与分红后果提示", () => {
     const h = dataSourceSwitchHint("CN_OTC");
     expect(h).toContain("日涨跌列口径随源变化");
-    expect(h).toContain("暂不自动检测分红");
+    expect(h).toContain("仍会自动检测分红");
     expect(h).toContain("切换后新净值来自新数据源");
   });
 
@@ -30,7 +30,7 @@ describe("dataSourceSwitchHint", () => {
     for (const m of ["CN_EXCHANGE", "HK_MUTUAL", undefined, ""]) {
       const h = dataSourceSwitchHint(m);
       expect(h).not.toContain("日涨跌列口径随源变化");
-      expect(h).not.toContain("暂不自动检测分红");
+      expect(h).not.toContain("仍会自动检测分红");
       expect(h).toContain("切换后新净值来自新数据源");
     }
   });

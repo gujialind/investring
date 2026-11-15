@@ -69,7 +69,7 @@ test.describe("产品数据源切换表单（#880）", () => {
     );
     const dlg = await openEditFromDetail(page, "/products/000001.OF?market=CN_OTC");
     await expect(dlg.getByText("日涨跌列口径随源变化")).toBeVisible();
-    await expect(dlg.getByText("暂不自动检测分红")).toBeVisible();
+    await expect(dlg.getByText("仍会自动检测分红")).toBeVisible();
   });
 
   test("存量 HK+tushare 行只改名：不下发 data_source、保存成功（F1）", async ({ page }) => {

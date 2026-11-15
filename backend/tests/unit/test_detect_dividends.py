@@ -300,6 +300,16 @@ class TestAkshareSource:
         assert self._run_ak(test_db, fund, [_akdiv(div_cash=None)]) == (0, [_skip(fund, None)])
         assert _rows(test_db, fund) == []
 
+    def test_akshare_missing_record_date_silent_no_trace(self, test_db):
+        """L2 #885 Nit 反例：缺权益登记日 → 检测器日期门静默跳过，无 dividends_skipped。
+
+        日期门（`if not ex_date_str or not record_date_str`）先于留痕分支执行；
+        取数层归一 div_cash=None 不改变这一去向。
+        """
+        fund = _env(test_db, "AKNOREC", data_source="akshare")
+        assert self._run_ak(test_db, fund, [_akdiv(record_date="")]) == (0, [])
+        assert _rows(test_db, fund) == []
+
     def test_akshare_same_day_announcement(self, test_db):
         fund = _env(test_db, "AKSAME", data_source="akshare")
         assert self._run_ak(
