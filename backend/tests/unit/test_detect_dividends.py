@@ -47,19 +47,37 @@ def _div(**overrides):
     return row
 
 
-def _env(db, suffix, *, positions=(("PF", "PL"),), hold_date=HOLD_DATE, shares=1000.0):
-    """建一只 CN_OTC 基金及若干 `(组合, 平台)` 持仓行，返回基金代码。
+def _akdiv(**overrides):
+    """一条 akshare 分红送配详情归一化公告（#881，键与 `get_fund_div_otc` 返回一致）。
+
+    无 div_proc（该接口只列已实施分红）；pay_date 保留但建事件不消费。
+    """
+    row = {
+        "ex_date": EX.strftime("%Y%m%d"),
+        "record_date": ENT.strftime("%Y%m%d"),
+        "div_cash": 0.0039,
+        "pay_date": "20261021",
+    }
+    row.update(overrides)
+    return row
+
+
+def _env(db, suffix, *, positions=(("PF", "PL"),), hold_date=HOLD_DATE, shares=1000.0,
+         data_source="tushare", market=MARKET):
+    """建一只场外基金及若干 `(组合, 平台)` 持仓行，返回基金代码。
 
     持仓必须落在该组合**最新**快照日上：检测器按 `max(snapshot_date)` 选行，并要求
     `ex_date > 该行快照日`，否则本来就不会建事件（也就不该留痕）。
+    `data_source` 供 #881 源路由用例；`market` 供 HK/场内排除用例。
     """
     fund = f"F771_{suffix}"
-    create_product(db, code=fund, market=MARKET, product_type="OEF")
+    product = create_product(db, code=fund, market=market, product_type="OEF")
+    product.data_source = data_source
     for port, plat in positions:
         create_portfolio(db, code=f"{port}_{suffix}", status="active")
         create_platform(db, code=f"{plat}_{suffix}")
         create_position_snapshot(
-            db, f"{port}_{suffix}", fund, MARKET, snapshot_date=hold_date,
+            db, f"{port}_{suffix}", fund, market, snapshot_date=hold_date,
             platform_code=f"{plat}_{suffix}", shares=shares, market_value=shares,
         )
     db.commit()
@@ -229,3 +247,93 @@ class TestDetectorIdempotency:
         assert _run(test_db, fund, [_div(div_cash=0)]) == (0, [_skip(fund, 0)])
         assert _run(test_db, fund, [_div(div_cash=0.0039)])[0] == 1
         assert len(_rows(test_db, fund)) == 1
+
+
+class TestAkshareSource:
+    """#881：akshare 场外产品进入检测（源无关核心 + 双取数器）。
+
+    A11 回归防线（分红方式配置需求，交叉引用 #881 验收断言 1）：数据源切到
+    akshare 后分红公告仍被检测并产生事件——旧过滤条件（`data_source=="tushare"`）
+    造成的静默失效由本类钉住关闭。共享核心判据（#771/#766）对两源同口径。
+    """
+
+    def _run_ak(self, db, fund, dividends):
+        product = db.query(Product).filter_by(code=fund, market=MARKET).one()
+        with patch("app.services.akshare_client.get_fund_div_otc", return_value=dividends):
+            return _detect_dividends(db, [product])
+
+    def test_akshare_product_creates_pending_event(self, test_db):
+        fund = _env(test_db, "AK", data_source="akshare")
+        detected, skipped = self._run_ak(test_db, fund, [_akdiv()])
+        assert (detected, skipped) == (1, [])
+        event = _rows(test_db, fund)[0]
+        assert (event.status, event.event_type, event.event_source) == (
+            "pending", "dividend_pending", "akshare",
+        )
+        assert "akshare" in event.notes
+        # pay_date 不消费：建事件不带任何适用日期（#881 口径）
+        assert event.cash_pay_date is None and event.share_confirm_date is None
+        assert float(event.div_cash) == 0.0039
+        assert (event.entitlement_date, event.ex_date) == (ENT, EX)
+
+    def test_source_routing_tushare_untouched(self, test_db):
+        fund = _env(test_db, "TS")
+        with patch("app.services.akshare_client.get_fund_div_otc") as ak_fetch:
+            assert _run(test_db, fund, [_div()]) == (1, [])
+            ak_fetch.assert_not_called()
+        assert _rows(test_db, fund)[0].event_source == "tushare"
+
+    def test_mixed_sources_one_batch(self, test_db):
+        ak_fund = _env(test_db, "MIXAK", data_source="akshare")
+        ts_fund = _env(test_db, "MIXTS")
+        ak_prod = test_db.query(Product).filter_by(code=ak_fund, market=MARKET).one()
+        ts_prod = test_db.query(Product).filter_by(code=ts_fund, market=MARKET).one()
+        with patch("app.services.akshare_client.get_fund_div_otc", return_value=[_akdiv()]), \
+             patch("app.services.tushare_client.get_fund_div", return_value=[_div()]):
+            detected, skipped = _detect_dividends(test_db, [ak_prod, ts_prod])
+        assert (detected, skipped) == (2, [])
+        assert _rows(test_db, ak_fund)[0].event_source == "akshare"
+        assert _rows(test_db, ts_fund)[0].event_source == "tushare"
+
+    def test_akshare_invalid_row_skipped_with_trace(self, test_db):
+        fund = _env(test_db, "AKBAD", data_source="akshare")
+        assert self._run_ak(test_db, fund, [_akdiv(div_cash=None)]) == (0, [_skip(fund, None)])
+        assert _rows(test_db, fund) == []
+
+    def test_akshare_same_day_announcement(self, test_db):
+        fund = _env(test_db, "AKSAME", data_source="akshare")
+        assert self._run_ak(
+            test_db, fund, [_akdiv(record_date=EX.strftime("%Y%m%d"))]
+        ) == (1, [])
+        event = _rows(test_db, fund)[0]
+        assert (event.entitlement_date, event.ex_date) == (EX, EX)
+
+    def test_akshare_dedup_idempotent(self, test_db):
+        fund = _env(test_db, "AKIDEM", data_source="akshare")
+        assert self._run_ak(test_db, fund, [_akdiv()])[0] == 1
+        assert self._run_ak(test_db, fund, [_akdiv()]) == (0, [])
+        assert len(_rows(test_db, fund)) == 1
+
+    def test_akshare_api_error_rolls_back_only_that_product(self, test_db):
+        from app.services.akshare_client import AkshareAPIError
+        bad = _env(test_db, "AKERR", data_source="akshare")
+        good = _env(test_db, "AKERRTS")
+        bad_prod = test_db.query(Product).filter_by(code=bad, market=MARKET).one()
+        good_prod = test_db.query(Product).filter_by(code=good, market=MARKET).one()
+        with patch("app.services.akshare_client.get_fund_div_otc",
+                   side_effect=AkshareAPIError("结构漂移")), \
+             patch("app.services.tushare_client.get_fund_div", return_value=[_div()]):
+            detected, _ = _detect_dividends(test_db, [bad_prod, good_prod])
+        assert detected == 1
+        assert _rows(test_db, bad) == []
+        assert len(_rows(test_db, good)) == 1
+
+    @pytest.mark.parametrize("market", ["HK_MUTUAL", "CN_EXCHANGE"])
+    def test_hk_and_exchange_not_detected(self, test_db, market):
+        fund = _env(test_db, f"AK{market[:2]}", data_source="akshare", market=market)
+        product = test_db.query(Product).filter_by(code=fund, market=market).one()
+        with patch("app.services.akshare_client.get_fund_div_otc") as ak_fetch, \
+             patch("app.services.tushare_client.get_fund_div") as ts_fetch:
+            assert _detect_dividends(test_db, [product]) == (0, [])
+        ak_fetch.assert_not_called()
+        ts_fetch.assert_not_called()

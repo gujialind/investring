@@ -152,9 +152,10 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
     已落库、既有 accumulated_nav 已保留，不计入 `failed_products`，但经
     `_derive_log_fields` 落到任务终态的 error_message 上，避免与完全正常的成功同形。
 
-    返回的 `dividends_skipped`（#771）同手法：分红公告有效、但 `div_cash` 缺失或非正，
-    检测器**刻意不建事件**（建了只会永久 pending），只在终态 error_message 留痕，
-    不计入 `failed_products`、不改 status。口径取舍见 `_detect_dividends`。
+    返回的 `dividends_skipped`（#771）同手法：分红公告有效、但 `div_cash` 缺失或非正
+    （含 akshare 无效行经取数层归一为 None，#881），检测器**刻意不建事件**（建了只会
+    永久 pending），只在终态 error_message 留痕，不计入 `failed_products`、不改 status。
+    口径取舍见 `_detect_dividends`。
 
     `new_nav_count`（#747）是本次运行**新增的价格日**总数（增量窗重放回看段不计）：
     调度侧据此判断「是否有新净值值得联动快照」，与 `synced_count`（含幂等重写）分工。
@@ -467,7 +468,15 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
 
 
 def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
-    """分红检测：从 tushare fund_div 获取分红数据，自动创建 pending dividend_pending（方式待定）事件。
+    """分红检测：按产品 data_source 路由取数器（#881），自动创建 pending dividend_pending（方式待定）事件。
+
+    tushare → fund_div；akshare → 东财「分红送配详情」（get_fund_div_otc）。两源归一化
+    形态对齐（ex_date/record_date/div_cash），共享核心完全复用既有事件创建/去重/
+    持仓过滤/div_cash 判据（#771/#766）；akshare 另保留 pay_date 仅供调试/参考，
+    建事件不消费（#881；消费属分红方式配置需求 PR2）。akshare 无 div_proc 列——
+    该接口只列已实施分红（预案防线见 get_fund_div_otc），div_proc 过滤对 akshare 行
+    天然放行；无效行（缺日期/发放日/金额解析失败）由取数层归一 div_cash=None，
+    走既有 dividends_skipped 留痕。
 
     逐产品 commit/rollback 是编排层有意的 checkpoint 语义：逐只远程 API 调用，
     部分成功须保留，单产品失败仅回滚该产品。
@@ -499,6 +508,7 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     现金在途共同化解；逆序（`ex_date < record_date`）仍属脏数据跳过。
     """
     from app.services.tushare_client import get_fund_div, TushareNotConfiguredError, TushareAPIError
+    from app.services.akshare_client import get_fund_div_otc, AkshareAPIError
     from app.services.share_change_event_service import dividend_div_cash_invalid
     from app.constants.share_change_events import PENDING_DIVIDEND_TYPE
     from app.models.share_change_event import ShareChangeEvent
@@ -508,12 +518,20 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     detected = 0
     skipped: List[dict] = []
     skipped_keys = set()
-    otc_products = [p for p in products if p.market == "CN_OTC" and (p.data_source or "tushare") == "tushare"]
+    otc_products = [p for p in products if p.market == "CN_OTC"]
 
     for product in otc_products:
+        source = product.data_source or "tushare"
         try:
-            ts_code = f"{product.code}.OF"
-            dividends = get_fund_div(ts_code)
+            if source == "akshare":
+                source_errors = (AkshareAPIError,)
+                dividends = get_fund_div_otc(product.code)
+                source_note = f"akshare 分红送配详情 {product.code}"
+            else:
+                source_errors = (TushareNotConfiguredError, TushareAPIError)
+                ts_code = f"{product.code}.OF"
+                dividends = get_fund_div(ts_code)
+                source_note = f"tushare fund_div {ts_code}"
 
             for div in dividends:
                 if div.get("div_proc") and div["div_proc"] != "实施":
@@ -603,17 +621,17 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                         ex_date=ex_date,
                         entitlement_date=entitlement_date,
                         platform_code=pos.platform_code,
-                        event_source="tushare",
+                        event_source=source,
                         div_cash=div_cash,
                         status="pending",
-                        notes=f"自动检测：tushare fund_div {ts_code}",
+                        notes=f"自动检测：{source_note}",
                     )
                     db.add(event)
                     detected += 1
 
             db.commit()
 
-        except (TushareNotConfiguredError, TushareAPIError) as e:
+        except source_errors as e:
             logger.warning(f"分红检测跳过 {product.code}: {e}")
             db.rollback()
         except Exception as e:
