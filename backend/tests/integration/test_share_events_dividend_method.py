@@ -256,6 +256,26 @@ def test_http_without_selection_rejects(client, admin_headers, test_db, base, op
     assert test_db.query(ShareChangeEvent).filter_by(parent_event_id=event_id).count() == 0
 
 
+def test_default_config_does_not_fill_method_on_confirm(client, admin_headers, test_db, base):
+    """#887 A3/A12 边界①：存在 default 预选行时，后端确认仍不替用户补方式——
+    无 selection 照样 DIVIDEND_METHOD_REQUIRED，且配置不被反向改写（A6）。"""
+    from app.models.dividend_method_config import DividendMethodConfig
+
+    test_db.add(DividendMethodConfig(
+        portfolio_code=base.port, product_code=base.fund, market=base.market,
+        platform_code=base.plat, dividend_method="reinvest_dividend",
+        effective_from=ENT, source="default",
+    ))
+    test_db.commit()
+    event = _event(test_db, base)
+    _error(_request(client, admin_headers, event.id, "confirm"), "DIVIDEND_METHOD_REQUIRED")
+    test_db.expire_all()
+    config = test_db.query(DividendMethodConfig).filter_by(portfolio_code=base.port).one()
+    assert config.source == "default"
+    assert config.dividend_method == "reinvest_dividend"
+    assert test_db.query(ShareChangeEvent).filter_by(id=event.id).one().event_type == PENDING
+
+
 def test_gate_message_caps_undecided_ids_in_id_order(test_db, ledger):
     """积压超过 10 笔时消息只按 id 序列出前 10 笔并附总数（#782 复审 Nit）。
 

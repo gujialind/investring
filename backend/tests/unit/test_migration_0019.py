@@ -177,6 +177,8 @@ REFERENCE_ROWS = {
                   trade_date=DAY, transfer_group="migration_0019"),
     "share_change_event": dict(portfolio_code="E2E_PORT", event_type="forced_adjustment", cash_change=10,
                                ex_date=DAY, entitlement_date=date(2025, 11, 10), event_source="manual"),
+    "dividend_method_config": dict(portfolio_code="E2E_PORT", platform_code="MYCF",
+                                   dividend_method="reinvest_dividend", effective_from=DAY, source="default"),
 }
 
 

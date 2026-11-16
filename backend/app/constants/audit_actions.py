@@ -37,6 +37,9 @@ RESOURCE_PORTFOLIO = "portfolio"
 # issue #880：产品数据源变更审计（仅 data_source 实际变化埋点，其余产品 CRUD 仍不埋，
 # 见 docs/reference/logging.md 必埋范围）。列宽 String(50)，"product" 远小于上限。
 RESOURCE_PRODUCT = "product"
+# issue #887：分红方式配置写入审计（create/update/delete，提升替换记 update）。
+# 列宽 String(50)，"dividend_config" 远小于上限。
+RESOURCE_DIVIDEND_CONFIG = "dividend_config"
 
 # ---- sentinel ----
 

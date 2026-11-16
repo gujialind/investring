@@ -142,11 +142,12 @@ def main(
     pass
 
 
-# 注册 19 个命令组
+# 注册 20 个命令组
 from ir_cli.commands import (
     asset_classifications,
     auth,
     config_cmd,
+    dividend_config,
     investors,
     portfolios,
     positions,
@@ -184,6 +185,7 @@ app.add_typer(cash_transfers.app, name="cash-transfer", help="现金转移管理
 app.add_typer(sync_jobs.app, name="sync-job", help="同步任务管理")
 app.add_typer(notifications.app, name="notification", help="通知管理")
 app.add_typer(asset_classifications.app, name="asset-classification", help="资产分类维度字典管理")
+app.add_typer(dividend_config.app, name="dividend-config", help="分红方式配置管理")
 
 
 @app.command("schema")

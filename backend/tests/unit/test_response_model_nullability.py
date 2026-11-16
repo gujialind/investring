@@ -41,6 +41,7 @@ from app.models.auth import ApiKey
 from app.schemas.auth import ApiKeyInfo, AuthStatus
 from app.models.asset_classification import AssetClassification
 from app.models.audit_log import AuditLog
+from app.models.dividend_method_config import DividendMethodConfig
 from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
 from app.models.login_log import LoginLog
@@ -61,6 +62,7 @@ from app.models.price_record import PriceRecord
 from app.models.trading_calendar import TradingCalendar
 from app.models.trade import Trade
 from app.schemas.asset_classification import AssetClassificationDetail
+from app.schemas.dividend_config import DividendConfigResponse
 from app.schemas.investor import InvestorResponse
 from app.schemas.market_data import PriceDataResponse
 from app.schemas.log import AuditLogResponse, LoginLogResponse, SystemErrorLogResponse
@@ -131,6 +133,10 @@ ORM_SCHEMA_PAIRS: list[tuple[type, type]] = [
     # market_value/total_cost/profit/cost_per_share 均 nullable，正是本守门管的
     # 列形态；实测收录后无违规、EXCEPTIONS 台账不增不减
     (InvestorHolding, PortfolioInvestorItem),
+    # #887 纳入：分红方式配置 REST 出口（list/resolve/POST）。可空列仅 created_at /
+    # updated_at（DateTime，响应均 Optional[datetime]），其余键与方法列 NOT NULL，
+    # 收录后无违规、EXCEPTIONS 台账不增不减。
+    (DividendMethodConfig, DividendConfigResponse),
 ]
 
 # (模型名, 字段名) -> (kind, 理由)。kind 的机制必须能被 MECHANISM_CHECKERS 机器复核。

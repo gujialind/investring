@@ -26,6 +26,7 @@ from app.models.system_error_log import SystemErrorLog
 from app.models.notification import Notification
 from app.models.idempotency_cache import IdempotencyCache
 from app.models.manual_market_value import ManualMarketValue
+from app.models.dividend_method_config import DividendMethodConfig
 
 __all__ = [
     "Investor",
@@ -55,4 +56,5 @@ __all__ = [
     "Notification",
     "IdempotencyCache",
     "ManualMarketValue",
+    "DividendMethodConfig",
 ]

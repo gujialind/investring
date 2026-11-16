@@ -148,4 +148,10 @@ export const queryKeys = {
   dataSources: {
     config: () => ["data-source-config"] as const,
   },
+  dividendConfigs: {
+    root: ["dividend-configs"] as const,
+    list: (key: unknown) => ["dividend-configs", "list", key] as const,
+    resolve: (key: unknown, entitlementDate: string) =>
+      ["dividend-configs", "resolve", key, entitlementDate] as const,
+  },
 };

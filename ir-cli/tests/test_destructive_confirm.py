@@ -93,6 +93,7 @@ DESTRUCTIVE = [
     (["share-event", "delete", "7"], "DELETE", "/api/share-change-events/7"),
     (["product", "delete", "022959.OF", "CN_OTC"], "DELETE", "/api/products/022959.OF/CN_OTC"),
     (["platform", "delete", "alipay"], "DELETE", "/api/platforms/alipay"),
+    (["dividend-config", "remove", "7"], "DELETE", "/api/dividend-configs/7"),
     (["snapshot", "delete", "P1", "2026-01-05"], "DELETE", "/api/snapshots/P1/2026-01-05"),
 ]
 

@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmInfoDialog, InfoRow } from "@/components/shared/ConfirmInfoDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useShareChangeEventPreview } from "@/hooks/useShareChangeEvent";
+import { useDividendConfigResolve } from "@/hooks/useDividendConfig";
 import { ApiException, getErrorMessage } from "@/lib/api";
 import { normalizePreviewOption } from "@/lib/queryKeys";
 import type { ShareChangeEvent, ShareChangeEventConfirmSelection } from "@/types/share-change-event";
@@ -42,7 +44,7 @@ interface EventConfirmDialogProps {
   onOpenChange: (open: boolean) => void;
   event: ShareChangeEvent | null;
   platformNameMap: Map<string, string>;
-  onConfirm: (selection?: ShareChangeEventConfirmSelection) => void;
+  onConfirm: (selection?: ShareChangeEventConfirmSelection, remember?: boolean) => void;
   isConfirming?: boolean;
 }
 
@@ -72,6 +74,33 @@ function EventConfirmSession({
     }
     return undefined;
   });
+  // A13「记住」勾选：默认不勾选（勾选=显式人工动作），经 onConfirm 传父组件，
+  // 确认成功后才沉淀为 explicit 配置；不勾选绝不衍生写入。
+  const [remember, setRemember] = useState(false);
+  // A12 预选：仅 dividend_pending 且可选方式时解析生效配置（不滤 source，default 预选是本职）。
+  const preselectEnabled = canChooseMethod && event.event_type === "dividend_pending";
+  const { data: resolvedConfig } = useDividendConfigResolve(
+    {
+      portfolio_code: event.portfolio_code,
+      product_code: event.product_code ?? "",
+      platform_code: event.platform_code ?? "",
+      market: event.market,
+    },
+    event.entitlement_date,
+    open && preselectEnabled,
+  );
+  // 命中且用户尚未手动选择（choice 仍 undefined）→ 以配置方式初始化候选（仅方式，
+  // 适用日期仍须用户按形态填写）；手动改选后 choice 已定义，异步到达的预选不覆盖（A6）。
+  useEffect(() => {
+    if (preselectEnabled && resolvedConfig && choice === undefined) {
+      setChoice({ event_type: resolvedConfig.dividend_method });
+    }
+  }, [preselectEnabled, resolvedConfig, choice]);
+  const configSourceLabel = resolvedConfig
+    ? resolvedConfig.source === "default"
+      ? "系统默认，未确认过"
+      : "配置值（自动落地回退）"
+    : null;
   // 带方式即完整候选，原有适用日期必须主动回填。现金到账日=除息日与省略同义；
   // 显式份额确认日=除息日却是非法输入，不能归一掉以绕过后端日期校验。
   const selection: ShareChangeEventConfirmSelection | undefined = choice && (
@@ -121,6 +150,11 @@ function EventConfirmSession({
             <SelectItem value="reinvest_dividend">分红再投资</SelectItem>
           </SelectContent>
         </Select>
+        {configSourceLabel && (
+          <p className="text-xs text-muted-foreground" data-testid="confirm-config-source">
+            {configSourceLabel}
+          </p>
+        )}
       </div>
       {choice?.event_type === "cash_dividend" && (
         <div className="space-y-2" data-testid="confirm-cash-pay-date-field">
@@ -157,6 +191,20 @@ function EventConfirmSession({
           </p>
         </div>
       )}
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id="confirm_remember_method"
+          checked={remember}
+          onCheckedChange={(v) => setRemember(v === true)}
+          disabled={isConfirming}
+        />
+        <Label
+          htmlFor="confirm_remember_method"
+          className="text-xs font-normal text-muted-foreground"
+        >
+          记住本次方式，以后自动入账
+        </Label>
+      </div>
       <p className="text-xs text-muted-foreground">方式和日期仅在确认成功后保存，取消不会修改事件。</p>
     </div>
   );
@@ -171,7 +219,7 @@ function EventConfirmSession({
       error={previewError}
       confirmDisabled={!preview || needsMethod}
       onConfirm={() => {
-        if (preview && !needsMethod && !isConfirming) onConfirm(selection);
+        if (preview && !needsMethod && !isConfirming) onConfirm(selection, remember);
       }}
       isConfirming={isConfirming}
       inputSlot={methodInputs}
