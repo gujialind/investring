@@ -18,6 +18,6 @@ export function dataSourceSwitchHint(market: string | undefined): string {
   if (market !== "CN_OTC") return base;
   return (
     base +
-    "日涨跌列口径随源变化（tushare=累计净值总收益口径，akshare=单位净值口径含除息跳水），该列数字会系统性变化，非数据错误。切到 akshare 的场外产品仍会自动检测分红（东财分红送配详情，#881），与 tushare 同口径建「分红方式待定」事件，确认时选择分红方式；公告发放日暂不消费，预案/无效行跳过留痕。"
+    "日涨跌列口径随源变化（tushare=累计净值总收益口径，akshare=单位净值口径含除息跳水），该列数字会系统性变化，非数据错误。切到 akshare 的场外产品仍会自动检测分红（东财分红送配详情，#881）：若该 (组合, 产品, 市场, 平台) 已有显式分红方式配置，按公告发放日自动建带类型事件（#887 PR2）；未配置时仍建「分红方式待定」事件、确认时人工选方式（A3）。akshare 缺发放日由取数层归一后跳过并留痕（与 tushare 的 pending+degraded 存在差异，统一口径另见 #892）；预案/无效行跳过留痕。"
   );
 }
