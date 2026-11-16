@@ -529,7 +529,10 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                 source_note = f"akshare 分红送配详情 {product.code}"
             else:
                 source_errors = (TushareNotConfiguredError, TushareAPIError)
-                ts_code = f"{product.code}.OF"
+                # 机器码按 #705 约定带 .OF 后缀（seed_base / 净值侧同形）；拼接前剥已有
+                # 后缀，对齐 akshare_client.get_fund_div_otc 的 split(".")[0] 口径——
+                # 否则拼成 "000001.OF.OF"，fund_div 返回 0 行，检测静默空转。
+                ts_code = f"{product.code.split('.')[0]}.OF"
                 dividends = get_fund_div(ts_code)
                 source_note = f"tushare fund_div {ts_code}"
 

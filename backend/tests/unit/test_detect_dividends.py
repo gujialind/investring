@@ -347,3 +347,34 @@ class TestAkshareSource:
             assert _detect_dividends(test_db, [product]) == (0, [])
         ak_fetch.assert_not_called()
         ts_fetch.assert_not_called()
+
+
+class TestTsCodeShape:
+    """hotfix/otc-dividend-ts-code-suffix：ts_code 拼码**形态**钉住。
+
+    机器码按 #705 约定带 .OF（business-constraints rule-product、seed_base 同形）。
+    本类以带后缀的机器码构造产品并断言取数入参——若剥后缀逻辑被去掉，入参变成
+    "….OF.OF"，用例即红（不靠 mock 里的裸码悄悄通过）；裸码用例钉住向后兼容。
+    """
+
+    def test_suffixed_machine_code_normalized_once(self, test_db):
+        fund = _env(test_db, "SUF.OF")  # 机器码 "F771_SUF.OF"，文档化形态
+        product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
+        with patch("app.services.tushare_client.get_fund_div", return_value=[_div()]) as fetch:
+            detected, skipped = _detect_dividends(test_db, [product])
+        fetch.assert_called_once_with(fund)  # "F771_SUF.OF"，而非 "F771_SUF.OF.OF"
+        assert (detected, skipped) == (1, [])
+        event = _rows(test_db, fund)[0]
+        assert event.product_code == fund  # 机器码原样落库，不改写不归一
+        assert (event.status, event.event_type, event.event_source) == (
+            "pending", "dividend_pending", "tushare",
+        )
+        assert fund in event.notes  # notes 用归一后的 ts_code
+
+    def test_bare_code_still_appends_suffix(self, test_db):
+        fund = _env(test_db, "BARE")
+        product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
+        with patch("app.services.tushare_client.get_fund_div", return_value=[_div()]) as fetch:
+            detected, _ = _detect_dividends(test_db, [product])
+        fetch.assert_called_once_with(f"{fund}.OF")
+        assert detected == 1
