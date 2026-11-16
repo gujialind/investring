@@ -29,6 +29,8 @@ export interface DividendConfigKey {
 export interface DividendConfigCreate extends DividendConfigKey {
   dividend_method: DividendMethod;
   effective_from: string;
+  /** 确认弹窗沉淀入口标记（S4 方案 B）：true 时后端取 max(effective_from, 业务当日)。 */
+  from_confirmation?: boolean;
 }
 
 export interface DividendConfigResolveParams extends DividendConfigKey {

@@ -162,8 +162,15 @@ def _validate_key_exists(db: Session, portfolio_code: str, platform_code: str) -
 def create_config(
     db: Session, *, portfolio_code: str, product_code: str, market: Optional[str],
     platform_code: str, dividend_method: str, effective_from: date,
+    from_confirmation: bool = False,
 ) -> DividendMethodConfig:
-    """追加/提升/替换（SPEC §1.2）。default 遇 explicit 写入即提升；历史 explicit 不可改。"""
+    """追加/提升/替换（SPEC §1.2）。default 遇 explicit 写入即提升；历史 explicit 不可改。
+
+    from_confirmation（S4 方案 B，SPEC v1.1 §11.2 决定 2）：确认弹窗沉淀路径把
+    effective_from 取 max(入参, business_today())——「以后自动入账」从业务当日起算，
+    使沉淀行不早于今天，消除迁移 default 行对更早 explicit 的遮蔽；解析单点规则不变。
+    配置页/CLI 用户自选日期（含补录过去，D3）默认 false，取值原样保留。
+    """
     _, resolved_market = resolve_product_market(db, product_code, market)
     _validate_market(resolved_market)
     _validate_method(dividend_method, resolved_market)
@@ -177,6 +184,8 @@ def create_config(
             details={"product_code": product_code, "market": resolved_market},
         )
     _validate_key_exists(db, portfolio_code, platform_code)
+    if from_confirmation:
+        effective_from = max(effective_from, business_today())
 
     existing = db.query(DividendMethodConfig).filter(
         DividendMethodConfig.portfolio_code == portfolio_code,

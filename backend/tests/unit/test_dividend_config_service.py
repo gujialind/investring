@@ -175,6 +175,44 @@ class TestCreate:
         assert exc.value.code == "PRODUCT_NOT_FOUND"
         assert env.query(DividendMethodConfig).count() == 0
 
+    def test_sediment_historical_entitlement_clamps_to_today_eliminating_shadow(self, env):
+        """S4 B：default@今日 + 历史权益登记日沉淀 → effective_from=今日（提升 default），
+        UI 预选与 explicit 检测取同一条 explicit，遮蔽消除。可证伪：回退取值（=权益登记日）
+        则 explicit 落 HIST、resolve 仍回 default，本用例翻红。"""
+        _row(env, source="default", method="reinvest_dividend", eff=TODAY)
+        row = svc.create_config(
+            env, portfolio_code=PORT, product_code=PRODUCT, market="CN_OTC",
+            platform_code=PLATFORM, dividend_method="cash_dividend",
+            effective_from=HIST, from_confirmation=True,
+        )
+        assert row.effective_from == TODAY
+        assert row.source == "explicit"
+        ui = svc.resolve_dividend_method(env, PORT, PRODUCT, "CN_OTC", PLATFORM, TODAY)
+        det = svc.resolve_dividend_method(
+            env, PORT, PRODUCT, "CN_OTC", PLATFORM, TODAY, source_filter="explicit")
+        assert ui.source == "explicit"
+        assert ui.id == det.id
+        assert ui.dividend_method == "cash_dividend"
+
+    def test_sediment_clamps_above_earlier_default(self, env):
+        """S4 B：default@更早 + 历史权益登记日沉淀 → explicit@今日成为最新，default 不再遮蔽。"""
+        _row(env, source="default", method="reinvest_dividend", eff=HIST)
+        row = svc.create_config(
+            env, portfolio_code=PORT, product_code=PRODUCT, market="CN_OTC",
+            platform_code=PLATFORM, dividend_method="cash_dividend",
+            effective_from=HIST, from_confirmation=True,
+        )
+        assert row.effective_from == TODAY
+        ui = svc.resolve_dividend_method(env, PORT, PRODUCT, "CN_OTC", PLATFORM, TODAY)
+        assert ui.id == row.id
+        assert ui.source == "explicit"
+
+    def test_config_page_past_date_not_clamped(self, env):
+        """配置页/CLI（from_confirmation 默认 false）补录过去日期原样保留（D3），不被 clamp。"""
+        row = _create(env, eff=HIST)
+        assert row.effective_from == HIST
+        assert row.source == "explicit"
+
 
 class TestDelete:
     def test_delete_today_ok_with_audit(self, env):

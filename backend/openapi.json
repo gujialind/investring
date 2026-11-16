@@ -9703,6 +9703,11 @@
             "type": "string",
             "format": "date",
             "title": "Effective From"
+          },
+          "from_confirmation": {
+            "type": "boolean",
+            "title": "From Confirmation",
+            "default": false
           }
         },
         "type": "object",

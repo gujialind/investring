@@ -933,6 +933,8 @@ export default function ShareChangeEventsContent({
                   platform_code: ev.platform_code,
                   dividend_method: selection.event_type,
                   effective_from: ev.entitlement_date,
+                  // S4 方案 B：沉淀生效日取 max(权益登记日, 业务当日)，消除 default 遮蔽
+                  from_confirmation: true,
                 });
               }
             },

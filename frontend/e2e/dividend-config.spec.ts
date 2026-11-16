@@ -174,7 +174,8 @@ test.describe('分红方式配置（#887，桌面/移动共用）', () => {
     ]);
     expect(confirmResp.status(), await confirmResp.text()).toBe(200);
     await expect(toast(page, '确认成功')).toBeVisible();
-    // 沉淀走同一 POST，effective_from=权益登记日，source=explicit
+    // 沉淀走同一 POST（from_confirmation=true），effective_from=max(权益登记日, 业务当日)（S4 B）。
+    // 本场景权益登记日=除息日前一交易日（未来），max=权益登记日；历史权益登记日 clamp 由后端单测证伪。
     await expect.poll(async () => (await listConfigs(page, s)).length).toBe(1);
     const configs = await listConfigs(page, s);
     expect(configs[0].dividend_method).toBe('cash_dividend');

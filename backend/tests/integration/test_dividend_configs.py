@@ -133,6 +133,24 @@ class TestCreate:
         assert resp.status_code == 404
         assert resp.json()["detail"]["error"] == "PRODUCT_NOT_FOUND"
 
+    def test_from_confirmation_clamps_effective_from(self, client, admin_headers, env, monkeypatch):
+        """S4 B：from_confirmation=true 时 effective_from 取 max(入参, 业务当日)。"""
+        from datetime import date
+        import app.services.dividend_config_service as svc
+        monkeypatch.setattr(svc, "business_today", lambda: date(2026, 11, 16))
+        resp = client.post("/api/dividend-configs", headers=admin_headers,
+                           json=_body(effective_from="2026-11-10", from_confirmation=True))
+        assert resp.status_code == 200
+        assert resp.json()["effective_from"] == "2026-11-16"
+        assert resp.json()["source"] == "explicit"
+
+    def test_config_page_past_date_preserved(self, client, admin_headers, env):
+        """配置页（from_confirmation 默认 false）补录过去日期原样保留（D3）。"""
+        resp = client.post("/api/dividend-configs", headers=admin_headers,
+                           json=_body(effective_from="2020-01-01"))
+        assert resp.status_code == 200
+        assert resp.json()["effective_from"] == "2020-01-01"
+
     def test_promote_default_via_api(self, client, admin_headers, env):
         _row(env, source="default", method="reinvest_dividend", eff=FUTURE)
         resp = client.post("/api/dividend-configs", headers=admin_headers,

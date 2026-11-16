@@ -65,6 +65,7 @@ def create_dividend_config(
         db, portfolio_code=payload.portfolio_code, product_code=payload.product_code,
         market=payload.market, platform_code=payload.platform_code,
         dividend_method=payload.dividend_method, effective_from=payload.effective_from,
+        from_confirmation=payload.from_confirmation,
     )
     db.commit()
     db.refresh(row)

@@ -14,6 +14,10 @@ class DividendConfigCreate(BaseModel):
     platform_code: str
     dividend_method: str
     effective_from: date
+    # 确认弹窗「一次确认即沉淀」入口标记（#887 S4 方案 B）。true 时 service 把
+    # effective_from 取 max(入参, 业务当日)，使沉淀行不早于今天、消除 default 遮蔽；
+    # 配置页/CLI 用户自选日期（含补录过去，D3）默认 false、不受影响。
+    from_confirmation: bool = False
 
 
 class DividendConfigResponse(BaseModel):
