@@ -89,6 +89,7 @@ describe("queryKeys 全域工厂", () => {
     expect(queryKeys.tradingCalendar.root).toEqual(["trading-calendar"]);
     // dataSources 域无 root，仅单键查询
     expect(queryKeys.dataSources.config()).toEqual(["data-source-config"]);
+    expect(queryKeys.dividendConfigs.root).toEqual(["dividend-configs"]);
   });
 
   it("root 是域内所有键的真前缀（失效整域命中全部子键）", () => {
@@ -115,6 +116,13 @@ describe("queryKeys 全域工厂", () => {
           queryKeys.positions.byPortfolio("P1"),
           queryKeys.positions.list("P1"),
           queryKeys.positions.list("P1", { page: 1 }),
+        ],
+      },
+      {
+        root: queryKeys.dividendConfigs.root,
+        keys: [
+          queryKeys.dividendConfigs.list({ portfolio_code: "P1", product_code: "000300.OF", platform_code: "HBZQ" }),
+          queryKeys.dividendConfigs.resolve({ portfolio_code: "P1", product_code: "000300.OF", platform_code: "HBZQ" }, "2026-11-16"),
         ],
       },
       {

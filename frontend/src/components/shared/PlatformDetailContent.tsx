@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Settings2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import HoldingProductCard from "./HoldingProductCard";
+import DividendConfigDialog from "./DividendConfigDialog";
+import RowActionButton from "./RowActionButton";
 import { cardGridClass } from "./PortfolioHoldings";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
@@ -60,6 +62,11 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   const portfolioCode = params.code as string;
   const platformCode = params.platformCode as string;
   const isMobile = variant === "mobile";
+
+  // #887：CN_OTC 持仓行分红方式配置入口（A14/R10：仅 CN_OTC 出现，HK/场内无入口）
+  const [configTarget, setConfigTarget] = useState<
+    { productCode: string; market: string; productName?: string } | null
+  >(null);
 
   const { data: productData, isLoading: productLoading, isError: productError, error: productErr, refetch: refetchProduct } =
     useHoldingsByProduct(portfolioCode);
@@ -234,17 +241,26 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
                 daily_profit: slice.daily_profit,
               };
               return (
-                <Link
-                  key={`${p.product_code}-${p.market}`}
-                  href={`${basePath}/${portfolioCode}/platforms/${platformCode}/products/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
-                  className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <HoldingProductCard
-                    product={cardProduct}
-                    percent={productPercents[i] ?? 0}
-                    snapshotDate={snapshotDate}
-                  />
-                </Link>
+                <div key={`${p.product_code}-${p.market}`} className="space-y-1">
+                  <Link
+                    href={`${basePath}/${portfolioCode}/platforms/${platformCode}/products/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
+                    className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <HoldingProductCard
+                      product={cardProduct}
+                      percent={productPercents[i] ?? 0}
+                      snapshotDate={snapshotDate}
+                    />
+                  </Link>
+                  {p.market === "CN_OTC" && (
+                    <RowActionButton
+                      icon={Settings2}
+                      label="分红方式"
+                      testId={`dividend-config-entry-${p.product_code}`}
+                      onClick={() => setConfigTarget({ productCode: p.product_code, market: p.market, productName: p.product_name ?? undefined })}
+                    />
+                  )}
+                </div>
               );
             })}
             {cashProduct && (
@@ -397,6 +413,16 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
           </div>
         </div>
       )}
+
+      <DividendConfigDialog
+        open={configTarget !== null}
+        onOpenChange={(o) => !o && setConfigTarget(null)}
+        portfolioCode={portfolioCode}
+        platformCode={platformCode}
+        productCode={configTarget?.productCode ?? ""}
+        market={configTarget?.market ?? ""}
+        productName={configTarget?.productName}
+      />
     </div>
   );
 }
