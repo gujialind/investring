@@ -23,12 +23,13 @@ ENUMS = {
         "share_merge", "bonus_share", "forced_adjustment",
     ),
     "market": ("CN_EXCHANGE", "CN_OTC", "HK_MUTUAL"),
+    "dividend_method": ("cash_dividend", "reinvest_dividend"),
     "product_type": ("ETF", "OEF", "LOF", "CASH"),
     "role": ("admin", "viewer"),
 }
 
 # 日期类字段名（后缀匹配）
-DATE_FIELDS = ("_date",)
+DATE_FIELDS = ("_date", "effective_from")
 
 # 列表默认输出的摘要字段集（对照后端 schemas）；--full 输出全字段，--fields 显式指定优先级最高
 SUMMARY_FIELDS = {
@@ -39,6 +40,7 @@ SUMMARY_FIELDS = {
     "log_audit": "id,investor_code,action,resource_type,resource_id,resource_name,created_at",
     "log_error": "id,error_type,error_code,error_message,request_path,created_at",
     "asset_classification": "code,dimension,name,sort_order,is_active,applicable_asset_classes",
+    "dividend_config": "id,portfolio_code,product_code,market,platform_code,dividend_method,effective_from,source",
 }
 
 

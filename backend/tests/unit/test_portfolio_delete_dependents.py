@@ -23,6 +23,10 @@ EXPECTED_DEPENDENT_TABLES = {
     "share_change_event",
     "subscription",
     "trade",
+    # #887：分红方式配置行引用 portfolio.code（单列 FK RESTRICT）。语义=阻止删除
+    # （持有配置行的组合不能被 delete_draft_portfolio 删除），与 append-only 历史
+    # 保全及 FK RESTRICT 一致；S2-3 语义裁决见 PR #888 处置回传。
+    "dividend_method_config",
 }
 
 # 有 portfolio_code 列但**无外键**的表：元数据派生的删除判据对它们失明，

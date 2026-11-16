@@ -22,6 +22,7 @@
 - **预案/无效行防线**：该接口只列已实施分红（实测 000001 含 2007 年分红预案公告历史，详情仍只有 25 行实施记录，与 tushare `div_proc=实施` 一一对应）。**缺发放日**、金额解析失败或非现金形态（送股/拆分）的行由取数层归一 `div_cash=None`，走检测器既有 #771 闸门跳过并 `dividends_skipped` 留痕；**缺权益登记日**的行由检测器日期门**静默跳过、无 `dividends_skipped` 留痕**（日期门先于留痕分支，与 tushare 同口径）；除息日不可解析的行取数层 WARNING 后丢弃（无法按 (产品, 除息日) 留痕）。
 - **结构漂移响亮失败**：缺必需列 / 上游有行但除息日整段不可解析 → `AkshareAPIError`，该产品本轮检测跳过（warning + rollback，与 tushare API 错误同形），不静默空集。
 - **tushare 路径不变**：`get_fund_div` 归一仍 4 字段（ex_date/record_date/div_cash/div_proc），`div_proc != "实施"` 过滤不变；#771/#766 既有口径对两源同等适用。
+- **分红方式配置层（#887 PR1 已落地，检测接线属 PR2）**：`dividend_method_config` 表存储 (组合,产品,市场,平台) 分红方式，按权益登记日生效区间解析（`dividend_config_service.resolve_dividend_method`）；`source=default`（迁移 0027 回填）仅确认弹窗预选、检测器视同无配置，`source=explicit` 供 PR2 检测器自动建带类型事件。配置可经 `ir dividend-config list/set/remove` 或组合详情 CN_OTC 持仓行入口管理；写侧恒 CN_OTC。**PR1 检测器与账务路径零改动、不消费 pay_date**——explicit 配置自动入账、pay_date 全形态消费与 A5/A5b 日期规则属 PR2，届时本 runbook 增补 degraded 留痕（pay_date_missing/invalid/not_after_ex/reinvest_non_trading_day/reinvest_nav_lag_window/market_not_allowed）。
 
 ## 2. 错过窗口的后果
 

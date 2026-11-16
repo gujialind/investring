@@ -1743,6 +1743,48 @@ ir schema trade
 
 ---
 
+### 4.21 `ir dividend-config` — 分红方式配置管理
+
+场外分红方式配置（issue #887）：键 (组合, 产品, 市场, 平台)，按权益登记日生效区间解析。写侧仅 CN_OTC（港互认/场内不支持，报 `INVALID_PARAM`）；`source=explicit` 为用户显式配置，`default` 为迁移存量预选值（仅确认弹窗预选、不自动入账）。确认分红事件仍须人工选方式，`ir share-event confirm` 不变。
+
+#### `ir dividend-config list`
+
+获取配置历史列表（按生效日降序）。
+
+```bash
+ir dividend-config list --portfolio-code <组合> --product-code <产品> --platform-code <平台> [--market <市场>] [--page N] [--page-size N] [--all]
+```
+
+#### `ir dividend-config set`
+
+写入配置（追加/提升/替换，`source=explicit`）。同键同生效日碰撞：default 行提升为 explicit；今日/未来 explicit 行可替换；历史 explicit 行不同方式拒绝（`INVALID_PARAM`），同方式幂等。`--effective-from` 含当日，允许补录过去日期。
+
+```bash
+ir dividend-config set --portfolio-code <组合> --product-code <产品> --platform-code <平台> --method <方式> --effective-from YYYY-MM-DD [--market <市场>]
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `--method` | 是 | `cash_dividend` 或 `reinvest_dividend` |
+| `--effective-from` | 是 | 生效起始日 YYYY-MM-DD（含当日） |
+| `--market` | 否 | 省略按产品唯一市场补全；写侧仅 CN_OTC |
+
+#### `ir dividend-config remove`
+
+删除配置行（仅今日/未来生效行可删，历史行不可删）。
+
+```bash
+ir dividend-config remove <ID> --yes
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
+
+---
+
+---
+
 ## 5. 典型业务流程
 
 ### 5.1 从零开始创建组合并完成首笔交易

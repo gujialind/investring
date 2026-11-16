@@ -50,6 +50,7 @@ import {
   useUnconfirmShareChangeEvent,
   useCancelShareChangeEvent,
 } from "@/hooks/useShareChangeEvent";
+import { useCreateDividendConfig } from "@/hooks/useDividendConfig";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import type { DateRange } from "react-day-picker";
 import PaginationBar from "@/components/shared/PaginationBar";
@@ -221,6 +222,8 @@ export default function ShareChangeEventsContent({
   // 创建/更新/确认/取消确认/取消走统一 hooks
   const createEvent = useCreateShareChangeEvent(code);
   const confirmEvent = useConfirmShareChangeEvent(code);
+  // A13 沉淀：确认成功后按「记住」勾选写 explicit 配置（与配置页同一 POST/审计）。
+  const rememberConfig = useCreateDividendConfig();
   const unconfirmEvent = useUnconfirmShareChangeEvent(code);
   const cancelEvent = useCancelShareChangeEvent(code);
   // 编辑入口（#342）：仅 pending 父记录可编辑；顶层持 hook（弹窗关闭时 id=0 不触发）
@@ -914,9 +917,28 @@ export default function ShareChangeEventsContent({
         event={confirmingEvent}
         platformNameMap={platformNameMap}
         isConfirming={confirmEvent.isPending}
-        onConfirm={(selection) => {
+        onConfirm={(selection, remember) => {
           if (confirmEventId === null) return;
-          confirmEvent.mutate({ id: confirmEventId, selection }, { onSuccess: () => setConfirmEventId(null) });
+          const ev = confirmingEvent;
+          confirmEvent.mutate({ id: confirmEventId, selection }, {
+            onSuccess: () => {
+              setConfirmEventId(null);
+              // A13：确认成功后、用户勾选「记住」才沉淀（独立 mutation，失败不回滚确认，
+              // SPEC §7.2）。键=事件键，method=本次所选，effective_from=权益登记日。
+              if (remember && selection && ev?.product_code && ev.platform_code && ev.market === "CN_OTC") {
+                rememberConfig.mutate({
+                  portfolio_code: code,
+                  product_code: ev.product_code,
+                  market: ev.market,
+                  platform_code: ev.platform_code,
+                  dividend_method: selection.event_type,
+                  effective_from: ev.entitlement_date,
+                  // S4 方案 B：沉淀生效日取 max(权益登记日, 业务当日)，消除 default 遮蔽
+                  from_confirmation: true,
+                });
+              }
+            },
+          });
         }}
       />
 

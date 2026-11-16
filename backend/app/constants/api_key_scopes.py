@@ -31,6 +31,7 @@ READ_PATHS = frozenset({
     "/api/positions/portfolio/{portfolio_code}/cash-position",
     "/api/snapshots/validation", "/api/snapshots/portfolios/{code}/status",
     "/api/snapshots/portfolios/{code}/list",
+    "/api/dividend-configs", "/api/dividend-configs/resolve",
 })
 
 WRITE_OPERATIONS = frozenset({
@@ -42,6 +43,8 @@ WRITE_OPERATIONS = frozenset({
     ("POST", "/api/portfolios/{portfolio_code}/cash-transfer"),
     ("POST", "/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/confirm"),
     ("POST", "/api/portfolios/{portfolio_code}/cash-transfer/{transfer_group}/cancel"),
+    ("POST", "/api/dividend-configs"),
+    ("DELETE", "/api/dividend-configs/{config_id}"),
 })
 
 # snapshot:ops 只放行「历史补录闭环」必需的 2 个端点：批量删除（打开写入窗口）

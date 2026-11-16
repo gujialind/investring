@@ -50,11 +50,19 @@ def test_whitelist_equals_model_not_null_product_code_columns():
     import app.models  # noqa: F401  确保全部模型注册进 metadata
     from app.models.base import Base
 
+    # 0018 之后新建的表不在本迁移恢复范围（#887 L2 S2-2）：0018 在全新库上先于
+    # 0027 执行，若把后建表追加进 PRODUCT_CODE_COLUMNS，bootstrap 会对尚未建出的表
+    # SELECT/ALTER 直接失败。后建表的 product_code NOT NULL 由其建表迁移自身保证
+    # （0027 create_table nullable=False）。新增此类表必须显式登记进本豁免并写明理由。
+    POST_0018_TABLES = {
+        "dividend_method_config": "0027 (#887) 建表，product_code NOT NULL 由 create_table 保证",
+    }
     required = {
         (table.name, column.name)
         for table in Base.metadata.tables.values()
         for column in table.columns
         if column.name == "product_code" and not column.nullable
+        and table.name not in POST_0018_TABLES
     }
     assert required == set(migration.PRODUCT_CODE_COLUMNS)
     assert len(migration.PRODUCT_CODE_COLUMNS) == 6

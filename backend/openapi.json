@@ -8169,6 +8169,310 @@
         }
       }
     },
+    "/api/dividend-configs": {
+      "get": {
+        "tags": [
+          "分红方式配置"
+        ],
+        "summary": "List Dividend Configs",
+        "operationId": "list_dividend_configs_api_dividend_configs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "portfolio_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Code"
+            }
+          },
+          {
+            "name": "platform_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Platform Code"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Market"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 20,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedDividendConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "分红方式配置"
+        ],
+        "summary": "Create Dividend Config",
+        "operationId": "create_dividend_config_api_dividend_configs_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DividendConfigCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DividendConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dividend-configs/resolve": {
+      "get": {
+        "tags": [
+          "分红方式配置"
+        ],
+        "summary": "Resolve Dividend Config",
+        "description": "确认弹窗预选解析（A12）：按权益登记日取生效行，不滤 source；无命中返回 null。",
+        "operationId": "resolve_dividend_config_api_dividend_configs_resolve_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "portfolio_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Portfolio Code"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Code"
+            }
+          },
+          {
+            "name": "platform_code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Platform Code"
+            }
+          },
+          {
+            "name": "entitlement_date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Entitlement Date"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Market"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DividendConfigResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Resolve Dividend Config Api Dividend Configs Resolve Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dividend-configs/{config_id}": {
+      "delete": {
+        "tags": [
+          "分红方式配置"
+        ],
+        "summary": "Delete Dividend Config",
+        "operationId": "delete_dividend_config_api_dividend_configs__config_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Read Root",
@@ -9366,6 +9670,130 @@
         "type": "object",
         "title": "DataSourceUpdate"
       },
+      "DividendConfigCreate": {
+        "properties": {
+          "portfolio_code": {
+            "type": "string",
+            "title": "Portfolio Code"
+          },
+          "product_code": {
+            "type": "string",
+            "title": "Product Code"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "platform_code": {
+            "type": "string",
+            "title": "Platform Code"
+          },
+          "dividend_method": {
+            "type": "string",
+            "title": "Dividend Method"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date",
+            "title": "Effective From"
+          },
+          "from_confirmation": {
+            "type": "boolean",
+            "title": "From Confirmation",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "portfolio_code",
+          "product_code",
+          "platform_code",
+          "dividend_method",
+          "effective_from"
+        ],
+        "title": "DividendConfigCreate",
+        "description": "分红方式配置写入（#887，SPEC §6）。market 省略按 resolve_product_market 补全；\n写侧恒 CN_OTC（R10）。必填字段显式 null 由 pydantic 校验拒绝（422，#579 口径）。"
+      },
+      "DividendConfigResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "portfolio_code": {
+            "type": "string",
+            "title": "Portfolio Code"
+          },
+          "product_code": {
+            "type": "string",
+            "title": "Product Code"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          },
+          "platform_code": {
+            "type": "string",
+            "title": "Platform Code"
+          },
+          "dividend_method": {
+            "type": "string",
+            "title": "Dividend Method"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date",
+            "title": "Effective From"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "portfolio_code",
+          "product_code",
+          "market",
+          "platform_code",
+          "dividend_method",
+          "effective_from",
+          "source"
+        ],
+        "title": "DividendConfigResponse"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -10513,6 +10941,37 @@
         ],
         "title": "PaginatedCashFlowResponse",
         "description": "现金流水分页响应。total = 筛选后（分页前）的现金变动笔数——\n一笔平台间转移计 2（与各平台账本同构）。"
+      },
+      "PaginatedDividendConfigResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DividendConfigResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "PaginatedDividendConfigResponse"
       },
       "PaginatedInvestorResponse": {
         "properties": {
