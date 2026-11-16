@@ -1,7 +1,7 @@
 """akshare 场外分红取数器 `get_fund_div_otc`（#881）。
 
 上游全 mock（不触网）：列结构 / 每10份÷10 / 无效行归一 / 整段漂移响亮失败 /
-pay_date 保留不消费。检测器侧集成（源路由、去重、同日、留痕、A11 回归）在
+pay_date 归一保留（#887 PR2 起检测器消费，取数器归一逻辑不变）。检测器侧集成（源路由、去重、同日、留痕、A11 回归）在
 `test_detect_dividends.py::TestAkshareSource`。
 
 实证依据（2026-11，只读实测）：000001/000005 列为 年份/权益登记日/除息日/
@@ -55,8 +55,8 @@ class TestNormalization:
         }]
 
     def test_pay_date_retained_not_consumed(self, monkeypatch):
-        # pay_date 仅供调试/参考：归一键固定四个，不从中派生任何事件日期
-        # （#881 口径；消费属分红方式配置需求 PR2）
+        # 取数器归一键固定四个，不从中派生任何事件日期（取数器不消费 pay_date）；
+        # 检测器消费 pay_date 属 #887 PR2（explicit 配置命中时），取数器归一逻辑不变。
         _patch(monkeypatch, [_row()])
         rows = get_fund_div_otc("000001")
         assert set(rows[0]) == {"ex_date", "record_date", "div_cash", "pay_date"}

@@ -470,21 +470,27 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
 
 
 def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict], List[dict]]:
-    """分红检测：按产品 data_source 路由取数器（#881），自动创建 pending dividend_pending（方式待定）事件。
+    """分红检测：按产品 data_source 路由取数器（#881）。无 explicit 配置（含仅 default）时
+    创建 pending dividend_pending（方式待定）事件（A3）；有 explicit 配置时按配置建带类型
+    事件（#887 PR2，A5/A5b 判据见下）。
 
     tushare → fund_div；akshare → 东财「分红送配详情」（get_fund_div_otc）。两源归一化
-    形态对齐（ex_date/record_date/div_cash），共享核心完全复用既有事件创建/去重/
-    持仓过滤/div_cash 判据（#771/#766）；akshare 另保留 pay_date 仅供调试/参考，
-    建事件不消费（#881；消费属分红方式配置需求 PR2）。akshare 无 div_proc 列——
+    形态对齐（ex_date/record_date/div_cash/pay_date），共享核心完全复用既有事件创建/去重/
+    持仓过滤/div_cash 判据（#771/#766）；pay_date 自 #887 PR2 起由检测器消费（explicit
+    配置命中时作适用日期，A5/A5b；两源各取本值不跨源修正 C1）。akshare 无 div_proc 列——
     该接口只列已实施分红（预案防线见 get_fund_div_otc），div_proc 过滤对 akshare 行
     天然放行；无效行（缺发放日/金额解析失败/非现金形态）由取数层归一 div_cash=None，
-    走既有 dividends_skipped 留痕；缺权益登记日的行由日期门静默跳过、无留痕。
+    走既有 dividends_skipped 留痕（缺发放日与金额缺失/非正原因文案分立，S3）；缺权益登记日
+    的行由日期门静默跳过、无留痕。explicit 配置命中但 pay_date/市场/滞后守卫不满足 →
+    回退 pending + dividends_degraded 留痕（与 skipped「不建事件」语义分立）。
 
     逐产品 commit/rollback 是编排层有意的 checkpoint 语义：逐只远程 API 调用，
     部分成功须保留，单产品失败仅回滚该产品。
 
-    返回 `(detected, skipped)`：`skipped` 是「公告有效但因 `div_cash` 缺失/非正而
-    **刻意不建事件**」的留痕（按 `(产品, 除息日)` 去重），供任务日志可见。
+    返回 `(detected, skipped, degraded)`：`skipped` 是「公告有效但因 `div_cash` 缺失/非正
+    （含 akshare 缺发放日取数层归一 None）而**刻意不建事件**」的留痕（按 `(产品, 除息日)` 去重）；
+    `degraded` 是「explicit 配置命中但判据不满足，**建了 pending 但未按配置落地**」的留痕
+    （按 `(产品, 除息日, 组合, 平台)` 去重）。两者均供任务日志可见。
 
     **为什么是「不建事件」而不是「建一条待补录的事件」**（#771）：
     - 建事件需要新状态（或复用 pending + 一个标记列），而 pending 正是病灶本身——
@@ -615,11 +621,18 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict], Lis
                         key = (product.code, ex_date)
                         if key not in skipped_keys:
                             skipped_keys.add(key)
+                            # S3：区分跳过原因文案——akshare 缺发放日由取数层归一 div_cash=None，
+                            # 与「金额缺失/非正」分立（仅留痕文案选择，skip 判定与建事件逻辑不变；
+                            # 缺发放日走 dividends_skipped，不产生 pending+degraded 人工兜底）。
+                            if source == "akshare" and not div.get("pay_date"):
+                                skip_reason = "缺发放日（取数层归一金额 None），未建事件；请核对公告后手工录入"
+                            else:
+                                skip_reason = "每份分红金额缺失或非正，未建事件；请核对公告后手工录入"
                             skipped.append({
                                 "product_code": product.code,
                                 "ex_date": ex_date.isoformat(),
                                 "div_cash": div_cash,
-                                "reason": "每份分红金额缺失或非正，未建事件；请核对公告后手工录入",
+                                "reason": skip_reason,
                             })
                         continue
 

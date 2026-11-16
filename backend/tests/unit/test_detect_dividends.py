@@ -52,7 +52,8 @@ def _div(**overrides):
 def _akdiv(**overrides):
     """一条 akshare 分红送配详情归一化公告（#881，键与 `get_fund_div_otc` 返回一致）。
 
-    无 div_proc（该接口只列已实施分红）；pay_date 保留但建事件不消费。
+    无 div_proc（该接口只列已实施分红）；pay_date 保留，#887 PR2 起 explicit 配置命中时
+    由检测器消费（无配置时仍不消费，A3）。
     """
     row = {
         "ex_date": EX.strftime("%Y%m%d"),
@@ -279,7 +280,7 @@ class TestAkshareSource:
             "pending", "dividend_pending", "akshare",
         )
         assert "akshare" in event.notes
-        # pay_date 不消费：建事件不带任何适用日期（#881 口径）
+        # 无 explicit 配置：pay_date 不消费，建 pending 不带适用日期（A3；有 explicit 时消费见 TestConfigDrivenDetection）
         assert event.cash_pay_date is None and event.share_confirm_date is None
         assert float(event.div_cash) == 0.0039
         assert (event.entitlement_date, event.ex_date) == (ENT, EX)
@@ -307,6 +308,23 @@ class TestAkshareSource:
         fund = _env(test_db, "AKBAD", data_source="akshare")
         assert self._run_ak(test_db, fund, [_akdiv(div_cash=None)]) == (0, [_skip(fund, None)])
         assert _rows(test_db, fund) == []
+
+    def test_akshare_missing_pay_date_skip_reason_distinguished(self, test_db):
+        """S3：akshare 缺发放日 → 取数层归一 div_cash=None → skipped 原因「缺发放日」，
+        与「金额缺失/非正」分立（仅文案区分，不产生 pending+degraded，取数归一逻辑不变）。"""
+        fund = _env(test_db, "AKNOPAY", data_source="akshare")
+        detected, skipped = self._run_ak(test_db, fund, [_akdiv(pay_date="", div_cash=None)])
+        assert detected == 0
+        assert "缺发放日" in skipped[0]["reason"]
+        assert _rows(test_db, fund) == []
+
+    def test_akshare_amount_invalid_skip_reason_generic(self, test_db):
+        """S3：akshare 有发放日但金额无效 → skipped 原因仍「金额缺失/非正」（与缺发放日分立）。"""
+        fund = _env(test_db, "AKAMT", data_source="akshare")
+        detected, skipped = self._run_ak(test_db, fund, [_akdiv(div_cash=None)])  # pay_date 默认存在
+        assert detected == 0
+        assert "金额缺失或非正" in skipped[0]["reason"]
+        assert "缺发放日" not in skipped[0]["reason"]
 
     def test_akshare_missing_record_date_silent_no_trace(self, test_db):
         """L2 #885 Nit 反例：缺权益登记日 → 检测器日期门静默跳过，无 dividends_skipped。

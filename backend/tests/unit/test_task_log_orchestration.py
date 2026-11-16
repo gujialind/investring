@@ -222,6 +222,45 @@ class TestNavSyncDerivation:
         status, total, success, failed, _ = _derive_log_fields("nav_sync", {})
         assert (status, total, success, failed) == ("success", 0, 0, 0)
 
+    def test_dividend_degraded_shows_in_terminal_state_without_failing(self):
+        """#887 PR2 S2：explicit 配置回退待定（建了 pending 但未按配置落地）→ 终态留痕，不算失败。
+
+        与 dividends_skipped「不建事件」语义分立。删掉 _derive_log_fields 的 degraded 拼接段，
+        本用例单独翻红（不靠 dividends_skipped 用例自证）。
+        """
+        status, total, success, failed, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "dividends_degraded": [{
+                "product_code": "007169.OF", "ex_date": "2026-10-19",
+                "portfolio_code": "PF1", "platform_code": "PL1",
+                "config_method": "reinvest_dividend", "reason": "reinvest_nav_lag_window",
+            }],
+        })
+        assert (status, total, success, failed) == ("success", 3, 3, 0)
+        assert total == success + failed
+        assert "分红配置回退待定" in message
+        assert "007169.OF@2026-10-19" in message
+        assert "PF1#PL1" in message
+        assert "reinvest_dividend" in message and "reinvest_nav_lag_window" in message
+
+    def test_dividend_degraded_alongside_skip_and_accum(self):
+        """三类非失败留痕（累计净值降级/分红跳过/分红配置回退）同时出现都保留，不互相覆盖。"""
+        status, _, _, _, message = _derive_log_fields("nav_sync", {
+            "synced_count": 12, "products_count": 3, "failed_products": [],
+            "degraded_products": ["000001.OF"],
+            "dividends_skipped": [{
+                "product_code": "007169.OF", "ex_date": "2026-10-19",
+                "div_cash": None, "reason": "金额缺失",
+            }],
+            "dividends_degraded": [{
+                "product_code": "000002.OF", "ex_date": "2026-10-20",
+                "portfolio_code": "PF1", "platform_code": "PL1",
+                "config_method": "cash_dividend", "reason": "pay_date_missing",
+            }],
+        })
+        assert status == "success"
+        assert "累计净值降级" in message and "分红公告跳过" in message and "分红配置回退待定" in message
+
 
 class TestSnapshotGenerateDerivation:
     """snapshot_generate：#305 语义 + records 归一口径"""

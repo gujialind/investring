@@ -12,6 +12,7 @@ Tushare 客户端限流增强测试（P5.1）
 import math
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 from unittest.mock import patch, MagicMock
 from app.services import tushare_client
@@ -292,3 +293,22 @@ class TestFundDivRowMapping:
 
         assert [item["div_cash"] for item in result] == [None, None]
         assert [item["div_proc"] for item in result] == ["实施", "实施"]
+
+
+class TestPayDateOrNone:
+    """#887 PR2 S2：`_pay_date_or_none` 缺失值归一直接单测（可独立变红）。
+
+    回退归一里的缺失值分支（如去掉 nan/NaT 判断），对应参数化用例单独翻红——
+    不靠 get_fund_div 整体形态自证。
+    """
+
+    @pytest.mark.parametrize("raw,expected", [
+        (None, None),
+        (float("nan"), None),
+        (pd.NaT, None),
+        ("", None),
+        ("20070116", "20070116"),
+    ], ids=["none", "nan", "nat", "empty", "valid"])
+    def test_missing_values_normalized(self, raw, expected):
+        from app.services.tushare_client import _pay_date_or_none
+        assert _pay_date_or_none(raw) == expected
