@@ -379,16 +379,16 @@ def test_real_detector_to_confirmation_preserves_selection_on_redetection(
         "div_cash": 0.1, "div_proc": "实施",
     }
     with patch("app.services.tushare_client.get_fund_div", return_value=[announcement]) as source:
-        assert _detect_dividends(test_db, [product]) == (1, [])
+        assert _detect_dividends(test_db, [product]) == (1, [], [])
         source.assert_called_once_with(f"{base.fund}.OF")
         event = test_db.query(ShareChangeEvent).filter_by(portfolio_code=base.port).one()
         assert (event.event_type, event.status, event.event_source) == (PENDING, "pending", "tushare")
-        assert _detect_dividends(test_db, [product]) == (0, [])
+        assert _detect_dividends(test_db, [product]) == (0, [], [])
         assert auto_confirm_after_snapshot(test_db, base.port, ENT)[0]["code"] == "DIVIDEND_METHOD_REQUIRED"
         response = _request(client, admin_headers, event.id, "confirm", {"event_type": method})
         assert response.status_code == 200, response.text
         before = _state(event)
-        assert _detect_dividends(test_db, [product]) == (0, [])
+        assert _detect_dividends(test_db, [product]) == (0, [], [])
         assert _state(event) == before
         assert test_db.query(ShareChangeEvent).filter_by(portfolio_code=base.port).count() == 1
     _generate(client, admin_headers, base, EX)

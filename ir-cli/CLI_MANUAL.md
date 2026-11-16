@@ -1180,7 +1180,7 @@ ir product update <CODE> <MARKET> [--name <名称>] [--product-type <类型>] [-
 > - **创建/换源净值型必须指定 `--market`**：省略 market 创建净值型 → 422 `INVALID_DATA_SOURCE`（reason=market_missing，契约收紧；旧版曾允许落 market="" 的净值型，现拒绝）
 > - **切换前置连通检测**：仅值实际变化时对目标源取一条真实净值，取不到 → 422 `DATA_SOURCE_PROBE_FAILED` 且零写入；无强制保存。切 tushare 需已配置 token（无 token → 422 `INVALID_DATA_SOURCE`，reason=token_missing）
 > - 切换成功后产品数据源状态置「待验证」（`data_source_status=pending`）、清错误信息，最后同步时间保留；下次净值同步按新源路由。日涨跌列口径随源变化仅适用场外（CN_OTC）（tushare 累计净值总收益口径 / akshare 单位净值口径）；场内两源均用上游收盘价涨跌幅、港互认只 akshare，无此差异。属展示口径差异非账务变化
-> - **分红后果**：切到 `akshare` 的场外产品经东财「分红送配详情」检测分红（#881），与 tushare 同口径建「分红方式待定」事件（事件源标 `akshare`）；发放日不消费、预案/无效行跳过留痕、结构漂移响亮失败，详见 `docs/runbooks/dividend-detection.md`
+> - **分红后果**：切到 `akshare` 的场外产品经东财「分红送配详情」检测分红（#881）：若该 (组合, 产品, 市场, 平台) 已有显式分红方式配置，按公告发放日自动建带类型事件（#887 PR2）；未配置时仍建「分红方式待定」事件（事件源标 `akshare`）、确认时人工选方式（A3）。akshare 缺发放日由取数层归一后跳过并留痕（与 tushare 的 pending+degraded 存在差异，统一口径另见 #892）；预案/无效行跳过留痕、结构漂移响亮失败，详见 `docs/runbooks/dividend-detection.md`
 > - **硬拦例外**：「港互认只 akshare」仅作用于显式传 `--data-source` 的创建/换源；仅改 market（`--json '{"market":...}'`）不带 data_source 不触发源组合校验（已披露取舍）
 
 #### `ir product delete`

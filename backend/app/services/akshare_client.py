@@ -418,9 +418,10 @@ def get_fund_nav_otc(
 def get_fund_div_otc(symbol: str) -> List[Dict[str, Any]]:
     """场外基金分红公告（CN_OTC，东财「分红送配详情」，#881）。
 
-    归一化形态与 `tushare_client.get_fund_div` 对齐（ex_date / record_date / div_cash，
-    YYYYMMDD），供检测器源无关共享核心复用；另保留 pay_date（分红发放日）**仅供
-    调试/参考**——建事件不消费（#881 口径；消费属分红方式配置需求 PR2）。
+    归一化形态与 `tushare_client.get_fund_div` 对齐（ex_date / record_date / div_cash /
+    pay_date，YYYYMMDD），供检测器源无关共享核心复用；pay_date（分红发放日）自 #887 PR2
+    起由检测器消费（explicit 配置命中时作适用日期）。**取数层归一逻辑不变**：缺发放日仍
+    归一 div_cash=None 交检测器 dividends_skipped 跳过留痕（不产生 pending+degraded）。
     symbol 接受 '000001' 或 '000001.OF'（取 . 前部分）。
 
     **预案/无效行防线**：该接口只列已实施分红（作者只读实测：000001 含 2007 年分红

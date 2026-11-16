@@ -236,6 +236,12 @@ CLI 持续轮询）——`pending` 不等于卡死。线程名前缀仍是 `pric
 失败并落 `partial_success`，快照联动补跑据此判断「当日快照未成功」）；`trading_calendar_sync`、
 `log_cleanup` 只填 total 与 success。
 
+`nav_sync` 的 `error_message` 还承载**非失败留痕**（不改 status/records，与 `snapshot_generate`
+用 `error_message` 承载 warnings 同一手法）：累计净值降级（`degraded_products`，#704）、分红公告跳过
+（`dividends_skipped`，`div_cash` 缺失/非正而**不建事件**，#771）、**分红配置回退待定**（`dividends_degraded`，
+#887 PR2：explicit 配置命中但 pay_date/市场/滞后守卫不满足，**建了 pending 但未按配置落地**，reason 与
+A5/A5b 判据见[分红检测 runbook](../runbooks/dividend-detection.md)；与 `dividends_skipped`「不建事件」语义分立）。
+
 > **`records_failed` 为 NULL 表示「未度量」，不是「零失败」**。读侧（含前端与 CLI）不得
 > 把 NULL 折算成 0——本表的初衷就是消灭「恒 null 的摆设列」，那要求空值能表达「不知道」、
 > 有值必须是真的。

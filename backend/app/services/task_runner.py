@@ -243,7 +243,7 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         # 此处保留增量持久化：中途崩溃不丢已同步产品的价格与同步明细
         db.commit()
 
-    dividends_detected, dividends_skipped = _detect_dividends(db, products)
+    dividends_detected, dividends_skipped, dividends_degraded = _detect_dividends(db, products)
 
     return {
         "synced_count": total_synced,
@@ -254,6 +254,8 @@ def run_nav_sync(db: Session, log_id: int) -> dict:
         "dividends_detected": dividends_detected,
         # #771：因 div_cash 缺失/非正而未建事件的公告，供 _derive_log_fields 落终态留痕
         "dividends_skipped": dividends_skipped,
+        # #887 PR2：explicit 配置命中但 pay_date/市场/滞后守卫不满足 → 建 pending 但未按配置落地
+        "dividends_degraded": dividends_degraded,
         "target_date": target_date.isoformat(),
     }
 
@@ -467,22 +469,28 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     return outcome
 
 
-def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
-    """分红检测：按产品 data_source 路由取数器（#881），自动创建 pending dividend_pending（方式待定）事件。
+def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict], List[dict]]:
+    """分红检测：按产品 data_source 路由取数器（#881）。无 explicit 配置（含仅 default）时
+    创建 pending dividend_pending（方式待定）事件（A3）；有 explicit 配置时按配置建带类型
+    事件（#887 PR2，A5/A5b 判据见下）。
 
     tushare → fund_div；akshare → 东财「分红送配详情」（get_fund_div_otc）。两源归一化
-    形态对齐（ex_date/record_date/div_cash），共享核心完全复用既有事件创建/去重/
-    持仓过滤/div_cash 判据（#771/#766）；akshare 另保留 pay_date 仅供调试/参考，
-    建事件不消费（#881；消费属分红方式配置需求 PR2）。akshare 无 div_proc 列——
+    形态对齐（ex_date/record_date/div_cash/pay_date），共享核心完全复用既有事件创建/去重/
+    持仓过滤/div_cash 判据（#771/#766）；pay_date 自 #887 PR2 起由检测器消费（explicit
+    配置命中时作适用日期，A5/A5b；两源各取本值不跨源修正 C1）。akshare 无 div_proc 列——
     该接口只列已实施分红（预案防线见 get_fund_div_otc），div_proc 过滤对 akshare 行
     天然放行；无效行（缺发放日/金额解析失败/非现金形态）由取数层归一 div_cash=None，
-    走既有 dividends_skipped 留痕；缺权益登记日的行由日期门静默跳过、无留痕。
+    走既有 dividends_skipped 留痕（缺发放日与金额缺失/非正原因文案分立，S3）；缺权益登记日
+    的行由日期门静默跳过、无留痕。explicit 配置命中但 pay_date/市场/滞后守卫不满足 →
+    回退 pending + dividends_degraded 留痕（与 skipped「不建事件」语义分立）。
 
     逐产品 commit/rollback 是编排层有意的 checkpoint 语义：逐只远程 API 调用，
     部分成功须保留，单产品失败仅回滚该产品。
 
-    返回 `(detected, skipped)`：`skipped` 是「公告有效但因 `div_cash` 缺失/非正而
-    **刻意不建事件**」的留痕（按 `(产品, 除息日)` 去重），供任务日志可见。
+    返回 `(detected, skipped, degraded)`：`skipped` 是「公告有效但因 `div_cash` 缺失/非正
+    （含 akshare 缺发放日取数层归一 None）而**刻意不建事件**」的留痕（按 `(产品, 除息日)` 去重）；
+    `degraded` 是「explicit 配置命中但判据不满足，**建了 pending 但未按配置落地**」的留痕
+    （按 `(产品, 除息日, 组合, 平台)` 去重）。两者均供任务日志可见。
 
     **为什么是「不建事件」而不是「建一条待补录的事件」**（#771）：
     - 建事件需要新状态（或复用 pending + 一个标记列），而 pending 正是病灶本身——
@@ -509,7 +517,9 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     """
     from app.services.tushare_client import get_fund_div, TushareNotConfiguredError, TushareAPIError
     from app.services.akshare_client import get_fund_div_otc, AkshareAPIError
-    from app.services.share_change_event_service import dividend_div_cash_invalid
+    from app.services.share_change_event_service import dividend_div_cash_invalid, REINVEST_ALLOWED_MARKETS
+    from app.services.dividend_config_service import resolve_dividend_method
+    from app.services.trading_utils import exchange_for_market, try_get_next_trading_day, is_trading_day
     from app.constants.share_change_events import PENDING_DIVIDEND_TYPE
     from app.models.share_change_event import ShareChangeEvent
     from app.models.portfolio_position import PortfolioPosition
@@ -518,6 +528,9 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
     detected = 0
     skipped: List[dict] = []
     skipped_keys = set()
+    # #887 PR2：degraded = 建了 pending 但未按 explicit 配置落地（与 skipped「不建事件」分立）
+    degraded: List[dict] = []
+    degraded_keys = set()
     otc_products = [p for p in products if p.market == "CN_OTC"]
 
     for product in otc_products:
@@ -608,13 +621,89 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                         key = (product.code, ex_date)
                         if key not in skipped_keys:
                             skipped_keys.add(key)
+                            # S3：区分跳过原因文案——akshare 缺发放日由取数层归一 div_cash=None，
+                            # 与「金额缺失/非正」分立（仅留痕文案选择，skip 判定与建事件逻辑不变；
+                            # 缺发放日走 dividends_skipped，不产生 pending+degraded 人工兜底）。
+                            if source == "akshare" and not div.get("pay_date"):
+                                skip_reason = "缺发放日（取数层归一金额 None），未建事件；请核对公告后手工录入"
+                            else:
+                                skip_reason = "每份分红金额缺失或非正，未建事件；请核对公告后手工录入"
                             skipped.append({
                                 "product_code": product.code,
                                 "ex_date": ex_date.isoformat(),
                                 "div_cash": div_cash,
-                                "reason": "每份分红金额缺失或非正，未建事件；请核对公告后手工录入",
+                                "reason": skip_reason,
                             })
                         continue
+
+                    # #887 PR2：explicit 配置接线（source_filter=explicit；default 视同无配置，A3）。
+                    # 账务路径不读配置——这里只决定建何种 pending 事件，确认/自动确认/闸门/重放仍走既有路径。
+                    event_type = PENDING_DIVIDEND_TYPE
+                    config = resolve_dividend_method(
+                        db, pos.portfolio_code, product.code, product.market,
+                        pos.platform_code, entitlement_date, source_filter="explicit",
+                    )
+                    cash_pay_date = None
+                    share_confirm_date = None
+                    notes = f"自动检测：{source_note}"
+                    if config is not None:
+                        method = config.dividend_method
+                        pay_raw = div.get("pay_date")
+                        pay_missing = pay_raw is None or str(pay_raw).strip() == ""
+                        pay_date = None
+                        if not pay_missing:
+                            try:
+                                pay_date = datetime.strptime(str(pay_raw).strip(), "%Y%m%d").date()
+                            except ValueError:
+                                pay_date = None
+                        degraded_reason = None
+                        if method == "reinvest_dividend" and product.market not in REINVEST_ALLOWED_MARKETS:
+                            degraded_reason = "market_not_allowed"
+                        elif pay_date is None:
+                            degraded_reason = "pay_date_missing" if pay_missing else "pay_date_invalid"
+                        elif method == "cash_dividend":
+                            # A5/R8：同日现金严格晚于除息日；非同日允许等于（不比人工路径更严）
+                            same_day = entitlement_date == ex_date
+                            if pay_date < ex_date or (same_day and pay_date == ex_date):
+                                degraded_reason = "pay_date_not_after_ex"
+                            else:
+                                event_type = "cash_dividend"
+                                cash_pay_date = pay_date
+                        elif method == "reinvest_dividend":
+                            exchange = exchange_for_market(product.market)
+                            if pay_date <= ex_date:
+                                degraded_reason = "pay_date_not_after_ex"
+                            elif not is_trading_day(db, pay_date, exchange=exchange):
+                                degraded_reason = "reinvest_non_trading_day"
+                            else:
+                                # A5b：再投滞后守卫 pay >= ex 后第 nav_lag_days+1 个交易日；
+                                # nav_lag_days=0 退化为 pay 晚于 ex（既有人工路径不变）；日历耗尽回退待定
+                                lag_day = try_get_next_trading_day(
+                                    db, ex_date, days=(product.nav_lag_days or 0) + 1, exchange=exchange,
+                                )
+                                if lag_day is None or pay_date < lag_day:
+                                    degraded_reason = "reinvest_nav_lag_window"
+                                else:
+                                    event_type = "reinvest_dividend"
+                                    share_confirm_date = pay_date
+                        if degraded_reason is not None:
+                            event_type = PENDING_DIVIDEND_TYPE
+                            cash_pay_date = None
+                            share_confirm_date = None
+                            notes = f"自动检测：{source_note}（explicit {method} 回退待定：{degraded_reason}）"
+                            dkey = (product.code, ex_date, pos.portfolio_code, pos.platform_code)
+                            if dkey not in degraded_keys:
+                                degraded_keys.add(dkey)
+                                degraded.append({
+                                    "product_code": product.code,
+                                    "ex_date": ex_date.isoformat(),
+                                    "portfolio_code": pos.portfolio_code,
+                                    "platform_code": pos.platform_code,
+                                    "config_method": method,
+                                    "reason": degraded_reason,
+                                })
+                        else:
+                            notes = f"自动检测：{source_note}（explicit 配置 {method}）"
 
                     event = ShareChangeEvent(
                         portfolio_code=pos.portfolio_code,
@@ -626,8 +715,10 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
                         platform_code=pos.platform_code,
                         event_source=source,
                         div_cash=div_cash,
+                        cash_pay_date=cash_pay_date,
+                        share_confirm_date=share_confirm_date,
                         status="pending",
-                        notes=f"自动检测：{source_note}",
+                        notes=notes,
                     )
                     db.add(event)
                     detected += 1
@@ -641,7 +732,7 @@ def _detect_dividends(db: Session, products: list) -> Tuple[int, List[dict]]:
             logger.error(f"分红检测失败 {product.code}: {e}")
             db.rollback()
 
-    return detected, skipped
+    return detected, skipped, degraded
 
 
 def run_calendar_sync(db: Session, year: Optional[int] = None) -> dict:
@@ -759,6 +850,17 @@ def _derive_log_fields(
                     f"{item.get('product_code', '?')}@{item.get('ex_date', '?')} "
                     f"div_cash={item.get('div_cash')}（{item.get('reason', '金额不可用')}）"
                     for item in skipped_dividends
+                )
+            )
+        # #887 PR2：explicit 配置回退待定（建了 pending 但未按配置落地），与跳过语义分立
+        degraded_dividends = result.get("dividends_degraded") or []
+        if degraded_dividends:
+            segments.append(
+                "分红配置回退待定: " + "; ".join(
+                    f"{item.get('product_code', '?')}@{item.get('ex_date', '?')} "
+                    f"{item.get('portfolio_code', '?')}#{item.get('platform_code', '?')} "
+                    f"（{item.get('config_method', '?')} → {item.get('reason', '?')}）"
+                    for item in degraded_dividends
                 )
             )
         error_message = (" | ".join(segments)[:ERROR_MESSAGE_MAX] if segments else None)

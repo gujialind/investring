@@ -15,15 +15,17 @@
 归一为 None（形态用例在 `test_tushare_rate_limit.py::TestFundDivRowMapping`），检测口
 复用服务层判据自带 `is_finite` 防御——本文件的用例**打桩绕过取数层**，钉的是第二道。
 """
-from datetime import date
+from datetime import date, timedelta
 import math
 from unittest.mock import patch
 
 import pytest
 
 from app.models.product import Product
+from app.models.dividend_method_config import DividendMethodConfig
 from app.models.share_change_event import ShareChangeEvent
 from app.services.task_runner import _detect_dividends
+from app.services.trading_utils import try_get_next_trading_day, is_trading_day
 from tests.factories import (
     create_platform, create_portfolio, create_position_snapshot, create_product,
 )
@@ -50,7 +52,8 @@ def _div(**overrides):
 def _akdiv(**overrides):
     """一条 akshare 分红送配详情归一化公告（#881，键与 `get_fund_div_otc` 返回一致）。
 
-    无 div_proc（该接口只列已实施分红）；pay_date 保留但建事件不消费。
+    无 div_proc（该接口只列已实施分红）；pay_date 保留，#887 PR2 起 explicit 配置命中时
+    由检测器消费（无配置时仍不消费，A3）。
     """
     row = {
         "ex_date": EX.strftime("%Y%m%d"),
@@ -85,10 +88,15 @@ def _env(db, suffix, *, positions=(("PF", "PL"),), hold_date=HOLD_DATE, shares=1
 
 
 def _run(db, fund, dividends):
-    """取回产品对象后跑检测（`get_fund_div` 打桩，不触网），返回 `(detected, skipped)`。"""
+    """取回产品对象后跑检测（`get_fund_div` 打桩，不触网），返回 `(detected, skipped)`。
+
+    本文件用例均无 explicit 配置行（#771/#881 口径），degraded 恒空，故只取前二元组；
+    PR2 配置接线/degraded 专项见 TestConfigDrivenDetection（直接取三元组）。
+    """
     product = db.query(Product).filter_by(code=fund, market=MARKET).one()
     with patch("app.services.tushare_client.get_fund_div", return_value=dividends):
-        return _detect_dividends(db, [product])
+        detected, skipped, _degraded = _detect_dividends(db, [product])
+    return detected, skipped
 
 
 def _rows(db, fund):
@@ -260,7 +268,8 @@ class TestAkshareSource:
     def _run_ak(self, db, fund, dividends):
         product = db.query(Product).filter_by(code=fund, market=MARKET).one()
         with patch("app.services.akshare_client.get_fund_div_otc", return_value=dividends):
-            return _detect_dividends(db, [product])
+            detected, skipped, _degraded = _detect_dividends(db, [product])
+        return detected, skipped
 
     def test_akshare_product_creates_pending_event(self, test_db):
         fund = _env(test_db, "AK", data_source="akshare")
@@ -271,7 +280,7 @@ class TestAkshareSource:
             "pending", "dividend_pending", "akshare",
         )
         assert "akshare" in event.notes
-        # pay_date 不消费：建事件不带任何适用日期（#881 口径）
+        # 无 explicit 配置：pay_date 不消费，建 pending 不带适用日期（A3；有 explicit 时消费见 TestConfigDrivenDetection）
         assert event.cash_pay_date is None and event.share_confirm_date is None
         assert float(event.div_cash) == 0.0039
         assert (event.entitlement_date, event.ex_date) == (ENT, EX)
@@ -290,7 +299,7 @@ class TestAkshareSource:
         ts_prod = test_db.query(Product).filter_by(code=ts_fund, market=MARKET).one()
         with patch("app.services.akshare_client.get_fund_div_otc", return_value=[_akdiv()]), \
              patch("app.services.tushare_client.get_fund_div", return_value=[_div()]):
-            detected, skipped = _detect_dividends(test_db, [ak_prod, ts_prod])
+            detected, skipped, _ = _detect_dividends(test_db, [ak_prod, ts_prod])
         assert (detected, skipped) == (2, [])
         assert _rows(test_db, ak_fund)[0].event_source == "akshare"
         assert _rows(test_db, ts_fund)[0].event_source == "tushare"
@@ -299,6 +308,23 @@ class TestAkshareSource:
         fund = _env(test_db, "AKBAD", data_source="akshare")
         assert self._run_ak(test_db, fund, [_akdiv(div_cash=None)]) == (0, [_skip(fund, None)])
         assert _rows(test_db, fund) == []
+
+    def test_akshare_missing_pay_date_skip_reason_distinguished(self, test_db):
+        """S3：akshare 缺发放日 → 取数层归一 div_cash=None → skipped 原因「缺发放日」，
+        与「金额缺失/非正」分立（仅文案区分，不产生 pending+degraded，取数归一逻辑不变）。"""
+        fund = _env(test_db, "AKNOPAY", data_source="akshare")
+        detected, skipped = self._run_ak(test_db, fund, [_akdiv(pay_date="", div_cash=None)])
+        assert detected == 0
+        assert "缺发放日" in skipped[0]["reason"]
+        assert _rows(test_db, fund) == []
+
+    def test_akshare_amount_invalid_skip_reason_generic(self, test_db):
+        """S3：akshare 有发放日但金额无效 → skipped 原因仍「金额缺失/非正」（与缺发放日分立）。"""
+        fund = _env(test_db, "AKAMT", data_source="akshare")
+        detected, skipped = self._run_ak(test_db, fund, [_akdiv(div_cash=None)])  # pay_date 默认存在
+        assert detected == 0
+        assert "金额缺失或非正" in skipped[0]["reason"]
+        assert "缺发放日" not in skipped[0]["reason"]
 
     def test_akshare_missing_record_date_silent_no_trace(self, test_db):
         """L2 #885 Nit 反例：缺权益登记日 → 检测器日期门静默跳过，无 dividends_skipped。
@@ -333,7 +359,7 @@ class TestAkshareSource:
         with patch("app.services.akshare_client.get_fund_div_otc",
                    side_effect=AkshareAPIError("结构漂移")), \
              patch("app.services.tushare_client.get_fund_div", return_value=[_div()]):
-            detected, _ = _detect_dividends(test_db, [bad_prod, good_prod])
+            detected, _, _ = _detect_dividends(test_db, [bad_prod, good_prod])
         assert detected == 1
         assert _rows(test_db, bad) == []
         assert len(_rows(test_db, good)) == 1
@@ -344,7 +370,7 @@ class TestAkshareSource:
         product = test_db.query(Product).filter_by(code=fund, market=market).one()
         with patch("app.services.akshare_client.get_fund_div_otc") as ak_fetch, \
              patch("app.services.tushare_client.get_fund_div") as ts_fetch:
-            assert _detect_dividends(test_db, [product]) == (0, [])
+            assert _detect_dividends(test_db, [product]) == (0, [], [])
         ak_fetch.assert_not_called()
         ts_fetch.assert_not_called()
 
@@ -361,7 +387,7 @@ class TestTsCodeShape:
         fund = _env(test_db, "SUF.OF")  # 机器码 "F771_SUF.OF"，文档化形态
         product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
         with patch("app.services.tushare_client.get_fund_div", return_value=[_div()]) as fetch:
-            detected, skipped = _detect_dividends(test_db, [product])
+            detected, skipped, _ = _detect_dividends(test_db, [product])
         fetch.assert_called_once_with(fund)  # "F771_SUF.OF"，而非 "F771_SUF.OF.OF"
         assert (detected, skipped) == (1, [])
         event = _rows(test_db, fund)[0]
@@ -375,6 +401,170 @@ class TestTsCodeShape:
         fund = _env(test_db, "BARE")
         product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
         with patch("app.services.tushare_client.get_fund_div", return_value=[_div()]) as fetch:
-            detected, _ = _detect_dividends(test_db, [product])
+            detected, _, _ = _detect_dividends(test_db, [product])
         fetch.assert_called_once_with(f"{fund}.OF")
         assert detected == 1
+
+
+class TestConfigDrivenDetection:
+    """#887 PR2：explicit 配置接线 + A5/A5b 日期规则 + degraded 留痕 + A3 反向防线。
+
+    检测器只决定建何种 pending 事件；确认/自动确认/闸门/重放仍走既有账务路径（不读配置）。
+    degraded = 建了 pending 但未按 explicit 配置落地（与 skipped「不建事件」语义分立）。
+    """
+
+    def _cfg(self, db, fund, suffix, method, *, eff=date(2026, 10, 1), source="explicit"):
+        row = DividendMethodConfig(
+            portfolio_code=f"PF_{suffix}", product_code=fund, market=MARKET,
+            platform_code=f"PL_{suffix}", dividend_method=method,
+            effective_from=eff, source=source,
+        )
+        db.add(row)
+        db.commit()
+        return row
+
+    def _detect(self, db, fund, dividends):
+        product = db.query(Product).filter_by(code=fund, market=MARKET).one()
+        with patch("app.services.tushare_client.get_fund_div", return_value=dividends):
+            return _detect_dividends(db, [product])
+
+    def test_explicit_cash_builds_typed_event(self, test_db):
+        """A1：explicit 现金 + pay>=ex（非同日）→ cash_dividend，不产生 pending。"""
+        fund = _env(test_db, "C1")
+        self._cfg(test_db, fund, "C1", "cash_dividend")
+        detected, skipped, degraded = self._detect(test_db, fund, [_div(pay_date="20261021")])
+        assert (detected, skipped, degraded) == (1, [], [])
+        event = _rows(test_db, fund)[0]
+        assert (event.event_type, event.status) == ("cash_dividend", "pending")
+        assert event.cash_pay_date == date(2026, 10, 21)
+        assert event.share_confirm_date is None
+        assert "explicit" in event.notes
+
+    def test_explicit_reinvest_builds_typed_event(self, test_db):
+        """A2：explicit 再投 + pay 为交易日且 >ex>=滞后 → reinvest_dividend；净值确认时取（不预填）。"""
+        fund = _env(test_db, "C2")
+        self._cfg(test_db, fund, "C2", "reinvest_dividend")
+        pay = try_get_next_trading_day(test_db, EX, days=1, exchange="SSE")  # nav_lag_days=0 → 滞后 1
+        detected, skipped, degraded = self._detect(test_db, fund, [_div(pay_date=pay.strftime("%Y%m%d"))])
+        assert (detected, skipped, degraded) == (1, [], [])
+        event = _rows(test_db, fund)[0]
+        assert (event.event_type, event.status) == ("reinvest_dividend", "pending")
+        assert event.share_confirm_date == pay
+        assert event.reinvest_nav is None  # A2/#744：确认时取除息日精确净值
+
+    def test_only_default_row_stays_pending_verbatim(self, test_db):
+        """A3 反向防线（可独立变红）：仅 default 行 → 检测器视同无配置，建 dividend_pending。
+        若检测器误读 default 建 typed，本用例翻红。"""
+        fund = _env(test_db, "C3")
+        self._cfg(test_db, fund, "C3", "reinvest_dividend", source="default")
+        detected, skipped, degraded = self._detect(test_db, fund, [_div(pay_date="20261021")])
+        assert (detected, skipped, degraded) == (1, [], [])
+        event = _rows(test_db, fund)[0]
+        assert event.event_type == "dividend_pending"
+        assert event.cash_pay_date is None and event.share_confirm_date is None
+
+    def test_no_config_stays_pending(self, test_db):
+        """A3：无配置 → pending（与今日行为逐字一致）。"""
+        fund = _env(test_db, "C4")
+        detected, skipped, degraded = self._detect(test_db, fund, [_div(pay_date="20261021")])
+        assert (detected, skipped, degraded) == (1, [], [])
+        assert _rows(test_db, fund)[0].event_type == "dividend_pending"
+
+    def test_cash_same_day_pay_equal_ex_degraded(self, test_db):
+        """A5：同日现金 pay==ex → degraded pay_date_not_after_ex + pending（防互等死锁）。"""
+        fund = _env(test_db, "C5")
+        self._cfg(test_db, fund, "C5", "cash_dividend")
+        detected, skipped, degraded = self._detect(
+            test_db, fund, [_div(record_date=EX.strftime("%Y%m%d"), pay_date=EX.strftime("%Y%m%d"))])
+        assert detected == 1 and skipped == []
+        assert degraded[0]["reason"] == "pay_date_not_after_ex"
+        event = _rows(test_db, fund)[0]
+        assert event.event_type == "dividend_pending" and event.cash_pay_date is None
+
+    def test_cash_non_same_day_pay_equal_ex_allowed(self, test_db):
+        """A5/R8：非同日现金 pay==ex 允许（检测器不比人工路径更严）。"""
+        fund = _env(test_db, "C6")
+        self._cfg(test_db, fund, "C6", "cash_dividend")
+        detected, skipped, degraded = self._detect(test_db, fund, [_div(pay_date=EX.strftime("%Y%m%d"))])
+        assert (detected, skipped, degraded) == (1, [], [])
+        event = _rows(test_db, fund)[0]
+        assert event.event_type == "cash_dividend" and event.cash_pay_date == EX
+
+    def test_cash_pay_before_ex_degraded(self, test_db):
+        fund = _env(test_db, "C7")
+        self._cfg(test_db, fund, "C7", "cash_dividend")
+        _detected, _skipped, degraded = self._detect(test_db, fund, [_div(pay_date="20261019")])
+        assert degraded[0]["reason"] == "pay_date_not_after_ex"
+        assert _rows(test_db, fund)[0].event_type == "dividend_pending"
+
+    def test_pay_date_missing_degraded(self, test_db):
+        """pay_date 缺失 → pending + degraded pay_date_missing，不猜。"""
+        fund = _env(test_db, "C8")
+        self._cfg(test_db, fund, "C8", "cash_dividend")
+        _detected, _skipped, degraded = self._detect(test_db, fund, [_div()])
+        assert degraded[0]["reason"] == "pay_date_missing"
+        assert _rows(test_db, fund)[0].event_type == "dividend_pending"
+
+    def test_pay_date_invalid_degraded(self, test_db):
+        fund = _env(test_db, "C9")
+        self._cfg(test_db, fund, "C9", "cash_dividend")
+        _detected, _skipped, degraded = self._detect(test_db, fund, [_div(pay_date="not-a-date")])
+        assert degraded[0]["reason"] == "pay_date_invalid"
+
+    def test_reinvest_non_trading_day_degraded(self, test_db):
+        fund = _env(test_db, "C10")
+        self._cfg(test_db, fund, "C10", "reinvest_dividend")
+        non_td = EX + timedelta(days=1)
+        while is_trading_day(test_db, non_td, exchange="SSE"):
+            non_td += timedelta(days=1)
+        _detected, _skipped, degraded = self._detect(test_db, fund, [_div(pay_date=non_td.strftime("%Y%m%d"))])
+        assert degraded[0]["reason"] == "reinvest_non_trading_day"
+        assert _rows(test_db, fund)[0].event_type == "dividend_pending"
+
+    def test_reinvest_nav_lag_window_degraded(self, test_db):
+        """A5b：nav_lag_days=1，pay=ex+1 交易日（< ex+2 滞后）→ degraded reinvest_nav_lag_window。"""
+        fund = _env(test_db, "C11")
+        product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
+        product.nav_lag_days = 1
+        test_db.commit()
+        self._cfg(test_db, fund, "C11", "reinvest_dividend")
+        pay = try_get_next_trading_day(test_db, EX, days=1, exchange="SSE")
+        _detected, _skipped, degraded = self._detect(test_db, fund, [_div(pay_date=pay.strftime("%Y%m%d"))])
+        assert degraded[0]["reason"] == "reinvest_nav_lag_window"
+        assert _rows(test_db, fund)[0].event_type == "dividend_pending"
+
+    def test_reinvest_nav_lag_satisfied(self, test_db):
+        """A5b：nav_lag_days=1，pay=ex+2 交易日（>=滞后）→ reinvest_dividend。"""
+        fund = _env(test_db, "C12")
+        product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
+        product.nav_lag_days = 1
+        test_db.commit()
+        self._cfg(test_db, fund, "C12", "reinvest_dividend")
+        pay = try_get_next_trading_day(test_db, EX, days=2, exchange="SSE")
+        detected, skipped, degraded = self._detect(test_db, fund, [_div(pay_date=pay.strftime("%Y%m%d"))])
+        assert (detected, skipped, degraded) == (1, [], [])
+        assert _rows(test_db, fund)[0].event_type == "reinvest_dividend"
+
+    def test_akshare_pay_date_consumed_own_value(self, test_db):
+        """双源 pay_date 各取本值（C1）：akshare explicit + akshare pay_date → typed 用该值。"""
+        fund = _env(test_db, "C13", data_source="akshare")
+        self._cfg(test_db, fund, "C13", "cash_dividend")
+        product = test_db.query(Product).filter_by(code=fund, market=MARKET).one()
+        with patch("app.services.akshare_client.get_fund_div_otc", return_value=[_akdiv(pay_date="20261022")]):
+            detected, skipped, degraded = _detect_dividends(test_db, [product])
+        assert (detected, skipped, degraded) == (1, [], [])
+        event = _rows(test_db, fund)[0]
+        assert event.event_type == "cash_dividend" and event.cash_pay_date == date(2026, 10, 22)
+        assert event.event_source == "akshare"
+
+    def test_config_change_after_detection_no_rewrite(self, test_db):
+        """A7：检测后改配置不重写既有事件（existing 去重，事后补建不回溯）。"""
+        fund = _env(test_db, "C14")
+        self._cfg(test_db, fund, "C14", "cash_dividend")
+        assert self._detect(test_db, fund, [_div(pay_date="20261021")])[0] == 1
+        cfg = test_db.query(DividendMethodConfig).filter_by(product_code=fund).one()
+        cfg.dividend_method = "reinvest_dividend"
+        test_db.commit()
+        detected, _skipped, _degraded = self._detect(test_db, fund, [_div(pay_date="20261021")])
+        assert detected == 0
+        assert _rows(test_db, fund)[0].event_type == "cash_dividend"
