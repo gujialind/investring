@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_admin
 from app.services.market_data_service import submit_price_sync_job, ConflictError
+from app.services.data_source_switch_job import JOB_TYPE as DATA_SOURCE_SWITCH_JOB_TYPE
 from app.models.sync_job import SyncJob
 from app.models.nav_sync_detail import NavSyncDetail
 from app.schemas.sync_job import PriceSyncRequest, SyncJobResponse, NavSyncDetailResponse
@@ -53,6 +54,13 @@ def get_job_details(
     job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
+    # #882：批量切换台账在 params["results"]（逐产品 code/market/old_source/new_source/
+    # status/reason），本类型不写 NavSyncDetail 行；价格同步类型仍走明细表。
+    if job.job_type == DATA_SOURCE_SWITCH_JOB_TYPE:
+        return {
+            "job": SyncJobResponse.model_validate(job),
+            "details": (job.params or {}).get("results", []),
+        }
     details = db.query(NavSyncDetail).filter(NavSyncDetail.job_id == job_id).all()
     return {
         "job": SyncJobResponse.model_validate(job),

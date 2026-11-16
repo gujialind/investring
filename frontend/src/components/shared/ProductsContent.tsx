@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +33,7 @@ import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHor
 import { Product } from "@/types/product";
 import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import BatchDataSourceDialog from "@/components/shared/dialogs/BatchDataSourceDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import ProductCell from "@/components/shared/ProductCell";
 import EmptyState from "@/components/shared/EmptyState";
@@ -81,6 +83,11 @@ const NAV_LAG_OPTIONS = [
 ] as const;
 
 // DATA_SOURCE_OPTIONS 移至 @/lib/dataSource 共享（#880：产品表单与本筛选共用，避免硬编码漂移）
+
+// 批量切换显式清单上限（#882，对齐后端 data_source_switch_job.BATCH_MAX_PRODUCTS）；
+// 仅当前页选择（V4：不做跨页/按筛选全选的无界集合），翻页/改筛选即清空
+const BATCH_SWITCH_MAX = 50;
+const rowKey = (p: Product) => `${p.code}|${p.market ?? ""}`;
 
 /**
  * 产品管理页内容（桌面/移动共用，issue #234 真分页 + #238 筛选栏）。
@@ -159,6 +166,36 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
 
   const products = data?.items || [];
   const total = data?.total ?? 0;
+
+  // 批量切换选择（#882）：仅当前页、显式清单 ≤50；虚拟产品不可选（无数据源概念）。
+  // 翻页/改筛选即清空（V4 所见即所选，不做跨页/按筛选全选的无界集合）。
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
+  useEffect(() => {
+    setSelectedKeys(new Set());
+  }, [page, pageSize, market, productType, confirmDays, navLagDays, dataSource, isQdii, keyword, dimFilters]);
+
+  const selectableRows = products.filter((p) => !VIRTUAL_PRODUCT_TYPES.includes(p.product_type));
+  const selectedProducts = products.filter((p) => selectedKeys.has(rowKey(p)));
+  const allPageSelected =
+    selectableRows.length > 0 && selectableRows.every((p) => selectedKeys.has(rowKey(p)));
+  const toggleRow = (p: Product) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      const key = rowKey(p);
+      if (next.has(key)) next.delete(key);
+      else if (next.size < BATCH_SWITCH_MAX) next.add(key);
+      return next;
+    });
+  };
+  const toggleAllPage = () => {
+    setSelectedKeys((prev) => {
+      if (selectableRows.length > 0 && selectableRows.every((p) => prev.has(rowKey(p)))) {
+        return new Set();
+      }
+      return new Set(selectableRows.slice(0, BATCH_SWITCH_MAX).map(rowKey));
+    });
+  };
 
   // 页码越界钳制（评审 #244）：删除/筛选失效后 total 收缩致 page 越界时回退末页，
   // 避免「末页删空即死胡同」；只在 data 到达后判（placeholderData 期间 total 为旧值，不误钳）
@@ -491,6 +528,28 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           ) : (
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
+          {/* 批量切换操作条（#882）：有选择才出现；上限 50 钳制在 toggleRow/toggleAllPage */}
+          {selectedKeys.size > 0 && (
+            <div
+              className="mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-3 py-2"
+              data-testid="batch-action-bar"
+            >
+              <span className="text-sm">
+                已选 {selectedKeys.size} 只{selectedKeys.size >= BATCH_SWITCH_MAX ? "（已达上限 50）" : ""}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBatchOpen(true)}
+                data-testid="batch-switch-button"
+              >
+                批量修改数据源
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedKeys(new Set())}>
+                清空选择
+              </Button>
+            </div>
+          )}
           {/* 规范 §14：筛选/翻页局部刷新保留旧数据，表格半透明 + 右上角小 spinner；
               首次加载（isLoading）走上方区块级 spinner，此处不重复遮罩；
               移动端窄屏表格横向滚动（同 SnapshotsContent） */}
@@ -501,6 +560,14 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
             <Table className={cn(isFetching && !isLoading && "opacity-50")}>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-8">
+                    <Checkbox
+                      checked={allPageSelected ? true : selectedProducts.length > 0 ? "indeterminate" : false}
+                      onCheckedChange={toggleAllPage}
+                      aria-label="全选当前页可切换产品"
+                      data-testid="batch-select-all"
+                    />
+                  </TableHead>
                   <TableHead>产品名称</TableHead>
                   <TableHead>类型</TableHead>
                   <TableHead className="number-cell">确认天数</TableHead>
@@ -529,6 +596,18 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                   );
                   return (
                   <TableRow key={`${product.code}-${product.market || "null"}`}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedKeys.has(rowKey(product))}
+                        onCheckedChange={() => toggleRow(product)}
+                        disabled={
+                          !isNavType ||
+                          (!selectedKeys.has(rowKey(product)) && selectedKeys.size >= BATCH_SWITCH_MAX)
+                        }
+                        aria-label={`选择 ${product.code} 批量切换数据源`}
+                        data-testid="batch-row-checkbox"
+                      />
+                    </TableCell>
                     <TableCell>
                       {isNavType ? (
                         <Link
@@ -658,6 +737,13 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           setNavSyncConfirmOpen(false);
           handleBatchNavSync();
         }}
+      />
+
+      <BatchDataSourceDialog
+        open={batchOpen}
+        onOpenChange={setBatchOpen}
+        products={selectedProducts}
+        onFinished={() => setSelectedKeys(new Set())}
       />
     </div>
   );

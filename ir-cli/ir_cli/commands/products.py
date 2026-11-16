@@ -2,7 +2,7 @@
 import typer
 from typing import Optional
 from ir_cli.client import APIClient
-from ir_cli.output import error, success
+from ir_cli.output import EXIT_USAGE, error, success
 from ir_cli.utils import build_body, resolve_body, run_list
 
 app = typer.Typer(no_args_is_help=True)
@@ -125,3 +125,35 @@ def delete(
     client = APIClient.from_config()
     result = client.delete(f"/api/products/{code}/{market}")
     success(data=result["data"])
+
+
+@app.command("batch-set-data-source")
+def batch_set_data_source(
+    products: str = typer.Option(..., "--products", help="产品清单，格式: code|market,code|market（显式清单≤50，整批预校验 fail-fast）"),
+    data_source: str = typer.Option(..., "--data-source", help="目标数据源(tushare/akshare；港互认只akshare)"),
+    yes: bool = typer.Option(False, "--yes", help="跳过确认，未提供则拒绝执行"),
+):
+    """批量切换数据源（异步任务，#882）：整批预校验+源级快检通过后返回 job_id，逐产品探测/写入/台账在后台"""
+    parsed = []
+    for p in products.split(","):
+        # #808 格式：恰好两段且 code/market 去空格后非空；批量误操作面大，任一非法即整批拒绝
+        parts = [s.strip() for s in p.split("|")]
+        if len(parts) != 2 or not all(parts):
+            error("USAGE_ERROR",
+                  f"--products 条目格式错误 '{p.strip()}'（需 code|market 格式），未下发批量切换任务",
+                  exit_code=EXIT_USAGE)
+        parsed.append(parts)
+    if not parsed:
+        error("USAGE_ERROR", "--products 清单为空，未下发批量切换任务", exit_code=EXIT_USAGE)
+    if not yes:
+        error("CONFIRM_REQUIRED",
+              f"批量切换 {len(parsed)} 只产品数据源为 {data_source} 影响面大（逐只探测，失败跳过其余继续）：请追加 --yes 确认，先用 ir product list 核实清单")
+    client = APIClient.from_config()
+    body = {
+        "products": [{"code": c, "market": m} for c, m in parsed],
+        "data_source": data_source,
+    }
+    result = client.post("/api/products/batch-data-source", json_data=body)
+    success(data=result["data"], hints=[
+        "任务异步执行：用 ir sync-job status <job_id> 轮询终态（success/partial/failed），ir sync-job details <job_id> 看逐产品台账（old_source 供反向批量切回）与失败原因",
+    ])

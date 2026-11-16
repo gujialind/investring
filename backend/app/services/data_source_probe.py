@@ -200,3 +200,18 @@ def probe_data_source(db, code, market, data_source):
             "product_code": code,
         },
     )
+
+
+def quick_check_data_source(db, code, market, data_source):
+    """批量源级快检（#882，SPEC v1.1 V4）：复用产品级探测单点做一次轻量探测。
+
+    源整体故障（token 缺失/鉴权失败/不可达）→ 原样上抛，整批早拒零写入；
+    产品级 no_data（该代码在目标源无净值）不代表源故障 → 放行，交逐产品循环
+    把该只 skipped。不另起一套探测实现（REST/CLI/批量共用单点）。
+    """
+    try:
+        probe_data_source(db, code, market, data_source)
+    except BusinessError as e:
+        if (e.details or {}).get("reason") == "no_data":
+            return
+        raise

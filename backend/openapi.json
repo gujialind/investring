@@ -1612,6 +1612,53 @@
         }
       }
     },
+    "/api/products/batch-data-source": {
+      "post": {
+        "tags": [
+          "产品管理"
+        ],
+        "summary": "Batch Set Data Source",
+        "description": "批量切换数据源（#882，admin）：整批预校验 + 源级快检 fail-fast 零写入，\n通过后落异步 job 立即返回 job_id；逐产品探测/写入/台账在后台执行体。\n终态经 GET /api/sync-jobs/{job_id}，逐产品结果经 /{job_id}/details。",
+        "operationId": "batch_set_data_source_api_products_batch_data_source_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDataSourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchDataSourceAccepted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/products/{code}/{market}": {
       "get": {
         "tags": [
@@ -9120,6 +9167,93 @@
           "credential_id"
         ],
         "title": "AuthStatus"
+      },
+      "BatchDataSourceAccepted": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "message"
+        ],
+        "title": "BatchDataSourceAccepted",
+        "description": "异步受理回执（与 sync-jobs/price 同型，#882）。"
+      },
+      "BatchDataSourceRequest": {
+        "properties": {
+          "products": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BatchProductEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Products"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BatchDataSourceRequest",
+        "description": "POST /api/products/batch-data-source 请求体（#882，SPEC v1.1 V4）。\n上限/重复/存在性/市场兼容整批预校验在 service（fail-fast 零写入）。"
+      },
+      "BatchProductEntry": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BatchProductEntry",
+        "description": "批量切换清单条目（#882）：显式 (code, market)，不做「按筛选全选」无界集合。\ncode/market 空值（含显式 null）由 service 统一拒为 INVALID_PARAM（#579 方向）。"
       },
       "CashFlowAction": {
         "properties": {

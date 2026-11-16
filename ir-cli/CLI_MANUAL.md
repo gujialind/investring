@@ -1195,6 +1195,26 @@ ir product delete <CODE> <MARKET> --yes
 |------|:------:|------|
 | `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
 
+#### `ir product batch-set-data-source`
+
+批量切换数据源（异步任务，#882，POST `/api/products/batch-data-source`；admin）。显式清单 ≤50，整批预校验 fail-fast 零写入；源级快检失败整批早拒；单只探测失败该只跳过不写、其余继续。受理返回 `job_id`，终态 `success`/`partial`/`failed` 经 `ir sync-job status <id>` 轮询，逐产品台账（`code/market/old_source/new_source/status/reason`）经 `ir sync-job details <id>`。
+
+```bash
+ir product batch-set-data-source --products <CODE|MARKET,CODE|MARKET,...> --data-source <数据源> --yes
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--products` | 无 | 必传。显式清单，格式 `code|market,code|market`（#808 口径：恰好两段、去空格后非空）；任一条目格式错误 → `USAGE_ERROR`（退出码 64，不下发）；上限 50 只、重复条目/不存在/虚拟产品/市场不兼容由后端整批拒绝（422，零写入） |
+| `--data-source` | 无 | 必传。目标源 `tushare`/`akshare`；港互认只 `akshare`；非法值 422 `INVALID_DATA_SOURCE` |
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1，不调用后端接口） |
+
+> **语义**：
+> - 单 active 锁（仅 `data_source_switch` 类型）：已有 pending/running 批量切换任务 → 409；与价格同步/快照重算互不阻塞
+> - 逐产品写入同单只切换口径：`data_source_status=pending`（待验证）、清 `sync_error`、`last_sync_at` 保留；diff-only 审计（后台 actor=SYSTEM）；同值条目 no-op（不探/不写/不审计）计成功
+> - **不支持运行中取消**；误操作恢复 = 反向批量切回（台账 `old_source` 清单）+ 必要时 `ir market sync-history`；已烘焙进快照的历史价格需手动重算（不自动触发）
+> - 切换后果与单只一致（日涨跌口径差仅场外、akshare 场外分红检测，见 `ir product update` #880 语义）
+
 ---
 
 ### 4.10 `ir platform` — 平台管理
@@ -1610,7 +1630,7 @@ ir sync-job status <JOB_ID>
 
 #### `ir sync-job details`
 
-查询同步任务逐产品明细。
+查询同步任务逐产品明细。价格同步任务返回净值同步明细行；批量切换任务（`data_source_switch`，#882）返回逐产品台账（`code/market/old_source/new_source/status/reason`，`old_source` 供反向批量切回）。
 
 ```bash
 ir sync-job details <JOB_ID>
