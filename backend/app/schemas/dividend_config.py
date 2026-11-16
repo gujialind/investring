@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class DividendConfigCreate(BaseModel):
@@ -17,6 +17,8 @@ class DividendConfigCreate(BaseModel):
 
 
 class DividendConfigResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     portfolio_code: str
     product_code: str
@@ -27,9 +29,6 @@ class DividendConfigResponse(BaseModel):
     source: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
 
 
 class PaginatedDividendConfigResponse(BaseModel):
