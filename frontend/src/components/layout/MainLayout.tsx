@@ -11,13 +11,13 @@ import BottomNav from "@/components/shared/BottomNav";
 import BrandLogo from "@/components/shared/BrandLogo";
 import AccountMenu from "@/components/shared/AccountMenu";
 import { Button } from "@/components/ui/button";
-import { exitPaths } from "@/components/shared/navItems";
+import { mobileExitPaths } from "@/components/shared/navItems";
 
 // 不在侧栏主导航的管理页（投资人/平台/分类）→ 返回宿主页（#894）。这些页自身没有返回
 // 入口：宽屏侧栏不列出它们、也无高亮；窄屏侧栏隐藏且底部导航按 mobileTab 过滤同样不含，
 // 页内唯一出路只剩指向 /dashboard 的 Logo——不是宿主页。缺这一条就是「可达即被困」
 // （#650 验收第 4 条在桌面侧的补齐）。与 MobileLayout 共用同一份派生，判据按端取轴。
-const EXIT_PAGES = new Map(exitPaths("").map((e) => [e.path, e]));
+const EXIT_PAGES = new Map(mobileExitPaths("").map((e) => [e.path, e]));
 
 export default function MainLayout({
   children,

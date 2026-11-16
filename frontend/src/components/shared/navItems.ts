@@ -77,9 +77,14 @@ export function mobileTabPaths(basePath: "" | "/m"): string[] {
  * 的轴，今天 `inNav:false` 与 `mobileTab:false` 的集合恰好相同，沿用单轴会在将来出现
  * `inNav:false, mobileTab:true` 的项时静默漏掉桌面出口。
  *
+ * **函数名是历史遗留**：#894 起双端共用，但名字仍叫 `mobileExitPaths`——E2E compare 的
+ * baseline 侧用 base 的 `frontend/e2e/` 配 head 的 src，base spec import 本函数，改名会让
+ * baseline capture 直接 import 失败且无豁免机制（ci_policy 里 capture 是必需 job）。故改名
+ * 留待本 PR 合入后的 follow-up，届时 base 与 head 同名、不再有此约束。
+ *
  * 宿主页不在 NAV_ITEMS 里时不产出出口，宁可不给链接也不指向不存在的路径。
  */
-export function exitPaths(
+export function mobileExitPaths(
   basePath: "" | "/m",
 ): { path: string; href: string; label: string }[] {
   const inPrimaryNav = (item: NavItem) =>

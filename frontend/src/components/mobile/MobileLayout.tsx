@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import BottomNav from "@/components/shared/BottomNav";
-import { exitPaths, mobileTabPaths } from "@/components/shared/navItems";
+import { mobileExitPaths, mobileTabPaths } from "@/components/shared/navItems";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -13,8 +13,8 @@ import { cn } from "@/lib/utils";
 const TOP_LEVEL_PATHS = new Set(mobileTabPaths("/m"));
 // 不进底部 Tab 的管理页（投资人/平台/分类）→ 返回宿主页。这些页自身没有返回入口、
 // 此处又不渲染底部导航，缺这一条就是「可达即被困」（#650 验收第 4 条）。
-// 桌面侧同形出口在 MainLayout，两端共用 exitPaths 这一份派生（#894）
-const EXIT_PAGES = new Map(exitPaths("/m").map((e) => [e.path, e]));
+// 桌面侧同形出口在 MainLayout，两端共用 mobileExitPaths 这一份派生（#894）
+const EXIT_PAGES = new Map(mobileExitPaths("/m").map((e) => [e.path, e]));
 
 export default function MobileLayout({
   children,

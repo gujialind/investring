@@ -25,7 +25,7 @@ import {
   type PortfolioCode,
 } from './helpers';
 // 运行时导入导航单源：断言清单与返回出口由同一份数据派生，不在 spec 里抄第三份（#650）
-import { NAV_ITEMS, exitPaths } from '../src/components/shared/navItems';
+import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
 
 test.describe('页面渲染回归（防 P0 复发）', () => {
   // #715：任务页（双端）下线，功能迁到设置页「日志管理」Tab 与产品页「批量净值同步」。
@@ -390,7 +390,7 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
   // 本用例原以「桌面端这些页走侧边栏，无此形态」为由 skip 桌面端。该前提在 #878 把
   // 投资人/平台/分类设为 inNav:false（侧栏不再列出）后已失效，桌面因此既漏了出口、
   // 守卫又静默放行——与 e2e/AGENTS.md 禁止的「把未证前提写进 skip」同一种病。
-  // 现双端真跑：出口是布局层职责，两端各由 exitPaths 按自己的轴派生。
+  // 现双端真跑：出口是布局层职责，两端各由 mobileExitPaths 按自己的轴派生。
   test('经页内入口进入后可返回宿主页，不再「可达即被困」', async ({ page }, testInfo) => {
     const isMobile = testInfo.project.name === 'mobile';
     const basePath: '' | '/m' = isMobile ? '/m' : '';
@@ -401,7 +401,7 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
     await page.getByRole('link', { name: '平台管理' }).click();
     await page.waitForURL(`**${basePath}/platforms`);
 
-    for (const exit of exitPaths(basePath)) {
+    for (const exit of mobileExitPaths(basePath)) {
       await page.goto(exit.path);
       const back = page.getByRole('link', { name: `返回${exit.label}` });
       await expect(back, `${exit.path} 应有站内出口`).toBeVisible();
@@ -436,7 +436,7 @@ test.describe('桌面窄屏管理页出口（#894：侧栏隐藏 + 底部导航�
     );
 
     const nav = page.getByTestId('bottom-nav');
-    for (const exit of exitPaths('')) {
+    for (const exit of mobileExitPaths('')) {
       await page.goto(exit.path);
       await expect(
         page.getByRole('link', { name: `返回${exit.label}` }),
