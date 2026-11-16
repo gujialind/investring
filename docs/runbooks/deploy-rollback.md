@@ -238,9 +238,12 @@ CD 不构建（消费 CI `image-smoke` 产出并经 `release_bundle.py verify` �
    `docker compose …` 是省略号占位，**不可直接粘贴执行**，按上面展开。取输出最后一行
    JSON 的 `fingerprint`（64 位）。
 2. **核对状态**：`state` 为 `migration_required`；`revisions` 是旧 head、`expected_heads`
-   是新 head 且**单一**（多 head 或 `unknown_revision` 停止，转 §2）；`missing_tables` /
-   `missing_not_null` / `missing_tasks` 为空，`missing_columns` 恰好等于本次迁移应加的列
-   ——多出任何一项都说明库与代码的差距不止本次迁移。
+   是新 head 且**单一**（多 head 或 `unknown_revision` 停止，转 §2）；`missing_tables`
+   **恰好只包含本次迁移将要新建的表**、`missing_columns` **恰好只包含本次迁移将要新增的列**，
+   `missing_not_null` 与 `missing_tasks` 为空——多出任何一项都说明库与代码的差距不止本次迁移，
+   停止并转 §2 人工决策。（差集语义见 `app/bootstrap.py::status`：`missing_tables` = 模型要求的表集 − 库内实际表集，
+   故**新建表型迁移**执行前该表必然在列、`missing_tables` 不为空；`missing_columns` 仅统计已存在表所缺的列，
+   加列型迁移才非空。旧文「`missing_tables` 为空」只对加列型迁移成立，对建表型会误判正常待迁移态为异常。）
 3. **人工核对迁移内容**：读目标区间每条迁移的 `upgrade()`，并对照 §4.3 确认其
    `downgrade()` 是否实现、是否有损。**上线后还能不能回退，在这一步就已确定。**
 4. **授权后 dispatch**（`--expect-accepted` 由 CI 自己读服务器记录，人工不提供）：
