@@ -608,7 +608,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                         data-testid="batch-row-checkbox"
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell data-testid="product-name-cell">
                       {isNavType ? (
                         <Link
                           href={detailHref}
