@@ -321,6 +321,23 @@ def _div_cash_or_none(raw: Any) -> Optional[float]:
     return value if math.isfinite(value) else None
 
 
+def _pay_date_or_none(raw: Any) -> Optional[str]:
+    """`fund_div.pay_date`（分红发放日）原值 → YYYYMMDD 字符串；缺值归一为 None。
+
+    #887 PR2（A5）：tushare fund_div 上游含 pay_date 列（#881 V2 实测 ts=20070116），
+    PR1 归一仅 4 字段未取用，PR2 补取供检测器消费。pandas 缺失值为 NaN/NaT（str 后
+    'nan'/'NaT'），与 None/空串一并归一 None——下游检测器对 None 走 pay_date_missing
+    degraded 留痕、不猜日期（同 _div_cash_or_none 哲学）。本层不判日期合法性，
+    格式非法由检测器 strptime 走 pay_date_invalid degraded。
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text == "" or text.lower() in ("nan", "nat", "none"):
+        return None
+    return text
+
+
 def get_fund_div(
     ts_code: str,
 ) -> List[Dict[str, Any]]:
@@ -331,7 +348,8 @@ def get_fund_div(
         ts_code: 基金代码（如 000001.OF）
 
     Returns:
-        分红记录列表，包含 ex_date(YYYYMMDD), record_date(YYYYMMDD), div_cash, div_proc
+        分红记录列表，包含 ex_date(YYYYMMDD), record_date(YYYYMMDD), div_cash, div_proc,
+        pay_date(YYYYMMDD 或 None，#887 PR2 起供检测器消费)
     """
     pro = _get_tushare_pro()
 
@@ -350,6 +368,7 @@ def get_fund_div(
             "record_date": str(row.get("record_date", "")),
             "div_cash": _div_cash_or_none(row.get("div_cash")),
             "div_proc": str(row.get("div_proc", "")),
+            "pay_date": _pay_date_or_none(row.get("pay_date")),
         })
 
     return result
