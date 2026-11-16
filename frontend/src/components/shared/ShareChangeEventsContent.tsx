@@ -925,7 +925,7 @@ export default function ShareChangeEventsContent({
               setConfirmEventId(null);
               // A13：确认成功后、用户勾选「记住」才沉淀（独立 mutation，失败不回滚确认，
               // SPEC §7.2）。键=事件键，method=本次所选，effective_from=权益登记日。
-              if (remember && selection && ev?.product_code && ev.platform_code) {
+              if (remember && selection && ev?.product_code && ev.platform_code && ev.market === "CN_OTC") {
                 rememberConfig.mutate({
                   portfolio_code: code,
                   product_code: ev.product_code,

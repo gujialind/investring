@@ -25,6 +25,7 @@ from app.constants.audit_actions import (
 from app.models.dividend_method_config import DividendMethodConfig
 from app.models.platform import Platform
 from app.models.portfolio import Portfolio
+from app.models.product import Product
 from app.services.audit_service import record_audit
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.product_service import resolve_product_market
@@ -166,6 +167,15 @@ def create_config(
     _, resolved_market = resolve_product_market(db, product_code, market)
     _validate_market(resolved_market)
     _validate_method(dividend_method, resolved_market)
+    # 显式 (code, market) 存在性守卫——杜绝复合外键违约 500（同 share_change_event_service）。
+    # resolve_product_market 在 market 非空时原样返回，不查产品存在性，故此处补查。
+    if not db.query(Product).filter(
+        Product.code == product_code, Product.market == resolved_market
+    ).first():
+        raise NotFoundError(
+            "PRODUCT_NOT_FOUND", f"产品 {product_code} 不存在",
+            details={"product_code": product_code, "market": resolved_market},
+        )
     _validate_key_exists(db, portfolio_code, platform_code)
 
     existing = db.query(DividendMethodConfig).filter(

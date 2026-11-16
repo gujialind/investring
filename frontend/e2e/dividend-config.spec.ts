@@ -182,4 +182,43 @@ test.describe('分红方式配置（#887，桌面/移动共用）', () => {
     expect(configs[0].effective_from).toBe(s.entitlement);
     expect(errors).toEqual([]);
   });
+
+  test('配置列表读取失败呈现错误态而非空态，可重试（B2）', async ({ page }, info) => {
+    const s = await setup(page, info, 'E');
+    await page.goto(`/portfolio/${s.code}/platforms/${PLATFORM}`);
+    await page.getByTestId('platform-holdings-section').waitFor({ state: 'visible', timeout: 15_000 });
+    // 仅拦截列表端点（pathname 精确匹配，不误伤 /resolve）；标志位切换故障/恢复，
+    // 避免 page.unroute 谓词引用不一致导致拦截未解除。
+    let failList = true;
+    await page.route((url) => url.pathname === '/api/dividend-configs', (route) => {
+      if (failList) {
+        return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: { error: 'INTERNAL', message: '模拟列表故障' } }) });
+      }
+      return route.continue();
+    });
+    await page.getByTestId(`dividend-config-entry-${PRODUCT.code}`).click();
+    const dlg = configDialog(page);
+    await expect(dlg.getByTestId('dividend-config-error')).toBeVisible();
+    await expect(dlg.getByTestId('dividend-config-empty')).toHaveCount(0);
+    await expect(dlg.getByTestId('dividend-config-retry')).toBeVisible();
+    // 恢复后端后重试 → 空态（失败≠空态，重试可恢复）
+    failList = false;
+    await dlg.getByTestId('dividend-config-retry').click();
+    await expect(dlg.getByTestId('dividend-config-empty')).toBeVisible();
+  });
+
+  test('非 CN_OTC 分红事件不显示「记住」（S1/A14）', async ({ page }, info) => {
+    const s = await setup(page, info, 'H');
+    // CN_EXCHANGE 现金分红人工事件（允许登记），force_cover 绕过平台覆盖校验
+    const event = await post<ShareChangeEvent>(page, s.headers, '/api/share-change-events?force_cover=true', {
+      portfolio_code: s.code, product_code: '510300.SH', market: 'CN_EXCHANGE',
+      platform_code: PLATFORM, event_type: 'cash_dividend',
+      entitlement_date: s.entitlement, ex_date: s.ex, div_cash: 0.1,
+    });
+    await gotoPortfolioSubpage(page, s.code as PortfolioCode, 'share-change-events');
+    await page.getByTestId(`share-event-${event.id}`).getByTitle('确认', { exact: true }).click();
+    const dlg = confirmDialog(page);
+    await expect(dlg.getByLabel('分红方式', { exact: true })).toBeVisible();
+    await expect(dlg.getByLabel('记住本次方式，以后自动入账')).toHaveCount(0);
+  });
 });

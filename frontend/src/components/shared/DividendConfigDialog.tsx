@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCreateDividendConfig, useDeleteDividendConfig, useDividendConfigList } from "@/hooks/useDividendConfig";
+import { getErrorMessage } from "@/lib/api";
 import { formatDate, parseDateOnly, toDateOnly } from "@/lib/utils";
 import type { DividendConfigSource, DividendMethod } from "@/types/dividend-config";
 
@@ -47,7 +49,7 @@ export default function DividendConfigDialog({
     platform_code: platformCode,
     market,
   };
-  const { data: listData, isLoading } = useDividendConfigList(key, open);
+  const { data: listData, isLoading, isError, error, refetch } = useDividendConfigList(key, open);
   const createConfig = useCreateDividendConfig();
   const deleteConfig = useDeleteDividendConfig();
   const [method, setMethod] = useState<DividendMethod>("reinvest_dividend");
@@ -66,7 +68,20 @@ export default function DividendConfigDialog({
         <div className="space-y-4">
           <div className="space-y-2">
             <Label>配置历史（生效日降序，首行为最新）</Label>
-            {isLoading ? (
+            {isError ? (
+              <Alert variant="destructive" data-testid="dividend-config-error">
+                <AlertDescription>{getErrorMessage(error, "配置列表加载失败")}</AlertDescription>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => refetch()}
+                  data-testid="dividend-config-retry"
+                >
+                  重试
+                </Button>
+              </Alert>
+            ) : isLoading ? (
               <p className="text-sm text-muted-foreground">加载中…</p>
             ) : items.length === 0 ? (
               <p className="text-sm text-muted-foreground" data-testid="dividend-config-empty">暂无配置</p>

@@ -20,7 +20,7 @@ source='explicit' 行——用户显式声明是记账事实，命中即在任�
 字符集与市场白名单硬编码并注释与服务常量同步（db_charset.DB_CHARSET / DB_COLLATE、
 dividend_config_service.ALLOWED_CONFIG_MARKETS）。
 """
-from datetime import date
+from datetime import datetime, timedelta, timezone
 
 from alembic import op
 import sqlalchemy as sa
@@ -100,7 +100,10 @@ def upgrade() -> None:
         )
 
     # 回填存量 default 行：各组合最新快照日的 CN_OTC 有效持仓三元组（R2/D6/A9）。
-    effective_from = date.today()
+    # 业务日按 Asia/Shanghai（UTC+8）取当日，与服务侧 business_today() 同口径；
+    # 进程容器为 UTC，date.today() 会在 CST 00:00–08:00 早一天（S3）。迁移自包含，
+    # 不 import app 代码，故此处显式按 UTC+8 计算。
+    effective_from = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
     latest = (
         sa.select(
             POSITION.c.portfolio_code,

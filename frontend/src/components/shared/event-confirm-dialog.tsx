@@ -78,7 +78,8 @@ function EventConfirmSession({
   // 确认成功后才沉淀为 explicit 配置；不勾选绝不衍生写入。
   const [remember, setRemember] = useState(false);
   // A12 预选：仅 dividend_pending 且可选方式时解析生效配置（不滤 source，default 预选是本职）。
-  const preselectEnabled = canChooseMethod && event.event_type === "dividend_pending";
+  // 配置能力只覆盖 CN_OTC（A14/R10）：HK/场内事件不解析、不显示「记住」（写侧亦拒）。
+  const preselectEnabled = canChooseMethod && event.event_type === "dividend_pending" && event.market === "CN_OTC";
   const { data: resolvedConfig } = useDividendConfigResolve(
     {
       portfolio_code: event.portfolio_code,
@@ -191,20 +192,22 @@ function EventConfirmSession({
           </p>
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id="confirm_remember_method"
-          checked={remember}
-          onCheckedChange={(v) => setRemember(v === true)}
-          disabled={isConfirming}
-        />
-        <Label
-          htmlFor="confirm_remember_method"
-          className="text-xs font-normal text-muted-foreground"
-        >
-          记住本次方式，以后自动入账
-        </Label>
-      </div>
+      {event.market === "CN_OTC" && (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="confirm_remember_method"
+            checked={remember}
+            onCheckedChange={(v) => setRemember(v === true)}
+            disabled={isConfirming}
+          />
+          <Label
+            htmlFor="confirm_remember_method"
+            className="text-xs font-normal text-muted-foreground"
+          >
+            记住本次方式，以后自动入账
+          </Label>
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">方式和日期仅在确认成功后保存，取消不会修改事件。</p>
     </div>
   );

@@ -168,6 +168,13 @@ class TestCreate:
             _create(env, platform="NO_SUCH_PLAT")
         assert exc.value.code == "PLATFORM_NOT_FOUND"
 
+    def test_product_not_found_explicit_market(self, env):
+        """B1：显式 market + 不存在产品 → PRODUCT_NOT_FOUND（杜绝复合外键违约 500）。"""
+        with pytest.raises(NotFoundError) as exc:
+            _create(env, product="NO_SUCH.OF", market="CN_OTC")
+        assert exc.value.code == "PRODUCT_NOT_FOUND"
+        assert env.query(DividendMethodConfig).count() == 0
+
 
 class TestDelete:
     def test_delete_today_ok_with_audit(self, env):

@@ -1,7 +1,7 @@
 """#887：在 pytest 自有库验证迁移 0027 的回填范围、往返、幂等与拒绝降级零写入。"""
 
 import importlib.util
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,8 @@ spec.loader.exec_module(migration)
 CONFIG = Base.metadata.tables["dividend_method_config"]
 POSITION = Base.metadata.tables["portfolio_position"]
 PRODUCT = Base.metadata.tables["product"]
-TODAY = date.today()
+# 与迁移 0027 同口径：业务日按 UTC+8（Asia/Shanghai），不用进程本地 date.today()。
+TODAY = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
 
 
 def _run(fn, conn):

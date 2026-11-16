@@ -126,6 +126,13 @@ class TestCreate:
         assert resp.status_code == 404
         assert resp.json()["detail"]["error"] == "NOT_FOUND"
 
+    def test_product_not_found_explicit_market_404(self, client, admin_headers, env):
+        """B1：显式 market + 不存在产品 → 404 PRODUCT_NOT_FOUND，而非复合外键违约 500。"""
+        resp = client.post("/api/dividend-configs", headers=admin_headers,
+                           json=_body(product_code="NO_SUCH.OF"))
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"] == "PRODUCT_NOT_FOUND"
+
     def test_promote_default_via_api(self, client, admin_headers, env):
         _row(env, source="default", method="reinvest_dividend", eff=FUTURE)
         resp = client.post("/api/dividend-configs", headers=admin_headers,
