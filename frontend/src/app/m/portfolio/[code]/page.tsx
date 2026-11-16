@@ -116,7 +116,7 @@ function MobilePortfolioDetailInner() {
     <div className="space-y-4 p-4">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link href="/m/portfolio">
+        <Link href="/m/portfolio" aria-label="返回组合列表">
           <Button variant="ghost" size="sm">
             <ArrowLeft className="h-4 w-4" />
           </Button>

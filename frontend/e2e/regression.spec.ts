@@ -25,7 +25,7 @@ import {
   type PortfolioCode,
 } from './helpers';
 // 运行时导入导航单源：断言清单与返回出口由同一份数据派生，不在 spec 里抄第三份（#650）
-import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
+import { NAV_ITEMS, exitPaths } from '../src/components/shared/navItems';
 
 test.describe('页面渲染回归（防 P0 复发）', () => {
   // #715：任务页（双端）下线，功能迁到设置页「日志管理」Tab 与产品页「批量净值同步」。
@@ -386,28 +386,92 @@ test.describe('桌面窄屏底部导航（#658 L2 Blocker 1 回归网）', () =>
   });
 });
 
-test.describe('移动端非 Tab 管理页的站内出口（#658 L2 Blocker 2 回归网）', () => {
+test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 补桌面侧）', () => {
+  // 本用例原以「桌面端这些页走侧边栏，无此形态」为由 skip 桌面端。该前提在 #878 把
+  // 投资人/平台/分类设为 inNav:false（侧栏不再列出）后已失效，桌面因此既漏了出口、
+  // 守卫又静默放行——与 e2e/AGENTS.md 禁止的「把未证前提写进 skip」同一种病。
+  // 现双端真跑：出口是布局层职责，两端各由 exitPaths 按自己的轴派生。
   test('经页内入口进入后可返回宿主页，不再「可达即被困」', async ({ page }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== 'mobile',
-      '移动端出口断言仅针对移动项目（桌面端这些页走侧边栏，无此形态）',
-    );
+    const isMobile = testInfo.project.name === 'mobile';
+    const basePath: '' | '/m' = isMobile ? '/m' : '';
 
-    // 先走一遍真实入口：钉住组件里的 /m/* 字面量与 navItems 的 mobileEntryHost 仍对齐
+    // 先走一遍真实入口：钉住组件里的路径字面量与 navItems 的 entryHost 仍对齐
     // （#878 平台管理入口从设置页迁到产品页头部）
-    await page.goto('/m/products');
+    await page.goto(`${basePath}/products`);
     await page.getByRole('link', { name: '平台管理' }).click();
-    await page.waitForURL('**/m/platforms');
+    await page.waitForURL(`**${basePath}/platforms`);
 
-    for (const exit of mobileExitPaths('/m')) {
+    for (const exit of exitPaths(basePath)) {
       await page.goto(exit.path);
       const back = page.getByRole('link', { name: `返回${exit.label}` });
       await expect(back, `${exit.path} 应有站内出口`).toBeVisible();
-      // 这些页不渲染底部导航，返回入口是页内唯一出路
-      await expect(page.getByTestId('bottom-nav')).toHaveCount(0);
+
+      // 该页不在本端主导航里——这正是出口必须存在的理由，也是修复前桌面红的那一条
+      if (isMobile) {
+        // MobileLayout 只在一级 Tab 页渲染底部导航
+        await expect(page.getByTestId('bottom-nav')).toHaveCount(0);
+      } else {
+        // 桌面宽屏侧栏可见，但不列出语境分布入口页
+        await expect(page.locator(`aside a[href="${exit.path}"]`)).toHaveCount(0);
+      }
+
       await back.click();
       await page.waitForURL(`**${exit.href}`);
       expect(new URL(page.url()).pathname, `返回应落在 ${exit.href}`).toBe(exit.href);
+    }
+  });
+});
+
+test.describe('桌面窄屏管理页出口（#894：侧栏隐藏 + 底部导航不含该页）', () => {
+  // 最严重的一档：<lg 时侧栏 hidden lg:flex 不渲染，底部导航又按 mobileTab 过滤同样
+  // 不含这三页，页内唯一出路只剩指向 /dashboard 的紧凑头栏 Logo（不是宿主页）。
+  // chromium project 固定 1280 宽，只跑宽屏会整档漏掉，故显式降视口（手法同上一条
+  // #658 窄屏导航用例）。
+  test.use({ viewport: { width: 900, height: 800 } });
+
+  test('窄屏三页仍有返回宿主出口，侧栏隐藏且底部导航不含该页', async ({ page }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== 'chromium',
+      '桌面窄视口断言仅针对桌面项目（mobile 项目 390px 走 /m 端、由 MobileLayout 提供出口，镜像用例是上一条双端出口断言）',
+    );
+
+    const nav = page.getByTestId('bottom-nav');
+    for (const exit of exitPaths('')) {
+      await page.goto(exit.path);
+      await expect(
+        page.getByRole('link', { name: `返回${exit.label}` }),
+        `${exit.path} 窄屏应有站内出口`,
+      ).toBeVisible();
+      await expect(page.locator('aside')).toBeHidden();
+      await expect(nav).toBeVisible();
+      await expect(nav.locator(`a[href="${exit.path}"]`)).toHaveCount(0);
+    }
+  });
+});
+
+test.describe('图标返回按钮的可访问名（#894 B）', () => {
+  // 这 7 处曾是纯图标、既无可见文本也无 aria-label：读屏听不出是返回，E2E 也无法按
+  // role+name 定位。对照页 products/[code] 一直带 aria-label="返回"，故此前没暴露。
+  // toBeVisible 的 strict mode 同时钉住「唯一命中」——同名多命中会直接红。
+  test('组合详情与四个子页的返回按钮均可按 role+name 唯一命中', async ({ page }, testInfo) => {
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    await expect(page.getByRole('link', { name: '返回组合列表' })).toBeVisible();
+
+    // positions 的渲染信号桌面专属（见 helpers SUBPAGE_READY 注），移动端自行 goto
+    if (testInfo.project.name === 'mobile') {
+      await page.goto(portfolioPath(E2E_ACTIVE, 'positions'));
+      await page.getByTestId('cash-update-trigger').waitFor({ state: 'visible', timeout: 15_000 });
+    } else {
+      await gotoPortfolioSubpage(page, E2E_ACTIVE, 'positions');
+    }
+    await expect(page.getByRole('link', { name: '返回组合详情' })).toBeVisible();
+
+    for (const sub of ['trades', 'subscriptions', 'share-change-events'] as const) {
+      await gotoPortfolioSubpage(page, E2E_ACTIVE, sub);
+      await expect(
+        page.getByRole('link', { name: '返回组合详情' }),
+        `${sub} 的返回按钮应有可访问名`,
+      ).toBeVisible();
     }
   });
 });

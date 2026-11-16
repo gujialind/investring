@@ -23,10 +23,9 @@ import {
  *   宽放到 6 项，8~9 项（admin 全量）需 448px 以上、不可用（口径见 #650），故改走页内
  *   入口（#878 语境分布：投资人在组合页、平台与分类在产品页）。把取舍写成显式字段，
  *   下一个人不必再猜为什么少这几项。
- * - `mobileEntryHost`：`mobileTab: false` 时，承载其页内入口的那个移动一级 Tab 路径，
- *   也就是该页的**返回目标**。这几页自身没有返回链接、底部导航也不渲染（`MobileLayout`
- *   只在一级 Tab 页显示它），不写明出口就是「可达即被困」（#650 验收第 4 条）。进 Tab 的
- *   项为 `null`。
+ * - `entryHost`：不在该端主导航时，承载其页内入口的那个宿主页路径，也就是该页的**返回
+ *   目标**（#894 起双端共用，原名 `mobileEntryHost`）。这几页自身没有返回链接，不写明
+ *   出口就是「可达即被困」（#650 验收第 4 条）。在该端主导航里的项为 `null`。
  */
 export interface NavItem {
   /** 相对 basePath 的路径，自带前导 `/`；basePath 不得带尾斜杠（见 BottomNav 的说明） */
@@ -37,22 +36,22 @@ export interface NavItem {
   inNav: boolean;
   adminOnly: boolean;
   mobileTab: boolean;
-  mobileEntryHost: string | null;
+  entryHost: string | null;
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: "/dashboard", label: "首页", icon: LayoutDashboard, inNav: true, adminOnly: false, mobileTab: true, mobileEntryHost: null },
+  { href: "/dashboard", label: "首页", icon: LayoutDashboard, inNav: true, adminOnly: false, mobileTab: true, entryHost: null },
   // 投资人：语境分布入口在组合页头部（#878），侧栏/底部 Tab 不列出，返回宿主=组合
-  { href: "/investors", label: "投资人", icon: Users, inNav: false, adminOnly: true, mobileTab: false, mobileEntryHost: "/portfolio" },
-  { href: "/portfolio", label: "组合", icon: Briefcase, inNav: true, adminOnly: false, mobileTab: true, mobileEntryHost: null },
-  { href: "/products", label: "产品", icon: Package, inNav: true, adminOnly: true, mobileTab: true, mobileEntryHost: null },
+  { href: "/investors", label: "投资人", icon: Users, inNav: false, adminOnly: true, mobileTab: false, entryHost: "/portfolio" },
+  { href: "/portfolio", label: "组合", icon: Briefcase, inNav: true, adminOnly: false, mobileTab: true, entryHost: null },
+  { href: "/products", label: "产品", icon: Package, inNav: true, adminOnly: true, mobileTab: true, entryHost: null },
   // 平台 / 分类：语境分布入口在产品页头部（#878），返回宿主=产品
-  { href: "/platforms", label: "平台", icon: Building2, inNav: false, adminOnly: true, mobileTab: false, mobileEntryHost: "/products" },
-  { href: "/asset-classifications", label: "分类", icon: Tags, inNav: false, adminOnly: true, mobileTab: false, mobileEntryHost: "/products" },
+  { href: "/platforms", label: "平台", icon: Building2, inNav: false, adminOnly: true, mobileTab: false, entryHost: "/products" },
+  { href: "/asset-classifications", label: "分类", icon: Tags, inNav: false, adminOnly: true, mobileTab: false, entryHost: "/products" },
   // 注：日志管理已落地为设置页内 Tab（SettingsContent 的 logs Tab，#715），不建独立
   // /settings/logs 路由，故此处无导航项；任务页（/settings/tasks）已随 #715 下线。
   // 新增项时必须同时决定 inNav / mobileTab，填 false 就得补页内入口 + 这里的返回宿主
-  { href: "/settings", label: "设置", icon: Settings, inNav: true, adminOnly: true, mobileTab: true, mobileEntryHost: null },
+  { href: "/settings", label: "设置", icon: Settings, inNav: true, adminOnly: true, mobileTab: true, entryHost: null },
 ];
 
 /** 按角色过滤后的导航项（viewer 只见非 adminOnly 项；未登录/水合前按 viewer） */
@@ -71,15 +70,23 @@ export function mobileTabPaths(basePath: "" | "/m"): string[] {
 }
 
 /**
- * 不进底部 Tab 的页面的站内出口（#650 验收第 4 条）：路径 → 返回到承载其页内入口的那个
- * 一级 Tab 页。宿主页不在 NAV_ITEMS 里时不产出出口，宁可不给链接也不指向不存在的路径。
+ * 不在该端主导航里的页面的站内出口（#650 验收第 4 条 / #894 补桌面侧）：路径 → 返回到
+ * 承载其页内入口的宿主页。两端布局各自消费（`MainLayout` / `MobileLayout`）。
+ *
+ * **判据按端取轴**：桌面看 `inNav`（侧栏）、移动看 `mobileTab`（底部 Tab）。这是两个独立
+ * 的轴，今天 `inNav:false` 与 `mobileTab:false` 的集合恰好相同，沿用单轴会在将来出现
+ * `inNav:false, mobileTab:true` 的项时静默漏掉桌面出口。
+ *
+ * 宿主页不在 NAV_ITEMS 里时不产出出口，宁可不给链接也不指向不存在的路径。
  */
-export function mobileExitPaths(
+export function exitPaths(
   basePath: "" | "/m",
 ): { path: string; href: string; label: string }[] {
+  const inPrimaryNav = (item: NavItem) =>
+    basePath === "/m" ? item.mobileTab : item.inNav;
   return NAV_ITEMS.flatMap((item) => {
-    if (item.mobileTab || !item.mobileEntryHost) return [];
-    const host = NAV_ITEMS.find((cand) => cand.href === item.mobileEntryHost);
+    if (inPrimaryNav(item) || !item.entryHost) return [];
+    const host = NAV_ITEMS.find((cand) => cand.href === item.entryHost);
     if (!host) return [];
     return [
       {

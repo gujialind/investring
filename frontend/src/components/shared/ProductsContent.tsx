@@ -450,7 +450,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
       </div>
 
       {/* 语境分布入口（#878）：平台与分类管理从产品页头部到达（双端），不再进侧栏/底部 Tab。
-          返回出口由 MobileLayout 按 navItems.mobileEntryHost（=产品）统一提供 */}
+          返回出口由两端布局按 navItems.entryHost（=产品）统一提供（#894） */}
       <div className="flex flex-wrap items-center gap-2">
         <Button asChild variant="outline" size="sm">
           <Link href={`${basePath}/platforms`}>
