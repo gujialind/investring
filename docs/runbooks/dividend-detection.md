@@ -4,7 +4,7 @@
 
 ## 1. 时序前提
 
-tushare 分红检测在 **`run_nav_sync` 末尾**执行（`backend/app/services/task_runner.py::run_nav_sync`，末尾调用 `_detect_dividends`），检测对象是「最新持仓快照仍早于公告除息日」的组合：
+分红检测在 **`run_nav_sync` 末尾**执行（`backend/app/services/task_runner.py::run_nav_sync`，末尾调用 `_detect_dividends`），按产品 `data_source` 路由取数器（#881：tushare → `fund_div`；akshare → 东财「分红送配详情」`akshare_client.get_fund_div_otc`；仅 CN_OTC，HK/场内不覆盖），检测对象是「最新持仓快照仍早于公告除息日」的组合：
 
 - 取每个组合的最新 `portfolio_position.snapshot_date`（`backend/app/services/task_runner.py::_detect_dividends`）；
 - 对某条公告，若 `ex_date <= 最新快照日`，直接 `continue` 跳过（`backend/app/services/task_runner.py::_detect_dividends` 的跳过分支）。
@@ -15,6 +15,13 @@ tushare 分红检测在 **`run_nav_sync` 末尾**执行（`backend/app/services/
 - nav_sync 连续失败/自动重试，快照由别的触发源（手动、cascade 复查、追平）先行生成；
 - 人工先跑 `snapshot_generate` 再跑 nav_sync；
 - 补录/追平历史时先重建了 `ex_date` 及之后的快照。
+
+### 双源取数口径（#881）
+
+- **akshare（东财「分红送配详情」）**：列为 年份/权益登记日/除息日/每10份分红/分红发放日；金额形如「每10份派现金X元」÷10 折每份（与 tushare `div_cash` 逐条一致，实测 000001 25/25）。归一行保留 `pay_date`（分红发放日）**仅供调试/参考，建事件不消费**（消费属分红方式配置需求 PR2）；两源发放日有 1 天差（实测除息日 20070112：akshare 20070117 vs tushare 20070116），不跨源修正。
+- **预案/无效行防线**：该接口只列已实施分红（实测 000001 含 2007 年分红预案公告历史，详情仍只有 25 行实施记录，与 tushare `div_proc=实施` 一一对应）。**缺发放日**、金额解析失败或非现金形态（送股/拆分）的行由取数层归一 `div_cash=None`，走检测器既有 #771 闸门跳过并 `dividends_skipped` 留痕；**缺权益登记日**的行由检测器日期门**静默跳过、无 `dividends_skipped` 留痕**（日期门先于留痕分支，与 tushare 同口径）；除息日不可解析的行取数层 WARNING 后丢弃（无法按 (产品, 除息日) 留痕）。
+- **结构漂移响亮失败**：缺必需列 / 上游有行但除息日整段不可解析 → `AkshareAPIError`，该产品本轮检测跳过（warning + rollback，与 tushare API 错误同形），不静默空集。
+- **tushare 路径不变**：`get_fund_div` 归一仍 4 字段（ex_date/record_date/div_cash/div_proc），`div_proc != "实施"` 过滤不变；#771/#766 既有口径对两源同等适用。
 
 ## 2. 错过窗口的后果
 

@@ -43,6 +43,14 @@ _OTC_PCT_COLUMN = "日增长率"
 # 本地从未请求，导致 akshare 场外产品的 accumulated_nav 恒 NULL。
 _OTC_ACCUM_COLUMN = "累计净值"
 _OTC_ACCUM_INDICATOR = "累计净值走势"
+# 东财场外「分红送配详情」（#881）：与净值同一接口函数换 indicator 返回。实测列
+# （000001/000005，2026-11）：年份/权益登记日/除息日/每10份分红/分红发放日，全字符串列；
+# 金额形如「每10份派现金0.0180元」——每 10 份口径，÷10 折每份（0.0180 → 0.0018，
+# 与 tushare fund_div.div_cash 逐条一致）。该接口只列已实施分红（预案防线见
+# get_fund_div_otc docstring）。
+_OTC_DIV_INDICATOR = "分红送配详情"
+_OTC_DIV_COLUMNS = ("权益登记日", "除息日", "每10份分红", "分红发放日")
+_OTC_DIV_CASH_RE = re.compile(r"每10份派现金([0-9]+(?:\.[0-9]+)?)元")
 # 东财港互认响应里的日涨跌率键（百分数形态，如 -0.4762 = -0.4762%）。
 _HK_PCT_KEY = "NAVCHGRT"
 # 东财港互认响应里的累计净值键（#703）。实测**逐基金分档**：968024 有值、968050 为
@@ -405,6 +413,113 @@ def get_fund_nav_otc(
         # `_fetch_otc_accum_map` 的按日映射，不做位置对齐（#704）。
         for td, price, pct, _accum in usable
     ]
+
+
+def get_fund_div_otc(symbol: str) -> List[Dict[str, Any]]:
+    """场外基金分红公告（CN_OTC，东财「分红送配详情」，#881）。
+
+    归一化形态与 `tushare_client.get_fund_div` 对齐（ex_date / record_date / div_cash，
+    YYYYMMDD），供检测器源无关共享核心复用；另保留 pay_date（分红发放日）**仅供
+    调试/参考**——建事件不消费（#881 口径；消费属分红方式配置需求 PR2）。
+    symbol 接受 '000001' 或 '000001.OF'（取 . 前部分）。
+
+    **预案/无效行防线**：该接口只列已实施分红（作者只读实测：000001 含 2007 年分红
+    预案公告历史，详情仍只有 25 行实施记录，与 tushare div_proc=实施 一一对应；
+    akshare 无 div_proc 列）。行有效性判据与处置分层（缺日期与缺金额去向不同）：
+    - 权益登记日/除息日可解析（_compact_date）；除息日不可解析的行无法按
+      (产品, 除息日) 留痕，取数层 WARNING 后丢弃；登记日缺失的行由检测器日期门
+      静默跳过、无 dividends_skipped 留痕（日期门先于留痕分支，与 tushare 同口径）；
+    - 「每10份分红」匹配「每10份派现金X元」且 X 为有限数（送股/拆分等非现金形态、
+      解析失败 → None）；÷10 折每份金额，0 值原样保留（非正由检测器闸门判，
+      与 tushare _div_cash_or_none 同分工）；
+    - 分红发放日可解析（实施分红必有发放日——作者只读实测断言；缺失视为非实施/无效行）。
+    缺发放日/金额无效的行归一 div_cash=None，交检测器既有 #771 闸门跳过并
+    dividends_skipped 留痕。
+
+    整段结构漂移（缺必需列 / 上游有行但除息日整段不可解析）→ AkshareAPIError
+    （响亮，#651 同族）；上游 0 行是合法空（该基金无分红历史）→ []。
+    """
+    try:
+        import akshare as ak
+    except ImportError:
+        raise AkshareAPIError("akshare 未安装，请 pip install akshare")
+
+    code = symbol.split(".")[0]
+
+    def _fetch():
+        return ak.fund_open_fund_info_em(symbol=code, indicator=_OTC_DIV_INDICATOR)
+
+    df = _retry(_fetch, "获取场外基金分红失败")
+
+    missing = [c for c in _OTC_DIV_COLUMNS if c not in df.columns]
+    if missing:
+        logger.error(
+            "东财场外分红响应缺少必需列 %s（结构漂移，#881）", missing,
+            extra={
+                "operation": "fetch_fund_div_otc",
+                "product_code": code,
+                "market": "CN_OTC",
+                "missing_columns": missing,
+                "column_drift": True,
+            },
+        )
+        raise AkshareAPIError(
+            f"东财场外分红响应缺少必需列 {missing}（结构漂移，#881）"
+        )
+
+    if df.empty:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    unparsed_ex = 0
+    for _, raw in df.iterrows():
+        ex_date = _compact_date(raw.get("除息日"))
+        record_date = _compact_date(raw.get("权益登记日"))
+        pay_date = _compact_date(raw.get("分红发放日"))
+        amount_text = str(raw.get("每10份分红", ""))
+        div_cash: Optional[float] = None
+        match = _OTC_DIV_CASH_RE.search(amount_text)
+        if match is not None:
+            per_ten = _finite_number(match.group(1))
+            if per_ten is not None:
+                div_cash = per_ten / 10.0
+        if ex_date is None:
+            unparsed_ex += 1
+            logger.warning(
+                "东财场外分红行除息日不可解析，丢弃（#881）：%r", amount_text,
+                extra={
+                    "operation": "fetch_fund_div_otc",
+                    "product_code": code,
+                    "market": "CN_OTC",
+                },
+            )
+            continue
+        if record_date is None or pay_date is None:
+            # 缺登记日/发放日 → 无效行：金额归一 None 交检测器 #771 闸门跳过留痕；
+            # 不猜日期、不建缺日期事件。
+            div_cash = None
+        rows.append({
+            "ex_date": ex_date,
+            "record_date": record_date or "",
+            "div_cash": div_cash,
+            "pay_date": pay_date,
+        })
+
+    if unparsed_ex == len(df):
+        logger.error(
+            "东财场外分红除息日整段不可解析（结构漂移，#881）",
+            extra={
+                "operation": "fetch_fund_div_otc",
+                "product_code": code,
+                "market": "CN_OTC",
+                "upstream_rows": len(df),
+                "parsed": 0,
+                "ex_date_drift": True,
+            },
+        )
+        raise AkshareAPIError("东财场外分红除息日整段不可解析（结构漂移，#881）")
+
+    return rows
 
 
 def get_fund_daily_exchange(
