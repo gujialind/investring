@@ -15,7 +15,6 @@ import {
   collectPageErrors,
   dialogByTitle,
   gotoPortfolioSubpage,
-  nextTradingDays,
   openAppAndAuth,
   openPopover,
   pickCalendarDay,
@@ -28,6 +27,27 @@ const PRODUCT = { code: '000300.OF', market: 'CN_OTC' };
 const PLATFORM = 'HBZQ';
 type Headers = { Authorization: string };
 type Method = 'cash_dividend' | 'reinvest_dividend';
+
+/**
+ * 后端业务日（business_time.business_today，settings.timezone 默认 Asia/Shanghai）的 ISO 日期。
+ *
+ * 为什么需要它：组件生效日默认取**浏览器本地日**（toDateOnly(new Date())），而后端删除守卫
+ * 按**业务日**判「历史行不可删」（dividend_config_service.delete_config）。CI 容器/浏览器
+ * TZ=UTC 时，16:00–24:00Z 窗口内浏览器日比上海业务日小一天 → 默认生效日建的配置被拒删、
+ * 删除用例必红（#887 既存 TZ 脆弱性，#882 附带修复，只改测试侧）。
+ *
+ * 取法：UTC epoch + 业务时区偏移后按 **UTC getter** 切日，与浏览器/进程 TZ 无关。
+ * 注意这不是 helpers 台账禁用的「toISOString 按 UTC 切日」形态——那条禁的是未偏移的 UTC 日
+ * 与组件本地钟混用；这里刻意偏移 +8h 再切，得到的就是上海日历日。后端无业务日读侧端点可锚
+ * （种子日历终点用进程 date.today()，CI 为 UTC，反推不得），故偏移硬编码 +8 =
+ * settings.timezone 默认值；若部署改时区配置须同步本锚点。
+ */
+function businessTodayISO(): string {
+  const shifted = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${shifted.getUTCFullYear()}-${m}-${d}`;
+}
 
 async function post<T = unknown>(page: Page, headers: Headers, path: string, data?: unknown): Promise<T> {
   const response = await page.request.post(path, { headers, data });
@@ -105,6 +125,12 @@ const configDialog = (page: Page) => dialogByTitle(page, '分红方式配置');
 const confirmDialog = (page: Page) => dialogByTitle(page, '确认份额变动事件');
 const toast = (page: Page, title: string) => page.getByTestId('toast-card').filter({ hasText: title });
 
+// 钉死浏览器时钟为 UTC（CI 容器口径）：本地机器 TZ=CST 时浏览器日与上海业务日恒对齐，
+// 「浏览器日比业务日小一天」的 16:00–24:00Z 窗口缺陷在本地不可复现（local_stack 的
+// runtime_environment 丢弃 TZ，env 前缀无效）。pin 住后该错开条件本地恒成立，作回归防线；
+// 生效日锚定见 businessTodayISO() 与保存前显式选日。
+test.use({ timezoneId: 'UTC' });
+
 test.describe('分红方式配置（#887，桌面/移动共用）', () => {
   test('CN_OTC 持仓行入口：保存/历史/删除（A14/R10 展示侧）', async ({ page }, info) => {
     const errors = collectPageErrors(page);
@@ -123,13 +149,14 @@ test.describe('分红方式配置（#887，桌面/移动共用）', () => {
     await openPopover(page, dlg.getByLabel('新增/变更方式'), page.getByRole('listbox'));
     await page.getByRole('option', { name: '现金分红', exact: true }).click();
     await settlePopovers(page);
-    // 生效日不依赖组件默认「客户端今天」：CI 浏览器 TZ=UTC 而业务日按 Asia/Shanghai，
-    // 客户端 today 可能早于业务日一天，默认值会落「历史行」致删除被业务规则拒绝
-    // （dividend_config_service.delete_config：effective_from < business_today 即拒）。
-    // 改取后端 /trading-calendar/next 的首个开市日——严格晚于客户端 today，故恒 ≥ 业务日，
-    // 双端/双时区均可删（#896 L2 评审任务外发现的授权扩围修）。
-    const [effectiveFrom] = await nextTradingDays(page, s.headers, toISODate(new Date()), 1);
-    await pickCalendarDay(page, dlg.locator('button#dividend-config-effective-from'), effectiveFrom);
+    // 生效日显式选到后端业务日：组件默认=浏览器本地日，CI TZ=UTC 的 16:00–24:00Z 窗口内
+    // 比业务日小一天，直接保存会被删除守卫「历史行不可删」拒删。断言意图不变：
+    // 删除当日（业务日）新建配置并出成功 toast。
+    await pickCalendarDay(
+      page,
+      dlg.locator('button#dividend-config-effective-from'),
+      businessTodayISO(),
+    );
     await dlg.getByTestId('dividend-config-save').click();
     await expect(toast(page, '配置已保存')).toBeVisible();
     const row = dlg.getByTestId('dividend-config-row');

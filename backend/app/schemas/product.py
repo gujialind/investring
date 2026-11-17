@@ -74,6 +74,29 @@ class ProductUpdate(BaseModel):
     data_source: Optional[str] = None
 
 
+class BatchProductEntry(BaseModel):
+    """批量切换清单条目（#882）：显式 (code, market)，不做「按筛选全选」无界集合。
+    code/market 空值（含显式 null）由 service 统一拒为 INVALID_PARAM（#579 方向）。"""
+    model_config = ConfigDict(extra="forbid")
+    code: Optional[str] = None
+    market: Optional[str] = None
+
+
+class BatchDataSourceRequest(BaseModel):
+    """POST /api/products/batch-data-source 请求体（#882，SPEC v1.1 V4）。
+    上限/重复/存在性/市场兼容整批预校验在 service（fail-fast 零写入）。"""
+    model_config = ConfigDict(extra="forbid")
+    products: Optional[List[BatchProductEntry]] = None
+    data_source: Optional[str] = None
+
+
+class BatchDataSourceAccepted(BaseModel):
+    """异步受理回执（与 sync-jobs/price 同型，#882）。"""
+    job_id: int
+    status: str
+    message: str
+
+
 class ProductResponse(ProductBase):
     # issue #856：停用标记，列 NOT NULL + server_default，存量行回填 true
     is_active: bool = True

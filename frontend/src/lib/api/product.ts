@@ -120,6 +120,15 @@ export const productApi = {
   delete: (code: string, market?: string) =>
     request<{ message: string }>({ method: "DELETE", url: `/products/${code}/${requireMarket(market, "删除产品")}` }),
 
+  // #882 批量切换数据源（admin）：整批预校验 + 源级快检 fail-fast，受理返回 job_id，
+  // 终态经 syncJobApi.get / details 轮询（异步 job，逐产品探测约 50–150s）
+  batchSetDataSource: (data: { products: { code: string; market: string }[]; data_source: string }) =>
+    request<{ job_id: number; status: string; message: string }>({
+      method: "POST",
+      url: "/products/batch-data-source",
+      data,
+    }),
+
   syncHistory: (code: string, market?: string, data?: { start_date?: string; end_date?: string }) =>
     request<{ message: string; synced_count?: number; new_count?: number }>({
       method: "POST",
