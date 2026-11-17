@@ -1,5 +1,8 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+import { mobileExitPaths } from "@/components/shared/navItems";
+
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,6 +41,8 @@ interface InvestorsContentProps {
 
 export default function InvestorsContent({ variant = "desktop" }: InvestorsContentProps) {
   const isMobile = variant === "mobile";
+  const basePath = variant === "mobile" ? "/m" : "";
+  const exit = mobileExitPaths(basePath).find((e) => e.path === `${basePath}/investors`);
   const {
     data,
     isLoading,
@@ -129,13 +134,12 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
 
   return (
     <div className={isMobile ? "space-y-4" : "space-y-6"}>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">投资人管理</h1>
-          <p className="text-muted-foreground">
-            管理投资人和权限
-          </p>
-        </div>
+      <PageHeader
+        variant={variant}
+        crumbs={exit ? [{ href: exit.href, label: exit.label }] : []}
+        title="投资人管理"
+        meta="管理投资人和权限"
+        actions={
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button onClick={() => {
@@ -227,7 +231,8 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        }
+      />
 
       <Card>
         {!isMobile && (

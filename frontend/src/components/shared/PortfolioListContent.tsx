@@ -1,5 +1,7 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -111,17 +113,14 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            组合管理
-          </h1>
-          <p className="text-muted-foreground">管理投资组合和查看收益</p>
-        </div>
-        {isAdmin && (
-          <div className="flex items-center gap-2">
-            {/* 投资人管理语境入口（#878）：投资人不再进侧栏/底部 Tab，从组合页头部到达 */}
-            <Button asChild variant="outline">
+      <PageHeader
+        variant={variant}
+        title="组合管理"
+        meta="管理投资组合和查看收益"
+        actions={isAdmin && (
+          <>
+            {/* 投资人管理语境入口（#878）：权重降为 ghost 链接档（#904），入口语义不变 */}
+            <Button asChild variant="ghost" className="text-muted-foreground">
               <Link href={variant === "mobile" ? "/m/investors" : "/investors"}>
                 <Users className="mr-2 h-4 w-4" />
                 投资人管理
@@ -180,9 +179,9 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
               </form>
             </DialogContent>
           </Dialog>
-          </div>
+          </>
         )}
-      </div>
+      />
 
       <div className="flex items-center gap-4">
         <Select value={filter} onValueChange={setFilter}>

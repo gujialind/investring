@@ -1,5 +1,8 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+import { mobileExitPaths } from "@/components/shared/navItems";
+
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,6 +43,8 @@ interface PlatformsContentProps {
 
 export default function PlatformsContent({ variant = "desktop" }: PlatformsContentProps) {
   const isMobile = variant === "mobile";
+  const basePath = variant === "mobile" ? "/m" : "";
+  const exit = mobileExitPaths(basePath).find((e) => e.path === `${basePath}/platforms`);
   const {
     data,
     isLoading,
@@ -116,13 +121,12 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
 
   return (
     <div className={isMobile ? "space-y-4" : "space-y-6"}>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">平台管理</h1>
-          <p className="text-muted-foreground">
-            管理投资平台信息
-          </p>
-        </div>
+      <PageHeader
+        variant={variant}
+        crumbs={exit ? [{ href: exit.href, label: exit.label }] : []}
+        title="平台管理"
+        meta="管理投资平台信息"
+        actions={
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button onClick={() => {
@@ -181,7 +185,8 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        }
+      />
 
       <Card>
         {!isMobile && (
