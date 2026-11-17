@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
 from app.models.auth import AuthSession, ApiKey
-from app.services.auth_service import revoke_user_sessions
 from app.utils.security import get_password_hash
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.null_guard import reject_explicit_nulls
@@ -40,7 +39,7 @@ def create_investor(
 
 
 def update_investor(db: Session, *, code: str, updates: dict) -> Investor:
-    """更新投资人信息（password 字段自动转 password_hash）。不 commit。
+    """更新投资人信息。不 commit。改密统一走 PUT /api/auth/password（#893）。
 
     显式 null 收口（issue #573）：role/name 落 NULL 会让 InvestorResponse 校验 500
     且此后该行 GET 恒 500；phone/email 列可空且响应 Optional，null = 清除。
@@ -51,9 +50,6 @@ def update_investor(db: Session, *, code: str, updates: dict) -> Investor:
 
     updates = dict(updates)
     reject_explicit_nulls(updates, allow={"phone", "email"})
-    if "password" in updates:
-        updates["password_hash"] = get_password_hash(updates.pop("password"))
-        revoke_user_sessions(db, code)
 
     for field, value in updates.items():
         setattr(investor, field, value)

@@ -64,17 +64,12 @@ def test_old_stateless_and_expired_session_rejected(client, test_db, admin_token
     assert client.post("/api/auth/renew", headers=headers(admin_token)).status_code == 401
 
 
-@pytest.mark.parametrize("generic_update", [False, True])
-def test_password_change_revokes_target_sessions_not_admin_or_key(client, test_db, admin_headers, generic_update):
+def test_password_change_revokes_target_sessions_not_admin_or_key(client, test_db, admin_headers):
     owner = create_investor(test_db, code="KEY_OWNER", password="old_pass")
     tokens = [auth_service.create_session(test_db, owner)["token"] for _ in range(2)]
     key = issue_key(client, admin_headers, investor_code=owner.code)
-    if generic_update:
-        investor_service.update_investor(test_db, code=owner.code, updates={"password": "new_pass"})
-        test_db.flush()
-    else:
-        result = client.put("/api/auth/password", headers=admin_headers, json={"target_code": owner.code, "new_password": "new_pass"})
-        assert result.status_code == 200
+    result = client.put("/api/auth/password", headers=admin_headers, json={"target_code": owner.code, "new_password": "new_pass"})
+    assert result.status_code == 200
     for token in tokens:
         assert client.get("/api/auth/status", headers=headers(token)).status_code == 401
     assert client.get("/api/auth/status", headers=admin_headers).status_code == 200

@@ -97,6 +97,23 @@ def change_password(
     success(data=result["data"])
 
 
+@app.command("reset-password")
+def reset_password(
+    code: str = typer.Option(..., "--code", help="目标用户代码（重置自己请用 change-password）"),
+    password_stdin: bool = typer.Option(False, "--password-stdin", help="从标准输入读取一行新密码"),
+):
+    """管理员重置他人密码；支持 IR_NEW_PASSWORD 安全注入，成功后不影响本地凭证"""
+    new_password = _password("IR_NEW_PASSWORD", "新密码", password_stdin)
+    client = APIClient.from_config()
+    try:
+        result = client.put("/api/auth/password", json_data={
+            "target_code": code, "new_password": new_password,
+        })
+    finally:
+        client.close()
+    success(data=result["data"])
+
+
 @app.command("status")
 def status():
     """向服务端验证当前凭证（IR_TOKEN 优先），不输出秘密"""
