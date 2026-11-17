@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, KeyRound } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +15,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useResetPassword } from "@/hooks/useAuth";
-import { useUIStore } from "@/stores/uiStore";
 
 interface ResetPasswordDialogProps {
   open: boolean;
@@ -26,29 +26,33 @@ interface ResetPasswordDialogProps {
  * 管理员重置他人密码弹窗（#893）：形态对齐 ChangePasswordDialog（#878），
  * 仅新密码 + 确认（≥6 位、两次一致），无原密码字段。成功后只关弹窗清表单——
  * 后端仅撤销目标会话，操作者不登出、不跳转。
+ * 表单校验走 destructive inline Alert（visual-spec §14 错误提示分工，#893 L2 S1）；
+ * 提交结果的成败仍走 toast（useResetPassword）。
  */
 export default function ResetPasswordDialog({ open, onOpenChange, investor }: ResetPasswordDialogProps) {
-  const addToast = useUIStore((state) => state.addToast);
   const resetPassword = useResetPassword();
   const [form, setForm] = useState({ new_password: "", confirm_password: "" });
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   // 提交进行中禁止关闭，避免「取消」被误解为撤销已提交的重置（mutation 不可中止）。
   const requestClose = () => {
     if (resetPassword.isPending) return;
     setForm({ new_password: "", confirm_password: "" });
+    setValidationError(null);
     onOpenChange(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (form.new_password !== form.confirm_password) {
-      addToast({ type: "error", title: "密码不一致", message: "新密码和确认密码不一致" });
+      setValidationError("新密码和确认密码不一致");
       return;
     }
     if (form.new_password.length < 6) {
-      addToast({ type: "error", title: "密码太短", message: "新密码长度至少 6 位" });
+      setValidationError("新密码长度至少 6 位");
       return;
     }
+    setValidationError(null);
     resetPassword.mutate(
       { target_code: investor.code, new_password: form.new_password },
       {
@@ -76,13 +80,21 @@ export default function ResetPasswordDialog({ open, onOpenChange, investor }: Re
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
+          {validationError && (
+            <Alert variant="destructive" data-testid="reset-password-validation-alert">
+              <AlertDescription>{validationError}</AlertDescription>
+            </Alert>
+          )}
           <div className="space-y-2">
             <Label htmlFor="reset_new_password">新密码</Label>
             <Input
               id="reset_new_password"
               type="password"
               value={form.new_password}
-              onChange={(e) => setForm({ ...form, new_password: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, new_password: e.target.value });
+                setValidationError(null);
+              }}
               required
             />
           </div>
@@ -92,7 +104,10 @@ export default function ResetPasswordDialog({ open, onOpenChange, investor }: Re
               id="reset_confirm_password"
               type="password"
               value={form.confirm_password}
-              onChange={(e) => setForm({ ...form, confirm_password: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, confirm_password: e.target.value });
+                setValidationError(null);
+              }}
               required
             />
           </div>

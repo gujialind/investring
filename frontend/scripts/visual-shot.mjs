@@ -11,7 +11,8 @@
  *   --scenario  打开态浮层取证（#872 PR2，SPEC §9）：
  *             snapshot-delete-confirm = 快照删除确认 AlertDialog；
  *             trade-date-range = 交易日期区间 Popover（移动端先展开折叠筛选面板）；
- *             investor-reset-password = 投资人管理页重置密码 Dialog（#893，只开不提交）
+ *             investor-reset-password = 投资人管理页重置密码 Dialog（#893，只开不提交，
+ *             填短密码截校验 Alert 态）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -119,10 +120,15 @@ function shotName(path, device, theme) {
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
   if (scenario === 'investor-reset-password') {
-    // 本人（ADMIN）行无此按钮，first() 命中的是首个他人行；只开不提交，取消收口
+    // 本人（ADMIN）行无此按钮，first() 命中的是首个他人行；只开不提交，取消收口。
+    // 填短密码触发校验 Alert 取证（#893 L2 S1：inline Alert 形态；校验拦截不发请求）
     await page.locator('button[title="重置密码"]').first().click();
     const dlg = page.getByRole('dialog').filter({ hasText: '重置密码' });
     await dlg.waitFor();
+    await dlg.getByLabel('新密码', { exact: true }).fill('abc');
+    await dlg.getByLabel('确认新密码').fill('abc');
+    await dlg.getByRole('button', { name: '重置密码' }).click();
+    await dlg.getByTestId('reset-password-validation-alert').waitFor();
     return { close: async () => {
       await dlg.getByRole('button', { name: '取消' }).click();
       await dlg.waitFor({ state: 'hidden' });

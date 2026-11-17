@@ -100,16 +100,22 @@ test.describe('管理员重置他人密码', () => {
     const dlg = dialogByTitle(page, '重置密码');
     await expect(dlg).toBeVisible();
 
+    // 校验提示走弹窗内 destructive inline Alert（visual-spec §14，#893 L2 S1），
+    // 不走 toast；编辑输入即清除，弹窗保持打开且零请求
+    const alert = dlg.getByTestId('reset-password-validation-alert');
     await dlg.getByLabel('新密码', { exact: true }).fill('abc');
     await dlg.getByLabel('确认新密码').fill('abc');
     await dlg.getByRole('button', { name: '重置密码' }).click();
-    await expect(page.getByTestId('toast-card').filter({ hasText: '密码太短' })).toBeVisible();
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText('至少 6 位');
     await expect(dlg).toBeVisible();
 
     await dlg.getByLabel('新密码', { exact: true }).fill(NEW_PASSWORD);
+    await expect(alert).toBeHidden();
     await dlg.getByLabel('确认新密码').fill('e893other@2026');
     await dlg.getByRole('button', { name: '重置密码' }).click();
-    await expect(page.getByTestId('toast-card').filter({ hasText: '密码不一致' })).toBeVisible();
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText('不一致');
     await expect(dlg).toBeVisible();
     expect(requests).toEqual([]);
 

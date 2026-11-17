@@ -66,6 +66,25 @@ def test_reset_password_forbidden_exit(monkeypatch):
     assert config.load_token() is not None
 
 
+def test_reset_password_self_rejected_credentials_untouched(monkeypatch):
+    """--code 指向自己时后端走「改自己」分支 400 OLD_PASSWORD_REQUIRED；
+    拒绝路径与成功路径一样不触碰本地凭证（#893 L2 Blocker 验证项 3）。"""
+    original = credential()
+    config.save_token(original)
+    monkeypatch.setenv("IR_NEW_PASSWORD", "reset-secret")
+
+    def request(self, method, path, **kwargs):
+        return self._handle_response(httpx.Response(
+            400, json={"detail": {"error": "OLD_PASSWORD_REQUIRED", "message": "修改密码需要提供旧密码"}},
+        ))
+
+    monkeypatch.setattr(APIClient, "_request", request)
+    result = CliRunner().invoke(app, ["auth", "reset-password", "--code", "ADMIN"])
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["error"]["code"] == "OLD_PASSWORD_REQUIRED"
+    assert config.load_token() == original
+
+
 def test_reset_password_requires_password_without_interaction(monkeypatch):
     config.save_token(credential())
     calls = []

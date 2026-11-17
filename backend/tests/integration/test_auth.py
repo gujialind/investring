@@ -12,6 +12,7 @@ from unittest import mock
 
 from app.services.auth_service import create_session
 from app.models.audit_log import AuditLog
+from app.models.investor import Investor
 from app.utils.security import create_access_token
 from tests.factories import create_investor
 
@@ -198,6 +199,57 @@ class TestAdminResetPassword:
             json={"old_password": "viewer123", "new_password": "new_viewer_pass"},
         )
         assert resp.status_code == 200
+        assert test_db.query(AuditLog).filter(AuditLog.action == "reset_password").count() == 0
+
+
+@pytest.mark.dialect
+class TestResetPasswordCaseVariantMysql:
+    """#893 L2 Blocker 的 MySQL 方言反例——utf8mb4_general_ci 下大小写变体
+    命中同一行，但 Python 比较与内存锁精确匹配，SQLite 下不显形：
+
+    - 变体 code 重置锁定账户须清掉规范 code 的锁（否则 200 假成功）；
+    - admin 以自身 code 变体重置须落入「改自己」分支被旧密码门拒绝，
+      不得免旧密码改自己、撤销自己会话或落 reset_password 审计。
+    """
+
+    def _mysql_only(self, test_db):
+        if test_db.get_bind().dialect.name != "mysql":
+            pytest.skip("大小写不敏感排序规则仅 MySQL 方言成立")
+
+    def test_variant_reset_unlocks_canonical_code(self, client, test_db, admin_headers):
+        self._mysql_only(test_db)
+        create_investor(test_db, code="LOCK_VAR", password="old_pass")
+        for _ in range(5):
+            client.post("/api/auth/login", json={"code": "LOCK_VAR", "password": "wrong"})
+        locked = client.post("/api/auth/login", json={"code": "LOCK_VAR", "password": "old_pass"})
+        assert locked.status_code == 403
+
+        resp = client.put(
+            "/api/auth/password",
+            headers=admin_headers,
+            json={"target_code": "lock_var", "new_password": "new_pass"},
+        )
+        assert resp.status_code == 200
+        login = client.post("/api/auth/login", json={"code": "LOCK_VAR", "password": "new_pass"})
+        assert login.status_code == 200
+
+    def test_admin_self_variant_still_requires_old_password(self, client, test_db, admin_headers):
+        self._mysql_only(test_db)
+        admin = test_db.query(Investor).filter(Investor.code == "ADMIN").one()
+        hash_before = admin.password_hash
+        token = create_session(test_db, admin)["token"]
+
+        for old in (None, "wrong_old"):
+            body = {"target_code": "admin", "new_password": "hacked_pass"}
+            if old is not None:
+                body["old_password"] = old
+            resp = client.put("/api/auth/password", headers=admin_headers, json=body)
+            assert resp.status_code == 400
+
+        test_db.expire_all()
+        assert test_db.query(Investor).filter(Investor.code == "ADMIN").one().password_hash == hash_before
+        status_resp = client.get("/api/auth/status", headers={"Authorization": f"Bearer {token}"})
+        assert status_resp.status_code == 200
         assert test_db.query(AuditLog).filter(AuditLog.action == "reset_password").count() == 0
 
 

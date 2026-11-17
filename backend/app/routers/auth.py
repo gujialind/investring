@@ -132,6 +132,10 @@ def change_password(
     if not investor:
         raise HTTPException(status_code=404, detail="用户不存在")
 
+    # _ci 排序规则下大小写变体也能命中，但 Python 比较与内存锁精确匹配——
+    # 本人/他人判断、撤销会话、清锁、审计与日志一律用库内规范 code（#893 L2）。
+    target_code = investor.code
+
     # 非 admin 修改自己密码时，必须验证旧密码
     if current_user.role != "admin" or target_code == current_user.code:
         if not body.old_password:
