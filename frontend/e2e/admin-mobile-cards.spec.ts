@@ -7,7 +7,8 @@ import { dialogByTitle, expectSingleLine } from './helpers';
  * （承载位断言靠 `--` 兜底），平台 MYCF/HBZQ/TTJJ/ZB（seed_base.py）。不造数、不写库：
  * 编辑/删除只开弹窗后取消，验证操作入口可达与二次确认沿用。
  * 形态断言按 project 分支：mobile 断卡片容器存在 + table 不存在 + 姓名/用户名（平台：名称/代码·类型）
- * 单行；chromium 断桌面表格列结构不变（#897 验收断言 5/7 定案口径）。
+ * 单行 + 卡片内大标题/描述文案不渲染；chromium 断桌面表格列结构不变 + CardHeader 保留（#897 验收断言 5/7 定案口径）。
+ * 桌面行集锚点顺序无关（getByRole cell exact；列表顺序非契约，#354 同口径，L2 #901 Blocker 修复）。
  * 邮箱**不做单行断言**（维护者 2026-11-17 定案：允许换两行）。
  */
 
@@ -19,8 +20,9 @@ test('投资人管理页：移动卡片形态 / 桌面表格形态，字段承�
     await expect(page).toHaveURL(/\/m\/investors/);
     await expect(page.getByTestId('investor-card-list')).toBeVisible();
     await expect(page.locator('table')).toHaveCount(0);
-    // 描述文案仅移动收掉（定案②），桌面保留见 else 分支
+    // 描述文案与卡片内大标题仅移动收掉（定案②④⑤），桌面保留见 else 分支
     await expect(page.getByText('所有投资人的详细信息')).toHaveCount(0);
+    await expect(page.getByText('投资人列表', { exact: true })).toHaveCount(0);
 
     const adminCard = page.getByTestId('investor-card').filter({ hasText: '测试管理员' });
     await expect(adminCard).toBeVisible();
@@ -55,7 +57,9 @@ test('投资人管理页：移动卡片形态 / 桌面表格形态，字段承�
       await expect(page.locator('thead').getByText(head, { exact: true })).toBeVisible();
     }
     await expect(page.getByText('所有投资人的详细信息')).toBeVisible();
-    await expect(page.locator('tbody tr').first().getByText('ADMIN', { exact: true })).toBeVisible();
+    await expect(page.getByText('投资人列表', { exact: true })).toBeVisible();
+    // 顺序无关定位（#354 口径；列表顺序非契约，L2 #901 Blocker 修复）
+    await expect(page.getByRole('cell', { name: 'ADMIN', exact: true })).toBeVisible();
   }
 });
 
@@ -67,6 +71,8 @@ test('平台管理页：移动卡片形态 / 桌面表格形态，名称与代�
     await expect(page).toHaveURL(/\/m\/platforms/);
     await expect(page.getByTestId('platform-card-list')).toBeVisible();
     await expect(page.locator('table')).toHaveCount(0);
+    await expect(page.getByText('所有投资平台')).toHaveCount(0);
+    await expect(page.getByText('平台列表', { exact: true })).toHaveCount(0);
 
     const mycfCard = page.getByTestId('platform-card').filter({ hasText: '蚂蚁财富' });
     await expect(mycfCard).toBeVisible();
@@ -91,6 +97,9 @@ test('平台管理页：移动卡片形态 / 桌面表格形态，名称与代�
     for (const head of ['代码', '名称', '类型', '操作']) {
       await expect(page.locator('thead').getByText(head, { exact: true })).toBeVisible();
     }
-    await expect(page.locator('tbody tr').first().getByText('MYCF', { exact: true })).toBeVisible();
+    await expect(page.getByText('所有投资平台')).toBeVisible();
+    await expect(page.getByText('平台列表', { exact: true })).toBeVisible();
+    // 顺序无关定位（#354 口径；MySQL 聚簇首行 HBZQ ≠ SQLite 插入首行 MYCF，L2 #901 Blocker 修复）
+    await expect(page.getByRole('cell', { name: 'MYCF', exact: true })).toBeVisible();
   }
 });

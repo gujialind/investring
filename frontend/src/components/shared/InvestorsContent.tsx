@@ -219,14 +219,14 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>投资人列表</CardTitle>
-          {!isMobile && (
+        {!isMobile && (
+          <CardHeader>
+            <CardTitle>投资人列表</CardTitle>
             <CardDescription>
               所有投资人的详细信息
             </CardDescription>
-          )}
-        </CardHeader>
+          </CardHeader>
+        )}
         <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>
           {isMobile ? (
             <div className="space-y-3" data-testid="investor-card-list">
@@ -255,7 +255,7 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
                     </div>
                   </div>
                   <div className="space-y-1 text-xs text-muted-foreground">
-                    <p data-testid="investor-card-code">用户名：{investor.code}</p>
+                    <p className="break-all" data-testid="investor-card-code">用户名：{investor.code}</p>
                     <p>电话：{investor.phone || "--"}</p>
                     <p className="break-all">邮箱：{investor.email || "--"}</p>
                   </div>

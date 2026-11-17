@@ -184,12 +184,14 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>平台列表</CardTitle>
-          <CardDescription>
-            所有投资平台
-          </CardDescription>
-        </CardHeader>
+        {!isMobile && (
+          <CardHeader>
+            <CardTitle>平台列表</CardTitle>
+            <CardDescription>
+              所有投资平台
+            </CardDescription>
+          </CardHeader>
+        )}
         <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>
           {isMobile ? (
             <div className="space-y-3" data-testid="platform-card-list">
@@ -212,7 +214,7 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
                       />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground" data-testid="platform-card-meta">{platform.code} · {platform.platform_type || "--"}</p>
+                  <p className="text-xs text-muted-foreground break-all" data-testid="platform-card-meta">{platform.code} · {platform.platform_type || "--"}</p>
                 </div>
               ))}
             </div>
