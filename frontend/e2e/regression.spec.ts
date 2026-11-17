@@ -506,11 +506,17 @@ test.describe('读侧失败伪装成空态（#683 A 平台页 / C 交易列表�
     await refetched;
   });
 
-  test('平台列表正常态仍渲染行集、两句兜底文案都不出现（#683 A2，防把空态改坏）', async ({ page }) => {
+  test('平台列表正常态仍渲染行集、两句兜底文案都不出现（#683 A2，防把空态改坏）', async ({ page }, testInfo) => {
     // 不 mock。本批只把「失败」从「空态」里分出来，真·有数据与真·空的形态都不许被顺带改坏。
     await page.goto('/platforms');
-    await expect(page.getByRole('cell', { name: '华宝证券' })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByRole('cell', { name: '蚂蚁财富' })).toBeVisible();
+    if (testInfo.project.name === 'mobile') {
+      // #897 方案 A：移动改卡片列表后行集断言改卡片锚点；桌面仍断 cells（旧断言去向）
+      await expect(page.getByTestId('platform-card').filter({ hasText: '华宝证券' })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId('platform-card').filter({ hasText: '蚂蚁财富' })).toBeVisible();
+    } else {
+      await expect(page.getByRole('cell', { name: '华宝证券' })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole('cell', { name: '蚂蚁财富' })).toBeVisible();
+    }
     await expect(page.getByText('暂无平台')).toHaveCount(0);
     await expect(page.getByText('加载失败')).toHaveCount(0);
   });

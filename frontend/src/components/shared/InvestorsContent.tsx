@@ -31,7 +31,12 @@ import ResetPasswordDialog from "@/components/shared/ResetPasswordDialog";
 import RowActionButton from "@/components/shared/RowActionButton";
 import { useAuthStore } from "@/stores/authStore";
 
-export default function InvestorsContent() {
+interface InvestorsContentProps {
+  variant?: "desktop" | "mobile";
+}
+
+export default function InvestorsContent({ variant = "desktop" }: InvestorsContentProps) {
+  const isMobile = variant === "mobile";
   const { data, isLoading } = useInvestorList({ page_size: 100 });
   const createInvestor = useCreateInvestor();
   const updateInvestor = useUpdateInvestor();
@@ -116,7 +121,7 @@ export default function InvestorsContent() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className={isMobile ? "space-y-4" : "space-y-6"}>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">投资人管理</h1>
@@ -218,13 +223,58 @@ export default function InvestorsContent() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>投资人列表</CardTitle>
-          <CardDescription>
-            所有投资人的详细信息
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+        {!isMobile && (
+          <CardHeader>
+            <CardTitle>投资人列表</CardTitle>
+            <CardDescription>
+              所有投资人的详细信息
+            </CardDescription>
+          </CardHeader>
+        )}
+        <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>
+          {isMobile ? (
+            <div className="space-y-3" data-testid="investor-card-list">
+              {investors.map((investor) => (
+                <div key={investor.code} className="rounded-lg border p-3 space-y-2" data-testid="investor-card">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm" data-testid="investor-card-name">{investor.name}</span>
+                      <Badge variant={investor.role === "admin" ? "default" : "neutral"}>
+                        {investor.role === "admin" ? "管理员" : "投资人"}
+                      </Badge>
+                    </div>
+                    <div className="flex shrink-0 items-center">
+                      <RowActionButton
+                        icon={Pencil}
+                        label="编辑"
+                        onClick={() => handleEdit(investor)}
+                      />
+                      {/* 本人行不渲染判据同桌面（#893/#898）：重置自己需旧密码，自助改密另有入口 */}
+                      {investor.code !== currentUserCode && (
+                        <RowActionButton
+                          icon={KeyRound}
+                          label="重置密码"
+                          onClick={() => setResetTarget(investor)}
+                        />
+                      )}
+                      <RowActionButton
+                        icon={Trash2}
+                        label="删除"
+                        destructive
+                        onClick={() => handleDelete(investor.code)}
+                        disabled={removeInvestor.isPending}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <p className="break-all" data-testid="investor-card-code">用户名：{investor.code}</p>
+                    <p>电话：{investor.phone || "--"}</p>
+                    <p className="break-all">邮箱：{investor.email || "--"}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -274,6 +324,7 @@ export default function InvestorsContent() {
               ))}
             </TableBody>
           </Table>
+          )}
           {investors.length === 0 && (
             <div className="text-center text-muted-foreground py-8">
               暂无投资人

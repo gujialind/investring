@@ -47,11 +47,12 @@ test.describe('管理员重置他人密码', () => {
     const oldToken = ((await before.json()) as { token: string }).token;
 
     await page.reload();
-    const targetRow = page.getByRole('row').filter({ hasText: code });
+    // 双形态容器锚点：桌面表格 tr / 移动卡片（#897 卡片形态；tag+testid 符合定位器契约）
+    const targetRow = page.locator('tr, [data-testid="investor-card"]').filter({ hasText: code });
     await expect(targetRow).toBeVisible();
 
     // 本人（ADMIN）行不渲染重置按钮：重置自己需旧密码，自助改密另有入口
-    const adminRow = page.getByRole('row').filter({ hasText: 'ADMIN' });
+    const adminRow = page.locator('tr, [data-testid="investor-card"]').filter({ hasText: 'ADMIN' });
     await expect(adminRow.getByRole('button', { name: '重置密码' })).toHaveCount(0);
 
     await targetRow.getByRole('button', { name: '重置密码' }).click();
@@ -95,7 +96,7 @@ test.describe('管理员重置他人密码', () => {
       if (request.url().includes('/api/auth/password')) requests.push(request.url());
     });
 
-    await page.getByRole('row').filter({ hasText: code })
+    await page.locator('tr, [data-testid="investor-card"]').filter({ hasText: code })
       .getByRole('button', { name: '重置密码' }).click();
     const dlg = dialogByTitle(page, '重置密码');
     await expect(dlg).toBeVisible();

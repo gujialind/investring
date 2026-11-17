@@ -34,7 +34,12 @@ import {
   useDeletePlatform,
 } from "@/hooks/usePlatform";
 
-export default function PlatformsContent() {
+interface PlatformsContentProps {
+  variant?: "desktop" | "mobile";
+}
+
+export default function PlatformsContent({ variant = "desktop" }: PlatformsContentProps) {
+  const isMobile = variant === "mobile";
   const {
     data,
     isLoading,
@@ -110,7 +115,7 @@ export default function PlatformsContent() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className={isMobile ? "space-y-4" : "space-y-6"}>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">平台管理</h1>
@@ -179,13 +184,41 @@ export default function PlatformsContent() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>平台列表</CardTitle>
-          <CardDescription>
-            所有投资平台
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+        {!isMobile && (
+          <CardHeader>
+            <CardTitle>平台列表</CardTitle>
+            <CardDescription>
+              所有投资平台
+            </CardDescription>
+          </CardHeader>
+        )}
+        <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>
+          {isMobile ? (
+            <div className="space-y-3" data-testid="platform-card-list">
+              {platforms.map((platform) => (
+                <div key={platform.code} className="rounded-lg border p-3 space-y-2" data-testid="platform-card">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm" data-testid="platform-card-name">{platform.name}</span>
+                    <div className="flex shrink-0 items-center">
+                      <RowActionButton
+                        icon={Pencil}
+                        label="编辑"
+                        onClick={() => handleEdit(platform)}
+                      />
+                      <RowActionButton
+                        icon={Trash2}
+                        label="删除"
+                        destructive
+                        onClick={() => handleDelete(platform.code)}
+                        disabled={deletePlatform.isPending}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground break-all" data-testid="platform-card-meta">{platform.code} · {platform.platform_type || "--"}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -219,6 +252,7 @@ export default function PlatformsContent() {
               ))}
             </TableBody>
           </Table>
+          )}
           {/* #683A 判序承重：失败必须排在「长度为 0」之前，否则后端故障被说成「环境里没有平台」，
               用户会去重复新建（同 code 撞 ALREADY_EXISTS）。usePlatformList 的 isError→addToast 按 #214
               保留，但 toast 几秒即消失，不能当失败的唯一出口。失败优先写在**外层三元**而非 ProductsContent
