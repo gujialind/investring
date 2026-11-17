@@ -15,8 +15,10 @@ import {
   collectPageErrors,
   dialogByTitle,
   gotoPortfolioSubpage,
+  nextTradingDays,
   openAppAndAuth,
   openPopover,
+  pickCalendarDay,
   settlePopovers,
   toISODate,
   type PortfolioCode,
@@ -121,7 +123,13 @@ test.describe('分红方式配置（#887，桌面/移动共用）', () => {
     await openPopover(page, dlg.getByLabel('新增/变更方式'), page.getByRole('listbox'));
     await page.getByRole('option', { name: '现金分红', exact: true }).click();
     await settlePopovers(page);
-    // 生效日默认今天（组件 toDateOnly(new Date())），直接保存
+    // 生效日不依赖组件默认「客户端今天」：CI 浏览器 TZ=UTC 而业务日按 Asia/Shanghai，
+    // 客户端 today 可能早于业务日一天，默认值会落「历史行」致删除被业务规则拒绝
+    // （dividend_config_service.delete_config：effective_from < business_today 即拒）。
+    // 改取后端 /trading-calendar/next 的首个开市日——严格晚于客户端 today，故恒 ≥ 业务日，
+    // 双端/双时区均可删（#896 L2 评审任务外发现的授权扩围修）。
+    const [effectiveFrom] = await nextTradingDays(page, s.headers, toISODate(new Date()), 1);
+    await pickCalendarDay(page, dlg.locator('button#dividend-config-effective-from'), effectiveFrom);
     await dlg.getByTestId('dividend-config-save').click();
     await expect(toast(page, '配置已保存')).toBeVisible();
     const row = dlg.getByTestId('dividend-config-row');
