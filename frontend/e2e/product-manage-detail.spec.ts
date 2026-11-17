@@ -103,12 +103,13 @@ async function expectProductMetaLayout(row: Locator, label: string) {
     `${label}：次行 scrollWidth=${single.scrollWidth} 应 ≤ clientWidth=${single.clientWidth}`
   ).toBeLessThanOrEqual(1);
 
-  // C：首列不窄于该行次行内容宽（关系式，不写死像素阈值）
-  const cell = await row.getByRole("cell").first().boundingBox();
-  if (!cell) throw new Error(`${label}：首列没有可见盒`);
+  // C：产品名称列不窄于该行次行内容宽（关系式，不写死像素阈值）。
+  // #882 起批量勾选列位于首列，故按组件锚点取名称列而非位置首列；断言意图不变（#829 防名称列挤压）
+  const cell = await row.getByTestId("product-name-cell").boundingBox();
+  if (!cell) throw new Error(`${label}：产品名称列没有可见盒`);
   expect(
     cell.width,
-    `${label}：首列宽 ${cell.width}px 应 ≥ 次行内容宽 ${single.scrollWidth}px`
+    `${label}：产品名称列宽 ${cell.width}px 应 ≥ 次行内容宽 ${single.scrollWidth}px`
   ).toBeGreaterThanOrEqual(single.scrollWidth - 1);
 }
 

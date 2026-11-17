@@ -80,7 +80,7 @@ client_ip 由 `get_current_user` 在认证成功后写入。排查时先按 `req
 ERROR 并落一条 `system_error_log`，绝不静默）。
 
 **audit_log 的必埋范围**（高风险子集，非全量）：申赎、调仓、跨平台现金转移、份额变动
-事件、快照 generate / recalculate / delete（含级联回退）、现金手动重估、代理 API Key 创建/撤销（#797），以及**产品数据源实际变更**（#880，`resource_type=product`、`action=update`，diff-only 记 old/new `data_source`；换源影响估值与分红检测，属高风险配置变更）、**分红方式配置写入**（#887，`resource_type=dividend_config`、`action=create/update/delete`，载荷键四元组 + old/new method + effective_from + source；default 提升替换记 update，配置驱动分红落地属高风险配置变更）、**管理员重置他人密码**（#893，`resource_type=investor`、`action=reset_password`，载荷不含密码；自助改密不埋）。成功预览只记访问日志，不产生业务审计或业务写入。产品 / 平台 /
+事件、快照 generate / recalculate / delete（含级联回退）、现金手动重估、代理 API Key 创建/撤销（#797），以及**产品数据源实际变更**（#880 单只 / #882 批量逐产品，`resource_type=product`、`action=update`，diff-only 记 old/new `data_source`；换源影响估值与分红检测，属高风险配置变更。批量不新增专用 action，逐产品行与单只同形；批量关联经 job 台账 `params["results"]` 的 old_source 清单，审计载荷不加 batch_job_id——audit_log 无 details 列，保持 diff-only 单一形状；批量后台执行体 actor 恒 SYSTEM）、**分红方式配置写入**（#887，`resource_type=dividend_config`、`action=create/update/delete`，载荷键四元组 + old/new method + effective_from + source；default 提升替换记 update，配置驱动分红落地属高风险配置变更）、**管理员重置他人密码**（#893，`resource_type=investor`、`action=reset_password`，载荷不含密码；自助改密不埋）。成功预览只记访问日志，不产生业务审计或业务写入。产品 / 平台 /
 投资人 / 组合的**其余** CRUD 与任务手动触发**不埋**（YAGNI，需要时另开 issue）；产品创建不埋数据源审计（无旧值可比，创建结果在响应与同步明细可见）。
 
 **action / resource_type 取值**以 `app/constants/audit_actions.py` 为单一事实来源，埋点
@@ -107,7 +107,7 @@ NOT NULL 列，缺哨兵则后台路径（调度器、线程池）整条写不�
 
 ### 载荷与去重边界
 
-- `snapshot_recalc_job` 跨线程只传 request_id、不传 actor（共用线程池不复制 contextvars），后台审计恒为 SYSTEM，stdout 仍能关联请求。
+- `snapshot_recalc_job` / `data_source_switch_job`（#882）跨线程只传 request_id、不传 actor（共用线程池不复制 contextvars），后台审计恒为 SYSTEM，stdout 仍能关联请求。批量切换逐产品 checkpoint 提交（产品行 + 审计行 + job 计数/台账同一事务），台账写独立副本防 JSON 列共享引用漏 UPDATE。
 - JSON 用 `default=str` 保存 Decimal/date，create 无 old_value、delete 无 new_value；副作用仅申赎确认的 cash_transfer_group 与交易创建的 transfer_group 折进 new_value，组合激活及确认配对腿镜像不另入载荷。
 - 快照 generate 数值载荷用保标度字符串（#421）：ORM 构造点保留量化后的 Decimal（估值 4 位、份额 2 位），不转 float；同函数 API 返回 dict 的 float **刻意保留**，那是 JSON 数字契约。投资人成本价构造点同样保留 Decimal。
 - 级联委派给既有 unconfirm 实现时只由被委派方留痕；事件级联就地改字段才记 cascade_unconfirm。不为 generate 前的空删除记 delete；申赎/交易/事件 update 仅 diff 非空才记审计，原样提交不产生两侧皆 NULL 的空行。

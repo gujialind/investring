@@ -9,9 +9,14 @@ from app.schemas.product import (
     ProductUpdate,
     ProductResponse,
     PaginatedProductResponse,
+    BatchDataSourceRequest,
+    BatchDataSourceAccepted,
 )
 from app.dependencies import get_current_user, get_current_admin
 from app.services import product_service
+from app.services.data_source_switch_job import submit_data_source_switch_job
+from app.services.market_data_service import ConflictError
+from app.services.null_guard import reject_explicit_nulls
 
 router = APIRouter()
 
@@ -127,6 +132,25 @@ def create_product(
     db.commit()
     db.refresh(new_product)
     return new_product
+
+
+@router.post("/batch-data-source", response_model=BatchDataSourceAccepted)
+def batch_set_data_source(
+    payload: BatchDataSourceRequest,
+    current_user=Depends(get_current_admin),
+):
+    """批量切换数据源（#882，admin）：整批预校验 + 源级快检 fail-fast 零写入，
+    通过后落异步 job 立即返回 job_id；逐产品探测/写入/台账在后台执行体。
+    终态经 GET /api/sync-jobs/{job_id}，逐产品结果经 /{job_id}/details。"""
+    # 显式 null 收口（#579 方向）：顶层 null → INVALID_PARAM；条目内 null 由 service 同码拒绝
+    reject_explicit_nulls(payload.model_dump(exclude_unset=True))
+    products = [[e.code, e.market] for e in (payload.products or [])]
+    try:
+        # 任务记录的事务归投递入口自持会话（#592），本端点不注入请求会话
+        job_id = submit_data_source_switch_job(products, payload.data_source, triggered_by="manual")
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="已有批量切换任务在运行中")
+    return {"job_id": job_id, "status": "pending", "message": "任务已提交"}
 
 
 @router.get("/{code}/{market}", response_model=ProductResponse)

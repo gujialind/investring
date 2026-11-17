@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { availableDataSources, dataSourceSwitchHint } from "./dataSource";
+import {
+  availableDataSources,
+  dataSourceSwitchHint,
+  batchAvailableDataSources,
+  batchDataSourceSwitchHint,
+} from "./dataSource";
 
 describe("availableDataSources", () => {
   it("HK_MUTUAL 只返回 akshare（tushare 不支持港互认）", () => {
@@ -31,6 +36,37 @@ describe("dataSourceSwitchHint", () => {
       const h = dataSourceSwitchHint(m);
       expect(h).not.toContain("日涨跌列口径随源变化");
       expect(h).not.toContain("仍会自动检测分红");
+      expect(h).toContain("切换后新净值来自新数据源");
+    }
+  });
+});
+
+describe("batchAvailableDataSources（#882）", () => {
+  it("含港互认的清单只 akshare（市场兼容交集）", () => {
+    expect(batchAvailableDataSources(["CN_OTC", "HK_MUTUAL"])).toEqual(["akshare"]);
+    expect(batchAvailableDataSources(["HK_MUTUAL"])).toEqual(["akshare"]);
+  });
+
+  it("纯场内/场外清单两源皆可", () => {
+    expect(batchAvailableDataSources(["CN_OTC", "CN_EXCHANGE"])).toEqual(["tushare", "akshare"]);
+  });
+
+  it("空清单返回两源（字面量断言，不自证）", () => {
+    expect(batchAvailableDataSources([])).toEqual(["tushare", "akshare"]);
+  });
+});
+
+describe("batchDataSourceSwitchHint（#882）", () => {
+  it("清单含任一场外产品即附口径差与分红后果", () => {
+    const h = batchDataSourceSwitchHint(["CN_EXCHANGE", "CN_OTC"]);
+    expect(h).toContain("日涨跌列口径随源变化");
+    expect(h).toContain("仍会自动检测分红");
+  });
+
+  it("纯场内/港互认清单只有通用提示", () => {
+    for (const markets of [["CN_EXCHANGE"], ["HK_MUTUAL"], []]) {
+      const h = batchDataSourceSwitchHint(markets);
+      expect(h).not.toContain("日涨跌列口径随源变化");
       expect(h).toContain("切换后新净值来自新数据源");
     }
   });

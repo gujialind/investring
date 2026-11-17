@@ -128,6 +128,24 @@ export function useDeleteProduct() {
   });
 }
 
+// 批量切换数据源 Hook（#882）：受理即返 job_id，终态由调用方经 useSyncJob 轮询；
+// 提交失败（预校验/快检/409）弹 toast 透传后端中文消息，对话框不关（同 PR1 探测失败形态）
+export function useBatchSetDataSource() {
+  const addToast = useUIStore((state) => state.addToast);
+
+  return useMutation({
+    mutationFn: (data: { products: { code: string; market: string }[]; data_source: string }) =>
+      productApi.batchSetDataSource(data),
+    onError: (error: unknown) => {
+      addToast({
+        type: "error",
+        title: "批量切换提交失败",
+        message: getErrorMessage(error, "请稍后重试"),
+      });
+    },
+  });
+}
+
 // 同步历史价格 Hook（#856：可选周期；无日期=成立以来全量、不发请求体）
 export function useSyncProductHistory() {
   const queryClient = useQueryClient();

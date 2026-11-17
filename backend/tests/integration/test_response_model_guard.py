@@ -109,7 +109,8 @@ WHITELIST: dict[tuple[str, str], str] = {
     ("POST", "/api/share-change-events/{id}/unconfirm"):
         "回执 message + ShareChangeEventResponse 嵌在 event 键",
     ("GET", "/api/sync-jobs/{job_id}/details"):
-        "job(SyncJobResponse) + details(NavSyncDetailResponse[]) 双键包装，非单一模型",
+        "job(SyncJobResponse) + details 双键包装：价格同步类型为 NavSyncDetailResponse[]，"
+        "data_source_switch 类型为 params['results'] 台账 dict[]（#882），非单一模型",
     # ---- 守卫型：无成功响应体 ----
     ("DELETE", "/api/positions/{id}"):
         "恒抛 422 POSITION_TABLE_PROTECTED（快照表禁手改），无成功响应体",

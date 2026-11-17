@@ -125,7 +125,7 @@ function PortfolioDetailInner() {
         {/* 页头：返回 / 名称+code+成立日期·状态小字 / 操作区（#786：4 入口可换行、标题不压缩） */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-4">
-            <Link href="/portfolio">
+            <Link href="/portfolio" aria-label="返回组合列表">
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="h-4 w-4" />
               </Button>

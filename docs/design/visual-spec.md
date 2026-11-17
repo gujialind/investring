@@ -356,8 +356,10 @@
 
 ### 20.1 导航单源与语境分布
 
-- **唯一来源仍是 `components/shared/navItems.ts`**（#650）。`NavItem` 在 #878 增加 `inNav`（是否进桌面侧栏主导航）；`mobileTab` / `mobileEntryHost` 沿用 #650 语义。派生函数：`sidebarItemsForRole`（角色过滤后再剔 `inNav:false`）、`mobileTabPaths` / `mobileExitPaths`（移动底部 Tab 与站内出口）。**新增导航项必须同时决定 `inNav` / `mobileTab`，填 `false` 就得补页内入口 + 返回宿主**，否则「可达即被困」（#650 验收第 4 条）。
-- **管理入口走语境分布，不堆进设置页**（#878 拍板，入口式不删页）：投资人管理入口在**组合页头部**（admin-only，`PortfolioListContent`），平台管理 + 资产分类管理入口在**产品页头部**（双端，`ProductsContent`，`${basePath}/platforms`、`${basePath}/asset-classifications`）。三项 `inNav:false` / `mobileTab:false`，路由本身保留；`mobileEntryHost` 分别为 `/portfolio`、`/products`、`/products`。理由：管理动作发生在其宿主语境（看组合时管投资人、看产品时管平台/分类），比收进设置页更近；移动端底部 Tab 位宽有限（#650 口径），同样走页内入口。
+- **唯一来源仍是 `components/shared/navItems.ts`**（#650）。`NavItem` 在 #878 增加 `inNav`（是否进桌面侧栏主导航）；`mobileTab` 沿用 #650 语义；`mobileEntryHost` 自 #894 改名 `entryHost`（语义已是端无关的「语境入口宿主页」）。派生函数：`sidebarItemsForRole`（角色过滤后再剔 `inNav:false`）、`mobileTabPaths`（移动底部 Tab）、`mobileExitPaths`（**双端**站内出口；函数名属历史遗留——E2E compare 的 baseline 用 base 的 e2e 配 head 的 src 且 import 本函数，改名会弄红 baseline capture 且无豁免，故改名留待合入后 follow-up）。**新增导航项必须同时决定 `inNav` / `mobileTab`，填 `false` 就得补页内入口 + 返回宿主**，否则「可达即被困」（#650 验收第 4 条）。
+- **站内出口是布局层职责，双端各一份渲染、共用一份派生**（#894）：`MainLayout` 与 `MobileLayout` 都消费 `navItems.ts::mobileExitPaths`，在内容区上方渲染「返回{宿主label}」（图标 + 可见文本 + `aria-label`，故自带可访问名）。**判据按端取轴**：桌面看 `inNav`（侧栏）、移动看 `mobileTab`（底部 Tab）——两个独立的轴，当前 `inNav:false` 与 `mobileTab:false` 的集合恰好相同，沿用单轴会在出现 `inNav:false, mobileTab:true` 的项时静默漏掉桌面出口。**桌面窄屏（`<lg`）是最严重的一档**：侧栏不渲染、底部导航按 `mobileTab` 过滤同样不含该页，紧凑头栏 Logo 指向 `/dashboard` 而非宿主页，故出口在该档是页内唯一出路。#878 只落地移动侧、桌面侧漏到 #894 才补，成因是既有 E2E 守卫以「桌面端这些页走侧边栏」为由 skip 桌面端，而该前提被 #878 自己改掉——**导航口径变更必须同批复核相关 skip 前提**，否则覆盖无声蒸发。
+- **图标-only 返回按钮必须有可访问名**（#894）：页头返回控件若只有图标、无可见文本，则承载跳转的 `Link` 必须带 `aria-label` 且名字点明返回目标（如「返回组合列表」/「返回组合详情」），使读屏可辨、E2E 可按 `role+name` 唯一定位。与 §8 操作列控件的 `title`/`aria-label` 纪律同源，但适用对象是页面级导航控件、不是列表行操作。
+- **管理入口走语境分布，不堆进设置页**（#878 拍板，入口式不删页）：投资人管理入口在**组合页头部**（admin-only，`PortfolioListContent`），平台管理 + 资产分类管理入口在**产品页头部**（双端，`ProductsContent`，`${basePath}/platforms`、`${basePath}/asset-classifications`）。三项 `inNav:false` / `mobileTab:false`，路由本身保留；`entryHost` 分别为 `/portfolio`、`/products`、`/products`。理由：管理动作发生在其宿主语境（看组合时管投资人、看产品时管平台/分类），比收进设置页更近；移动端底部 Tab 位宽有限（#650 口径），同样走页内入口。
 - 设置页**不再承载**平台/投资人管理入口（原移动设置页的平台管理块已移除）；设置 = 纯系统设置（§20.4）。
 
 ### 20.2 桌面侧栏尺寸与收起

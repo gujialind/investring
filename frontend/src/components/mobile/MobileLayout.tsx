@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils";
 // 一级 Tab 页（底部导航项对应页面）；viewer 的导航项是其子集，无需按角色区分——
 // BottomNav 内部已按角色出项。路径集合由导航单源派生（#650），不再手抄一份
 const TOP_LEVEL_PATHS = new Set(mobileTabPaths("/m"));
-// 不进底部 Tab 的 admin 页（平台/分类/任务）→ 返回宿主页。这些页自身没有返回入口、
-// 此处又不渲染底部导航，缺这一条就是「可达即被困」（#650 验收第 4 条）
+// 不进底部 Tab 的管理页（投资人/平台/分类）→ 返回宿主页。这些页自身没有返回入口、
+// 此处又不渲染底部导航，缺这一条就是「可达即被困」（#650 验收第 4 条）。
+// 桌面侧同形出口在 MainLayout，两端共用 mobileExitPaths 这一份派生（#894）
 const EXIT_PAGES = new Map(mobileExitPaths("/m").map((e) => [e.path, e]));
 
 export default function MobileLayout({

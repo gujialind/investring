@@ -21,3 +21,18 @@ export function dataSourceSwitchHint(market: string | undefined): string {
     "日涨跌列口径随源变化（tushare=累计净值总收益口径，akshare=单位净值口径含除息跳水），该列数字会系统性变化，非数据错误。切到 akshare 的场外产品仍会自动检测分红（东财分红送配详情，#881）：若该 (组合, 产品, 市场, 平台) 已有显式分红方式配置，按公告发放日自动建带类型事件（#887 PR2）；未配置时仍建「分红方式待定」事件、确认时人工选方式（A3）。akshare 缺发放日由取数层归一后跳过并留痕（与 tushare 的 pending+degraded 存在差异，统一口径另见 #892）；预案/无效行跳过留痕。"
   );
 }
+
+/** 批量切换可选目标源（#882）：按所选清单各市场可选源取交集——
+ * 含港互认则只 akshare（与后端 validate_data_source 市场兼容同口径）；空清单返回两源。 */
+export function batchAvailableDataSources(markets: (string | undefined)[]): string[] {
+  if (markets.length === 0) return [...DATA_SOURCE_OPTIONS];
+  return markets
+    .map((m) => availableDataSources(m))
+    .reduce((acc, opts) => acc.filter((s) => opts.includes(s)));
+}
+
+/** 批量切换后果提示（#882）：清单含任一场外产品即附 CN_OTC 口径差与分红后果，
+ * 复用单只提示单点，不另写一份文案。 */
+export function batchDataSourceSwitchHint(markets: (string | undefined)[]): string {
+  return dataSourceSwitchHint(markets.includes("CN_OTC") ? "CN_OTC" : undefined);
+}
