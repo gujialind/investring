@@ -117,6 +117,31 @@ export function useChangePassword() {
   });
 }
 
+// 管理员重置他人密码 Hook（#893）：与 useChangePassword 刻意分离——后者文案与
+// 身份捕获绑定自助语义。后端只撤销目标会话，操作者不登出、不跳转、不清缓存。
+export function useResetPassword() {
+  const addToast = useUIStore((state) => state.addToast);
+
+  return useMutation({
+    mutationFn: (data: { target_code: string; new_password: string }) =>
+      authApi.changePassword(data, localStorage.getItem("token")),
+    onSuccess: () => {
+      addToast({
+        type: "success",
+        title: "密码重置成功",
+        message: "该用户已有登录全部失效，请通过安全渠道告知新密码",
+      });
+    },
+    onError: (error: unknown) => {
+      addToast({
+        type: "error",
+        title: "密码重置失败",
+        message: getErrorMessage(error, "重置失败，请稍后重试"),
+      });
+    },
+  });
+}
+
 // 认证守卫 Hook
 export function useAuthGuard(requireAuth: boolean = true) {
   const router = useRouter();

@@ -231,6 +231,21 @@ ir auth change-password
 
 缺省隐藏输入，或读取安全注入的 IR_OLD_PASSWORD / IR_NEW_PASSWORD；不再接受明文旧/新密码参数。改密撤销本账户的全部密码会话，需重登录，但代理 Key 不受影响。
 
+#### `ir auth reset-password`
+
+管理员重置他人密码（#893）。重置后目标用户的全部密码会话立即失效（代理 Key 不受影响），操作者自己的会话与本地凭证不受影响；被登录失败锁定的账户经重置立即解锁。
+
+```bash
+ir auth reset-password --code <目标用户代码>
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `--code` | 是 | 目标用户代码；指向自己时后端按「改自己」分支要求旧密码（400 OLD_PASSWORD_REQUIRED），重置自己请用 change-password |
+| `--password-stdin` | 否 | 从标准输入读取一行新密码，否则读取安全注入的 IR_NEW_PASSWORD 或隐藏交互输入 |
+
+不接受明文密码参数。viewer 执行返回 FORBIDDEN（exit 1）。与 change-password 的差异：无需旧密码、只撤销目标用户会话、成功后不清理本地凭证。
+
 #### `ir auth status`
 
 向服务端验证当前凭证，返回用户、凭证 ID、类型、标签、权限范围及实际到期时间；不返回秘密。

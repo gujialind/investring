@@ -23,23 +23,27 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, KeyRound } from "lucide-react";
 import { useInvestorList, useCreateInvestor, useUpdateInvestor, useRemoveInvestor } from "@/hooks/useInvestor";
 import { Investor } from "@/types/investor";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import ResetPasswordDialog from "@/components/shared/ResetPasswordDialog";
 import RowActionButton from "@/components/shared/RowActionButton";
+import { useAuthStore } from "@/stores/authStore";
 
 export default function InvestorsContent() {
   const { data, isLoading } = useInvestorList({ page_size: 100 });
   const createInvestor = useCreateInvestor();
   const updateInvestor = useUpdateInvestor();
   const removeInvestor = useRemoveInvestor();
+  const currentUserCode = useAuthStore((state) => state.user?.code);
 
   const investors = data?.items || [];
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingInvestor, setEditingInvestor] = useState<Investor | null>(null);
   const [pendingRemoveCode, setPendingRemoveCode] = useState<string | null>(null);
+  const [resetTarget, setResetTarget] = useState<Investor | null>(null);
   const [formData, setFormData] = useState<Partial<Investor & { password?: string }>>({
     code: "",
     name: "",
@@ -250,6 +254,14 @@ export default function InvestorsContent() {
                       label="编辑"
                       onClick={() => handleEdit(investor)}
                     />
+                    {/* 本人行不渲染：重置自己需旧密码（后端 400），自助改密另有入口（#893） */}
+                    {investor.code !== currentUserCode && (
+                      <RowActionButton
+                        icon={KeyRound}
+                        label="重置密码"
+                        onClick={() => setResetTarget(investor)}
+                      />
+                    )}
                     <RowActionButton
                       icon={Trash2}
                       label="删除"
@@ -269,6 +281,14 @@ export default function InvestorsContent() {
           )}
         </CardContent>
       </Card>
+
+      {resetTarget && (
+        <ResetPasswordDialog
+          open
+          onOpenChange={(open) => !open && setResetTarget(null)}
+          investor={resetTarget}
+        />
+      )}
 
       <ConfirmDialog
         open={!!pendingRemoveCode}
