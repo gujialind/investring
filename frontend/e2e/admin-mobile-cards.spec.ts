@@ -50,6 +50,15 @@ test('投资人管理页：移动卡片形态 / 桌面表格形态，字段承�
     await expect(confirmDlg).toBeVisible();
     await confirmDlg.getByRole('button', { name: '取消' }).click();
     await expect(confirmDlg).toBeHidden();
+
+    // 重置密码入口双端一致（#898 判据沿用）：他人卡有、本人卡无；dialog 共享挂载移动实开
+    await expect(viewerCard.getByRole('button', { name: '重置密码' })).toBeVisible();
+    await expect(adminCard.getByRole('button', { name: '重置密码' })).toHaveCount(0);
+    await viewerCard.getByRole('button', { name: '重置密码' }).click();
+    const resetDlg = dialogByTitle(page, '重置密码');
+    await expect(resetDlg).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(resetDlg).toBeHidden();
   } else {
     await expect(page.locator('table')).toBeVisible();
     await expect(page.getByTestId('investor-card-list')).toHaveCount(0);

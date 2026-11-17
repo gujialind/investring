@@ -249,6 +249,14 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
                         label="编辑"
                         onClick={() => handleEdit(investor)}
                       />
+                      {/* 本人行不渲染判据同桌面（#893/#898）：重置自己需旧密码，自助改密另有入口 */}
+                      {investor.code !== currentUserCode && (
+                        <RowActionButton
+                          icon={KeyRound}
+                          label="重置密码"
+                          onClick={() => setResetTarget(investor)}
+                        />
+                      )}
                       <RowActionButton
                         icon={Trash2}
                         label="删除"
