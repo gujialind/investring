@@ -7,7 +7,7 @@ import PlatformsContent from "@/components/shared/PlatformsContent";
 export default function MobilePlatformsPage() {
   return (
     <AdminGuard>
-      <PlatformsContent />
+      <PlatformsContent variant="mobile" />
     </AdminGuard>
   );
 }

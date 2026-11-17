@@ -7,7 +7,7 @@ import InvestorsContent from "@/components/shared/InvestorsContent";
 export default function MobileInvestorsPage() {
   return (
     <AdminGuard>
-      <InvestorsContent />
+      <InvestorsContent variant="mobile" />
     </AdminGuard>
   );
 }
