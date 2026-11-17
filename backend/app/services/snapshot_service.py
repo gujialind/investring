@@ -422,17 +422,25 @@ def generate_daily_snapshots(
 
 
 def _resolve_recalculate_portfolios(db: Session, portfolio_code: Optional[str]) -> List[Portfolio]:
-    """重算目标组合：显式 code 只校验存在性（不查 active，与执行侧一致）；None/空串 → 全部 active。
+    """重算目标组合：显式 code 只校验存在性（不查 active，与执行侧一致）；None/空串 → 全部 active 净值型。
 
     必须保留 `if portfolio_code:` 真值判断：改成 `is not None` 会让管理员会话传空串
     从「全部 active」变成 422 VALIDATION_FAILED，属静默行为回归（#855）。
+
+    issue #905：台账型（kind='ledger'）不进净值重算链——全量重算按 kind=='nav' 过滤；
+    显式传台账型 code 由 assert_nav_portfolio 响亮拒绝（422 PORTFOLIO_KIND_NOT_ALLOWED），
+    不让领域异常降级成 200+errors 拖垮同批净值型组合的重算（与 task_runner 自动快照同口径）。
     """
     if portfolio_code:
         portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
         if not portfolio:
             raise ValueError(f"组合 {portfolio_code} 不存在")
+        from app.services.portfolio_service import assert_nav_portfolio
+        assert_nav_portfolio(portfolio)
         return [portfolio]
-    return db.query(Portfolio).filter(Portfolio.status == "active").all()
+    return db.query(Portfolio).filter(
+        Portfolio.status == "active", Portfolio.kind == "nav"
+    ).all()
 
 
 def _effective_recalculate_end(db: Session, portfolio_code: str, end_date: date) -> date:

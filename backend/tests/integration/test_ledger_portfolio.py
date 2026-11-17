@@ -2,6 +2,8 @@
 # 集成测试：台账型组合创建与手动激活（#905 PR1）
 # ============================================================================
 
+import pytest
+
 from tests.factories import create_portfolio, create_investor
 from app.models.portfolio import Portfolio
 from app.models.subscription import Subscription
@@ -102,3 +104,26 @@ class TestLedgerActivate:
     def test_activate_nonexistent_404(self, client, admin_headers):
         resp = client.post("/api/portfolios/NO_SUCH/activate", headers=admin_headers)
         assert resp.status_code == 404
+
+
+class TestInvestorOwnerProtection:
+    """Suggestion 2：本次新增 owner_investor_code 外键，delete_investor 须查归属引用。"""
+
+    def test_delete_investor_owning_ledger_blocked(self, test_db):
+        from app.services import investor_service
+        from app.services.exceptions import BusinessError
+        from app.models.investor import Investor
+        create_investor(test_db, code="INV_O")
+        create_portfolio(test_db, code="LED_O", kind="ledger",
+                         owner_investor_code="INV_O", status="active")
+        with pytest.raises(BusinessError) as ei:
+            investor_service.delete_investor(test_db, "INV_O")
+        assert ei.value.code == "INVESTOR_HAS_PORTFOLIO"
+        assert test_db.query(Investor).filter_by(code="INV_O").first() is not None
+
+    def test_delete_investor_no_owner_ok(self, test_db):
+        from app.services import investor_service
+        from app.models.investor import Investor
+        create_investor(test_db, code="INV_FREE")
+        investor_service.delete_investor(test_db, "INV_FREE")
+        assert test_db.query(Investor).filter_by(code="INV_FREE").first() is None
