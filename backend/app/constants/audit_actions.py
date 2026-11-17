@@ -23,6 +23,8 @@ ACTION_GENERATE = "generate"
 ACTION_RECALCULATE = "recalculate"
 ACTION_CASCADE_UNCONFIRM = "cascade_unconfirm"
 ACTION_REVOKE = "revoke"
+# issue #893：管理员重置他人密码（仅 admin 重置他人分支埋点，自助改密不埋）。
+ACTION_RESET_PASSWORD = "reset_password"
 
 # ---- resource types (≤50 chars) ----
 
@@ -40,6 +42,8 @@ RESOURCE_PRODUCT = "product"
 # issue #887：分红方式配置写入审计（create/update/delete，提升替换记 update）。
 # 列宽 String(50)，"dividend_config" 远小于上限。
 RESOURCE_DIVIDEND_CONFIG = "dividend_config"
+# issue #893：管理员重置他人密码，resource_id 落目标投资人 code，载荷不含密码。
+RESOURCE_INVESTOR = "investor"
 
 # ---- sentinel ----
 

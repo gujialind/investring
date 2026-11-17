@@ -7,7 +7,8 @@ from app.schemas.auth import (
     LoginRequest, LoginResponse, ChangePasswordRequest, AuthMessage, AuthStatus,
     ApiKeyCreate, ApiKeyInfo, ApiKeyCreated,
 )
-from app.services import auth_service
+from app.services import audit_service, auth_service
+from app.constants.audit_actions import ACTION_RESET_PASSWORD, RESOURCE_INVESTOR
 from app.utils.security import (
     verify_password,
     get_password_hash,
@@ -131,6 +132,10 @@ def change_password(
     if not investor:
         raise HTTPException(status_code=404, detail="用户不存在")
 
+    # _ci 排序规则下大小写变体也能命中，但 Python 比较与内存锁精确匹配——
+    # 本人/他人判断、撤销会话、清锁、审计与日志一律用库内规范 code（#893 L2）。
+    target_code = investor.code
+
     # 非 admin 修改自己密码时，必须验证旧密码
     if current_user.role != "admin" or target_code == current_user.code:
         if not body.old_password:
@@ -152,6 +157,18 @@ def change_password(
 
     investor.password_hash = get_password_hash(body.new_password)
     auth_service.revoke_user_sessions(db, target_code)
+    # 密码已换，旧失败计数失去意义；锁定为进程内存态，清除只影响当前实例（#893）。
+    clear_login_failure(target_code)
+    if current_user.role == "admin" and target_code != current_user.code:
+        # 审计 actor 自动取操作者；载荷不含密码明文/哈希。须先于 record_login_log
+        # 入 session——该 helper 自带 commit，审计行随改密同事务落库（#893）。
+        audit_service.record_audit(
+            db,
+            action=ACTION_RESET_PASSWORD,
+            resource_type=RESOURCE_INVESTOR,
+            resource_id=target_code,
+            resource_name=investor.name,
+        )
     record_login_log(db, target_code, "password_changed", "success", ip_address, user_agent)
     db.commit()
 

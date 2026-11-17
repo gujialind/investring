@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from unittest import mock
 
 from app.services.auth_service import create_session
+from app.models.audit_log import AuditLog
+from app.models.investor import Investor
 from app.utils.security import create_access_token
 from tests.factories import create_investor
 
@@ -121,6 +123,134 @@ class TestChangePassword:
             headers=viewer_headers,
         )
         assert resp.status_code == 403
+
+
+class TestAdminResetPassword:
+    """管理员重置他人密码：联动解锁与操作者审计（#893）"""
+
+    def test_reset_unlocks_locked_account(self, client, test_db, admin_headers):
+        """被锁定的 viewer 经 admin 重置后立即可用新密码登录"""
+        create_investor(test_db, code="LOCK_RESET", password="old_pass")
+        for _ in range(5):
+            client.post("/api/auth/login", json={"code": "LOCK_RESET", "password": "wrong"})
+        locked = client.post("/api/auth/login", json={"code": "LOCK_RESET", "password": "old_pass"})
+        assert locked.status_code == 403
+        assert "ACCOUNT_LOCKED" in str(locked.json().get("detail", ""))
+
+        resp = client.put(
+            "/api/auth/password",
+            headers=admin_headers,
+            json={"target_code": "LOCK_RESET", "new_password": "new_pass"},
+        )
+        assert resp.status_code == 200
+
+        login = client.post("/api/auth/login", json={"code": "LOCK_RESET", "password": "new_pass"})
+        assert login.status_code == 200
+
+    def test_self_change_clears_failure_count(self, client, test_db):
+        """自助改密成功同样清除本人失败记录（未锁定形态；锁定中自助改密被鉴权门拦截）"""
+        investor = create_investor(test_db, code="SELF_CLR", password="old_pass")
+        token = create_session(test_db, investor)["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        for _ in range(4):
+            client.post("/api/auth/login", json={"code": "SELF_CLR", "password": "wrong"})
+
+        resp = client.put(
+            "/api/auth/password",
+            headers=headers,
+            json={"old_password": "old_pass", "new_password": "new_pass"},
+        )
+        assert resp.status_code == 200
+
+        from app.utils.security import login_failure_tracker
+        assert "SELF_CLR" not in login_failure_tracker
+
+    def test_reset_writes_operator_audit(self, client, test_db, admin_headers):
+        """重置他人落审计：actor=操作管理员，载荷不含密码"""
+        create_investor(test_db, code="AUDIT_TGT", name="目标用户", password="old_pass")
+        resp = client.put(
+            "/api/auth/password",
+            headers=admin_headers,
+            json={"target_code": "AUDIT_TGT", "new_password": "new_pass"},
+        )
+        assert resp.status_code == 200
+
+        rows = test_db.query(AuditLog).filter(AuditLog.action == "reset_password").all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.investor_code == "ADMIN"
+        assert row.resource_type == "investor"
+        assert row.resource_id == "AUDIT_TGT"
+        assert row.resource_name == "目标用户"
+        assert row.old_value is None
+        assert row.new_value is None
+
+    def test_self_change_writes_no_reset_audit(self, client, test_db, admin_headers, viewer_headers):
+        """改自己密码（admin/viewer）不产生 reset_password 审计行"""
+        resp = client.put(
+            "/api/auth/password",
+            headers=admin_headers,
+            json={"old_password": "admin@2026", "new_password": "new_admin_pass"},
+        )
+        assert resp.status_code == 200
+        resp = client.put(
+            "/api/auth/password",
+            headers=viewer_headers,
+            json={"old_password": "viewer123", "new_password": "new_viewer_pass"},
+        )
+        assert resp.status_code == 200
+        assert test_db.query(AuditLog).filter(AuditLog.action == "reset_password").count() == 0
+
+
+@pytest.mark.dialect
+class TestResetPasswordCaseVariantMysql:
+    """#893 L2 Blocker 的 MySQL 方言反例——utf8mb4_general_ci 下大小写变体
+    命中同一行，但 Python 比较与内存锁精确匹配，SQLite 下不显形：
+
+    - 变体 code 重置锁定账户须清掉规范 code 的锁（否则 200 假成功）；
+    - admin 以自身 code 变体重置须落入「改自己」分支被旧密码门拒绝，
+      不得免旧密码改自己、撤销自己会话或落 reset_password 审计。
+    """
+
+    def _mysql_only(self, test_db):
+        if test_db.get_bind().dialect.name != "mysql":
+            pytest.skip("大小写不敏感排序规则仅 MySQL 方言成立")
+
+    def test_variant_reset_unlocks_canonical_code(self, client, test_db, admin_headers):
+        self._mysql_only(test_db)
+        create_investor(test_db, code="LOCK_VAR", password="old_pass")
+        for _ in range(5):
+            client.post("/api/auth/login", json={"code": "LOCK_VAR", "password": "wrong"})
+        locked = client.post("/api/auth/login", json={"code": "LOCK_VAR", "password": "old_pass"})
+        assert locked.status_code == 403
+
+        resp = client.put(
+            "/api/auth/password",
+            headers=admin_headers,
+            json={"target_code": "lock_var", "new_password": "new_pass"},
+        )
+        assert resp.status_code == 200
+        login = client.post("/api/auth/login", json={"code": "LOCK_VAR", "password": "new_pass"})
+        assert login.status_code == 200
+
+    def test_admin_self_variant_still_requires_old_password(self, client, test_db, admin_headers):
+        self._mysql_only(test_db)
+        admin = test_db.query(Investor).filter(Investor.code == "ADMIN").one()
+        hash_before = admin.password_hash
+        token = create_session(test_db, admin)["token"]
+
+        for old in (None, "wrong_old"):
+            body = {"target_code": "admin", "new_password": "hacked_pass"}
+            if old is not None:
+                body["old_password"] = old
+            resp = client.put("/api/auth/password", headers=admin_headers, json=body)
+            assert resp.status_code == 400
+
+        test_db.expire_all()
+        assert test_db.query(Investor).filter(Investor.code == "ADMIN").one().password_hash == hash_before
+        status_resp = client.get("/api/auth/status", headers={"Authorization": f"Bearer {token}"})
+        assert status_resp.status_code == 200
+        assert test_db.query(AuditLog).filter(AuditLog.action == "reset_password").count() == 0
 
 
 class TestAccessControl:
