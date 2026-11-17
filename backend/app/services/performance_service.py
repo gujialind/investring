@@ -225,7 +225,7 @@ def get_performance(db: Session, code: str) -> dict:
     # 延迟导入：避免与 portfolio_service 形成模块级循环依赖
     from app.services.portfolio_service import _get_portfolio_or_404
 
-    _get_portfolio_or_404(db, code)
+    portfolio = _get_portfolio_or_404(db, code)
 
     snapshots = (
         db.query(PortfolioValueSnapshot)
@@ -257,6 +257,10 @@ def get_performance(db: Session, code: str) -> dict:
         "nav_series_consistent": None,
         "annualization_reliable": False,
     }
+    # issue #905：台账型绩效按类型分流骨架（PR1 返 empty，PR2 填充 ledger_performance）。
+    # 台账型无快照行，现状亦返 empty 不报错；此分支只为显式语义与 PR2 接线位置，不新增拒绝码。
+    if portfolio.kind == "ledger":
+        return empty
     if not snapshots:
         return empty
 

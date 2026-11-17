@@ -25,6 +25,8 @@ ACTION_CASCADE_UNCONFIRM = "cascade_unconfirm"
 ACTION_REVOKE = "revoke"
 # issue #893：管理员重置他人密码（仅 admin 重置他人分支埋点，自助改密不埋）。
 ACTION_RESET_PASSWORD = "reset_password"
+# issue #905：台账型组合手动激活（draft→active，绕开申购激活路径）。
+ACTION_ACTIVATE = "activate"
 
 # ---- resource types (≤50 chars) ----
 

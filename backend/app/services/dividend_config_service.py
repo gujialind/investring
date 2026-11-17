@@ -153,8 +153,11 @@ def _validate_method(dividend_method: str, market: str) -> None:
 
 
 def _validate_key_exists(db: Session, portfolio_code: str, platform_code: str) -> None:
-    if not db.query(Portfolio).filter(Portfolio.code == portfolio_code).first():
+    portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
+    if not portfolio:
         raise NotFoundError("NOT_FOUND", f"组合 {portfolio_code} 不存在")
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
     if not db.query(Platform).filter(Platform.code == platform_code).first():
         raise NotFoundError("PLATFORM_NOT_FOUND", f"平台 {platform_code} 不存在")
 

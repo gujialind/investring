@@ -236,6 +236,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 * **started_at** 为现存 confirmed 申购的最小 confirm_date（#180），代表到账事实、与激活轮次正交。确认时在 started_at 为空时写入（覆盖空组合 reactivate 后首购）；unconfirm 后重算最小值，close/reactivate 不修改。无 confirmed 申购且状态 active 时回退 draft，closed 不回退——关闭是用户意图，级联删快照只是数据修复。
 * 组合自身无份额列，总份额只在每日 `portfolio_value_snapshot.total_shares`。
 * **auto_snapshot_enabled**（#156）默认 False、opt-in，只约束自动任务，不影响手动生成/重算。**display_config**（#144）保存持仓明细二级分组的显式覆盖项，NULL 采用前端默认。
+* **组合类型 kind**（#905）：`nav`=净值型（默认，存量回填）/ `ledger`=平台市值台账型。创建期指定、**创建后不可改**（update 白名单排除 + raw body 显式拒绝 `INVALID_PARAM`）；台账型必填 `owner_investor_code`（组合级归属投资人，非份额关系）、净值型禁填。台账型经 `POST /portfolios/{code}/activate` 手动激活（draft→active，绕开申购激活路径，`started_at` 写激活日）；其净值型专属写入口（申赎/调仓/现金转移/份额事件/快照生成/现金覆盖/分红配置）由单点闸门 `assert_nav_portfolio` 拒绝（`PORTFOLIO_KIND_NOT_ALLOWED`），且不进自动快照轮（`task_runner` 过滤 `kind=='nav'`）。台账型绩效按类型分流：PR1 维持返 empty，PR2 起提供区间收益与年化（XIRR），逐日序列指标返 None（P1=口径A）。台账市值/进出/收益的独立台账表与读侧口径见 #905 SPEC（PR2/PR3 落地）。
 * 删除投资人的份额保护见[投资人与份额](#rule-investor)。
 
 * 存在 pending 申赎或 pending trade 时关闭 → `PENDING_TRANSACTIONS_EXIST`；已关闭再关 → `PORTFOLIO_ALREADY_CLOSED`；对非 active（含 draft）关闭 → `PORTFOLIO_NOT_ACTIVE`（#820）；非 `closed` 调 reactivate → `PORTFOLIO_NOT_CLOSED`。
@@ -356,6 +357,7 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 | `PLATFORM_REQUIRED` | 422 | 创建份额变动事件时 `event_type` 属平台级（cash_dividend / reinvest_dividend / forced_adjustment）而 `platform_code` 为空（空串先归一为 None，#343）；创建调仓交易未传 `platform_code`——基金腿平台决定持仓归属，缺省会让买入现金闸门退化为全组合聚合 | services/share_change_event_service.py::create_share_change_event; services/trade_service.py::create_trade |
 | `PORTFOLIO_ALREADY_CLOSED` | 422 | `close_portfolio`：目标组合 status 已为 closed 时重复关闭被拒（组合不存在走 `_get_portfolio_or_404` 的 404） | services/portfolio_service.py::close_portfolio |
 | `PORTFOLIO_HAS_DEPENDENT_DATA` | 409 | 删除空壳组合（draft/closed）时，任一依赖表仍有引用本组合 `code` 的行（判据按元数据派生、不硬编码表名清单，仅覆盖**外键**引用；无 FK 的 `portfolio_code` 列由守门测试显式豁免登记；`details.dependencies` 给出表名→计数）。刻意不与 `PORTFOLIO_NOT_DELETABLE` 合并：前者是「数据还挂着」，后者是「状态不对」，处置动作不同（#820） | services/portfolio_service.py::delete_draft_portfolio |
+| `PORTFOLIO_KIND_NOT_ALLOWED` | 422 | 组合类型闸门（#905）：台账型组合（`kind='ledger'`）调用净值型专属写入口——申赎/调仓/现金转移/份额事件创建、快照生成（`_validate_portfolio`）、现金覆盖写入/删除、分红配置写入；或手动激活端点 `POST /portfolios/{code}/activate` 用于非台账型组合。单点 helper 收敛，净值型（`kind='nav'`，含存量默认）逐字放行 | services/portfolio_service.py::assert_nav_portfolio; ::activate_ledger_portfolio |
 | `PORTFOLIO_NOT_ACTIVE` | 422 | 组合状态非 active 的写操作闸门：创建调仓、编辑调仓、创建跨平台现金转移、**关闭组合**（#820 收紧，draft 不再可关）均要求 `status == "active"`；创建申赎口径较宽——status 不在 (active, draft) 才拒，draft 放行以支持首购确认时激活（[组合管理](#rule-portfolio)） | services/trade_service.py::create_trade; services/subscription_service.py::create_subscription; services/portfolio_service.py::close_portfolio |
 | `PORTFOLIO_NOT_CLOSED` | 422 | `reactivate_portfolio`：组合 `status != "closed"`（draft / active）时不可重开 | services/portfolio_service.py::reactivate_portfolio |
 | `PORTFOLIO_NOT_DELETABLE` | 409 | 删除组合时 `status` 不在 (draft, closed)（即 active；#820 扩围口径，closed 空壳可删、active 一律拒绝），`details.status` 回显当前状态 | services/portfolio_service.py::delete_draft_portfolio |

@@ -984,6 +984,8 @@ def create_share_change_event(
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
         raise NotFoundError("NOT_FOUND", "组合不存在")
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
 
     # issue #258（口径同 #83 调仓创建）：market 省略/空串时按产品唯一市场补全；
     # 一码多市场（LOF）报 MARKET_AMBIGUOUS；产品不存在报 PRODUCT_NOT_FOUND

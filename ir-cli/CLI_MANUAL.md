@@ -389,12 +389,14 @@ ir portfolio list [--status <状态>] [--page N] [--page-size N] [--all]
 创建组合（初始状态为 `draft`）。
 
 ```bash
-ir portfolio create --code <代码> --name <名称> [--description <描述>] [--display-config <JSON>]
+ir portfolio create --code <代码> --name <名称> [--description <描述>] [--display-config <JSON>] [--kind <nav|ledger>] [--owner-investor-code <投资人代码>]
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|:------:|------|
 | `--display-config` | — | 持仓明细二级分组维度 JSON 对象，如 `'{"ASSET_STOCK": "style"}'`（issue #144） |
+| `--kind` | nav | 组合类型：`nav`=净值型（默认）/ `ledger`=平台市值台账型（issue #905）；创建后不可改 |
+| `--owner-investor-code` | — | 台账型归属投资人代码（`ledger` 必填、`nav` 禁填；issue #905）；创建后不可改 |
 
 #### `ir portfolio get`
 
@@ -439,6 +441,16 @@ ir portfolio reactivate <CODE>
 ```
 
 > **约束**：仅 `closed` 状态可激活。
+
+#### `ir portfolio activate`
+
+手动激活台账型组合（`draft`→`active`，绕开申购激活路径；issue #905）。
+
+```bash
+ir portfolio activate <CODE>
+```
+
+> **约束**：仅台账型（`kind=ledger`）`draft` 组合可激活；净值型调用返回 422 `PORTFOLIO_KIND_NOT_ALLOWED`（净值型激活仍由首笔申购确认驱动），非 `draft` 态返回 422 `INVALID_STATUS`。
 
 #### `ir portfolio delete`
 

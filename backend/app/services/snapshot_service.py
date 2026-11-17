@@ -982,6 +982,9 @@ def _validate_portfolio(db: Session, portfolio_code: str):
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
         raise ValueError(f"组合 {portfolio_code} 不存在")
+    # issue #905 类型闸门：台账型不进快照链（抛领域码，router 原样上抛）
+    from app.services.portfolio_service import assert_nav_portfolio
+    assert_nav_portfolio(portfolio)
     if portfolio.status != "active":
         raise ValueError(f"组合 {portfolio_code} 未激活，当前状态: {portfolio.status}")
 

@@ -12,7 +12,7 @@ from typing import List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.constants.audit_actions import ACTION_DELETE, RESOURCE_PORTFOLIO
+from app.constants.audit_actions import ACTION_ACTIVATE, ACTION_DELETE, RESOURCE_PORTFOLIO
 from app.models.asset_classification import AssetClassDimensionRule, AssetClassification
 from app.models.base import Base
 from app.models.investor import Investor
@@ -24,6 +24,7 @@ from app.models.trade import Trade
 from app.services.audit_service import record_audit
 from app.services.cumulative_profit_service import compute_cumulative_profits
 from app.services.exceptions import BusinessError, NotFoundError
+from app.utils.business_time import business_today
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,8 @@ def list_portfolios(
             "name": p.name,
             "description": p.description,
             "status": p.status,
+            "kind": p.kind,
+            "owner_investor_code": p.owner_investor_code,
             "started_at": p.started_at,
             "closed_at": p.closed_at,
             "created_at": p.created_at,
@@ -379,18 +382,93 @@ def create_portfolio(
     name: str,
     description: Optional[str] = None,
     display_config: Optional[dict] = None,
+    kind: str = "nav",
+    owner_investor_code: Optional[str] = None,
 ) -> Portfolio:
-    """创建组合（初始状态 draft）。不 commit。"""
+    """创建组合（初始状态 draft）。不 commit。
+
+    issue #905：kind ∈ {nav, ledger}（默认 nav，存量兼容）；ledger 必填
+    owner_investor_code（组合级归属投资人，非份额关系）且投资人须存在，nav 禁填
+    owner。kind/owner 创建后不可改（update 白名单排除 + router 显式拒绝）。
+    """
     if db.query(Portfolio).filter(Portfolio.code == code).first():
         raise BusinessError("ALREADY_EXISTS", f"组合 {code} 已存在", http_status=400)
+    if kind not in ("nav", "ledger"):
+        raise BusinessError(
+            "INVALID_PARAM", "组合类型 kind 仅支持 nav / ledger", details={"field": "kind"}
+        )
+    if kind == "ledger":
+        if not owner_investor_code:
+            raise BusinessError(
+                "INVALID_PARAM",
+                "台账型组合必须指定归属投资人 owner_investor_code",
+                details={"field": "owner_investor_code"},
+            )
+        if not db.query(Investor).filter(Investor.code == owner_investor_code).first():
+            raise NotFoundError("NOT_FOUND", f"投资人 {owner_investor_code} 不存在")
+    elif owner_investor_code is not None:
+        raise BusinessError(
+            "INVALID_PARAM",
+            "净值型组合不接受 owner_investor_code",
+            details={"field": "owner_investor_code"},
+        )
     portfolio = Portfolio(
         code=code,
         name=name,
         description=description,
         status="draft",
+        kind=kind,
+        owner_investor_code=owner_investor_code if kind == "ledger" else None,
         display_config=validate_display_config(db, display_config),
     )
     db.add(portfolio)
+    return portfolio
+
+
+def assert_nav_portfolio(portfolio: Portfolio) -> None:
+    """类型闸门单点（issue #905）：台账型组合禁止进入净值型专属写入口。
+
+    各写入口（申赎/调仓/现金转移/份额事件/快照/现金覆盖/分红配置）在组合存在性
+    校验后调用本 helper；台账型抛 PORTFOLIO_KIND_NOT_ALLOWED。净值型（kind='nav'，
+    含存量默认）直接放行，行为逐字不变。闸门收敛单点防类型字面量判断漂移。
+    """
+    if portfolio.kind == "ledger":
+        raise BusinessError(
+            "PORTFOLIO_KIND_NOT_ALLOWED",
+            f"组合 {portfolio.code} 为平台市值台账型，不支持该净值型操作",
+            details={"portfolio_code": portfolio.code, "kind": portfolio.kind},
+        )
+
+
+def activate_ledger_portfolio(db: Session, code: str) -> Portfolio:
+    """台账型组合手动激活（issue #905，D4）：draft → active，绕开申购激活路径。
+
+    仅台账型 draft 可激活；净值型调此端点拒绝（净值型激活仍由首笔申购确认驱动，
+    subscription_service 不动）。started_at 写激活日（台账型承载激活事实，与净值型
+    首购确认日口径分流）。不 commit。
+    """
+    portfolio = _get_portfolio_or_404(db, code)
+    if portfolio.kind != "ledger":
+        raise BusinessError(
+            "PORTFOLIO_KIND_NOT_ALLOWED",
+            f"组合 {code} 非台账型，手动激活仅适用于平台市值台账型组合",
+            details={"portfolio_code": code, "kind": portfolio.kind},
+        )
+    if portfolio.status != "draft":
+        raise BusinessError(
+            "INVALID_STATUS", f"仅草稿态台账型组合可激活，当前状态: {portfolio.status}"
+        )
+    portfolio.status = "active"
+    portfolio.started_at = business_today()
+    record_audit(
+        db,
+        action=ACTION_ACTIVATE,
+        resource_type=RESOURCE_PORTFOLIO,
+        resource_id=code,
+        resource_name=portfolio.name,
+        old_value={"status": "draft"},
+        new_value={"status": "active", "kind": portfolio.kind},
+    )
     return portfolio
 
 
