@@ -169,6 +169,8 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
 
   // 批量切换选择（#882）：仅当前页、显式清单 ≤50；虚拟产品不可选（无数据源概念）。
   // 翻页/改筛选即清空（V4 所见即所选，不做跨页/按筛选全选的无界集合）。
+  // L2 B2：列表请求在途/失败时禁选禁提交——keepPreviousData 的旧行不得用于确认新查询。
+  const listBusy = isFetching || isError;
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
   useEffect(() => {
@@ -535,12 +537,13 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
               data-testid="batch-action-bar"
             >
               <span className="text-sm">
-                已选 {selectedKeys.size} 只{selectedKeys.size >= BATCH_SWITCH_MAX ? "（已达上限 50）" : ""}
+                已选 {selectedProducts.length} 只{selectedKeys.size >= BATCH_SWITCH_MAX ? "（已达上限 50）" : ""}
               </span>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => setBatchOpen(true)}
+                disabled={listBusy}
                 data-testid="batch-switch-button"
               >
                 批量修改数据源
@@ -564,6 +567,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                     <Checkbox
                       checked={allPageSelected ? true : selectedProducts.length > 0 ? "indeterminate" : false}
                       onCheckedChange={toggleAllPage}
+                      disabled={listBusy}
                       aria-label="全选当前页可切换产品"
                       data-testid="batch-select-all"
                     />
@@ -602,6 +606,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                         onCheckedChange={() => toggleRow(product)}
                         disabled={
                           !isNavType ||
+                          listBusy ||
                           (!selectedKeys.has(rowKey(product)) && selectedKeys.size >= BATCH_SWITCH_MAX)
                         }
                         aria-label={`选择 ${product.code} 批量切换数据源`}

@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { collectPageErrors, openPopover } from "./helpers";
+import { collectPageErrors, openFilterPanelIfMobile, openPopover } from "./helpers";
 
 /**
  * #882 产品数据源批量切换（SPEC v1.1 Block 3 / V4）。
@@ -184,5 +184,201 @@ test.describe("产品数据源批量切换（#882）", () => {
     const toast = page.getByTestId("toast-card").filter({ hasText: "清单含不存在的产品" });
     await expect(toast).toBeVisible({ timeout: 10_000 });
     await expect(dlg).toBeVisible();
+  });
+
+  // ---- L2 6925267091 B2–B5 回归（可控延迟 / 故障注入，双端） ----
+
+  test("B2 列表请求在途：旧行禁选禁提交；新响应后清单/计数/预览一致且只提交新查询产品", async ({ page }, testInfo) => {
+    let listCalls = 0;
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { release = r; });
+    await page.route(/\/api\/products(\?|$)/, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      listCalls += 1;
+      if (listCalls === 2) await gate;
+      return route.fulfill({
+        status: 200,
+        json: listCalls === 1 ? LIST_BODY : { items: [P3], total: 1, page: 1, page_size: 20 },
+      });
+    });
+    let postBody: { products: { code: string; market: string }[] } | null = null;
+    await page.route(/\/api\/products\/batch-data-source(\?|$)/, (route) => {
+      postBody = route.request().postDataJSON();
+      return route.fulfill({ status: 200, json: { job_id: 901, status: "pending", message: "任务已提交" } });
+    });
+    await page.route(/\/api\/sync-jobs\/901(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: { ...JOB_PARTIAL, status: "success", success_count: 1, skipped_count: 0, total: 1, done: 1 } })
+    );
+    await page.route(/\/api\/sync-jobs\/901\/details(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: { job: JOB_PARTIAL, details: [DETAILS_BODY.details[2]] } })
+    );
+    await gotoProducts(page);
+    await rowCheckbox(page, "华夏成长混合").click();
+    await expect(page.getByTestId("batch-action-bar")).toContainText("已选 1 只");
+
+    // 触发新查询（关键字防抖 300ms 后发 GET），第二次响应被闸门扣住；
+    // 移动端筛选栏默认折叠，先展开（#383 口径）
+    await openFilterPanelIfMobile(page, testInfo);
+    await page.getByPlaceholder("搜索产品代码/名称").fill("沪深");
+    await expect.poll(() => listCalls).toBe(2);
+    // 在途窗口：旧行勾选/全选禁用；参数变化已清空选择 → 无批量提交入口（旧缓存不得确认新查询）
+    await expect(rowCheckbox(page, "华夏成长混合")).toBeDisabled();
+    await expect(page.getByTestId("batch-select-all")).toBeDisabled();
+    await expect(page.getByTestId("batch-action-bar")).toHaveCount(0);
+
+    release!();
+    await expect(page.getByTestId("products-list-card").getByRole("row").filter({ hasText: "沪深300ETF" })).toBeVisible();
+    // 新响应后选择集清空（旧查询产品不会残留进清单）
+    await expect(page.getByTestId("batch-action-bar")).toHaveCount(0);
+    await rowCheckbox(page, "沪深300ETF").click();
+    await expect(page.getByTestId("batch-action-bar")).toContainText("已选 1 只");
+    await page.getByTestId("batch-switch-button").click();
+    const dlg = batchDialog(page);
+    await expect(dlg.getByTestId("batch-preview").locator("> div")).toHaveCount(1);
+    await expect(dlg.getByTestId("batch-preview")).toContainText("510300");
+    await expect(dlg.getByTestId("batch-preview")).not.toContainText("000001");
+    await pickTarget(page, dlg, "akshare");
+    await dlg.getByTestId("batch-submit").click();
+    await expect.poll(() => postBody).not.toBeNull();
+    expect(postBody!.products).toEqual([{ code: "510300.SH", market: "CN_EXCHANGE" }]);
+  });
+
+  test("B3 迟到受理回执不接管重开后的新会话，旧 job 不清新选择", async ({ page }) => {
+    await mockList(page);
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { release = r; });
+    await page.route(/\/api\/products\/batch-data-source(\?|$)/, async (route) => {
+      await gate;
+      return route.fulfill({ status: 200, json: { job_id: 901, status: "pending", message: "任务已提交" } });
+    });
+    await page.route(/\/api\/sync-jobs\/901(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: JOB_PARTIAL })
+    );
+    await page.route(/\/api\/sync-jobs\/901\/details(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: DETAILS_BODY })
+    );
+    await gotoProducts(page);
+    await rowCheckbox(page, "华夏成长混合").click();
+    await page.getByTestId("batch-switch-button").click();
+    const dlg = batchDialog(page);
+    await pickTarget(page, dlg, "akshare");
+    await dlg.getByTestId("batch-submit").click();
+    // 提交在途时关闭 → 改选 → 重开（新会话）
+    await dlg.getByRole("button", { name: "取消" }).click();
+    await expect(dlg).toHaveCount(0);
+    await page.getByRole("button", { name: "清空选择" }).click();
+    await rowCheckbox(page, "沪深300ETF").click();
+    await expect(page.getByTestId("batch-action-bar")).toContainText("已选 1 只");
+    await page.getByTestId("batch-switch-button").click();
+    await expect(dlg).toBeVisible();
+    // 放行旧回执：不得把新会话切到旧 job 进度
+    release!();
+    await page.waitForTimeout(1200);
+    await expect(dlg.getByTestId("batch-submit")).toBeVisible();
+    await expect(dlg.getByTestId("batch-job-progress")).toHaveCount(0);
+    // 旧 job 即便到终态也不得清掉新选择
+    await page.waitForTimeout(2500);
+    await expect(page.getByTestId("batch-action-bar")).toContainText("已选 1 只");
+    await expect(dlg.getByTestId("batch-preview")).toContainText("510300");
+  });
+
+  test("B4a 状态查询失败：destructive Alert + 后端消息 + 重试恢复，不伪装提交中", async ({ page }) => {
+    await mockList(page);
+    let statusFail = true;
+    await page.route(/\/api\/products\/batch-data-source(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: { job_id: 901, status: "pending", message: "任务已提交" } })
+    );
+    await page.route(/\/api\/sync-jobs\/901(\?|$)/, (route) =>
+      statusFail
+        ? route.fulfill({ status: 500, json: { detail: { error: "INTERNAL", message: "模拟状态故障" } } })
+        : route.fulfill({ status: 200, json: JOB_PARTIAL })
+    );
+    await page.route(/\/api\/sync-jobs\/901\/details(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: DETAILS_BODY })
+    );
+    await gotoProducts(page);
+    await rowCheckbox(page, "华夏成长混合").click();
+    await page.getByTestId("batch-switch-button").click();
+    const dlg = batchDialog(page);
+    await pickTarget(page, dlg, "akshare");
+    await dlg.getByTestId("batch-submit").click();
+    const alert = dlg.getByTestId("batch-status-error");
+    await expect(alert).toBeVisible({ timeout: 20_000 });
+    await expect(alert).toContainText("模拟状态故障");
+    await expect(dlg.getByTestId("batch-job-status")).toHaveCount(0);
+    statusFail = false;
+    await dlg.getByTestId("batch-status-retry").click();
+    await expect(dlg.getByTestId("batch-job-status")).toContainText("部分成功", { timeout: 10_000 });
+    await expect(alert).toHaveCount(0);
+  });
+
+  test("B4b 台账查询失败：destructive Alert + 重试恢复失败清单，不伪装空清单", async ({ page }) => {
+    await mockList(page);
+    let detailsFail = true;
+    await page.route(/\/api\/products\/batch-data-source(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: { job_id: 901, status: "pending", message: "任务已提交" } })
+    );
+    await page.route(/\/api\/sync-jobs\/901(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: JOB_PARTIAL })
+    );
+    await page.route(/\/api\/sync-jobs\/901\/details(\?|$)/, (route) =>
+      detailsFail
+        ? route.fulfill({ status: 500, json: { detail: { error: "INTERNAL", message: "模拟台账故障" } } })
+        : route.fulfill({ status: 200, json: DETAILS_BODY })
+    );
+    await gotoProducts(page);
+    await rowCheckbox(page, "华夏成长混合").click();
+    await page.getByTestId("batch-switch-button").click();
+    const dlg = batchDialog(page);
+    await pickTarget(page, dlg, "akshare");
+    await dlg.getByTestId("batch-submit").click();
+    const alert = dlg.getByTestId("batch-details-error");
+    await expect(alert).toBeVisible({ timeout: 10_000 });
+    await expect(alert).toContainText("模拟台账故障");
+    await expect(dlg.getByTestId("batch-failure-list")).toHaveCount(0);
+    detailsFail = false;
+    await dlg.getByTestId("batch-details-retry").click();
+    await expect(dlg.getByTestId("batch-failure-list")).toContainText("000005.OF", { timeout: 10_000 });
+    await expect(alert).toHaveCount(0);
+  });
+
+  test("B5 异常 failed 保留已成功 checkpoint：按成功计数说真话，不得称全部未切换", async ({ page }) => {
+    await mockList(page);
+    const failedWithSuccess = {
+      ...JOB_PARTIAL, status: "failed", success_count: 1, done: 1, skipped_count: 0, failed_count: 1,
+      error_message: "000005.OF(CN_OTC): 模拟第二只 checkpoint 提交失败",
+    };
+    await page.route(/\/api\/products\/batch-data-source(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: { job_id: 901, status: "pending", message: "任务已提交" } })
+    );
+    await page.route(/\/api\/sync-jobs\/901(\?|$)/, (route) =>
+      route.fulfill({ status: 200, json: failedWithSuccess })
+    );
+    await page.route(/\/api\/sync-jobs\/901\/details(\?|$)/, (route) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          job: failedWithSuccess,
+          details: [
+            DETAILS_BODY.details[0],
+            { code: "000005.OF", market: "CN_OTC", old_source: null, new_source: "akshare", status: "failed", reason: "模拟第二只 checkpoint 提交失败" },
+          ],
+        },
+      })
+    );
+    await gotoProducts(page);
+    await rowCheckbox(page, "华夏成长混合").click();
+    await rowCheckbox(page, "华夏红利混合").click();
+    await page.getByTestId("batch-switch-button").click();
+    const dlg = batchDialog(page);
+    await pickTarget(page, dlg, "akshare");
+    await dlg.getByTestId("batch-submit").click();
+    const status = dlg.getByTestId("batch-job-status");
+    await expect(status).toContainText("已成功 1", { timeout: 10_000 });
+    await expect(status).toContainText("任务异常终止");
+    await expect(status).not.toContainText("全部未切换");
+    const failures = dlg.getByTestId("batch-failure-list");
+    await expect(failures).toContainText("000005.OF");
+    await expect(failures).not.toContainText("000001.OF");
   });
 });

@@ -10,6 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -19,10 +20,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { Product } from "@/types/product";
 import { batchAvailableDataSources, batchDataSourceSwitchHint } from "@/lib/dataSource";
-import { syncJobApi } from "@/lib/api";
+import { getErrorMessage, syncJobApi } from "@/lib/api";
 import { useBatchSetDataSource } from "@/hooks/useProduct";
 import { useSyncJob } from "@/hooks/useSyncJob";
 import { queryKeys } from "@/lib/queryKeys";
@@ -44,6 +45,12 @@ const TERMINAL = ["success", "partial", "failed", "interrupted"];
  * 终态（useSyncJob 2s）+ 失败清单（/details 台账）。提交失败 toast 透传后端中文
  * 消息、对话框不关（同 PR1 探测失败形态）；终态后失效产品列表刷新数据源列。
  * 不支持运行中取消（既有 sync_job 无 cancel 机制）；误操作恢复 = 反向批量切回。
+ *
+ * 会话隔离（L2 B3）：每次打开递增 session；迟到受理回执与旧 job 终态副作用只处理
+ * 本 session 的 job，关闭→改选→重开不被旧任务接管、新选择不被旧终态清除。
+ * 读侧失败可见（L2 B4，visual-spec §14）：status/details 查询失败显示 destructive
+ * inline Alert + 后端 detail.message + 重试，不落进「提交中」或空失败清单。
+ * 异常终态如实表达（L2 B5）：failed 保留已提交 checkpoint 的成功计数，仅零成功才说全部未切换。
  */
 export default function BatchDataSourceDialog({
   open,
@@ -60,46 +67,76 @@ export default function BatchDataSourceDialog({
   const sourceOptions = useMemo(() => batchAvailableDataSources(markets), [markets]);
   const hint = useMemo(() => batchDataSourceSwitchHint(markets), [markets]);
 
-  // 每次打开重置到确认段（不复用上一次的目标源/进度）
+  // 终态副作用去重键（open 重置时清空）
+  const terminalRef = useRef<string | null>(null);
+  // 会话标识：每次打开递增；受理回执与终态副作用绑定提交时的 session（L2 B3）
+  const sessionRef = useRef(0);
+  const jobSessionRef = useRef<number | null>(null);
   useEffect(() => {
     if (open) {
+      sessionRef.current += 1;
+      jobSessionRef.current = null;
+      terminalRef.current = null;
       setTarget(undefined);
       setJobId(null);
     }
   }, [open]);
 
-  const { data: job } = useSyncJob(jobId);
+  const {
+    data: job,
+    isError: statusIsError,
+    error: statusError,
+    isFetching: statusFetching,
+    refetch: refetchStatus,
+  } = useSyncJob(jobId);
   const isTerminal = !!job && TERMINAL.includes(job.status);
 
-  const { data: detailsData } = useQuery({
+  const {
+    data: detailsData,
+    isError: detailsIsError,
+    error: detailsError,
+    isFetching: detailsFetching,
+    refetch: refetchDetails,
+  } = useQuery({
     queryKey: ["sync-jobs", jobId, "details"],
     queryFn: () => syncJobApi.details(jobId!),
     enabled: jobId != null && isTerminal,
+    retry: false,
   });
   const failures = useMemo(
     () => (detailsData?.details ?? []).filter((r) => r.status !== "success"),
     [detailsData]
   );
 
-  // 终态副作用：刷新产品列表 + 通知列表侧清空选择，每 job 每终态只触发一次
-  const terminalRef = useRef<string | null>(null);
+  // 终态副作用：刷新产品列表 + 通知列表侧清空选择，每 job 每终态只触发一次；
+  // 仅本会话且弹窗开着时生效（旧 job 迟到终态不得清掉新选择，L2 B3）
   useEffect(() => {
-    if (!job || !isTerminal) return;
+    if (!open || !job || !isTerminal) return;
+    if (jobSessionRef.current !== sessionRef.current) return;
     const key = `${job.id}:${job.status}`;
     if (terminalRef.current === key) return;
     terminalRef.current = key;
     queryClient.invalidateQueries({ queryKey: queryKeys.products.root });
     onFinished?.();
-  }, [job, isTerminal, queryClient, onFinished]);
+  }, [open, job, isTerminal, queryClient, onFinished]);
 
   const handleSubmit = () => {
     if (!target) return;
+    const session = sessionRef.current;
     submit.mutate(
       {
         products: products.map((p) => ({ code: p.code, market: p.market ?? "" })),
         data_source: target,
       },
-      { onSuccess: (accepted) => setJobId(accepted.job_id) }
+      {
+        onSuccess: (accepted) => {
+          // 迟到回执隔离：弹窗已重开（session 变化）则丢弃，不接管新会话（L2 B3）
+          if (session !== sessionRef.current) return;
+          jobSessionRef.current = session;
+          terminalRef.current = null;
+          setJobId(accepted.job_id);
+        },
+      }
     );
   };
 
@@ -113,7 +150,9 @@ export default function BatchDataSourceDialog({
           ? `部分成功（成功 ${job.success_count} / 跳过 ${job.skipped_count} / 失败 ${job.failed_count}，共 ${job.total} 只）`
           : job.status === "interrupted"
             ? "任务中断（进程重启遗留），请核实台账后重试"
-            : `全部未切换（跳过 ${job.skipped_count} / 失败 ${job.failed_count}，共 ${job.total} 只）`;
+            : job.success_count > 0
+              ? `任务异常终止（已成功 ${job.success_count} / 已处理 ${job.done} / 共 ${job.total}），成功条目已保留，请按台账核实后重试剩余`
+              : `全部未切换（跳过 ${job.skipped_count} / 失败 ${job.failed_count}，共 ${job.total} 只）`;
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -170,11 +209,54 @@ export default function BatchDataSourceDialog({
           </div>
         ) : (
           <div className="space-y-3" data-testid="batch-job-progress">
-            <div className="flex items-center gap-2 text-sm" data-testid="batch-job-status">
-              {!isTerminal && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-              <span>{statusText}</span>
-            </div>
-            {isTerminal && failures.length > 0 && (
+            {statusIsError ? (
+              <Alert variant="destructive" data-testid="batch-status-error">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>任务状态读取失败</AlertTitle>
+                <AlertDescription className="flex items-center gap-3">
+                  <span className="min-w-0 break-all">
+                    {getErrorMessage(statusError, "请稍后重试")}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refetchStatus()}
+                    disabled={statusFetching}
+                    data-testid="batch-status-retry"
+                  >
+                    {statusFetching && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                    重试
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="flex items-center gap-2 text-sm" data-testid="batch-job-status">
+                {!isTerminal && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                <span>{statusText}</span>
+              </div>
+            )}
+            {isTerminal && detailsIsError && (
+              <Alert variant="destructive" data-testid="batch-details-error">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>逐产品台账读取失败</AlertTitle>
+                <AlertDescription className="flex items-center gap-3">
+                  <span className="min-w-0 break-all">
+                    {getErrorMessage(detailsError, "请稍后重试")}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refetchDetails()}
+                    disabled={detailsFetching}
+                    data-testid="batch-details-retry"
+                  >
+                    {detailsFetching && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                    重试
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
+            {isTerminal && !detailsIsError && failures.length > 0 && (
               <div
                 className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-destructive/40 p-2 text-xs"
                 data-testid="batch-failure-list"
@@ -192,7 +274,7 @@ export default function BatchDataSourceDialog({
                 ))}
               </div>
             )}
-            {isTerminal && job?.error_message && (
+            {isTerminal && !statusIsError && job?.error_message && (
               <p className="text-xs text-muted-foreground">{job.error_message}</p>
             )}
           </div>

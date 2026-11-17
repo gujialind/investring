@@ -136,14 +136,18 @@ def submit_data_source_switch_job(
                 "清单含不存在的产品: " + ", ".join(missing),
                 details={"reason": "product_not_found", "missing": missing},
             )
+        # 同值 no-op（单只 F1 同口径，L2 B1）：仅**实际换源**条目做市场兼容校验与源级快检；
+        # 同值条目不校验/不探（存量 HK+tushare 同值重提交不被误拦），由执行体逐项记
+        # 「同值无变更」成功。全同值批次跳过快检但仍建 job。
+        changed = [p for p in found if p.data_source != data_source]
         # 市场兼容/虚拟产品复用单只校验器（单一实现，INVALID_DATA_SOURCE 同形）
-        for p in found:
+        for p in changed:
             validate_data_source(p.market, p.product_type, data_source)
 
         # 源级快检（token 预检在内）：源整体故障整批早拒；产品级 no_data 不早拒，
-        # 交逐产品循环把该只 skipped。用清单首只做代表，不另起一套探测实现。
-        first_code, first_market = pairs[0]
-        quick_check_data_source(db, first_code, first_market, data_source)
+        # 交逐产品循环把该只 skipped。用首个**实际换源**产品做代表，不另起一套探测实现。
+        if changed:
+            quick_check_data_source(db, changed[0].code, changed[0].market, data_source)
 
         job = SyncJob(
             job_type=JOB_TYPE,

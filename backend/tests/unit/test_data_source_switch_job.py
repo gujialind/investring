@@ -287,7 +287,7 @@ class TestSubmitGuards:
         assert test_db.query(Product).filter(Product.code == "F882Q1").one().data_source == "tushare"
 
     def test_quick_check_token_missing_rejects_whole_batch(self, test_db, monkeypatch):
-        _product(test_db, "F882Q3")
+        _product(test_db, "F882Q3", source="akshare")
         patch_non_closing_session_local(monkeypatch, test_db)
         token_err = BusinessError("INVALID_DATA_SOURCE", "Tushare token 未配置", details={"reason": "token_missing"})
         with patch("app.services.data_source_probe.probe_data_source", side_effect=token_err):
@@ -386,3 +386,104 @@ class TestOrphanRecovery:
         test_db.refresh(running)
         assert pending.status == "interrupted"
         assert running.status == "interrupted"
+
+
+class TestSubmitSameValueNoOp:
+    """B1（L2 评论 6925267091）：受理阶段同值 no-op，与单只 F1 同口径（不校验/不探）。
+
+    既有 test_same_value_is_noop_without_probe_audit_or_reset 直调执行体，绕过受理路径；
+    本组在 submit 入口钉住：全同值跳过快检仍受理；存量 HK+tushare 同值不被误拦；
+    混合批次只校验/快检实际换源条目。
+    """
+
+    def test_all_same_value_accepts_without_quick_check(self, test_db, monkeypatch):
+        _product(test_db, "F882N1", source="akshare")
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.data_source_probe.probe_data_source") as probe, \
+             patch("app.services.data_source_switch_job._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            job_id = submit_data_source_switch_job([["F882N1", "CN_OTC"]], "akshare")
+        probe.assert_not_called()
+        assert test_db.query(SyncJob).get(job_id).status == "pending"
+
+    def test_same_value_accepts_even_if_source_unreachable(self, test_db, monkeypatch):
+        _product(test_db, "F882N2", source="akshare")
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch(
+            "app.services.data_source_probe.probe_data_source",
+            side_effect=_probe_error("unreachable"),
+        ), patch("app.services.data_source_switch_job._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            job_id = submit_data_source_switch_job([["F882N2", "CN_OTC"]], "akshare")
+        assert test_db.query(SyncJob).get(job_id).status == "pending"
+
+    def test_hk_legacy_tushare_same_value_accepts_without_probe(self, test_db, monkeypatch):
+        # 存量港互认+tushare（历史非法组合）同值重提交：F1 口径整体 no-op，不校验不探
+        _product(test_db, "F882N3", market="HK_MUTUAL", source="tushare")
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.data_source_probe.probe_data_source") as probe, \
+             patch("app.services.data_source_switch_job._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            job_id = submit_data_source_switch_job([["F882N3", "HK_MUTUAL"]], "tushare")
+        probe.assert_not_called()
+        assert test_db.query(SyncJob).get(job_id).status == "pending"
+
+    def test_mixed_batch_quick_checks_first_changed_only(self, test_db, monkeypatch):
+        # HK 已是目标源（同值 no-op），CN 实际换源：只校验/快检 CN
+        _product(test_db, "F882N4HK", market="HK_MUTUAL", source="akshare")
+        _product(test_db, "F882N4CN", source="tushare")
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.data_source_probe.probe_data_source", return_value=None) as probe, \
+             patch("app.services.data_source_switch_job._get_executor") as mock_exec:
+            mock_exec.return_value = MagicMock()
+            job_id = submit_data_source_switch_job(
+                [["F882N4HK", "HK_MUTUAL"], ["F882N4CN", "CN_OTC"]], "akshare",
+            )
+        # HK 同值不探不校验；快检只打实际换源的首只（CN）
+        probe.assert_called_once()
+        assert probe.call_args[0][1] == "F882N4CN"
+        assert test_db.query(SyncJob).get(job_id).status == "pending"
+
+    def test_actual_change_still_validated_before_quick_check(self, test_db, monkeypatch):
+        _product(test_db, "F882N5", market="HK_MUTUAL", source="akshare")
+        patch_non_closing_session_local(monkeypatch, test_db)
+        with patch("app.services.data_source_probe.probe_data_source") as probe:
+            with pytest.raises(BusinessError) as exc:
+                submit_data_source_switch_job([["F882N5", "HK_MUTUAL"]], "tushare")
+        assert exc.value.code == "INVALID_DATA_SOURCE"
+        probe.assert_not_called()
+
+
+class TestFailedTerminalPreservesCheckpoints:
+    """B5（L2 评论 6925267091）后端钉住：逐产品 checkpoint 已提交的成功不被外层异常撤销。
+
+    failed ≠ 零成功；前端文案须按 success_count 表达（前端回归见 E2E）。
+    """
+
+    def test_second_checkpoint_commit_error_keeps_first_success(self, test_db, monkeypatch):
+        p1 = _product(test_db, "F882K1")
+        p2 = _product(test_db, "F882K2")
+        job = _make_job(test_db, [("F882K1", "CN_OTC"), ("F882K2", "CN_OTC")])
+        real_commit = test_db.commit
+        calls = {"n": 0}
+
+        def flaky_commit():
+            calls["n"] += 1
+            # 1=running 落库，2=首只 checkpoint，3=第二只 checkpoint（注入失败）
+            if calls["n"] == 3:
+                raise RuntimeError("模拟第二只 checkpoint 提交失败")
+            return real_commit()
+
+        monkeypatch.setattr(test_db, "commit", flaky_commit)
+        with patch("app.services.data_source_probe.probe_data_source", return_value=None):
+            _run_data_source_switch_job_impl(job.id, db=test_db)
+
+        test_db.refresh(job)
+        test_db.refresh(p1)
+        test_db.refresh(p2)
+        assert job.status == "failed"
+        assert (job.success_count, job.done, job.failed_count) == (1, 1, 0)
+        assert len(job.params["results"]) == 1
+        assert job.params["results"][0]["status"] == "success"
+        assert p1.data_source == "akshare"  # 已提交 checkpoint 保留
+        assert p2.data_source == "tushare"  # 失败只回滚当前事务
