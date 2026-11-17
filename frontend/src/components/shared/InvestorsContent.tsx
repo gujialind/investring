@@ -27,6 +27,7 @@ import { Plus, Pencil, Trash2, Loader2, KeyRound } from "lucide-react";
 import { useInvestorList, useCreateInvestor, useUpdateInvestor, useRemoveInvestor } from "@/hooks/useInvestor";
 import { Investor } from "@/types/investor";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import ResetPasswordDialog from "@/components/shared/ResetPasswordDialog";
 import RowActionButton from "@/components/shared/RowActionButton";
 import { useAuthStore } from "@/stores/authStore";
@@ -37,7 +38,13 @@ interface InvestorsContentProps {
 
 export default function InvestorsContent({ variant = "desktop" }: InvestorsContentProps) {
   const isMobile = variant === "mobile";
-  const { data, isLoading } = useInvestorList({ page_size: 100 });
+  const {
+    data,
+    isLoading,
+    isError: investorsError,
+    error: investorsErr,
+    refetch: refetchInvestors,
+  } = useInvestorList({ page_size: 100 });
   const createInvestor = useCreateInvestor();
   const updateInvestor = useUpdateInvestor();
   const removeInvestor = useRemoveInvestor();
@@ -325,11 +332,15 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
             </TableBody>
           </Table>
           )}
-          {investors.length === 0 && (
+          {/* #900 判序承重：失败必须排在「长度为 0」之前，且写外层三元——同键后台重取失败时
+              react-query 保留 data（isRefetchError），嵌套形在那一态下失败块不可达（平台页 #683A 同形）。 */}
+          {investorsError ? (
+            <QueryErrorState error={investorsErr} onRetry={refetchInvestors} />
+          ) : investors.length === 0 ? (
             <div className="text-center text-muted-foreground py-8">
               暂无投资人
             </div>
-          )}
+          ) : null}
         </CardContent>
       </Card>
 

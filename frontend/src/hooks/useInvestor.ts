@@ -1,19 +1,35 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { investorApi, getErrorMessage } from "@/lib/api";
 import { InvestorCreate, InvestorUpdate } from "@/types/investor";
 import { useUIStore } from "@/stores/uiStore";
 
 const INVESTOR_QUERY_KEY = "investors";
 
-// 投资人列表 Hook
+// 投资人列表 Hook（#900 对齐 #214 toast 车道，usePlatformList 同型：失败弹全局 toast；
+// 调用方须同时读 isError 区分「请求失败」与「真的为空」，不得把失败渲染成空态）
 export function useInvestorList(params?: { page?: number; page_size?: number }) {
-  return useQuery({
+  const addToast = useUIStore((state) => state.addToast);
+  const query = useQuery({
     queryKey: [INVESTOR_QUERY_KEY, "list", params],
     queryFn: () => investorApi.list(params),
     staleTime: 30 * 1000,
   });
+
+  const { isError, error } = query;
+  useEffect(() => {
+    if (isError) {
+      addToast({
+        type: "error",
+        title: "投资人列表加载失败",
+        message: getErrorMessage(error, "请稍后重试"),
+      });
+    }
+  }, [isError, error, addToast]);
+
+  return query;
 }
 
 // 单个投资人详情 Hook
