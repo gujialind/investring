@@ -1,9 +1,11 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Settings2 } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -378,22 +380,16 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
 
   return (
     <div className={isMobile ? "space-y-3 p-3" : "space-y-4 p-6"}>
-      <div className="flex items-center gap-2">
-        <Button asChild variant="ghost" size="icon" aria-label="返回">
-          <Link href={`${basePath}/${portfolioCode}`}>
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-lg font-semibold">
-            {platform.platform_name || platform.platform_code || "--"}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {platform.platform_code}
-            {platform.platform_type ? ` · ${platform.platform_type}` : ""}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        variant={variant}
+        crumbs={[
+          { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
+        ]}
+        title={platform.platform_name || platform.platform_code || "--"}
+        truncateTitle
+        meta={`${platform.platform_code}${platform.platform_type ? ` · ${platform.platform_type}` : ""}`}
+      />
 
       {overview}
       {actionRow}

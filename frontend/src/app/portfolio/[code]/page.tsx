@@ -18,6 +18,7 @@ import {
   useActivatePortfolio,
   useDeletePortfolio,
   usePortfolioPerformance,
+  usePortfolioReturns,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
@@ -76,6 +77,8 @@ function PortfolioDetailInner() {
   // 绩效指标（后端计算）：draft 组合无快照，不请求
   const isDraftStatus = portfolio?.status === "draft";
   const { data: performance } = usePortfolioPerformance(code, !isDraftStatus);
+  // 累计收益率 chip 数据源（#904 P0b）：returns 端点后端单点计算；详情/列表 schema 不含该字段
+  const { data: returns } = usePortfolioReturns(code, !isDraftStatus);
 
   // 分组维度配置弹窗（issue #144）
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
@@ -193,6 +196,7 @@ function PortfolioDetailInner() {
                 totalValue={!isDraft ? portfolio.total_value ?? snapshot?.total_value ?? null : null}
                 unitPrice={!isDraft ? snapshot?.unit_price ?? null : null}
                 totalProfit={!isDraft ? portfolio.total_profit ?? null : null}
+                cumulativeReturn={returns?.cumulative_return ?? null}
                 holdingDays={!isDraft ? performance?.holding_days ?? null : null}
                 variant="desktop"
               />

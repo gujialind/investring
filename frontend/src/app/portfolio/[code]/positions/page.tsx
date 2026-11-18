@@ -1,5 +1,7 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import MainLayout from "@/components/layout/MainLayout";
@@ -25,8 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatCurrency, formatSharesUnit, formatNav, formatProductCodeLabel, formatReturnRate, getReturnColorClass, toDateOnly } from "@/lib/utils";
-import { Plus, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
-import Link from "next/link";
+import { Plus, Loader2, RefreshCw } from "lucide-react";
 import { ApiException } from "@/lib/api";
 import { useUIStore } from "@/stores/uiStore";
 import { usePositionList } from "@/hooks/usePosition";
@@ -144,18 +145,14 @@ export default function PositionsPage() {
   return (
     <MainLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href={`/portfolio/${code}`} aria-label="返回组合详情">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-2xl font-semibold">持仓管理</h1>
-              <p className="text-muted-foreground">组合代码: {code}</p>
-            </div>
-          </div>
+        <PageHeader
+          crumbs={[
+            { href: "/portfolio", label: "组合", ariaLabel: "返回组合列表" },
+            { href: `/portfolio/${code}`, label: code, ariaLabel: "返回组合详情" },
+          ]}
+          title="持仓管理"
+          meta={`组合代码: ${code}`}
+          actions={
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setIsTransferListOpen(true)}>
               转移记录
@@ -272,7 +269,8 @@ export default function PositionsPage() {
             onOpenChange={setIsTransferOpen}
           />
           </div>
-        </div>
+          }
+        />
 
         <Card>
           <CardHeader>

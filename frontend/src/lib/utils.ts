@@ -282,7 +282,7 @@ export function getReturnColorClass(value: number | string | undefined | null): 
  *
  * 当前无调用点——保留是刻意的：visual-spec §1.1 与 §19 自检项点名「涨跌色只允许由
  * getReturnColorClass / getReturnBgClass（或显式的涨跌语义）输出」——它是涨跌背景色的
- * 唯一合规出口。预期调用方 = 需要浅底涨跌色的展示点（现网暂无）。
+ * 唯一合规出口。预期调用方 = 需要浅底涨跌色的展示点（#904 P0b 起组合统计卡 chip 消费）。
  */
 export function getReturnBgClass(value: number | string | undefined | null): string {
   if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) {

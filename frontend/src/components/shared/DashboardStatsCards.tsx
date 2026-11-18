@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Briefcase, TrendingUp, Users, Wallet } from "lucide-react";
-import { formatCurrency, formatReturnRate, getReturnColorClass } from "@/lib/utils";
+import { formatCurrency, formatReturnRate, getReturnColorClass, getNumberCellClass, cn } from "@/lib/utils";
 
 interface DashboardStatsCardsProps {
   totalValue: number;
@@ -101,23 +101,22 @@ export default function DashboardStatsCards({
 
   return (
     // 桌面列数按**容器宽**取（#774，口径与阈值同 PortfolioStatsCards，推导见该处注释）：
-    // 8 位带符号总资产的单行墨迹实测 196px（本组件无 tabular-nums；组合详情同串 205px），
-    // 1024 档四列轨道只有 164px → 墨迹越出卡片与邻卡相碰（实测 −15px，修复前后同形态：
-    // 本页无表格钉住 main，#772 未改变其宽度，属既存缺陷，与组合详情同批按同口径修）。
+    // #904 P0b 起主数值走 font-mono（15 字符墨迹 216.05px，与现金流水页同），
+    // 四列不相碰要求容器 ≥ 4×(216.05 − 16) + 3×16 ≈ 848（此前无 mono 墨迹 196px 用 804）。
     <div className="@container">
       <div
-        className="grid gap-4 md:grid-cols-2 @min-[804px]:grid-cols-4"
+        className="grid gap-4 md:grid-cols-2 @min-[848px]:grid-cols-4"
         data-testid="dashboard-stat-grid"
       >
         {items.map((item) => (
           <Card key={item.label}>
             <CardContent className="pt-6">
               <div className="flex flex-row items-center justify-between pb-2">
-                <span className="text-sm font-medium">{item.label}</span>
+                <span className="text-xs text-muted-foreground">{item.label}</span>
                 <item.icon className={`h-4 w-4 ${item.iconCls}`} />
               </div>
               <div
-                className={`text-2xl font-bold ${item.valueCls}`}
+                className={cn(getNumberCellClass(), "text-left whitespace-nowrap text-2xl font-semibold", item.valueCls)}
                 data-testid={`dashboard-stat-${item.id}`}
               >
                 {item.value}

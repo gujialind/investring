@@ -1,5 +1,7 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,9 +49,8 @@ import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductN
 import { Badge } from "@/components/ui/badge";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
+import { Plus, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
-import Link from "next/link";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
 import { ApiException } from "@/lib/api";
@@ -849,21 +850,15 @@ export default function TradesContent({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link href={`${basePath}/${code}`} aria-label="返回组合详情">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold">
-              调仓交易
-            </h1>
-            <p className="text-muted-foreground">组合代码: {code}</p>
-          </div>
-        </div>
-        {isAdmin && <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
+      <PageHeader
+        variant={variant}
+        crumbs={[
+          { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" },
+        ]}
+        title="调仓交易"
+        meta={`组合代码: ${code}`}
+        actions={isAdmin && <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -1096,7 +1091,7 @@ export default function TradesContent({
             </form>
           </DialogContent>
         </Dialog>}
-      </div>
+      />
 
       <Card>
         <CardHeader>

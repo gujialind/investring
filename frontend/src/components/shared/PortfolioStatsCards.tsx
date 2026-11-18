@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { CalendarDays, Coins, TrendingUp, Wallet } from "lucide-react";
-import { formatNav, formatNumber, getReturnColorClass, getNumberCellClass, cn } from "@/lib/utils";
+import { formatNav, formatNumber, formatReturnRate, getReturnColorClass, getReturnBgClass, getNumberCellClass, cn } from "@/lib/utils";
 
 interface PortfolioStatsCardsProps {
   /** 总资产（元）：最新快照 total_value，无快照（draft）传 null */
@@ -13,6 +13,8 @@ interface PortfolioStatsCardsProps {
   totalProfit: number | null;
   /** 运行天数：首末快照间隔，无快照传 null */
   holdingDays: number | null;
+  /** 累计收益率（%）：总资产卡涨跌 soft chip（#904 P0b，双端同增 §6）；无快照传 null */
+  cumulativeReturn?: number | null;
   /** desktop: 标题左/图标右的大卡片；mobile: 2×2 紧凑卡片 */
   variant?: "desktop" | "mobile";
 }
@@ -33,6 +35,7 @@ export default function PortfolioStatsCards({
   unitPrice,
   totalProfit,
   holdingDays,
+  cumulativeReturn = null,
   variant = "desktop",
 }: PortfolioStatsCardsProps) {
   const items = [
@@ -42,6 +45,7 @@ export default function PortfolioStatsCards({
       icon: Wallet,
       value: totalValue === null ? "--" : formatNumber(totalValue),
       valueCls: "",
+      chip: cumulativeReturn,
     },
     {
       key: "净值",
@@ -49,6 +53,7 @@ export default function PortfolioStatsCards({
       icon: TrendingUp,
       value: unitPrice === null ? "--" : formatNav(unitPrice),
       valueCls: "",
+      chip: null as number | null,
     },
     {
       key: "累计收益",
@@ -56,6 +61,7 @@ export default function PortfolioStatsCards({
       icon: Coins,
       value: formatProfitAmount(totalProfit),
       valueCls: totalProfit === null ? "" : getReturnColorClass(totalProfit),
+      chip: null as number | null,
     },
     {
       key: "运行天数",
@@ -63,8 +69,22 @@ export default function PortfolioStatsCards({
       icon: CalendarDays,
       value: holdingDays === null ? "--" : `${formatNumber(holdingDays, 0)} 天`,
       valueCls: "",
+      chip: null as number | null,
     },
   ];
+
+  const chipOf = (chip: number | null) =>
+    chip === null || chip === undefined ? null : (
+      <span
+        className={cn(
+          "inline-flex items-center rounded-full px-2 text-xs font-medium",
+          getReturnBgClass(chip),
+          getReturnColorClass(chip),
+        )}
+      >
+        {formatReturnRate(chip)}
+      </span>
+    );
 
   if (variant === "mobile") {
     // 移动维持登记档（text-lg font-bold tabular-nums，#725/#730）：mono 化需连带
@@ -78,11 +98,14 @@ export default function PortfolioStatsCards({
                 <item.icon className="h-4 w-4 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">{item.key}</span>
               </div>
-              <div
-                className={`text-lg font-bold tabular-nums ${item.valueCls}`}
-                data-testid={`portfolio-stat-${item.id}`}
-              >
-                {item.value}
+              <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className={`text-lg font-bold tabular-nums ${item.valueCls}`}
+                  data-testid={`portfolio-stat-${item.id}`}
+                >
+                  {item.value}
+                </div>
+                {chipOf(item.chip)}
               </div>
             </CardContent>
           </Card>
@@ -110,11 +133,14 @@ export default function PortfolioStatsCards({
                 <span className="text-xs text-muted-foreground">{item.key}</span>
                 <item.icon className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div
-                className={cn(getNumberCellClass(), "text-left whitespace-nowrap text-2xl font-semibold", item.valueCls)}
-                data-testid={`portfolio-stat-${item.id}`}
-              >
-                {item.value}
+              <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className={cn(getNumberCellClass(), "text-left whitespace-nowrap text-2xl font-semibold", item.valueCls)}
+                  data-testid={`portfolio-stat-${item.id}`}
+                >
+                  {item.value}
+                </div>
+                {chipOf(item.chip)}
               </div>
             </CardContent>
           </Card>
