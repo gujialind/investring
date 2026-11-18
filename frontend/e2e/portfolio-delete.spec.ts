@@ -24,6 +24,7 @@ import {
   createPortfolioViaApi,
   isolatedPortfolioCode,
   openAppAndAuth,
+  openMobilePageActionsIfMobile,
 } from './helpers';
 
 const DELETE_BUTTON = '删除组合';
@@ -126,6 +127,8 @@ test.describe('组合删除闭环（#820）', () => {
     await createPortfolioViaApi(page, headers, code, `详情页删除 ${code}`);
 
     await gotoDetailAndWait(page, code);
+    // 移动删除入口收 ⋯ 抽屉（#904 P1c-3），先开再点
+    await openMobilePageActionsIfMobile(page, testInfo);
     await page.getByRole('button', { name: DELETE_BUTTON }).click();
 
     const dialog = deleteDialog(page);

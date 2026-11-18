@@ -1,8 +1,17 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Power, Plus, ArrowRightLeft, CalendarClock, Camera, Trash2 } from "lucide-react";
+import { Power, Plus, ArrowRightLeft, CalendarClock, Camera, Trash2, MoreHorizontal, X } from "lucide-react";
 import Link from "next/link";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetBody,
+} from "@/components/ui/sheet";
 
 interface PortfolioActionButtonsProps {
   portfolioCode: string;
@@ -44,9 +53,117 @@ export default function PortfolioActionButtons({
   onDeleteClick,
   isDeletePending,
 }: PortfolioActionButtonsProps) {
-  const cls = variant === "mobile" ? "w-full" : "";
-  const container =
-    variant === "mobile" ? "grid grid-cols-2 gap-2" : "ml-auto flex flex-wrap gap-2";
+  const container = "ml-auto flex flex-wrap gap-2";
+
+  // #904 P1c-3：移动改吸底拇指区 bar（主动作两枚 + ⋯ 抽屉收次动作/删除）；
+  // 桌面行内可换行形态不变。fixed bar 脱离文档流，页面侧补 pb-24 防遮内容。
+  if (variant === "mobile") {
+    // 台账型 active 无申赎/调仓/事件/快照入口（issue #905），bar 不渲染
+    if (kind === "ledger" && status === "active") return null;
+    return (
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card px-4 py-3">
+        <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+          {status === "draft" &&
+            (kind === "ledger" ? (
+              <Button
+                className="col-span-2 w-full"
+                onClick={onActivateClick}
+                disabled={isActivatePending}
+                data-testid="ledger-activate"
+              >
+                <Power className="mr-2 h-4 w-4 text-success" />
+                激活组合
+              </Button>
+            ) : (
+              <Link href={`${basePath}/${portfolioCode}/subscriptions`} className="col-span-2">
+                <Button className="w-full">
+                  <Plus className="mr-2 h-4 w-4" />
+                  首次申购激活
+                </Button>
+              </Link>
+            ))}
+          {status === "closed" && (
+            <Button
+              variant="outline"
+              className="col-span-2 w-full"
+              onClick={onActivateClick}
+              disabled={isActivatePending}
+            >
+              <Power className="mr-2 h-4 w-4 text-success" />
+              重新激活
+            </Button>
+          )}
+          {status === "active" && (
+            <>
+              <Link href={`${basePath}/${portfolioCode}/trades`}>
+                <Button variant="outline" className="w-full">
+                  <ArrowRightLeft className="mr-2 h-4 w-4" />
+                  调仓
+                </Button>
+              </Link>
+              <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
+                <Button className="w-full">
+                  <Plus className="mr-2 h-4 w-4" />
+                  申购赎回
+                </Button>
+              </Link>
+            </>
+          )}
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button variant="outline" size="icon" className="h-11 w-11" aria-label="页面更多操作">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent>
+              <SheetHeader>
+                <SheetTitle>更多操作</SheetTitle>
+                <SheetClose asChild>
+                  <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
+                    <X className="h-4 w-4" />
+                  </Button>
+                </SheetClose>
+              </SheetHeader>
+              <SheetBody>
+                {status === "active" && (
+                  <>
+                    <Link
+                      href={`${basePath}/${portfolioCode}/share-change-events`}
+                      className="flex h-11 items-center gap-2 text-sm"
+                    >
+                      <CalendarClock className="h-4 w-4 text-muted-foreground" />
+                      份额变动事件
+                    </Link>
+                    <Link
+                      href={`${basePath}/${portfolioCode}/snapshots`}
+                      className="flex h-11 items-center gap-2 text-sm"
+                    >
+                      <Camera className="h-4 w-4 text-muted-foreground" />
+                      快照管理
+                    </Link>
+                  </>
+                )}
+                {onDeleteClick && (
+                  <SheetClose asChild>
+                    <button
+                      type="button"
+                      onClick={onDeleteClick}
+                      disabled={isDeletePending}
+                      data-testid={`portfolio-delete-${portfolioCode}`}
+                      className="flex h-11 w-full items-center gap-2 text-sm text-destructive disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      删除组合
+                    </button>
+                  </SheetClose>
+                )}
+              </SheetBody>
+            </SheetContent>
+          </Sheet>
+        </div>
+      </div>
+    );
+  }
 
   if (status === "draft") {
     return (
@@ -56,19 +173,15 @@ export default function PortfolioActionButtons({
             onClick={onActivateClick}
             disabled={isActivatePending}
             data-testid="ledger-activate"
-            className={variant === "mobile" ? "col-span-2 w-full" : cls}
           >
             <Power className="mr-2 h-4 w-4 text-success" />
             激活组合
           </Button>
         ) : (
-          <Link
-            href={`${basePath}/${portfolioCode}/subscriptions`}
-            className={variant === "mobile" ? "col-span-2" : ""}
-          >
-            <Button className={cls}>
+          <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
+            <Button>
               <Plus className="mr-2 h-4 w-4" />
-              {variant === "mobile" ? "首次申购" : "首次申购激活"}
+              首次申购激活
             </Button>
           </Link>
         )}
@@ -77,7 +190,6 @@ export default function PortfolioActionButtons({
             variant="outline"
             onClick={onDeleteClick}
             disabled={isDeletePending}
-            className={variant === "mobile" ? "col-span-2 w-full" : cls}
           >
             <Trash2 className="mr-2 h-4 w-4 text-destructive" />
             删除组合
@@ -94,15 +206,15 @@ export default function PortfolioActionButtons({
     return (
       <div className={container}>
         <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
-          <Button className={cls}>
+          <Button>
             <Plus className="mr-2 h-4 w-4" />
             申购赎回
           </Button>
         </Link>
         <Link href={`${basePath}/${portfolioCode}/trades`}>
-          <Button variant="outline" className={cls}>
+          <Button variant="outline">
             <ArrowRightLeft className="mr-2 h-4 w-4" />
-            {variant === "mobile" ? "调仓" : "调仓交易"}
+            调仓交易
           </Button>
         </Link>
         {/* #786：事件/快照上移；可见文案「事件」，accessible name 保留全称
@@ -112,13 +224,13 @@ export default function PortfolioActionButtons({
           aria-label="份额变动事件"
           title="份额变动事件"
         >
-          <Button variant="outline" className={cls}>
+          <Button variant="outline">
             <CalendarClock className="mr-2 h-4 w-4" />
             事件
           </Button>
         </Link>
         <Link href={`${basePath}/${portfolioCode}/snapshots`}>
-          <Button variant="outline" className={cls}>
+          <Button variant="outline">
             <Camera className="mr-2 h-4 w-4" />
             快照管理
           </Button>
@@ -134,7 +246,6 @@ export default function PortfolioActionButtons({
         variant="outline"
         onClick={onActivateClick}
         disabled={isActivatePending}
-        className={variant === "mobile" ? "col-span-2 w-full" : ""}
       >
         <Power className="mr-2 h-4 w-4 text-success" />
         重新激活
@@ -144,7 +255,6 @@ export default function PortfolioActionButtons({
           variant="outline"
           onClick={onDeleteClick}
           disabled={isDeletePending}
-          className={variant === "mobile" ? "col-span-2 w-full" : ""}
         >
           <Trash2 className="mr-2 h-4 w-4 text-destructive" />
           删除组合

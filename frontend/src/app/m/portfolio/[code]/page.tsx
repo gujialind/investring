@@ -124,7 +124,7 @@ function MobilePortfolioDetailInner() {
   const allocation = buildAllocation(positions, assetClasses, theme);
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-4 p-4 pb-24">
       {/* Header */}
       <PageHeader
         variant="mobile"

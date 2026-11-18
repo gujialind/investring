@@ -101,6 +101,15 @@ export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): 
 }
 
 /**
+ * 打开移动端页头/吸底 bar 的 ⋯「页面更多操作」抽屉（#904 P1c-3）：
+ * 次动作与删除入口收进 sheet，断言/点击前须先开；桌面无 sheet，no-op。
+ */
+export async function openMobilePageActionsIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
+  if (testInfo.project.name !== 'mobile') return;
+  await page.getByRole('button', { name: '页面更多操作' }).click();
+}
+
+/**
  * 打开设置页某个分区（#878 双端形态分流）：桌面是三 Tab（点 tab），移动是分组列表 +
  * 行级钻取子页（点行 Link）。`goto('/settings')` 在 mobile project 经 proxy 落到
  * /m/settings，故按落地 pathname 是否带 /m/ 前缀分流，不依赖 testInfo（调用方未必持有）。
