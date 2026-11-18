@@ -76,7 +76,11 @@ jobs:
     # libicudata.so.74，mobile 用例在启动阶段即 1-3ms 全红。先固定 24.04；待 Playwright
     # 升级到兼容 ICU 78 的 webkit 构建后再放宽。
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 预算兜底（#913，与 install 步骤护栏成对放宽）：实测最坏 = 安装 21m52s + 测试 16m19s
+    # + 其余约 4m ≈ 42m11s（五轮表见 #913）。45 分钟贴边、50 才有裕量。三次事故里两次先撞
+    # install 步骤的 15 分钟护栏、一次撞 job 30 分钟预算，故只调 job 没用，必须与下面两步
+    # 15→25 成对改。单独放宽不算治本——治本是下面显式固定 apt 源；这里只保证慢镜像时不再被掐。
+    timeout-minutes: 50
 
     services:
       mysql:
@@ -224,31 +228,85 @@ jobs:
           cp -r public .next/standalone/public
 
       # 浏览器二进制缓存（issue #172）：key 绑定 package-lock.json
-      # （@playwright/test 版本决定所需浏览器构建）；未命中时回退全新安装
+      # （@playwright/test 版本决定所需浏览器构建）。
+      # restore-keys 前缀回退（#913）：仅是「防未来 lock 变动引发真 miss」的廉价保险，
+      # **不是本次根因修复**——五轮实测浏览器缓存全 Hit，本次慢/挂的根因是 apt 系统依赖
+      # 下载落到慢镜像（见下方 Pin apt mirror 步与 #913 五轮表）。lock 里无关依赖变动会让
+      # 精确 key 失配，前缀回退可复用上一版缓存、只补下缺失构建，避免那种未来的真 miss。
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-
 
       # 桌面 chromium + 移动 webkit（mobile 用 iPhone 13 描述符，
       # 见 playwright.config.ts 注释；PR #169 遗留的 webkit 307 取消问题
       # 已定位为 dev 竞态并修复，恢复真实 Safari 内核覆盖）。
-      # 拆步 + 预置 apt-get update：--with-deps 内置 update 遇首选镜像
-      # （azure.archive.ubuntu.com）不可达时会长时间重试卡死；先单独
-      # update 让 apt 完成镜像回退，后续内置 update 全 Hit 很快。
-      # timeout-minutes 兼作快速失败护栏（正常 ≤5 分钟）。
+      #
+      # apt 源固定（#913 治本）：--with-deps 要 apt 拉系统依赖（webkit 约 93.1 MB），
+      # 耗时跟着 runner 落到的 region 镜像走——azure 时两步合计 29 秒，落到
+      # us-east-2.ec2 只有 69–204 kB/s、单步撞 15 分钟护栏装不完（五轮表见 #913）。
+      # 下面 Pin apt mirror 步把源显式固定到实测快的 azure，不再受 region 随机摆布。
+      #
+      # 预置 apt-get update 保留，但更正旧注释口径：它只治「首选镜像不可达」（让 apt
+      # 完成镜像回退），**治不了本次的「可达但慢」**——慢镜像可达、回退条件根本不触发。
+      # 故不能指望它解决本次问题，治本靠上面的显式固定源。
+      # timeout-minutes 兼作快速失败护栏：缓存命中且镜像快时正常 ≤5 分钟；慢镜像最坏
+      # 约 22 分钟量级，护栏放宽到 25 的判据见各 install 步注释（#913）。
+      - name: Pin apt mirror to azure (explicit fallback)
+        # 仅本 E2E job 的 runner 内生效（各 job 独立 runner，不影响其他作业）。
+        # 固定源不可达时显式回退默认源并继续，日志可见回退原因；不用 || true 吞失败。
+        run: |
+          set -euo pipefail
+          MIRROR="http://azure.archive.ubuntu.com/ubuntu/"
+          DEB822=/etc/apt/sources.list.d/ubuntu.sources
+          LEGACY=/etc/apt/sources.list
+          BACKUP="$(mktemp -d)"
+          # 备份现有源（存在才备），供回退恢复
+          for f in "$DEB822" "$LEGACY"; do
+            if [ -f "$f" ]; then sudo cp -a "$f" "$BACKUP/$(basename "$f")"; fi
+          done
+          # 把 URIs 固定到 azure（deb822 与 legacy 两种格式都覆盖；azure 同样服务 security）
+          if [ -f "$DEB822" ]; then
+            sudo sed -i -E "s|^URIs:.*|URIs: $MIRROR|" "$DEB822"
+          fi
+          if [ -f "$LEGACY" ]; then
+            sudo sed -i -E "s#https?://[^ ]*\.ubuntu\.com/[^ ]*#$MIRROR#g" "$LEGACY"
+          fi
+          echo "固定后的 apt 源配置："
+          for f in "$DEB822" "$LEGACY"; do
+            if [ -f "$f" ]; then echo "--- $f ---"; sudo cat "$f"; fi
+          done
+          # 探测刷新：成功=固定生效；失败=显式回退默认源（不吞失败，回退原因进日志）
+          if sudo apt-get update; then
+            echo "::notice::apt 源已固定到 azure.archive.ubuntu.com 并刷新成功"
+          else
+            rc=$?
+            echo "::warning::固定源 azure 不可达（apt-get update rc=$rc），显式回退到 runner 默认源并继续；回退原因：固定源刷新失败"
+            for f in "$DEB822" "$LEGACY"; do
+              b="$BACKUP/$(basename "$f")"
+              if [ -f "$b" ]; then sudo cp -a "$b" "$f"; fi
+            done
+            echo "已恢复默认 apt 源，交由后续 Update apt index 步骤刷新"
+          fi
       - name: Update apt index
         run: sudo apt-get update
 
       - name: Install Playwright chromium
         working-directory: frontend
-        timeout-minutes: 15
+        # 步骤护栏 15→25（#913，与 job 30→50 成对）：慢镜像下 chromium 实测最坏 8m03s
+        # （68.9 kB/s），webkit 同轮撞 15 分钟护栏；放宽到 25 给慢镜像留裕量，避免先撞步骤
+        # 护栏（三次事故两次撞这里）。治本靠上面固定 apt 源，这里只是兜底。
+        timeout-minutes: 25
         run: npx playwright install --with-deps chromium
 
       - name: Install Playwright webkit
         working-directory: frontend
-        timeout-minutes: 15
+        # 步骤护栏 15→25（#913）：webkit 要 apt 拉约 93.1 MB 系统依赖，慢镜像下实测
+        # 15m12s/15m13s 两次撞旧 15 分钟护栏、测试根本没跑；azure 镜像下仅 19s。放宽到 25
+        # 兜底，治本靠上面固定 apt 源。判据见 #913 五轮表。
+        timeout-minutes: 25
         run: npx playwright install --with-deps webkit
 
       # main 模式：PLAYWRIGHT_JSON_OUTPUT_FILE 触发 playwright.config.ts 追加 json
