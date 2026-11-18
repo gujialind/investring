@@ -1,5 +1,8 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+import { mobileExitPaths } from "@/components/shared/navItems";
+
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,6 +94,10 @@ export default function AssetClassificationsContent({
   variant = "desktop",
 }: AssetClassificationsContentProps) {
   const isMobile = variant === "mobile";
+  const basePath = variant === "mobile" ? "/m" : "";
+  const exit = mobileExitPaths(basePath).find(
+    (e) => e.path === `${basePath}/asset-classifications`,
+  );
   const addToast = useUIStore((state) => state.addToast);
   const queryClient = useQueryClient();
 
@@ -229,10 +236,6 @@ export default function AssetClassificationsContent({
 
   const pending = createItem.isPending || updateItem.isPending;
 
-  if (isLoading) {
-    return <LoadingState />;
-  }
-
   /** 状态徽标（停用 = neutral，见 visual-spec §1.3） */
   const inactiveBadge = (item: AssetClassificationItem) =>
     !item.is_active && <Badge variant="neutral">停用</Badge>;
@@ -294,13 +297,12 @@ export default function AssetClassificationsContent({
 
   return (
     <div className={isMobile ? "space-y-4" : "space-y-6"}>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">资产分类</h1>
-          <p className="text-sm text-muted-foreground">
-            五维正交维度字典与适用关系矩阵（点击格子调整值 ↔ 大类适用关系）
-          </p>
-        </div>
+      <PageHeader
+        variant={variant}
+        crumbs={exit ? [{ href: exit.href, label: exit.label }] : []}
+        title="资产分类"
+        meta="五维正交维度字典与适用关系矩阵（点击格子调整值 ↔ 大类适用关系）"
+        actions={
         <Dialog
           open={isDialogOpen}
           onOpenChange={(open) => {
@@ -467,8 +469,13 @@ export default function AssetClassificationsContent({
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        }
+      />
 
+      {isLoading ? (
+        <LoadingState />
+      ) : (
+      <>
       {/* 大区：asset_class 管理（规则摘要 + 编辑） */}
       <Card>
         <CardHeader>
@@ -592,6 +599,8 @@ export default function AssetClassificationsContent({
           </Card>
         );
       })}
+      </>
+      )}
     </div>
   );
 }

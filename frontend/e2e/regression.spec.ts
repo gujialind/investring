@@ -390,7 +390,8 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
   // 本用例原以「桌面端这些页走侧边栏，无此形态」为由 skip 桌面端。该前提在 #878 把
   // 投资人/平台/分类设为 inNav:false（侧栏不再列出）后已失效，桌面因此既漏了出口、
   // 守卫又静默放行——与 e2e/AGENTS.md 禁止的「把未证前提写进 skip」同一种病。
-  // 现双端真跑：出口是布局层职责，两端各由 mobileExitPaths 按自己的轴派生。
+  // 现双端真跑：出口自 #904 起由页头 PageHeader 面包屑承载（布局不再渲染返回行），
+  // href 仍由 mobileExitPaths 按自己的轴派生；viewer 无权限态出口在 AdminGuard。
   test('经页内入口进入后可返回宿主页，不再「可达即被困」', async ({ page }, testInfo) => {
     const isMobile = testInfo.project.name === 'mobile';
     const basePath: '' | '/m' = isMobile ? '/m' : '';

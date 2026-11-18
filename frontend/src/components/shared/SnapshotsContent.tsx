@@ -1,13 +1,13 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import { format, isSameDay, subYears } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   AlertTriangle,
   CheckCircle2,
   Loader2,
@@ -276,22 +276,14 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
   const jobRunning = job?.status === "pending" || job?.status === "running";
 
   return (
-    <div className={variant === "mobile" ? "space-y-4 p-4" : "container mx-auto px-4 py-6 space-y-6"}>
-      {/* 1. Header */}
-      <div>
-        <div className="flex items-center gap-2 mb-4">
-          <Link href={`${basePath}/${code}`}>
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              返回
-            </Button>
-          </Link>
-        </div>
-        <h1 className="text-2xl font-semibold">快照管理</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          管理组合历史快照数据，支持手动生成、追平与区间重算
-        </p>
-      </div>
+    <div className={variant === "mobile" ? "space-y-4 p-4" : "space-y-6"}>
+      {/* 1. Header（#904 PageHeader：面包屑返回组合详情，缩进收敛） */}
+      <PageHeader
+        variant={variant}
+        crumbs={[{ href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" }]}
+        title="快照管理"
+        meta="管理组合历史快照数据，支持手动生成、追平与区间重算"
+      />
 
       {/* 2. 状态概览 */}
       <Card>

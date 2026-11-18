@@ -1,5 +1,7 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -453,57 +455,53 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">产品管理</h1>
-          <p className="text-muted-foreground">
-            管理基金产品和数据源
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            data-testid="batch-nav-sync"
-            onClick={() => setNavSyncConfirmOpen(true)}
-            disabled={runTask.isPending || navSyncRunning}
-          >
-            {navSyncRunning ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
-            )}
-            批量净值同步
-          </Button>
-          <ProductFormDialog
-            open={isDialogOpen}
-            onOpenChange={setIsDialogOpen}
-            editingProduct={editingProduct}
-            trigger={
-              <Button onClick={() => setEditingProduct(null)}>
-                <Plus className="mr-2 h-4 w-4" />
-                添加产品
-              </Button>
-            }
-          />
-        </div>
-      </div>
-
-      {/* 语境分布入口（#878）：平台与分类管理从产品页头部到达（双端），不再进侧栏/底部 Tab。
-          返回出口由两端布局按 navItems.entryHost（=产品）统一提供（#894） */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button asChild variant="outline" size="sm">
-          <Link href={`${basePath}/platforms`}>
-            <Building2 className="mr-2 h-4 w-4" />
-            平台管理
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={`${basePath}/asset-classifications`}>
-            <Tags className="mr-2 h-4 w-4" />
-            资产分类管理
-          </Link>
-        </Button>
-      </div>
+      {/* 语境分布入口（#878）仍在页头，权重降为 ghost 链接档（#904）；返回出口由
+          PageHeader 面包屑承载（管理页 crumbs = entryHost），布局不再渲染返回行 */}
+      <PageHeader
+        variant={variant}
+        title="产品管理"
+        meta="管理基金产品和数据源"
+        actions={
+          <>
+            <Button asChild variant="ghost" className="text-muted-foreground">
+              <Link href={`${basePath}/platforms`}>
+                <Building2 className="mr-2 h-4 w-4" />
+                平台管理
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" className="text-muted-foreground">
+              <Link href={`${basePath}/asset-classifications`}>
+                <Tags className="mr-2 h-4 w-4" />
+                资产分类管理
+              </Link>
+            </Button>
+            <Button
+              variant="outline"
+              data-testid="batch-nav-sync"
+              onClick={() => setNavSyncConfirmOpen(true)}
+              disabled={runTask.isPending || navSyncRunning}
+            >
+              {navSyncRunning ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              批量净值同步
+            </Button>
+            <ProductFormDialog
+              open={isDialogOpen}
+              onOpenChange={setIsDialogOpen}
+              editingProduct={editingProduct}
+              trigger={
+                <Button onClick={() => setEditingProduct(null)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  添加产品
+                </Button>
+              }
+            />
+          </>
+        }
+      />
 
       <Card data-testid="products-list-card">
         <CardHeader>

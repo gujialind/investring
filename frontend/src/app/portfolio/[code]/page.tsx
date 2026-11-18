@@ -3,7 +3,9 @@
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Suspense, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
+import PageHeader from "@/components/shared/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ArrowLeft, Settings2 } from "lucide-react";
@@ -32,6 +34,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
 import { buildAllocation } from "@/lib/allocation";
+import { getStatusBadgeVariant } from "@/lib/utils";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { parseHoldingsView, type HoldingsView } from "@/types/holding";
 
@@ -122,28 +125,26 @@ function PortfolioDetailInner() {
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* 页头：返回 / 名称+code+成立日期·状态小字 / 操作区（#786：4 入口可换行、标题不压缩） */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-4">
-            <Link href="/portfolio" aria-label="返回组合列表">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-2xl font-semibold">{portfolio.name}</h1>
-              <p className="text-muted-foreground">
-                {portfolio.code}
-                {portfolio.started_at && (
-                  <span> · 成立于 {portfolio.started_at.split("T")[0]}</span>
-                )}
-                <span>
-                  {" "}· {portfolio.status === "active" ? "活跃" : isDraft ? "草稿" : "已关闭"}
-                </span>
-              </p>
-            </div>
-          </div>
-          {isAdmin && (
+        {/* 页头（#904 PageHeader）：面包屑返回 / 名称+状态 badge / code·成立日 / 操作区（#786 可换行、标题不压缩） */}
+        <PageHeader
+          crumbs={[{ href: "/portfolio", label: "组合", ariaLabel: "返回组合列表" }]}
+          title={portfolio.name}
+          badge={
+            portfolio.status !== "active" ? (
+              <Badge variant={getStatusBadgeVariant(portfolio.status)}>
+                {isDraft ? "草稿" : "已关闭"}
+              </Badge>
+            ) : undefined
+          }
+          meta={
+            <>
+              {portfolio.code}
+              {portfolio.started_at && (
+                <span> · 成立于 {portfolio.started_at.split("T")[0]}</span>
+              )}
+            </>
+          }
+          actions={isAdmin && (
             <PortfolioActionButtons
               portfolioCode={code}
               status={portfolio.status as "draft" | "active" | "closed"}
@@ -155,6 +156,7 @@ function PortfolioDetailInner() {
               isDeletePending={deletePortfolio.isPending}
             />
           )}
+        />
           {/* 删除空壳确认（#820 扩围）：点名 name + code + 不可恢复 */}
           <DeletePortfolioDialog
             open={isDeleteOpen}
@@ -170,7 +172,6 @@ function PortfolioDetailInner() {
               })
             }
           />
-        </div>
 
         {isDraft && (
           <Alert>

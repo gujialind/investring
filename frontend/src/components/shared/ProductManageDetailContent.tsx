@@ -1,10 +1,11 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { subMonths, subYears } from "date-fns";
-import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Loader2, Pencil, Trash2, Ban } from "lucide-react";
+import { CheckCircle, XCircle, RefreshCw, Loader2, Pencil, Trash2, Ban } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -299,28 +300,21 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
 
   return (
     <div className={isMobile ? "space-y-3 p-3" : "space-y-4 p-6"}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Button asChild variant="ghost" size="icon" aria-label="返回" className="shrink-0">
-            <Link href={`${basePath}/products`}>
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="truncate text-lg font-semibold">{product.name || codeLabel}</h1>
-              {!product.is_active && (
-                <Badge variant="neutral" className="shrink-0" data-testid="product-inactive-badge">
-                  已停用
-                </Badge>
-              )}
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {codeLabel} · {formatMarketName(product.market)}
-            </p>
-          </div>
-        </div>
-        {/* #856 头部三动作：移动端图标-only（aria-label 表意），桌面带文字 */}
+      <PageHeader
+        variant={variant}
+        crumbs={[{ href: `${basePath}/products`, label: "产品", ariaLabel: "返回产品管理" }]}
+        title={product.name || codeLabel}
+        truncateTitle
+        badge={
+          !product.is_active ? (
+            <Badge variant="neutral" className="shrink-0" data-testid="product-inactive-badge">
+              已停用
+            </Badge>
+          ) : undefined
+        }
+        meta={`${codeLabel} · ${formatMarketName(product.market)}`}
+        actions={
+        /* #856 头部三动作：移动端图标-only（aria-label 表意），桌面带文字 */
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           <Button
             variant="outline"
@@ -360,7 +354,8 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
             <span className="hidden sm:inline">删除</span>
           </Button>
         </div>
-      </div>
+        }
+      />
 
       {isMobile ? (
         <>
