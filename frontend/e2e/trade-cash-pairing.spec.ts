@@ -39,6 +39,7 @@ import {
   expectSingleLine,
   gotoPortfolioSubpage,
   openFilterPanelIfMobile,
+  closeFilterPanelIfMobile,
   openPopover,
   settlePopovers,
 } from "./helpers";
@@ -116,6 +117,8 @@ async function filterByStatus(
   await openPopover(page, statusTrigger, option);
   await option.click({ timeout: 10_000 });
   await settlePopovers(page);
+  // 选完回列表再断言行集（modal sheet 开着时表格外 aria-hidden，#904 P1c-1）
+  await closeFilterPanelIfMobile(page, testInfo);
   const body = (await (await query).json()) as { items: RespTrade[] };
   return body.items;
 }

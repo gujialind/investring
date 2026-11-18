@@ -48,6 +48,7 @@ import {
   nextTradingDays,
   openAppAndAuth,
   openFilterPanelIfMobile,
+  closeFilterPanelIfMobile,
   openPopover,
   openSubmitTradeDialog,
   pickCalendarDay,
@@ -747,6 +748,8 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await openPopover(page, statusTrigger, confirmedOption);
     await confirmedOption.click({ timeout: 10_000 });
     await settlePopovers(page);
+    // 选完回列表再断言行集（modal sheet 开着时表格外 aria-hidden，#904 P1c-1）
+    await closeFilterPanelIfMobile(page, testInfo);
 
     const orphan = page.getByRole('row').filter({ hasText: '现金 · 调仓' }).first();
     await expect(orphan).toBeVisible({ timeout: 15_000 });

@@ -789,4 +789,6 @@ export async function closePortfolioViaApi(
 export async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promise<void> {
   await openFilterPanelIfMobile(page, testInfo);
   await page.getByRole('button', { name: '清除日期区间' }).click();
+  // 清完回列表再断言行集（modal sheet 开着时表格外 aria-hidden，#904 P1c-1）
+  await closeFilterPanelIfMobile(page, testInfo);
 }
