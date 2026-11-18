@@ -4,7 +4,7 @@ ir schema 响应字段契约与索引模式测试（issue #64）
 通过 typer.main.get_command 构建真实命令树，验证 build_schema 三种视图：
 - 全量视图：向后兼容 + 命中命令携带 output 契约
 - 按组视图：output 契约同样携带
-- index_only 视图：极简索引（<1KB），不含参数/输出细节
+- index_only 视图：极简索引（约1.4KB，预算1536），不含参数/输出细节
 
 运行方式（ir-cli/.venv 无 pytest，用仓库根 .venv）：
     PYTHONPATH=ir-cli .venv/bin/python -m pytest ir-cli/tests/ -q
@@ -94,9 +94,12 @@ class TestIndexOnly:
         raw = json.dumps(index, ensure_ascii=False)
         assert "params" not in raw
         assert '"output"' not in raw
-        # 索引预算随命令面增长适度上调（#88 新增 position 子命令后约 1KB），
-        # 目标仍是保持极简可低成本加载
-        assert len(raw.encode("utf-8")) < 1280, f"索引超过预算: {len(raw.encode('utf-8'))} bytes"
+        # 索引预算随命令面增长适度上调（#88 新增 position 子命令后约 1KB；#905 PR3 新增
+        # ledger 命令组 9 子命令。索引为「组名:命令名」紧凑编码、不含摘要文案，无文案可压缩，
+        # 命令名亦不可再缩（除非改 CLI 命令面），故 1278→1382 字节只能按 #88 先例上调预算）。
+        # 上调至 1536（1.5KB）留余量；仍远小于全量 schema，保持 agent 低成本加载。
+        # 「命令面增长 vs 索引成本」取舍见 PR #916 说明。不摘命令、不拆守卫。
+        assert len(raw.encode("utf-8")) < 1536, f"索引超过预算: {len(raw.encode('utf-8'))} bytes"
 
 
 class TestBackwardCompat:

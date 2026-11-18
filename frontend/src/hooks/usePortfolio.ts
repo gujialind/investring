@@ -143,6 +143,9 @@ export function useActivateLedgerPortfolio() {
     onSuccess: (_, code) => {
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      // S2（#905 PR3 L2）：激活使台账 totals 从 draft(None) 变 active(0/值)，须失效台账读侧，
+      // 否则汇总停旧值（--）。
+      queryClient.invalidateQueries({ queryKey: queryKeys.ledger.byPortfolio(code) });
       addToast({
         type: "success",
         title: "激活成功",

@@ -21,7 +21,10 @@ function useLedgerInvalidation(code: string) {
   return () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.ledger.byPortfolio(code) });
     queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(code) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.list() });
+    // B2（#905 PR3 L2）：list 键带尾部 undefined（["portfolios","list",undefined]）做前缀失效
+    // 时与带 params 的查询键（["portfolios","list",{page_size}]）第三元素不等 → 不匹配、列表停旧值。
+    // 改用 portfolios.root（["portfolios"]）前缀失效，覆盖 list(任意 params)+detail。
+    queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.root });
   };
 }
 

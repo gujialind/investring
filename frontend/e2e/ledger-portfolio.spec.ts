@@ -145,6 +145,39 @@ test.describe('台账型组合视图（#905 PR3）', () => {
     // R8：总收益 chip 存在（含台账型）；平均收益率标「不含台账型」
     await expect(page.getByTestId('dashboard-stat-total_profit')).toBeVisible();
     await expect(page.getByText('不含台账型').first()).toBeVisible();
+    // B3（#905 PR3 L2）：台账活跃卡显「累计收益(元)」，不把 None 收益率渲染成 0.00%
+    await expect(page.getByText('累计收益 ¥0.00').first()).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('dashboard-r8.png'), fullPage: true });
+  });
+
+  test('S2：真实点击激活后汇总从 -- 变 0 且登记入口出现（totals 失效回归）', async ({ page }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('E905S', testInfo, 'L');
+    await createLedgerViaApi(page, headers, code, false);
+    await gotoDetailAndWait(page, code);
+    // draft 汇总为 --（None），不出现 0
+    await expect(page.getByText('¥0.0000')).toHaveCount(0);
+    // 真实点击激活（非仅断言按钮存在）
+    await page.getByTestId('ledger-activate').click();
+    await expect(page.getByTestId('toast-card').filter({ hasText: '激活成功' })).toBeVisible();
+    // 激活后 ledger totals 失效重取：active 无记录 → 0（不再 --），登记入口出现
+    await expect(page.getByText('¥0.0000').first()).toBeVisible();
+    await expect(page.getByTestId('ledger-entry-add')).toBeVisible();
+  });
+
+  test('B1：绩效请求失败渲染错误态+重试，而非七个--空态（失败≠空态）', async ({ page }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('E905B', testInfo, 'L');
+    await createLedgerViaApi(page, headers, code, true);
+    await page.route(`**/api/portfolios/${code}/performance`, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: { error: 'INTERNAL', message: '绩效服务故障' } }),
+      }),
+    );
+    await gotoDetailAndWait(page, code);
+    await expect(page.getByText('绩效服务故障')).toBeVisible();
+    await expect(page.getByRole('button', { name: /重试/ })).toBeVisible();
   });
 });

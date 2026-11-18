@@ -175,3 +175,37 @@ class TestBatchSameSourceAndQueryCount:
         # 3 个台账组合，市值/进出各只查 1 次（批量），不随 N 增长
         assert counts["ledger_entry"] == 1, counts
         assert counts["ledger_flow"] == 1, counts
+
+    def _build_nav(self, db, n):
+        create_investor(db, code="INV_NV")
+        for i in range(n):
+            code = f"NAV_Q{i}"
+            create_portfolio(db, code=code, status="active")
+            create_subscription(db, code, "INV_NV", sub_type="subscribe", amount=10000.0,
+                                confirm_date=date(2026, 1, 5), status="confirmed",
+                                platform_code="PLAT_NV")
+            create_value_snapshot(db, code, date(2026, 1, 5), 10000.0, 10000.0, 1.0)
+            create_value_snapshot(db, code, date(2026, 1, 10), 12000.0, 10000.0, 1.2)
+            create_investor_holding(db, code, "INV_NV", date(2026, 1, 10), shares=10000.0)
+
+    def test_nav_queries_do_not_scale_with_n(self, test_db):
+        # S1（升级必做）：nav 列表亦批量，逐组合申赎/快照读放大消除；断言覆盖 nav 侧。
+        create_platform(test_db, code="PLAT_NV")
+        self._build_nav(test_db, 3)
+        engine = test_db.get_bind()
+        counts = {"subscription": 0, "portfolio_value_snapshot": 0, "investor_holding": 0}
+
+        def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+            for k in counts:
+                if k in statement:
+                    counts[k] += 1
+
+        event.listen(engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            list_portfolios(test_db, page_size=100)
+        finally:
+            event.remove(engine, "before_cursor_execute", before_cursor_execute)
+        # 3 个 nav 组合：subs/holdings 各 1 次、snapshot latest+first 共 2 次（批量），不随 N 增长
+        assert counts["subscription"] == 1, counts
+        assert counts["investor_holding"] == 1, counts
+        assert counts["portfolio_value_snapshot"] == 2, counts

@@ -23,7 +23,6 @@ import { DatePicker } from "@/components/ui/date-picker";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import { Loader2 } from "lucide-react";
 import { toDateOnly } from "@/lib/utils";
-import { getErrorMessage } from "@/lib/api";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { useCreateLedgerFlow, useUpdateLedgerFlow } from "@/hooks/useLedger";
 import { useUIStore } from "@/stores/uiStore";
@@ -90,13 +89,12 @@ export default function LedgerFlowDialog({
       return;
     }
     const onSuccess = () => onOpenChange(false);
-    const onError = (error: unknown) =>
-      addToast({ type: "error", title: isEdit ? "更新失败" : "登记失败", message: getErrorMessage(error, "请检查输入") });
+    // S3（#905 PR3 L2）：错误 toast 只留 hook 一层，Dialog 不再叠 onError 避免重复 toast。
 
     if (isEdit && flow) {
       updateFlow.mutate(
         { id: flow.id, data: { flow_date: toDateOnly(date), direction, amount: amt, note: note || null } },
-        { onSuccess, onError },
+        { onSuccess },
       );
     } else {
       createFlow.mutate(
@@ -107,7 +105,7 @@ export default function LedgerFlowDialog({
           amount: amt,
           note: note || null,
         },
-        { onSuccess, onError },
+        { onSuccess },
       );
     }
   };

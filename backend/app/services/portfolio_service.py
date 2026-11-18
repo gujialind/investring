@@ -92,8 +92,9 @@ def list_portfolios(
     """分页查询组合列表，附聚合字段 total_value / total_profit / cumulative_return / investor_count。
 
     聚合口径（issue #69；#905 PR3 B 按 kind 分流，R8 仪表盘跨口径合并读侧）：
-    - nav（净值型，逐字不变）：total_value/total_profit 与详情 _derive_portfolio_totals 同源
-      （共用 _nav_totals_from_latest）；cumulative_return=首末 unit_price 百分数（与 get_returns 一致）；
+    - nav（净值型，数值逐字不变）：total_value/total_profit 与详情 _derive_portfolio_totals 同源
+      （共用 _nav_totals 纯公式）；列表经 _nav_list_aggregates 批量 4 查询（latest/first/holdings/subs，
+      #905 PR3 S1 消除逐组合读放大）；cumulative_return=首末 unit_price 百分数（与 get_returns 一致）；
       investor_count=最新快照日 investor_holding 中 shares>0 的投资人数。无快照时 total_value/
       total_profit/cumulative_return 为 None，investor_count 为 0。
     - ledger（台账型）：total_value/total_profit 走 compute_ledger_totals_batch（与详情同源，批量
@@ -115,6 +116,9 @@ def list_portfolios(
         ledger_totals = compute_ledger_totals_batch(db, ledger_codes)
     else:
         ledger_totals = {}
+    # nav 侧同样批量（#905 PR3 S1）：固定 4 查询，消除逐组合申赎/快照读放大。
+    nav_codes = [p.code for p in portfolios if p.kind != "ledger"]
+    nav_agg = _nav_list_aggregates(db, nav_codes)
 
     items = []
     for p in portfolios:
@@ -127,37 +131,15 @@ def list_portfolios(
             total_value = t["total_value"]
             total_profit = t["total_profit"]
         else:
-            latest = (
-                db.query(PortfolioValueSnapshot)
-                .filter(PortfolioValueSnapshot.portfolio_code == p.code)
-                .order_by(PortfolioValueSnapshot.snapshot_date.desc())
-                .first()
-            )
-            # total_value/total_profit 与详情 _derive_portfolio_totals 同源（共用 _nav_totals_from_latest，
-            # #905 PR3 B 条件1：不在列表另造算法）；cumulative_return/investor_count 沿用快照口径逐字不变。
-            nav_totals = _nav_totals_from_latest(db, p.code, latest)
-            total_value = nav_totals["total_value"]
-            total_profit = nav_totals["total_profit"]
-            if latest:
-                first = (
-                    db.query(PortfolioValueSnapshot)
-                    .filter(PortfolioValueSnapshot.portfolio_code == p.code)
-                    .order_by(PortfolioValueSnapshot.snapshot_date.asc())
-                    .first()
-                )
-                if first and first.unit_price:
-                    initial_nav = float(first.unit_price)
-                    current_nav = float(latest.unit_price)
-                    cumulative_return = round((current_nav - initial_nav) / initial_nav * 100, 4)
-                investor_count = (
-                    db.query(InvestorHolding)
-                    .filter(
-                        InvestorHolding.portfolio_code == p.code,
-                        InvestorHolding.snapshot_date == latest.snapshot_date,
-                        InvestorHolding.shares > 0,
-                    )
-                    .count()
-                )
+            # nav：批量聚合 + 与详情同源纯公式 _nav_totals；cumulative_return/investor_count 口径逐字不变。
+            a = nav_agg.get(p.code, {})
+            lat = a.get("latest")
+            tv = float(lat.total_value) if lat is not None and lat.total_value is not None else None
+            nt = _nav_totals(tv, a.get("net_invested", 0.0))
+            total_value = nt["total_value"]
+            total_profit = nt["total_profit"]
+            cumulative_return = a.get("cumulative_return")
+            investor_count = a.get("investor_count", 0)
         items.append({
             "code": p.code,
             "name": p.name,
@@ -185,16 +167,34 @@ def list_portfolios(
     }
 
 
-def _nav_totals_from_latest(db: Session, code: str, latest) -> dict:
-    """nav 组合 total_value/total_profit（issue #99 口径），给定最新快照。
+def _nav_totals(total_value: Optional[float], net_invested: float) -> dict:
+    """nav total_value/total_profit 纯公式（issue #99）：total_profit=市值−净投入，round(...,2)。
 
-    详情 _derive_portfolio_totals 与列表 list_portfolios 共用此单点（#905 PR3 B），
-    保证列表 total_profit 与详情同源、不在列表另造算法。无快照或 total_value 为 None
-    → 两者均 None（nav 缺失即缺失，不冒充 0）。total_profit 量化沿用详情 round(...,2)。
+    详情 _derive_portfolio_totals 与列表 list_portfolios 共用此单点（#905 PR3），保证同源、
+    不在列表另造算法。total_value None → 两者 None（nav 缺失即缺失，不冒充 0）。
     """
+    if total_value is None:
+        return {"total_value": None, "total_profit": None}
+    return {"total_value": total_value, "total_profit": round(total_value - net_invested, 2)}
+
+
+def _sum_net_invested(subs) -> float:
+    """净投入 = Σ confirmed 申购 − Σ confirmed 赎回（amount None 跳过）。"""
+    net_invested = 0.0
+    for sub_type, amount in subs:
+        if amount is None:
+            continue
+        if sub_type == "subscribe":
+            net_invested += float(amount)
+        elif sub_type == "redeem":
+            net_invested -= float(amount)
+    return net_invested
+
+
+def _nav_totals_from_latest(db: Session, code: str, latest) -> dict:
+    """nav 组合 total_value/total_profit（issue #99 口径），给定最新快照（详情路径，逐组合查询）。"""
     if not latest or latest.total_value is None:
         return {"total_value": None, "total_profit": None}
-
     subs = (
         db.query(Subscription.sub_type, Subscription.amount)
         .filter(
@@ -204,20 +204,68 @@ def _nav_totals_from_latest(db: Session, code: str, latest) -> dict:
         )
         .all()
     )
-    net_invested = 0.0
-    for sub_type, amount in subs:
-        if amount is None:
-            continue
-        if sub_type == "subscribe":
-            net_invested += float(amount)
-        elif sub_type == "redeem":
-            net_invested -= float(amount)
+    return _nav_totals(float(latest.total_value), _sum_net_invested(subs))
 
-    total_value = float(latest.total_value)
-    return {
-        "total_value": total_value,
-        "total_profit": round(total_value - net_invested, 2),
-    }
+
+def _nav_list_aggregates(db: Session, nav_codes: list) -> dict:
+    """nav 列表批量聚合（#905 PR3 S1）：固定 4 查询（latest/first/holdings/subs）覆盖本页全部
+    nav 组合，非逐组合 N+1——与 ledger 批量同口径，消除列表循环里的逐组合申赎/快照读放大。
+    数值口径与逐组合路径（_nav_totals_from_latest + 快照 cumulative_return/investor_count）逐字一致。
+    返回 {code: {latest, cumulative_return, investor_count, net_invested}}。
+    """
+    if not nav_codes:
+        return {}
+    latest = {}
+    for r in (
+        db.query(PortfolioValueSnapshot)
+        .filter(PortfolioValueSnapshot.portfolio_code.in_(nav_codes))
+        .order_by(PortfolioValueSnapshot.snapshot_date.desc())
+        .all()
+    ):
+        latest.setdefault(r.portfolio_code, r)
+    first = {}
+    for r in (
+        db.query(PortfolioValueSnapshot)
+        .filter(PortfolioValueSnapshot.portfolio_code.in_(nav_codes))
+        .order_by(PortfolioValueSnapshot.snapshot_date.asc())
+        .all()
+    ):
+        first.setdefault(r.portfolio_code, r)
+    counts: dict = {}
+    for code, sd in (
+        db.query(InvestorHolding.portfolio_code, InvestorHolding.snapshot_date)
+        .filter(InvestorHolding.portfolio_code.in_(nav_codes), InvestorHolding.shares > 0)
+        .all()
+    ):
+        if code in latest and latest[code].snapshot_date == sd:
+            counts[code] = counts.get(code, 0) + 1
+    subs_by_code: dict = {}
+    for code, st, amt, cd in (
+        db.query(
+            Subscription.portfolio_code, Subscription.sub_type,
+            Subscription.amount, Subscription.confirm_date,
+        )
+        .filter(Subscription.portfolio_code.in_(nav_codes), Subscription.status == "confirmed")
+        .all()
+    ):
+        if code in latest and cd is not None and cd <= latest[code].snapshot_date:
+            subs_by_code.setdefault(code, []).append((st, amt))
+    agg = {}
+    for code in nav_codes:
+        lat = latest.get(code)
+        fir = first.get(code)
+        cumulative = None
+        if lat is not None and fir is not None and fir.unit_price:
+            cumulative = round(
+                (float(lat.unit_price) - float(fir.unit_price)) / float(fir.unit_price) * 100, 4
+            )
+        agg[code] = {
+            "latest": lat,
+            "cumulative_return": cumulative,
+            "investor_count": counts.get(code, 0),
+            "net_invested": _sum_net_invested(subs_by_code.get(code, [])),
+        }
+    return agg
 
 
 def _derive_portfolio_totals(db: Session, code: str) -> dict:

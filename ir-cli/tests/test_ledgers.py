@@ -87,6 +87,16 @@ class TestLedgerEntryCommands:
         assert _doc(result)["error"]["code"] == "VALIDATION_ERROR"
         assert client.calls == []
 
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_entry_add_non_finite_market_value_is_validation_error(self, bad):
+        # S4（#905 PR3 L2）：nan/inf 本地拦截为输入类错误，不发请求、不逃 INTERNAL_ERROR。
+        client = RecordingClient(ENTRY)
+        result = _invoke(["ledger", "entry-add", "C", "--platform-code", "PF",
+                          "--value-date", "2026-01-05", "--market-value", bad], client)
+        assert result.exit_code == 1
+        assert _doc(result)["error"]["code"] == "VALIDATION_ERROR"
+        assert client.calls == []
+
     def test_entry_list_hits_rest(self):
         client = RecordingClient([ENTRY])
         result = _invoke(["ledger", "entry-list", "C", "--platform-code", "PF"], client)

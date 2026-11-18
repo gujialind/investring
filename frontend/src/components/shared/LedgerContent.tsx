@@ -72,7 +72,7 @@ export default function LedgerContent({ portfolio, variant = "desktop" }: Ledger
   const totals = useLedgerTotals(code);
   const entries = useLedgerEntries(code);
   const flows = useLedgerFlows(code);
-  const { data: performance } = usePortfolioPerformance(code, !isDraft);
+  const performanceQuery = usePortfolioPerformance(code, !isDraft);
   const deleteEntry = useDeleteLedgerEntry(code);
   const deleteFlow = useDeleteLedgerFlow(code);
 
@@ -255,8 +255,17 @@ export default function LedgerContent({ portfolio, variant = "desktop" }: Ledger
         </CardContent>
       </Card>
 
-      {/* 绩效口径A（draft 不请求/不渲染） */}
-      {!isDraft && <LedgerPerformance data={performance} variant={variant} />}
+      {/* 绩效口径A（draft 不请求/不渲染）。B1（#905 PR3 L2）：请求失败走 QueryErrorState
+          （失败≠空态），不把失败渲染成七个 "--" 空态。 */}
+      {!isDraft &&
+        (performanceQuery.isError ? (
+          <QueryErrorState
+            error={performanceQuery.error}
+            onRetry={() => performanceQuery.refetch()}
+          />
+        ) : (
+          <LedgerPerformance data={performanceQuery.data} variant={variant} />
+        ))}
 
       {/* 登记/编辑 Dialog */}
       <LedgerEntryDialog

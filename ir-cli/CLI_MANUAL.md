@@ -167,7 +167,7 @@ ir schema trade              # 仅输出指定命令组
 | `INVALID_CONFIRM_DAYS` | confirm_days 必须 >=0；场内（market=CN_EXCHANGE）必须为 0；显式传 null 拒绝；返回 422 |
 | `DIMENSION_VALUE_IN_USE` | 维度值关联仍被产品引用，不可移除（`details.products` 列引用产品） |
 | `DIMENSION_RULE_CONFLICT` | 维度规则收紧与存量产品冲突（`details.products` 列冲突产品） |
-| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1；除 `auth key-revoke` 允许一次只读 `GET /api/auth/keys` 用于展示影响面外，不发任何后端请求）：`investor delete`、`portfolio close`、`portfolio delete`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）、`auth key-revoke`（#850）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
+| `CONFIRM_REQUIRED` | 破坏性命令未带 `--yes` 时的 CLI 侧拒绝（退出码 1；除 `auth key-revoke` 允许一次只读 `GET /api/auth/keys` 用于展示影响面外，不发任何后端请求）：`investor delete`、`portfolio close`、`portfolio delete`、`share-event delete`、`product delete`、`platform delete`、`snapshot delete`、`snapshot delete-bulk`（仅后者另有 `--dry-run` 预览，#629）、`auth key-revoke`（#850）、`ledger entry-delete`、`ledger flow-delete`（#905 PR3）；直连 REST 时由 `DELETE /api/snapshots/{code}/bulk/{date}` 的 `confirm=true` 产出 422 |
 
 ### 3.4 数据类型说明
 
@@ -1774,7 +1774,7 @@ ir config show
 # 全量输出
 ir schema
 
-# 极简命令索引（<1KB）
+# 极简命令索引（约1.4KB）
 ir schema --index
 
 # 仅输出指定命令组

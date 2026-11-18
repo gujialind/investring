@@ -142,7 +142,7 @@ def main(
     pass
 
 
-# 注册 20 个命令组
+# 注册 21 个命令组（#905 PR3 增 ledger）
 from ir_cli.commands import (
     asset_classifications,
     auth,
