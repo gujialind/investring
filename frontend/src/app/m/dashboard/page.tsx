@@ -82,10 +82,16 @@ export default function MobileDashboardPage() {
                         <p className="text-xs text-muted-foreground">{portfolio.code}</p>
                       </div>
                       <div className="text-right">
-                        <p className="font-medium text-sm">{formatCurrency(portfolio.total_value || 0)}</p>
-                        <p className={`text-xs ${getReturnColorClass(portfolio.cumulative_return || 0)}`}>
-                          {formatReturnRate(portfolio.cumulative_return || 0)}
-                        </p>
+                        <p className="font-medium text-sm">{formatCurrency(portfolio.total_value ?? 0)}</p>
+                        {portfolio.kind === "ledger" ? (
+                          <p className={`text-xs ${getReturnColorClass(portfolio.total_profit ?? 0)}`}>
+                            累计收益 {formatCurrency(portfolio.total_profit ?? 0)}
+                          </p>
+                        ) : (
+                          <p className={`text-xs ${getReturnColorClass(portfolio.cumulative_return || 0)}`}>
+                            {formatReturnRate(portfolio.cumulative_return || 0)}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </CardContent>

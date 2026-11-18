@@ -128,4 +128,23 @@ test.describe('台账型组合视图（#905 PR3）', () => {
     await expect(page.getByTestId('ledger-flow-add')).toHaveCount(0);
     await expect(page.getByTestId('ledger-activate')).toHaveCount(0);
   });
+
+  test('仪表盘 R8 合并：台账计入总资产/总收益 chip，四卡栅格（双端目检取证）', async ({ page }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('E905R', testInfo, 'L');
+    await createLedgerViaApi(page, headers, code, true);
+    const today = toISODate(new Date());
+    await page.request.post(`/api/portfolios/${code}/ledger/entries`, {
+      headers, data: { platform_code: 'HBZQ', value_date: today, market_value: 100 },
+    });
+    await page.request.post(`/api/portfolios/${code}/ledger/flows`, {
+      headers, data: { platform_code: 'HBZQ', flow_date: today, direction: 'inflow', amount: 100 },
+    });
+    await page.goto('/dashboard');
+    await expect(page.getByTestId('dashboard-stat-total_value')).toBeVisible();
+    // R8：总收益 chip 存在（含台账型）；平均收益率标「不含台账型」
+    await expect(page.getByTestId('dashboard-stat-total_profit')).toBeVisible();
+    await expect(page.getByText('不含台账型').first()).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('dashboard-r8.png'), fullPage: true });
+  });
 });
