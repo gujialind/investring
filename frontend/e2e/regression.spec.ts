@@ -343,8 +343,12 @@ test.describe('日志管理 Tab 与批量同步迁移（#715）', () => {
     await expect(card.getByTestId('log-cleanup-run')).toBeVisible();
   });
 
-  test('产品页「批量净值同步」按钮可见（nav_sync 迁移后入口）', async ({ page }) => {
+  test('产品页「批量净值同步」按钮可见（nav_sync 迁移后入口）', async ({ page }, testInfo) => {
     await page.goto('/products');
+    if (testInfo.project.name === 'mobile') {
+      // #904 P1：移动次动作收 ⋯ 抽屉，先开抽屉再断入口（桌面仍页头直给）
+      await page.getByTestId('products-more-trigger').click();
+    }
     await expect(page.getByTestId('batch-nav-sync')).toBeVisible({ timeout: 10_000 });
   });
 });
@@ -399,6 +403,10 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
     // 先走一遍真实入口：钉住组件里的路径字面量与 navItems 的 entryHost 仍对齐
     // （#878 平台管理入口从设置页迁到产品页头部）
     await page.goto(`${basePath}/products`);
+    if (isMobile) {
+      // #904 P1：移动语境入口收 ⋯ 抽屉，先开抽屉再走入口（桌面页头直给）
+      await page.getByTestId('products-more-trigger').click();
+    }
     await page.getByRole('link', { name: '平台管理' }).click();
     await page.waitForURL(`**${basePath}/platforms`);
 

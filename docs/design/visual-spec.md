@@ -282,6 +282,7 @@
 - 双端页面优先 `components/shared/` + `variant`，只有布局本质差异才拆 `components/mobile/` / `components/desktop/`。
 - 弹窗一律走 `Dialog` / `AlertDialog` 基件；提示一律走 `Alert` / toast，不自绘浮层。
 - **待建基件登记**（规格已定、随首个使用页面落地；未建前禁止手写同功能件）：`checkbox`（#146 首个使用，shadcn 基件，`rounded-sm`、选中态 `bg-primary`）、`date-range-picker`（#125，形态见 §10）、`pagination`（#125/#126，形态见 §11）。
+- **`sheet` 底部抽屉基件已建（#904 P1）**：`components/ui/sheet.tsx`（Radix Dialog 底部形态：handle + 标题行 + 内滚 body + sticky footer）；行高 44px 由消费方保证（触控目标）；首消费 = ProductsContent 移动 ⋯ 抽屉（平台管理/资产分类管理/批量净值同步）；移动筛选面板迁 sheet 留 P1b。无入场动效（仓库未装 tailwindcss-animate，§14 动效词汇）。
 
 ## 14. 交互反馈模式
 

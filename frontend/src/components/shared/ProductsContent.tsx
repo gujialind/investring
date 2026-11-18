@@ -31,7 +31,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import Link from "next/link";
-import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter, Building2 } from "lucide-react";
+import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter, Building2, X } from "lucide-react";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetBody,
+} from "@/components/ui/sheet";
 import { Product } from "@/types/product";
 import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
@@ -462,44 +471,115 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
         title="产品管理"
         meta="管理基金产品和数据源"
         actions={
-          <>
-            <Button asChild variant="ghost" className="text-muted-foreground">
-              <Link href={`${basePath}/platforms`}>
-                <Building2 className="mr-2 h-4 w-4" />
-                平台管理
-              </Link>
-            </Button>
-            <Button asChild variant="ghost" className="text-muted-foreground">
-              <Link href={`${basePath}/asset-classifications`}>
-                <Tags className="mr-2 h-4 w-4" />
-                资产分类管理
-              </Link>
-            </Button>
-            <Button
-              variant="outline"
-              data-testid="batch-nav-sync"
-              onClick={() => setNavSyncConfirmOpen(true)}
-              disabled={runTask.isPending || navSyncRunning}
-            >
-              {navSyncRunning ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              批量净值同步
-            </Button>
-            <ProductFormDialog
-              open={isDialogOpen}
-              onOpenChange={setIsDialogOpen}
-              editingProduct={editingProduct}
-              trigger={
-                <Button onClick={() => setEditingProduct(null)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  添加产品
-                </Button>
-              }
-            />
-          </>
+          variant === "mobile" ? (
+            <>
+              {/* #904 P1：移动次动作收 ⋯ 底部抽屉（44px 行），页头只留 ⋯ + 主动作 */}
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    data-testid="products-more-trigger"
+                    aria-label="页面更多操作"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent>
+                  <SheetHeader>
+                    <SheetTitle>更多操作</SheetTitle>
+                    <SheetClose asChild>
+                      <Button variant="ghost" size="icon" aria-label="关闭">
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </SheetClose>
+                  </SheetHeader>
+                  <SheetBody>
+                    <Link
+                      href={`${basePath}/platforms`}
+                      className="flex h-11 items-center gap-2 text-sm"
+                    >
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      平台管理
+                    </Link>
+                    <Link
+                      href={`${basePath}/asset-classifications`}
+                      className="flex h-11 items-center gap-2 text-sm"
+                    >
+                      <Tags className="h-4 w-4 text-muted-foreground" />
+                      资产分类管理
+                    </Link>
+                    <SheetClose asChild>
+                      <button
+                        type="button"
+                        data-testid="batch-nav-sync"
+                        onClick={() => setNavSyncConfirmOpen(true)}
+                        disabled={runTask.isPending || navSyncRunning}
+                        className="flex h-11 w-full items-center gap-2 text-sm disabled:opacity-50"
+                      >
+                        {navSyncRunning ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        批量净值同步
+                      </button>
+                    </SheetClose>
+                  </SheetBody>
+                </SheetContent>
+              </Sheet>
+              <ProductFormDialog
+                open={isDialogOpen}
+                onOpenChange={setIsDialogOpen}
+                editingProduct={editingProduct}
+                trigger={
+                  <Button size="sm" onClick={() => setEditingProduct(null)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加产品
+                  </Button>
+                }
+              />
+            </>
+          ) : (
+            <>
+              <Button asChild variant="ghost" className="text-muted-foreground">
+                <Link href={`${basePath}/platforms`}>
+                  <Building2 className="mr-2 h-4 w-4" />
+                  平台管理
+                </Link>
+              </Button>
+              <Button asChild variant="ghost" className="text-muted-foreground">
+                <Link href={`${basePath}/asset-classifications`}>
+                  <Tags className="mr-2 h-4 w-4" />
+                  资产分类管理
+                </Link>
+              </Button>
+              <Button
+                variant="outline"
+                data-testid="batch-nav-sync"
+                onClick={() => setNavSyncConfirmOpen(true)}
+                disabled={runTask.isPending || navSyncRunning}
+              >
+                {navSyncRunning ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                批量净值同步
+              </Button>
+              <ProductFormDialog
+                open={isDialogOpen}
+                onOpenChange={setIsDialogOpen}
+                editingProduct={editingProduct}
+                trigger={
+                  <Button onClick={() => setEditingProduct(null)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加产品
+                  </Button>
+                }
+              />
+            </>
+          )
         }
       />
 
