@@ -123,6 +123,23 @@ export async function clickPortfolioManageLink(page: Page, testInfo: TestInfo, n
 }
 
 /**
+ * 组合详情页「份额变动事件」入口（#904 P1c-3，状态感知）：draft 管理卡含该链接；
+ * active 管理卡不含（#786 移页头操作区，c-3 移动收 ⋯ 抽屉）。E2E_PORT 的 draft 契约
+ * 会被并行 trade-buy-amount-linkage 激活（#636），故按 API 现状分流，不假设状态。
+ */
+export async function clickEventsEntryFromDetail(page: Page, testInfo: TestInfo, code: string): Promise<void> {
+  const headers = await authHeaders(page);
+  const resp = await page.request.get(`/api/portfolios/${code}`, { headers });
+  const status = ((await resp.json()) as { status: string }).status;
+  if (testInfo.project.name === 'mobile' && status !== 'draft') {
+    await openMobilePageActionsIfMobile(page, testInfo);
+    await page.getByRole('link', { name: '份额变动事件' }).click();
+  } else {
+    await clickPortfolioManageLink(page, testInfo, '份额变动事件');
+  }
+}
+
+/**
  * 打开设置页某个分区（#878 双端形态分流）：桌面是三 Tab（点 tab），移动是分组列表 +
  * 行级钻取子页（点行 Link）。`goto('/settings')` 在 mobile project 经 proxy 落到
  * /m/settings，故按落地 pathname 是否带 /m/ 前缀分流，不依赖 testInfo（调用方未必持有）。
