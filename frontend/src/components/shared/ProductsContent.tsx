@@ -279,7 +279,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
 
   const [pendingDelete, setPendingDelete] = useState<{ code: string; market?: string } | null>(null);
 
-  // 筛选栏控件（规范 §9：表格卡片内顶部，控件 h-9、无 Label、placeholder 表意）；
+  // 筛选栏控件（规范 §9：表格卡片内顶部、无 Label、placeholder 表意；桌面 h-9、移动 sheet h-10）；
   // 下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值），
   // 数字型在 onChange 里 Number(v)（0 是合法筛选值，不能用真值判断）；每次变更页码归 1
   const selectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[140px]";
@@ -480,6 +480,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="h-11 w-11"
                     data-testid="products-more-trigger"
                     aria-label="页面更多操作"
                   >
@@ -490,7 +491,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                   <SheetHeader>
                     <SheetTitle>更多操作</SheetTitle>
                     <SheetClose asChild>
-                      <Button variant="ghost" size="icon" aria-label="关闭">
+                      <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
                         <X className="h-4 w-4" />
                       </Button>
                     </SheetClose>
@@ -610,7 +611,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                 <SheetHeader>
                   <SheetTitle>筛选</SheetTitle>
                   <SheetClose asChild>
-                    <Button variant="ghost" size="icon" aria-label="关闭">
+                    <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
                       <X className="h-4 w-4" />
                     </Button>
                   </SheetClose>
@@ -621,14 +622,14 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                 <SheetFooter>
                   <div className="flex items-center justify-between">
                     {hasNonDefaultFilter ? (
-                      <Button variant="ghost" size="sm" onClick={resetFilters}>
+                      <Button variant="ghost" size="sm" className="h-11" onClick={resetFilters}>
                         重置
                       </Button>
                     ) : (
                       <span />
                     )}
                     <SheetClose asChild>
-                      <Button size="sm">完成</Button>
+                      <Button size="sm" className="h-11">完成</Button>
                     </SheetClose>
                   </div>
                 </SheetFooter>

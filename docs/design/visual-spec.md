@@ -232,7 +232,7 @@
 > 流水类列表页（申赎/调仓/快照等）的标准配置，全站首个落地为 #125/#126。本节只定跨页一致决策，控件本身读 `components/ui/`。
 
 - **容器**：置于表格上方、与表格同卡片内容区顶部，不单独卡片包裹；横向 `flex flex-wrap`、控件间距 `gap-2`，与下方表格的间距走 §7 区块档位。
-- **控件尺寸**：筛选栏控件桌面统一紧凑档 `h-9`（Select/Input/日期触发按钮同高）；表单对话框内仍为 `h-10`，两档不混用。**移动 sheet 内控件 `h-10`（#904 P1b 触控专项落地）**：44px 触控目标；桌面 `h-9` 不变。
+- **控件尺寸**：筛选栏控件桌面统一紧凑档 `h-9`（Select/Input/日期触发按钮同高）；表单对话框内仍为 `h-10`，两档不混用。**移动 sheet 内控件 `h-10`（#904 P1b 触控专项落地）**：44px 触控目标；桌面 `h-9` 不变。本款覆盖 Select/Input/日期触发按钮；sheet footer 动作按钮与图标按钮按 44px（`h-11`/`h-11 w-11`，#917 L2 工效补充）。
 - **标签**：筛选栏省略 `Label`，以 placeholder 表意；placeholder 统一「全部 + 维度名」（全部状态/全部平台/全部产品）。默认有值的筛选（如"最近 1 年"）显示实际值而非 placeholder。
 - **控件排序**：全站统一——时间区间 → 状态 → 实体维度（投资人/平台/产品）→ 类型；多页并存时顺序一致。
 - **生效方式**：变更即时查询，不设「查询」按钮；文本输入类防抖 300ms，下拉/日期选择即时生效。
@@ -282,7 +282,7 @@
 - 双端页面优先 `components/shared/` + `variant`，只有布局本质差异才拆 `components/mobile/` / `components/desktop/`。
 - 弹窗一律走 `Dialog` / `AlertDialog` 基件；提示一律走 `Alert` / toast，不自绘浮层。
 - **待建基件登记**（规格已定、随首个使用页面落地；未建前禁止手写同功能件）：`checkbox`（#146 首个使用，shadcn 基件，`rounded-sm`、选中态 `bg-primary`）、`date-range-picker`（#125，形态见 §10）、`pagination`（#125/#126，形态见 §11）。
-- **`sheet` 底部抽屉基件已建（#904 P1）**：`components/ui/sheet.tsx`（Radix Dialog 底部形态：handle + 标题行 + 内滚 body + sticky footer）；行高 44px 由消费方保证（触控目标）；首消费 = ProductsContent 移动 ⋯ 抽屉（平台管理/资产分类管理/批量净值同步）；移动筛选面板迁 sheet 留 P1b。无入场动效（仓库未装 tailwindcss-animate，§14 动效词汇）。
+- **`sheet` 底部抽屉基件已建（#904 P1）**：`components/ui/sheet.tsx`（Radix Dialog 底部形态：handle + 标题行 + 内滚 body + sticky footer）；行高 44px 由消费方保证（触控目标）；首消费 = ProductsContent 移动 ⋯ 抽屉（平台管理/资产分类管理/批量净值同步）与移动筛选 sheet（P1b 同批落地）。无入场动效（仓库未装 tailwindcss-animate，§14 动效词汇）。**已知限制（#917 L2 登记）**：sheet 尚未带 dialog.tsx 的 #191 `DialogPortalContainerContext` 机制——现消费方（链接/按钮/Select，Select 浮层自带 disableOutsidePointerEvents）不命中；**迁带 date-range-picker（Popover）的筛选面板进 sheet 前必须先补同款 context** 并加「sheet 内日期 picker 可点选且不误关 sheet」用例（datepicker-in-dialog 手法），否则 #191 复现。
 
 ## 14. 交互反馈模式
 
