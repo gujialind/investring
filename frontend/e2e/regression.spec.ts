@@ -585,15 +585,20 @@ test.describe('读侧失败伪装成空态（#683 A 平台页 / C 交易列表�
 });
 
 test.describe('组合统计卡累计收益率 chip（#904 P0b）', () => {
-  test('active 渲染 soft 底 foreground 字；draft 不渲染', async ({ page }) => {
+  test('active 渲染 soft 底 foreground 字；draft 不渲染', async ({ page }, testInfo) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     const chip = page.getByTestId('portfolio-stat-return-chip');
     await expect(chip).toBeVisible();
     await expect(chip).toContainText('+3.00%');
     // soft 轨 foreground（L2 blocker 修复）：主色 text-gain 配 soft 底 light 仅 4.38:1 低于 AA
     await expect(chip).toHaveClass(/text-gain-foreground/);
-    // draft 无快照：returns 不请求、chip 不渲染（null 不折 0.00%）
-    await page.goto(portfolioPath(E2E_PORT));
+    // draft 一律自建、不复用 E2E_PORT（#636：会被 trade-buy-amount-linkage 激活，
+    // 拿它断 draft 随执行顺序漂移，见本文件「删除入口按形态出现」警告）。
+    // 新建 draft 无快照 → returns 不请求（enabled=!isDraft）、cumulative_return null → chip 不渲染
+    const headers = await openAppAndAuth(page);
+    const draftCode = isolatedPortfolioCode('E904C', testInfo, 'D');
+    await createPortfolioViaApi(page, headers, draftCode);
+    await page.goto(`/portfolio/${draftCode}`);
     await expect(page.getByTestId('portfolio-stat-return-chip')).toHaveCount(0);
   });
 });
