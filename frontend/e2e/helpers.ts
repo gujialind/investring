@@ -110,6 +110,19 @@ export async function openMobilePageActionsIfMobile(page: Page, testInfo: TestIn
 }
 
 /**
+ * 点击组合详情页尾「管理」卡链接（#904 P1c-3）：移动 fixed 吸底 bar 占视口底部，
+ * 管理卡在页尾、pb-24 预留空间须滚到页底才露出链接；Playwright 最小滚动会把链接
+ * 落在 bar 下被拦截，故移动先滚页底再点。桌面无 bar，no-op 直点。
+ */
+export async function clickPortfolioManageLink(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+  if (testInfo.project.name === 'mobile') {
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(300);
+  }
+  await page.getByRole('link', { name }).click();
+}
+
+/**
  * 打开设置页某个分区（#878 双端形态分流）：桌面是三 Tab（点 tab），移动是分组列表 +
  * 行级钻取子页（点行 Link）。`goto('/settings')` 在 mobile project 经 proxy 落到
  * /m/settings，故按落地 pathname 是否带 /m/ 前缀分流，不依赖 testInfo（调用方未必持有）。

@@ -28,6 +28,7 @@ import {
   gotoPortfolioDetail,
   gotoPortfolioSubpage,
   isolatedPortfolioCode,
+  clickPortfolioManageLink,
   nearestTradingDay,
   openAppAndAuth,
   openFilterPanelIfMobile,
@@ -206,10 +207,10 @@ async function statValueInks(page: Page, keys: string[]) {
 test.describe('现金流水页（#725，双端）', () => {
   // #16：管理卡「现金流水」入口进入本页（按名定位不依赖顺序；#786 后 active+admin
   // 卡为 4 项、本项居第 4；只读点击 E2E_ACTIVE 详情页，无写操作）
-  test('组合详情「现金流水」入口进入本页', async ({ page }) => {
+  test('组合详情「现金流水」入口进入本页', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    await page.getByRole('link', { name: '现金流水' }).click();
+    await clickPortfolioManageLink(page, testInfo, '现金流水');
     await expect(page.getByRole('heading', { level: 1, name: '现金流水' })).toBeVisible({
       timeout: 15_000,
     });
