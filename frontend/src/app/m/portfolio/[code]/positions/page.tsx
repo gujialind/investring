@@ -1,11 +1,13 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatCurrency, getReturnColorClass } from "@/lib/utils";
-import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { usePositionList } from "@/hooks/usePosition";
 import PositionCard from "@/components/shared/PositionCard";
@@ -37,18 +39,15 @@ export default function MobilePositionsPage() {
   return (
     <div className="space-y-4 p-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Link href={`/m/portfolio/${code}`} aria-label="返回组合详情">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold">持仓管理</h1>
-            <p className="text-xs text-muted-foreground">{code}</p>
-          </div>
-        </div>
+      <PageHeader
+        variant="mobile"
+        crumbs={[
+          { href: "/m/portfolio", label: "组合", ariaLabel: "返回组合列表" },
+          { href: `/m/portfolio/${code}`, label: code, ariaLabel: "返回组合详情" },
+        ]}
+        title="持仓管理"
+        meta={code}
+        actions={
         <Button
           variant="outline"
           size="sm"
@@ -57,7 +56,8 @@ export default function MobilePositionsPage() {
         >
           <RefreshCw className="h-4 w-4" />
         </Button>
-      </div>
+        }
+      />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-2">

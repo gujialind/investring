@@ -280,9 +280,9 @@ export function getReturnColorClass(value: number | string | undefined | null): 
  * 根据收益率/涨跌值获取对应背景色类名
  * 中国市场惯例：红涨绿跌（issue #127 语义 token soft 浅底）
  *
- * 当前无调用点——保留是刻意的：visual-spec §1.1 与 §19 自检项点名「涨跌色只允许由
+ * 由组合统计卡 chip 消费（#904 P0b）：visual-spec §1.1 与 §19 自检项点名「涨跌色只允许由
  * getReturnColorClass / getReturnBgClass（或显式的涨跌语义）输出」——它是涨跌背景色的
- * 唯一合规出口。预期调用方 = 需要浅底涨跌色的展示点（现网暂无）。
+ * 唯一合规出口；soft 底上的文字配对见 getReturnSoftTextClass。
  */
 export function getReturnBgClass(value: number | string | undefined | null): string {
   if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) {
@@ -292,6 +292,22 @@ export function getReturnBgClass(value: number | string | undefined | null): str
   if (n > 0) return "bg-gain-soft";   // 涨：浅朱底
   if (n < 0) return "bg-loss-soft";   // 跌：浅松底
   return "bg-muted";
+}
+
+/**
+ * 涨跌 soft 底上的文字色（与 getReturnBgClass 配对，#904 P0b L2 blocker 修复）：
+ * soft 底统一走 foreground 轨（visual-spec §1.2/§17 实测 ≥6.5:1）；主色 text-gain/text-loss
+ * 只用于常底——light 下 text-gain 配 gain-soft 仅 4.38:1，低于 12px 文字 AA 4.5:1。
+ * 零/未知值沿用 getReturnColorClass 的中性语义。
+ */
+export function getReturnSoftTextClass(value: number | string | undefined | null): string {
+  if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) {
+    return "text-muted-foreground";
+  }
+  const n = typeof value === "string" ? parseFloat(value) : value;
+  if (n > 0) return "text-gain-foreground";
+  if (n < 0) return "text-loss-foreground";
+  return "text-muted-foreground";
 }
 
 // ==================== 状态徽标 ====================

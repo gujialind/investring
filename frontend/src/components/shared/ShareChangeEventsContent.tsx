@@ -1,5 +1,7 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,9 +35,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
-import { Plus, ArrowLeft, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Info } from "lucide-react";
+import { Plus, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Info } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
-import Link from "next/link";
 import { ShareChangeEventCreate, ApiException } from "@/lib/api";
 import { platformApi } from "@/lib/api";
 import { EventType } from "@/types/common";
@@ -451,20 +452,15 @@ export default function ShareChangeEventsContent({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link href={`${basePath}/${code}`} aria-label="返回组合详情">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold">
-              份额变动事件
-            </h1>
-            <p className="text-muted-foreground">组合代码: {code}</p>
-          </div>
-        </div>
+      <PageHeader
+        variant={variant}
+        crumbs={[
+          { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" },
+        ]}
+        title="份额变动事件"
+        meta={`组合代码: ${code}`}
+        actions={
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
           <DialogTrigger asChild>
             <Button>
@@ -720,7 +716,8 @@ export default function ShareChangeEventsContent({
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        }
+      />
 
       <Card>
         <CardHeader>

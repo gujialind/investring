@@ -1,5 +1,9 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+import { Badge } from "@/components/ui/badge";
+import { getStatusBadgeVariant } from "@/lib/utils";
+
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,6 +20,7 @@ import {
   useActivateLedgerPortfolio,
   useDeletePortfolio,
   usePortfolioPerformance,
+  usePortfolioReturns,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
@@ -75,6 +80,8 @@ function MobilePortfolioDetailInner() {
   // 绩效指标：draft 组合无快照，不请求
   const isDraftStatus = portfolio?.status === "draft";
   const { data: performance } = usePortfolioPerformance(code, !isDraftStatus);
+  // 累计收益率 chip 数据源（#904 P0b）：returns 端点后端单点计算
+  const { data: returns } = usePortfolioReturns(code, !isDraftStatus);
 
   // 分组维度配置弹窗（issue #144，与桌面端共用 Dialog）
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
@@ -119,25 +126,26 @@ function MobilePortfolioDetailInner() {
   return (
     <div className="space-y-4 p-4">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <Link href="/m/portfolio" aria-label="返回组合列表">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold">{portfolio.name}</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        variant="mobile"
+        crumbs={[{ href: "/m/portfolio", label: "组合", ariaLabel: "返回组合列表" }]}
+        title={portfolio.name}
+        badge={
+          portfolio.status !== "active" ? (
+            <Badge variant={getStatusBadgeVariant(portfolio.status)}>
+              {isDraft ? "草稿" : "已关闭"}
+            </Badge>
+          ) : undefined
+        }
+        meta={
+          <>
             {portfolio.code}
             {portfolio.started_at && (
               <span> · 成立于 {portfolio.started_at.split("T")[0]}</span>
             )}
-            <span>
-              {" "}· {portfolio.status === "active" ? "活跃" : isDraft ? "草稿" : "已关闭"}
-            </span>
-          </p>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Status Alert（台账型 draft 引导在 LedgerContent，不显示净值型首购文案） */}
       {isDraft && !isLedger && (
@@ -191,6 +199,7 @@ function MobilePortfolioDetailInner() {
                 totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
                 unitPrice={snapshot?.unit_price ?? null}
                 totalProfit={portfolio.total_profit ?? null}
+                cumulativeReturn={returns?.cumulative_return ?? null}
                 holdingDays={performance?.holding_days ?? null}
                 variant="mobile"
               />

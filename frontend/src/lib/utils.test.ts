@@ -14,6 +14,7 @@ import {
   largestRemainderPercents,
   getReturnColorClass,
   getReturnBgClass,
+  getReturnSoftTextClass,
   getStatusBadgeVariant,
   getSignedReturn,
   getTradeStatusLabel,
@@ -216,6 +217,13 @@ describe("涨跌色与状态徽标", () => {
     expect(getReturnBgClass(-1)).toBe("bg-loss-soft");
     expect(getReturnBgClass(0)).toBe("bg-muted");
     expect(getReturnBgClass(null)).toBe("bg-muted");
+    // soft 底文字走 foreground 轨（#904 P0b L2 blocker：主色配 soft 底低于 AA）
+    expect(getReturnSoftTextClass(1)).toBe("text-gain-foreground");
+    expect(getReturnSoftTextClass(-1)).toBe("text-loss-foreground");
+    expect(getReturnSoftTextClass(0)).toBe("text-muted-foreground");
+    expect(getReturnSoftTextClass(null)).toBe("text-muted-foreground");
+    expect(getReturnSoftTextClass("2.5")).toBe("text-gain-foreground");
+    expect(getReturnSoftTextClass("abc")).toBe("text-muted-foreground");
     expect(getReturnBgClass("abc")).toBe("bg-muted");
   });
 

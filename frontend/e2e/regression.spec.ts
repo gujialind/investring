@@ -584,9 +584,28 @@ test.describe('读侧失败伪装成空态（#683 A 平台页 / C 交易列表�
   });
 });
 
+test.describe('组合统计卡累计收益率 chip（#904 P0b）', () => {
+  test('active 渲染 soft 底 foreground 字；draft 不渲染', async ({ page }, testInfo) => {
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const chip = page.getByTestId('portfolio-stat-return-chip');
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText('+3.00%');
+    // soft 轨 foreground（L2 blocker 修复）：主色 text-gain 配 soft 底 light 仅 4.38:1 低于 AA
+    await expect(chip).toHaveClass(/text-gain-foreground/);
+    // draft 一律自建、不复用 E2E_PORT（#636：会被 trade-buy-amount-linkage 激活，
+    // 拿它断 draft 随执行顺序漂移，见本文件「删除入口按形态出现」警告）。
+    // 新建 draft 无快照 → returns 不请求（enabled=!isDraft）、cumulative_return null → chip 不渲染
+    const headers = await openAppAndAuth(page);
+    const draftCode = isolatedPortfolioCode('E904C', testInfo, 'D');
+    await createPortfolioViaApi(page, headers, draftCode);
+    await page.goto(`/portfolio/${draftCode}`);
+    await expect(page.getByTestId('portfolio-stat-return-chip')).toHaveCount(0);
+  });
+});
+
 /**
  * 统计卡栅格（#774，双端）：首页 DashboardStatsCards 与组合详情 PortfolioStatsCards 同构，
- * 桌面列数按**容器宽**取（`@min-[804px]:grid-cols-4`，阈值推导见组件注释）。
+ * 桌面列数按**容器宽**取（`@min-[848px]:grid-cols-4`，#904 P0b mono 化后阈值；推导见组件注释）。
  *
  * 钉两端而不只钉窄窗：既有用例形态是「窄档不是四列」，四列分支若静默失效（类名写错、
  * Tailwind 未产出该任意容器查询变体）它们照样绿，故宽视口另断「确为四列单行」。

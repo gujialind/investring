@@ -1,5 +1,7 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,9 +50,8 @@ import { validatePlatformCode, parsePositiveNumber } from "@/lib/validation";
 import { Badge } from "@/components/ui/badge";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { Plus, ArrowLeft, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
+import { Plus, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
-import Link from "next/link";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
 import type { SubscriptionListParams } from "@/lib/api";
@@ -424,20 +425,15 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
           <AlertDescription>首次申购将激活组合，初始净值固定为 1.0000</AlertDescription>
         </Alert>
       )}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link href={`${basePath}/${code}`} aria-label="返回组合详情">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold">
-              申购赎回
-            </h1>
-            <p className="text-muted-foreground">组合代码: {code}</p>
-          </div>
-        </div>
+      <PageHeader
+        variant={variant}
+        crumbs={[
+          { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" },
+        ]}
+        title="申购赎回"
+        meta={`组合代码: ${code}`}
+        actions={
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen} modal={false}>
           <DialogTrigger asChild>
             <Button>
@@ -569,7 +565,8 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        }
+      />
 
       <Card>
         <CardHeader>
