@@ -31,7 +31,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import Link from "next/link";
-import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter, Building2 } from "lucide-react";
+import { Plus, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, MoreHorizontal, Tags, Filter, Building2, X } from "lucide-react";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetBody,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { Product } from "@/types/product";
 import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
@@ -269,10 +279,10 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
 
   const [pendingDelete, setPendingDelete] = useState<{ code: string; market?: string } | null>(null);
 
-  // 筛选栏控件（规范 §9：表格卡片内顶部，控件 h-9、无 Label、placeholder 表意）；
+  // 筛选栏控件（规范 §9：表格卡片内顶部、无 Label、placeholder 表意；桌面 h-9、移动 sheet h-10）；
   // 下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值），
   // 数字型在 onChange 里 Number(v)（0 是合法筛选值，不能用真值判断）；每次变更页码归 1
-  const selectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[140px]";
+  const selectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[140px]";
   const filterControls = (
     <>
       <Input
@@ -282,7 +292,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           setPage(1);
         }}
         placeholder="搜索产品代码/名称"
-        className={variant === "mobile" ? "h-9 w-full" : "h-9 w-[200px]"}
+        className={variant === "mobile" ? "h-10 w-full" : "h-9 w-[200px]"}
       />
       <Select
         value={market ?? "all"}
@@ -437,7 +447,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           </SelectContent>
         </Select>
       ))}
-      {hasNonDefaultFilter && (
+      {hasNonDefaultFilter && variant !== "mobile" && (
         <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
           重置
         </Button>
@@ -462,44 +472,116 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
         title="产品管理"
         meta="管理基金产品和数据源"
         actions={
-          <>
-            <Button asChild variant="ghost" className="text-muted-foreground">
-              <Link href={`${basePath}/platforms`}>
-                <Building2 className="mr-2 h-4 w-4" />
-                平台管理
-              </Link>
-            </Button>
-            <Button asChild variant="ghost" className="text-muted-foreground">
-              <Link href={`${basePath}/asset-classifications`}>
-                <Tags className="mr-2 h-4 w-4" />
-                资产分类管理
-              </Link>
-            </Button>
-            <Button
-              variant="outline"
-              data-testid="batch-nav-sync"
-              onClick={() => setNavSyncConfirmOpen(true)}
-              disabled={runTask.isPending || navSyncRunning}
-            >
-              {navSyncRunning ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              批量净值同步
-            </Button>
-            <ProductFormDialog
-              open={isDialogOpen}
-              onOpenChange={setIsDialogOpen}
-              editingProduct={editingProduct}
-              trigger={
-                <Button onClick={() => setEditingProduct(null)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  添加产品
-                </Button>
-              }
-            />
-          </>
+          variant === "mobile" ? (
+            <>
+              {/* #904 P1：移动次动作收 ⋯ 底部抽屉（44px 行），页头只留 ⋯ + 主动作 */}
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-11 w-11"
+                    data-testid="products-more-trigger"
+                    aria-label="页面更多操作"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent>
+                  <SheetHeader>
+                    <SheetTitle>更多操作</SheetTitle>
+                    <SheetClose asChild>
+                      <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </SheetClose>
+                  </SheetHeader>
+                  <SheetBody>
+                    <Link
+                      href={`${basePath}/platforms`}
+                      className="flex h-11 items-center gap-2 text-sm"
+                    >
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      平台管理
+                    </Link>
+                    <Link
+                      href={`${basePath}/asset-classifications`}
+                      className="flex h-11 items-center gap-2 text-sm"
+                    >
+                      <Tags className="h-4 w-4 text-muted-foreground" />
+                      资产分类管理
+                    </Link>
+                    <SheetClose asChild>
+                      <button
+                        type="button"
+                        data-testid="batch-nav-sync"
+                        onClick={() => setNavSyncConfirmOpen(true)}
+                        disabled={runTask.isPending || navSyncRunning}
+                        className="flex h-11 w-full items-center gap-2 text-sm disabled:opacity-50"
+                      >
+                        {navSyncRunning ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        批量净值同步
+                      </button>
+                    </SheetClose>
+                  </SheetBody>
+                </SheetContent>
+              </Sheet>
+              <ProductFormDialog
+                open={isDialogOpen}
+                onOpenChange={setIsDialogOpen}
+                editingProduct={editingProduct}
+                trigger={
+                  <Button size="sm" onClick={() => setEditingProduct(null)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加产品
+                  </Button>
+                }
+              />
+            </>
+          ) : (
+            <>
+              <Button asChild variant="ghost" className="text-muted-foreground">
+                <Link href={`${basePath}/platforms`}>
+                  <Building2 className="mr-2 h-4 w-4" />
+                  平台管理
+                </Link>
+              </Button>
+              <Button asChild variant="ghost" className="text-muted-foreground">
+                <Link href={`${basePath}/asset-classifications`}>
+                  <Tags className="mr-2 h-4 w-4" />
+                  资产分类管理
+                </Link>
+              </Button>
+              <Button
+                variant="outline"
+                data-testid="batch-nav-sync"
+                onClick={() => setNavSyncConfirmOpen(true)}
+                disabled={runTask.isPending || navSyncRunning}
+              >
+                {navSyncRunning ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                批量净值同步
+              </Button>
+              <ProductFormDialog
+                open={isDialogOpen}
+                onOpenChange={setIsDialogOpen}
+                editingProduct={editingProduct}
+                trigger={
+                  <Button onClick={() => setEditingProduct(null)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加产品
+                  </Button>
+                }
+              />
+            </>
+          )
         }
       />
 
@@ -511,20 +593,48 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {/* 筛选栏（规范 §9）；移动端为折叠面板 + 激活计数 Badge */}
+          {/* 筛选栏（规范 §9）；移动端为底部 sheet + 激活计数 Badge（#904 P1b，控件 h-10） */}
           {variant === "mobile" ? (
-            <div className="mb-3 space-y-2">
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setFilterOpen((v) => !v)}>
-                <Filter className="mr-2 h-4 w-4" />
-                筛选
-                {activeFilterCount > 0 && (
-                  <Badge variant="default" className="ml-2">
-                    {activeFilterCount}
-                  </Badge>
-                )}
-              </Button>
-              {filterOpen && <div className="grid grid-cols-1 gap-2">{filterControls}</div>}
-            </div>
+            <Sheet open={filterOpen} onOpenChange={setFilterOpen}>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="sm" className="h-10">
+                  <Filter className="mr-2 h-4 w-4" />
+                  筛选
+                  {activeFilterCount > 0 && (
+                    <Badge variant="default" className="ml-2">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Button>
+              </SheetTrigger>
+              <SheetContent>
+                <SheetHeader>
+                  <SheetTitle>筛选</SheetTitle>
+                  <SheetClose asChild>
+                    <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </SheetClose>
+                </SheetHeader>
+                <SheetBody>
+                  <div className="grid grid-cols-1 gap-3">{filterControls}</div>
+                </SheetBody>
+                <SheetFooter>
+                  <div className="flex items-center justify-between">
+                    {hasNonDefaultFilter ? (
+                      <Button variant="ghost" size="sm" className="h-11" onClick={resetFilters}>
+                        重置
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
+                    <SheetClose asChild>
+                      <Button size="sm" className="h-11">完成</Button>
+                    </SheetClose>
+                  </div>
+                </SheetFooter>
+              </SheetContent>
+            </Sheet>
           ) : (
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
