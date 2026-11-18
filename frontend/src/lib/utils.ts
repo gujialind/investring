@@ -294,6 +294,22 @@ export function getReturnBgClass(value: number | string | undefined | null): str
   return "bg-muted";
 }
 
+/**
+ * 涨跌 soft 底上的文字色（与 getReturnBgClass 配对，#904 P0b L2 blocker 修复）：
+ * soft 底统一走 foreground 轨（visual-spec §1.2/§17 实测 ≥6.5:1）；主色 text-gain/text-loss
+ * 只用于常底——light 下 text-gain 配 gain-soft 仅 4.38:1，低于 12px 文字 AA 4.5:1。
+ * 零/未知值沿用 getReturnColorClass 的中性语义。
+ */
+export function getReturnSoftTextClass(value: number | string | undefined | null): string {
+  if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) {
+    return "text-muted-foreground";
+  }
+  const n = typeof value === "string" ? parseFloat(value) : value;
+  if (n > 0) return "text-gain-foreground";
+  if (n < 0) return "text-loss-foreground";
+  return "text-muted-foreground";
+}
+
 // ==================== 状态徽标 ====================
 
 /** Badge 语义 variant（与 badge.tsx 对齐） */

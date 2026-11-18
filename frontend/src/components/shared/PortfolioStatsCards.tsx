@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { CalendarDays, Coins, TrendingUp, Wallet } from "lucide-react";
-import { formatNav, formatNumber, formatReturnRate, getReturnColorClass, getReturnBgClass, getNumberCellClass, cn } from "@/lib/utils";
+import { formatNav, formatNumber, formatReturnRate, getReturnColorClass, getReturnBgClass, getReturnSoftTextClass, getNumberCellClass, cn } from "@/lib/utils";
 
 interface PortfolioStatsCardsProps {
   /** 总资产（元）：最新快照 total_value，无快照（draft）传 null */
@@ -76,10 +76,11 @@ export default function PortfolioStatsCards({
   const chipOf = (chip: number | null) =>
     chip === null || chip === undefined ? null : (
       <span
+        data-testid="portfolio-stat-return-chip"
         className={cn(
           "inline-flex items-center rounded-full px-2 text-xs font-medium",
           getReturnBgClass(chip),
-          getReturnColorClass(chip),
+          getReturnSoftTextClass(chip),
         )}
       >
         {formatReturnRate(chip)}
