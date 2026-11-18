@@ -43,7 +43,7 @@ import {
   SheetFooter,
 } from "@/components/ui/sheet";
 import { Product } from "@/types/product";
-import { cn } from "@/lib/utils";
+import { cn, getNumberCellClass } from "@/lib/utils";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import BatchDataSourceDialog from "@/components/shared/dialogs/BatchDataSourceDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
@@ -455,6 +455,38 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
     </>
   );
 
+  // #856 行操作「更多」菜单（编辑/删除）：桌面表格行与移动卡片共用单点
+  const rowMenu = (product: Product) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          title="更多操作"
+          aria-label="更多操作"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => handleEdit(product)}>
+          <Pencil className="mr-2 h-4 w-4" />
+          编辑
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-destructive focus:text-destructive"
+          onClick={() => handleDelete(product.code, product.market)}
+          disabled={deleteProduct.isPending}
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          删除
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -668,6 +700,107 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
             {isFetching && !isLoading && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
+            {variant === "mobile" ? (
+              /* #904 P1d：移动卡化（§6②），字段集合与桌面列一致；全选自表头移卡列顶行；
+                 批量多选/禁选/上限钳制逻辑与桌面逐字同源 */
+              <div
+                className={cn("space-y-3", isFetching && !isLoading && "opacity-50")}
+                data-testid="products-card-list"
+              >
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={allPageSelected ? true : selectedProducts.length > 0 ? "indeterminate" : false}
+                    onCheckedChange={toggleAllPage}
+                    disabled={listBusy}
+                    aria-label="全选当前页可切换产品"
+                    data-testid="batch-select-all"
+                  />
+                  本页全选
+                </div>
+                {products.map((product) => {
+                  const isNavType = !VIRTUAL_PRODUCT_TYPES.includes(product.product_type);
+                  const detailHref = `${basePath}/products/${encodeURIComponent(product.code)}?market=${encodeURIComponent(product.market ?? "")}`;
+                  const nameCell = (
+                    <ProductCell
+                      code={product.code}
+                      name={product.name}
+                      market={product.market}
+                      displayCode={product.display_code}
+                      inactive={!product.is_active}
+                    />
+                  );
+                  return (
+                    <div
+                      key={`${product.code}-${product.market || "null"}`}
+                      className="space-y-2 rounded-lg border bg-card p-3"
+                      data-testid="product-card"
+                    >
+                      <div className="flex items-start gap-2">
+                        <Checkbox
+                          checked={selectedKeys.has(rowKey(product))}
+                          onCheckedChange={() => toggleRow(product)}
+                          disabled={
+                            !isNavType ||
+                            listBusy ||
+                            (!selectedKeys.has(rowKey(product)) && selectedKeys.size >= BATCH_SWITCH_MAX)
+                          }
+                          aria-label={`选择 ${product.code} 批量切换数据源`}
+                          data-testid="batch-row-checkbox"
+                        />
+                        <div className="min-w-0 flex-1" data-testid="product-name-cell">
+                          {isNavType ? (
+                            <Link
+                              href={detailHref}
+                              className="hover:text-primary"
+                              data-testid="product-detail-link"
+                            >
+                              {nameCell}
+                            </Link>
+                          ) : (
+                            nameCell
+                          )}
+                        </div>
+                        {rowMenu(product)}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        <div>
+                          <span className="block text-xs text-muted-foreground">类型</span>
+                          <b className="block text-sm font-normal text-foreground">{product.product_type}</b>
+                        </div>
+                        <div>
+                          <span className="block text-xs text-muted-foreground">确认天数</span>
+                          <b className={cn(getNumberCellClass(), "block text-left text-sm font-normal")}>{product.confirm_days}</b>
+                        </div>
+                        <div>
+                          <span className="block text-xs text-muted-foreground">估值滞后</span>
+                          <b className={cn(getNumberCellClass(), "block text-left text-sm font-normal")}>
+                            {(product.nav_lag_days ?? 0) > 0 ? `T-${product.nav_lag_days}` : "T"}
+                          </b>
+                        </div>
+                        <div>
+                          <span className="block text-xs text-muted-foreground">QDII</span>
+                          <b className="block text-sm font-normal text-foreground">{product.is_qdii ? "是" : "否"}</b>
+                        </div>
+                        <div>
+                          <span className="block text-xs text-muted-foreground">数据源</span>
+                          <b className="block text-sm font-normal">
+                            {product.data_source_status === "success" ? (
+                              <CheckCircle className="h-4 w-4 text-success" />
+                            ) : product.data_source_status === "failed" ? (
+                              <XCircle className="h-4 w-4 text-destructive" />
+                            ) : VIRTUAL_PRODUCT_TYPES.includes(product.product_type) ? (
+                              <span className="text-muted-foreground">不适用</span>
+                            ) : (
+                              <span className="text-warning">待验证</span>
+                            )}
+                          </b>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
             <Table className={cn(isFetching && !isLoading && "opacity-50")}>
               <TableHeader>
                 <TableRow>
@@ -756,40 +889,14 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                     <TableCell className="text-right">
                       {/* #856：行操作收敛为「更多」菜单（编辑/删除）；同步价格/历史/走势
                           迁到净值型产品详情页，列表行不再挂多个图标按钮 */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0"
-                            title="更多操作"
-                            aria-label="更多操作"
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleEdit(product)}>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            编辑
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => handleDelete(product.code, product.market)}
-                            disabled={deleteProduct.isPending}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            删除
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {rowMenu(product)}
                     </TableCell>
                   </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
+            )}
           </div>
           {/* 空态三分（评审 #244）：请求失败 ≠ 空数据 ≠ 筛选无结果；#663 把失败一支
               从 EmptyState 收敛到 QueryErrorState（透出后端消息 + 可点重试）。

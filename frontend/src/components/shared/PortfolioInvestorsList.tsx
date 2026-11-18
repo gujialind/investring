@@ -67,13 +67,68 @@ export default function PortfolioInvestorsList({
         {!investors || investors.length === 0 ? (
           <div className="py-8 text-center text-muted-foreground">暂无投资人</div>
         ) : (
-          <div className={variant === "mobile" ? "overflow-x-auto" : undefined}>
-            {/* min-w 是移动横滚壳下限（#693 八列形态定）；实际宽度由表格内容自然
-                宽度撑开（#694 九列实测 918），加列后目检见挤压再同步上调 */}
-            <Table
-              data-testid="portfolio-investors-table"
-              className={variant === "mobile" ? "min-w-[900px]" : undefined}
-            >
+          <>
+          {variant === "mobile" ? (
+            /* #904 P1d：移动卡化（§6②），字段集合与桌面九列一致；占比/累计/行 testid 保留 */
+            <div className="space-y-3" data-testid="portfolio-investors-cards">
+              {investors.map((investor, i) => {
+                const ret = getSignedReturn(investor.profit_percent);
+                return (
+                  <div
+                    key={investor.investor_code}
+                    className="space-y-2 rounded-lg border bg-card p-3"
+                    data-testid={investor.is_liquidated ? "investor-row-liquidated" : "investor-row"}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <NameCodeCell code={investor.investor_code} nameMap={nameMap} />
+                      {investor.is_liquidated && <Badge variant="secondary">已清仓</Badge>}
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      <div>
+                        <span className="block text-xs text-muted-foreground">份额</span>
+                        <b className={cn(NUM_CELL, "block text-left text-sm font-normal")}>{formatSharesUnit(investor.shares)}</b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">占比</span>
+                        <b className={cn(NUM_CELL, "block text-left text-sm font-normal")} data-testid="investor-ratio">{ratioText(investor.ratio, percents[i])}</b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">市值</span>
+                        <b className={cn(NUM_CELL, "block text-left text-sm font-normal")}>{formatCurrency(investor.market_value)}</b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">总成本</span>
+                        <b className={cn(NUM_CELL, "block text-left text-sm font-normal")}>{formatCurrency(investor.total_cost)}</b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">成本价</span>
+                        <b className={cn(NUM_CELL, "block text-left text-sm font-normal")}>{formatNav(investor.cost_per_share)}</b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">冻结</span>
+                        <b className={cn(NUM_CELL, "block text-left text-sm font-normal")}>{formatSharesUnit(investor.frozen_shares)}</b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">持仓收益</span>
+                        <b className="block text-sm font-normal">
+                          <span className={getReturnColorClass(investor.profit)}>{formatSignedCurrency(investor.profit)}</span>
+                          <span className={cn("block text-xs", ret.colorClass)}>{ret.text}</span>
+                        </b>
+                      </div>
+                      <div>
+                        <span className="block text-xs text-muted-foreground">累计收益*</span>
+                        <b className="block text-sm font-normal" data-testid="investor-cumulative">
+                          <span className={getReturnColorClass(investor.cumulative_profit)}>{formatSignedCurrency(investor.cumulative_profit)}</span>
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+          <div>
+            <Table data-testid="portfolio-investors-table">
               <TableHeader>
                 <TableRow>
                   <TableHead className="whitespace-nowrap text-muted-foreground">投资人</TableHead>
@@ -143,13 +198,15 @@ export default function PortfolioInvestorsList({
                 })}
               </TableBody>
             </Table>
-            {/* 口径注记有数据时恒渲染（空态走「暂无投资人」分支不渲染；形态与分色见
-                visual-spec §12「口径注记分色」条款） */}
-            <p className="mt-2 text-xs text-warning" data-testid="investor-cumulative-note">
-              *累计收益 = 当前市值 + 已确认赎回金额 − 已确认申购金额；产品分红与调整
-              未归属到投资人，与「持仓收益」（在手份额浮动盈亏）口径不同
-            </p>
           </div>
+          )}
+          {/* 口径注记有数据时恒渲染（空态走「暂无投资人」分支不渲染；形态与分色见
+              visual-spec §12「口径注记分色」条款） */}
+          <p className="mt-2 text-xs text-warning" data-testid="investor-cumulative-note">
+            *累计收益 = 当前市值 + 已确认赎回金额 − 已确认申购金额；产品分红与调整
+            未归属到投资人，与「持仓收益」（在手份额浮动盈亏）口径不同
+          </p>
+          </>
         )}
       </CardContent>
     </Card>
