@@ -26,6 +26,8 @@ ENUMS = {
     "dividend_method": ("cash_dividend", "reinvest_dividend"),
     "product_type": ("ETF", "OEF", "LOF", "CASH"),
     "role": ("admin", "viewer"),
+    "direction": ("inflow", "outflow"),
+    "asset_kind": ("cash", "non_cash"),
 }
 
 # 日期类字段名（后缀匹配）
@@ -41,6 +43,8 @@ SUMMARY_FIELDS = {
     "log_error": "id,error_type,error_code,error_message,request_path,created_at",
     "asset_classification": "code,dimension,name,sort_order,is_active,applicable_asset_classes",
     "dividend_config": "id,portfolio_code,product_code,market,platform_code,dividend_method,effective_from,source",
+    "ledger_entry": "id,portfolio_code,platform_code,value_date,market_value,asset_kind,note",
+    "ledger_flow": "id,portfolio_code,platform_code,flow_date,direction,amount,note",
 }
 
 

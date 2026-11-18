@@ -90,6 +90,7 @@ describe("queryKeys 全域工厂", () => {
     // dataSources 域无 root，仅单键查询
     expect(queryKeys.dataSources.config()).toEqual(["data-source-config"]);
     expect(queryKeys.dividendConfigs.root).toEqual(["dividend-configs"]);
+    expect(queryKeys.ledger.root).toEqual(["ledger"]);
   });
 
   it("root 是域内所有键的真前缀（失效整域命中全部子键）", () => {
@@ -186,6 +187,17 @@ describe("queryKeys 全域工厂", () => {
         ],
       },
       { root: queryKeys.tradingCalendar.root, keys: [queryKeys.tradingCalendar.byYear(2026)] },
+      {
+        root: queryKeys.ledger.root,
+        keys: [
+          queryKeys.ledger.byPortfolio("P1"),
+          queryKeys.ledger.entries("P1"),
+          queryKeys.ledger.entries("P1", { platform_code: "PF" }),
+          queryKeys.ledger.flows("P1"),
+          queryKeys.ledger.totals("P1"),
+          queryKeys.ledger.totals("P1", "2026-01-06"),
+        ],
+      },
     ];
 
     for (const { root, keys } of cases) {
@@ -195,6 +207,34 @@ describe("queryKeys 全域工厂", () => {
         expect(key.length).toBeGreaterThan(root.length);
       }
     }
+  });
+});
+
+// 台账型组合（#905 PR3）：entries/flows/totals 按组合分键，byPortfolio 是整段失效前缀。
+describe("queryKeys.ledger（#905 PR3）", () => {
+  it("byPortfolio 是 entries/flows/totals 键的真前缀（写后整段失效）", () => {
+    const root = queryKeys.ledger.byPortfolio("P1");
+    expect(root).toEqual(["ledger", "P1"]);
+    for (const key of [
+      queryKeys.ledger.entries("P1"),
+      queryKeys.ledger.flows("P1"),
+      queryKeys.ledger.totals("P1"),
+    ]) {
+      expect(key.slice(0, root.length)).toEqual(root);
+      expect(key.length).toBeGreaterThan(root.length);
+    }
+  });
+
+  it("entries/flows 按平台筛选分键，省略 params 落尾 undefined", () => {
+    expect(queryKeys.ledger.entries("P1")).toEqual(["ledger", "P1", "entries", undefined]);
+    expect(queryKeys.ledger.entries("P1", { platform_code: "PF" })).toEqual(["ledger", "P1", "entries", { platform_code: "PF" }]);
+    expect(queryKeys.ledger.flows("P1", { platform_code: "PF" })).toEqual(["ledger", "P1", "flows", { platform_code: "PF" }]);
+  });
+
+  it("totals 截止日参与键，省略落 null（与显式日期不同键）", () => {
+    expect(queryKeys.ledger.totals("P1")).toEqual(["ledger", "P1", "totals", null]);
+    expect(queryKeys.ledger.totals("P1", "2026-01-06")).toEqual(["ledger", "P1", "totals", "2026-01-06"]);
+    expect(queryKeys.ledger.totals("P1")).not.toEqual(queryKeys.ledger.totals("P1", "2026-01-06"));
   });
 });
 

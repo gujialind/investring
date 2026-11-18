@@ -7,7 +7,7 @@ TWR/波动率/回撤/nav 类恒 None（台账无净值序列，不硬算）。�
 """
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
@@ -87,6 +87,67 @@ def compute_ledger_totals(db: Session, code: str, as_of_date: Optional[date] = N
         "total_value": float(total_value), "net_inflow": float(net),
         "total_profit": float(profit), "warnings": warnings,
     }
+
+
+def compute_ledger_totals_batch(
+    db: Session, codes: List[str], as_of_date: Optional[date] = None
+) -> dict:
+    """批量台账收益（#905 PR3 B，R8 仪表盘跨口径合并读侧）。
+
+    与 compute_ledger_totals 逐组合同源（step-forward 每平台≤D最近一条市值之和 − 净入金，
+    quantize_nav/quantize_amount 同口径），但用**固定 3 条查询**覆盖全部台账组合
+    （状态 + 市值行 + 进出腿），避免列表页逐组合 N+1。只读 ledger_entry/ledger_flow，
+    不访问净值型快照子查询（D1 隔离）。
+
+    缺失值口径（与详情一致，PR 说明显式定义）：draft → total_value/total_profit=None；
+    active/closed 无记录 → 0（SPEC §5「active 无记录市值0收益0」，语义=已启用尚未记录资产）。
+    返回 {code: {"total_value": float|None, "total_profit": float|None}}。
+    """
+    if not codes:
+        return {}
+    D = as_of_date or business_today()
+    statuses = dict(
+        db.query(Portfolio.code, Portfolio.status).filter(Portfolio.code.in_(codes)).all()
+    )
+    result = {c: {"total_value": None, "total_profit": None} for c in codes}
+    active_codes = [c for c in codes if statuses.get(c) != "draft"]
+    if not active_codes:
+        return result
+
+    # 查询 1：全部 active 台账组合 ≤D 的市值行，按 value_date 升序，Python 选每 (组合,平台) 最近一条
+    entries = (
+        db.query(
+            LedgerEntry.portfolio_code, LedgerEntry.platform_code,
+            LedgerEntry.value_date, LedgerEntry.market_value,
+        )
+        .filter(LedgerEntry.portfolio_code.in_(active_codes), LedgerEntry.value_date <= D)
+        .order_by(LedgerEntry.value_date.asc())
+        .all()
+    )
+    latest_per_platform = {}
+    for code, platform, _vd, mv in entries:
+        latest_per_platform[(code, platform)] = Decimal(str(mv))  # 升序遍历，后者覆盖=最近一条
+    value_by_code: dict = {}
+    for (code, _platform), mv in latest_per_platform.items():
+        value_by_code[code] = value_by_code.get(code, Decimal("0")) + mv
+
+    # 查询 2：全部 active 台账组合 ≤D 的进出腿，Python 按组合累计净入金
+    flows = (
+        db.query(LedgerFlow.portfolio_code, LedgerFlow.direction, LedgerFlow.amount)
+        .filter(LedgerFlow.portfolio_code.in_(active_codes), LedgerFlow.flow_date <= D)
+        .all()
+    )
+    net_by_code: dict = {}
+    for code, direction, amount in flows:
+        amt = Decimal(str(amount))
+        net_by_code[code] = net_by_code.get(code, Decimal("0")) + (amt if direction == "inflow" else -amt)
+
+    for code in active_codes:
+        total_value = quantize_nav(value_by_code.get(code, Decimal("0")))
+        net = quantize_amount(net_by_code.get(code, Decimal("0")))
+        profit = quantize_nav(total_value - net)
+        result[code] = {"total_value": float(total_value), "total_profit": float(profit)}
+    return result
 
 
 def _modified_dietz(db: Session, code: str, start: date, end: date) -> Optional[Decimal]:

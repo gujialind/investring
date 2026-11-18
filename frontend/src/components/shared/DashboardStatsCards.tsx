@@ -1,11 +1,12 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Briefcase, TrendingUp, Users, Wallet } from "lucide-react";
+import { Briefcase, Coins, TrendingUp, Users, Wallet } from "lucide-react";
 import { formatCurrency, formatReturnRate, getReturnColorClass } from "@/lib/utils";
 
 interface DashboardStatsCardsProps {
   totalValue: number;
+  totalProfit: number;
   avgReturn: number;
   activeCount: number;
   totalCount: number;
@@ -30,6 +31,7 @@ interface StatItem {
  */
 export default function DashboardStatsCards({
   totalValue,
+  totalProfit,
   avgReturn,
   activeCount,
   totalCount,
@@ -41,10 +43,19 @@ export default function DashboardStatsCards({
       icon: Wallet,
       iconCls: "text-muted-foreground",
       id: "total_value",
-      label: variant === "mobile" ? "总资产" : "总资产",
+      label: "总资产",
       value: formatCurrency(totalValue),
       valueCls: "",
-      sub: variant === "mobile" ? `${activeCount} 个活跃组合` : `${activeCount} 个活跃组合合计`,
+      sub: variant === "mobile" ? `${activeCount} 个活跃·含台账型` : `${activeCount} 个活跃组合合计（含台账型）`,
+    },
+    {
+      icon: Coins,
+      iconCls: getReturnColorClass(totalProfit),
+      id: "total_profit",
+      label: "总收益",
+      value: formatCurrency(totalProfit),
+      valueCls: getReturnColorClass(totalProfit),
+      sub: variant === "mobile" ? "市值−净投入·含台账型" : "市值−净投入（含台账型）",
     },
     {
       icon: TrendingUp,
@@ -53,7 +64,7 @@ export default function DashboardStatsCards({
       label: variant === "mobile" ? "平均收益" : "平均累计收益",
       value: formatReturnRate(avgReturn),
       valueCls: getReturnColorClass(avgReturn),
-      sub: variant === "mobile" ? "活跃组合平均" : "活跃组合平均值",
+      sub: variant === "mobile" ? "净值型·不含台账型" : "净值型平均（不含台账型）",
     },
     {
       icon: Briefcase,
@@ -106,7 +117,7 @@ export default function DashboardStatsCards({
     // 本页无表格钉住 main，#772 未改变其宽度，属既存缺陷，与组合详情同批按同口径修）。
     <div className="@container">
       <div
-        className="grid gap-4 md:grid-cols-2 @min-[804px]:grid-cols-4"
+        className="grid gap-4 md:grid-cols-2 @min-[804px]:grid-cols-3 @min-[1200px]:grid-cols-5"
         data-testid="dashboard-stat-grid"
       >
         {items.map((item) => (

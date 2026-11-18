@@ -36,6 +36,8 @@ import {
   useDeletePortfolio,
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
+import { useInvestorList } from "@/hooks/useInvestor";
+import { useUIStore } from "@/stores/uiStore";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import ClosePortfolioDialog from "@/components/shared/dialogs/ClosePortfolioDialog";
@@ -73,25 +75,39 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
   const activatePortfolio = useActivatePortfolio();
   const deletePortfolio = useDeletePortfolio();
   const { isAdmin } = useRoleCheck();
+  const addToast = useUIStore((state) => state.addToast);
+  const { data: investorsData } = useInvestorList({ page_size: 100 });
+  const investors = investorsData?.items || [];
 
   const portfolios = data?.items || [];
 
   const [filter, setFilter] = useState<string>("all");
+  const [kindFilter, setKindFilter] = useState<string>("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({ code: "", name: "", description: "" });
+  const [formData, setFormData] = useState({ code: "", name: "", description: "", kind: "nav", owner_investor_code: "" });
   // 关闭组合：ClosePortfolioDialog 目标；重新激活 / 删除：AlertDialog 目标
   const [closeTarget, setCloseTarget] = useState<string | null>(null);
   const [activateTarget, setActivateTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  const filteredPortfolios = portfolios.filter((p) => filter === "all" || p.status === filter);
+  const filteredPortfolios = portfolios.filter(
+    (p) => (filter === "all" || p.status === filter) && (kindFilter === "all" || p.kind === kindFilter)
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createPortfolio.mutate(formData, {
+    const isLedger = formData.kind === "ledger";
+    if (isLedger && !formData.owner_investor_code) {
+      addToast({ type: "error", title: "输入错误", message: "台账型组合须选择归属投资人" });
+      return;
+    }
+    const payload = isLedger
+      ? { code: formData.code, name: formData.name, description: formData.description, kind: "ledger", owner_investor_code: formData.owner_investor_code }
+      : { code: formData.code, name: formData.name, description: formData.description };
+    createPortfolio.mutate(payload, {
       onSuccess: (created) => {
         setIsDialogOpen(false);
-        setFormData({ code: "", name: "", description: "" });
+        setFormData({ code: "", name: "", description: "", kind: "nav", owner_investor_code: "" });
         router.push(`${basePath}/${created.code}`);
       },
     });
@@ -169,6 +185,38 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                       placeholder="可选"
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="kind">组合类型</Label>
+                    <Select value={formData.kind} onValueChange={(v) => setFormData({ ...formData, kind: v })}>
+                      <SelectTrigger id="kind" data-testid="portfolio-create-kind">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="nav">净值型</SelectItem>
+                        <SelectItem value="ledger">平台市值台账型</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">类型创建后不可改；台账型按平台记市值与本金进出，不算净值</p>
+                  </div>
+                  {formData.kind === "ledger" && (
+                    <div className="space-y-2">
+                      <Label htmlFor="owner">归属投资人</Label>
+                      <Select
+                        value={formData.owner_investor_code}
+                        onValueChange={(v) => setFormData({ ...formData, owner_investor_code: v })}
+                      >
+                        <SelectTrigger id="owner" data-testid="portfolio-create-owner">
+                          <SelectValue placeholder="请选择归属投资人" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {investors.map((inv) => (
+                            <SelectItem key={inv.code} value={inv.code}>{inv.name}（{inv.code}）</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">台账型组合归属单一投资人（必填）</p>
+                    </div>
+                  )}
                 </div>
                 <DialogFooter>
                   <Button type="submit" disabled={createPortfolio.isPending}>
@@ -195,6 +243,16 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
             <SelectItem value="closed">已关闭</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={kindFilter} onValueChange={setKindFilter}>
+          <SelectTrigger className="w-[180px]" data-testid="portfolio-kind-filter">
+            <SelectValue placeholder="筛选类型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类型</SelectItem>
+            <SelectItem value="nav">净值型</SelectItem>
+            <SelectItem value="ledger">平台市值台账型</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className={gridCls}>
@@ -207,11 +265,29 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                   {portfolio.status === "active" ? "活跃" : portfolio.status === "draft" ? "草稿" : "已关闭"}
                 </Badge>
               </div>
-              <CardDescription>{portfolio.code}</CardDescription>
+              <CardDescription>{portfolio.code}{portfolio.kind === "ledger" ? " · 平台市值台账型" : ""}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {portfolio.status === "active" && (
+                {portfolio.status === "active" && portfolio.kind === "ledger" && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">当前市值</span>
+                      <span className="font-medium">{formatCurrency(portfolio.total_value ?? 0)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">累计收益</span>
+                      <span className={`font-medium ${getReturnColorClass(portfolio.total_profit ?? 0)}`}>
+                        {formatCurrency(portfolio.total_profit ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">归属投资人</span>
+                      <span className="font-medium">{portfolio.owner_investor_code || "--"}</span>
+                    </div>
+                  </>
+                )}
+                {portfolio.status === "active" && portfolio.kind !== "ledger" && (
                   <>
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-muted-foreground">总资产</span>
@@ -234,7 +310,9 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                 )}
                 {portfolio.status === "draft" && (
                   <div className="text-sm text-muted-foreground py-2">
-                    组合尚未激活，请执行首次申购以启动组合
+                    {portfolio.kind === "ledger"
+                      ? "组合尚未激活，请先激活后按平台登记台账"
+                      : "组合尚未激活，请执行首次申购以启动组合"}
                   </div>
                 )}
                 <div className="flex gap-2 pt-2">
@@ -244,15 +322,17 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
                       详情
                     </Button>
                   </Link>
-                  {/* 投资人入口：详情页 ?tab=investors 视图（issue #99） */}
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => router.push(`${basePath}/${portfolio.code}?tab=investors`)}
-                    title="投资人"
-                  >
-                    <Users className="h-4 w-4" />
-                  </Button>
+                  {/* 投资人入口：详情页 ?tab=investors 视图（issue #99）；台账型单归属无投资人份额视图 */}
+                  {portfolio.kind !== "ledger" && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => router.push(`${basePath}/${portfolio.code}?tab=investors`)}
+                      title="投资人"
+                    >
+                      <Users className="h-4 w-4" />
+                    </Button>
+                  )}
                   {isAdmin && portfolio.status === "active" && (
                     <Button
                       variant="outline"

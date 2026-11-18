@@ -7,6 +7,8 @@ import Link from "next/link";
 interface PortfolioActionButtonsProps {
   portfolioCode: string;
   status: "draft" | "active" | "closed";
+  /** 组合类型（issue #905）：ledger 台账型 draft 走手动激活、active 无申赎/调仓/事件/快照入口 */
+  kind?: string;
   /** 链接前缀，如 "/portfolio" 或 "/m/portfolio" */
   basePath: string;
   /** desktop: 行内按钮（可换行）；mobile: 单层 2 列网格，draft/closed 整行（#786 收敛嵌套 grid） */
@@ -34,6 +36,7 @@ interface PortfolioActionButtonsProps {
 export default function PortfolioActionButtons({
   portfolioCode,
   status,
+  kind,
   basePath,
   variant = "desktop",
   onActivateClick,
@@ -48,15 +51,27 @@ export default function PortfolioActionButtons({
   if (status === "draft") {
     return (
       <div className={container}>
-        <Link
-          href={`${basePath}/${portfolioCode}/subscriptions`}
-          className={variant === "mobile" ? "col-span-2" : ""}
-        >
-          <Button className={cls}>
-            <Plus className="mr-2 h-4 w-4" />
-            {variant === "mobile" ? "首次申购" : "首次申购激活"}
+        {kind === "ledger" ? (
+          <Button
+            onClick={onActivateClick}
+            disabled={isActivatePending}
+            data-testid="ledger-activate"
+            className={variant === "mobile" ? "col-span-2 w-full" : cls}
+          >
+            <Power className="mr-2 h-4 w-4 text-success" />
+            激活组合
           </Button>
-        </Link>
+        ) : (
+          <Link
+            href={`${basePath}/${portfolioCode}/subscriptions`}
+            className={variant === "mobile" ? "col-span-2" : ""}
+          >
+            <Button className={cls}>
+              <Plus className="mr-2 h-4 w-4" />
+              {variant === "mobile" ? "首次申购" : "首次申购激活"}
+            </Button>
+          </Link>
+        )}
         {onDeleteClick && (
           <Button
             variant="outline"
@@ -73,6 +88,9 @@ export default function PortfolioActionButtons({
   }
 
   if (status === "active") {
+    // 台账型无申赎/调仓/份额事件/快照（issue #905）：操作区不渲染净值型入口；
+    // 登记市值/进出在 LedgerContent 内（按角色门控）。
+    if (kind === "ledger") return null;
     return (
       <div className={container}>
         <Link href={`${basePath}/${portfolioCode}/subscriptions`}>

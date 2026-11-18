@@ -18,6 +18,7 @@ export default function DashboardPage() {
     subscriptions,
     investors,
     totalValue,
+    totalProfit,
     avgReturn,
     pendingSubscriptions,
     pendingTrades,
@@ -45,6 +46,7 @@ export default function DashboardPage() {
         {/* Summary Cards */}
         <DashboardStatsCards
           totalValue={totalValue}
+          totalProfit={totalProfit}
           avgReturn={avgReturn}
           activeCount={activePortfolios.length}
           totalCount={portfolios.length}

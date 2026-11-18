@@ -16,6 +16,7 @@ export default function MobileDashboardPage() {
     subscriptions,
     investors,
     totalValue,
+    totalProfit,
     avgReturn,
     pendingSubscriptions,
     isLoading,
@@ -38,6 +39,7 @@ export default function MobileDashboardPage() {
       {/* Summary Cards */}
       <DashboardStatsCards
         totalValue={totalValue}
+        totalProfit={totalProfit}
         avgReturn={avgReturn}
         activeCount={activePortfolios.length}
         totalCount={portfolios.length}

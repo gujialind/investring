@@ -89,13 +89,16 @@ def list_portfolios(
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
-    """分页查询组合列表，附聚合字段 total_value / cumulative_return / investor_count。
+    """分页查询组合列表，附聚合字段 total_value / total_profit / cumulative_return / investor_count。
 
-    聚合口径（issue #69）：
-    - total_value：最新 portfolio_value_snapshot 的 total_value
-    - cumulative_return：首末 unit_price 百分数，与 get_returns 一致
-    - investor_count：最新快照日 investor_holding 中 shares > 0 的投资人数
-    无快照（draft 等）时 total_value / cumulative_return 为 None，investor_count 为 0。
+    聚合口径（issue #69；#905 PR3 B 按 kind 分流，R8 仪表盘跨口径合并读侧）：
+    - nav（净值型，逐字不变）：total_value/total_profit 与详情 _derive_portfolio_totals 同源
+      （共用 _nav_totals_from_latest）；cumulative_return=首末 unit_price 百分数（与 get_returns 一致）；
+      investor_count=最新快照日 investor_holding 中 shares>0 的投资人数。无快照时 total_value/
+      total_profit/cumulative_return 为 None，investor_count 为 0。
+    - ledger（台账型）：total_value/total_profit 走 compute_ledger_totals_batch（与详情同源，批量
+      固定 3 查询、非逐组合 N+1）；draft→None，active/closed 无记录→0（SPEC §5）；无净值曲线/份额，
+      cumulative_return=None、investor_count=0。
     """
     query = db.query(Portfolio)
     if status:
@@ -103,38 +106,58 @@ def list_portfolios(
     total = query.count()
     portfolios = query.offset((page - 1) * page_size).limit(page_size).all()
 
+    # 台账型批量聚合（#905 PR3 B，R8 仪表盘跨口径合并读侧）：固定 3 查询覆盖本页全部
+    # 台账组合，非逐组合 N+1；只读 ledger 表、不碰净值快照子查询（D1）。nav 分支反之
+    # 只读快照/申赎/份额，不碰 ledger 表。
+    ledger_codes = [p.code for p in portfolios if p.kind == "ledger"]
+    if ledger_codes:
+        from app.services.ledger_profit_service import compute_ledger_totals_batch
+        ledger_totals = compute_ledger_totals_batch(db, ledger_codes)
+    else:
+        ledger_totals = {}
+
     items = []
     for p in portfolios:
-        total_value = None
         cumulative_return = None
         investor_count = 0
-        latest = (
-            db.query(PortfolioValueSnapshot)
-            .filter(PortfolioValueSnapshot.portfolio_code == p.code)
-            .order_by(PortfolioValueSnapshot.snapshot_date.desc())
-            .first()
-        )
-        if latest:
-            total_value = float(latest.total_value) if latest.total_value is not None else None
-            first = (
+        if p.kind == "ledger":
+            # 台账型：total_value/total_profit 走台账口径（与详情 compute_ledger_totals 同源）。
+            # draft→None；active/closed 无记录→0（SPEC §5）；台账型无净值曲线/无投资人份额。
+            t = ledger_totals.get(p.code, {"total_value": None, "total_profit": None})
+            total_value = t["total_value"]
+            total_profit = t["total_profit"]
+        else:
+            latest = (
                 db.query(PortfolioValueSnapshot)
                 .filter(PortfolioValueSnapshot.portfolio_code == p.code)
-                .order_by(PortfolioValueSnapshot.snapshot_date.asc())
+                .order_by(PortfolioValueSnapshot.snapshot_date.desc())
                 .first()
             )
-            if first and first.unit_price:
-                initial_nav = float(first.unit_price)
-                current_nav = float(latest.unit_price)
-                cumulative_return = round((current_nav - initial_nav) / initial_nav * 100, 4)
-            investor_count = (
-                db.query(InvestorHolding)
-                .filter(
-                    InvestorHolding.portfolio_code == p.code,
-                    InvestorHolding.snapshot_date == latest.snapshot_date,
-                    InvestorHolding.shares > 0,
+            # total_value/total_profit 与详情 _derive_portfolio_totals 同源（共用 _nav_totals_from_latest，
+            # #905 PR3 B 条件1：不在列表另造算法）；cumulative_return/investor_count 沿用快照口径逐字不变。
+            nav_totals = _nav_totals_from_latest(db, p.code, latest)
+            total_value = nav_totals["total_value"]
+            total_profit = nav_totals["total_profit"]
+            if latest:
+                first = (
+                    db.query(PortfolioValueSnapshot)
+                    .filter(PortfolioValueSnapshot.portfolio_code == p.code)
+                    .order_by(PortfolioValueSnapshot.snapshot_date.asc())
+                    .first()
                 )
-                .count()
-            )
+                if first and first.unit_price:
+                    initial_nav = float(first.unit_price)
+                    current_nav = float(latest.unit_price)
+                    cumulative_return = round((current_nav - initial_nav) / initial_nav * 100, 4)
+                investor_count = (
+                    db.query(InvestorHolding)
+                    .filter(
+                        InvestorHolding.portfolio_code == p.code,
+                        InvestorHolding.snapshot_date == latest.snapshot_date,
+                        InvestorHolding.shares > 0,
+                    )
+                    .count()
+                )
         items.append({
             "code": p.code,
             "name": p.name,
@@ -149,6 +172,7 @@ def list_portfolios(
             "display_config": p.display_config,
             "auto_snapshot_enabled": p.auto_snapshot_enabled,
             "total_value": total_value,
+            "total_profit": total_profit,
             "cumulative_return": cumulative_return,
             "investor_count": investor_count,
         })
@@ -161,28 +185,13 @@ def list_portfolios(
     }
 
 
-def _derive_portfolio_totals(db: Session, code: str) -> dict:
-    """组合概要派生字段（issue #99）：total_value / total_profit。
+def _nav_totals_from_latest(db: Session, code: str, latest) -> dict:
+    """nav 组合 total_value/total_profit（issue #99 口径），给定最新快照。
 
-    total_profit = 最新快照 total_value − 净投入；净投入 = Σ confirmed 申购金额
-    − Σ confirmed 赎回金额，且仅计 confirm_date <= 最新快照日的记录（#250，
-    与 total_value 的快照时点口径对齐）。无快照时两者均为 None。
-
-    issue #905 PR2：台账型（kind='ledger'）走台账收益口径（当前市值 − 净入金，
-    step-forward），净值型走下方快照口径，逐字不变。
+    详情 _derive_portfolio_totals 与列表 list_portfolios 共用此单点（#905 PR3 B），
+    保证列表 total_profit 与详情同源、不在列表另造算法。无快照或 total_value 为 None
+    → 两者均 None（nav 缺失即缺失，不冒充 0）。total_profit 量化沿用详情 round(...,2)。
     """
-    portfolio = db.query(Portfolio).filter(Portfolio.code == code).first()
-    if portfolio and portfolio.kind == "ledger":
-        from app.services.ledger_profit_service import compute_ledger_totals
-        totals = compute_ledger_totals(db, code)
-        return {"total_value": totals["total_value"], "total_profit": totals["total_profit"]}
-
-    latest = (
-        db.query(PortfolioValueSnapshot)
-        .filter(PortfolioValueSnapshot.portfolio_code == code)
-        .order_by(PortfolioValueSnapshot.snapshot_date.desc())
-        .first()
-    )
     if not latest or latest.total_value is None:
         return {"total_value": None, "total_profit": None}
 
@@ -209,6 +218,31 @@ def _derive_portfolio_totals(db: Session, code: str) -> dict:
         "total_value": total_value,
         "total_profit": round(total_value - net_invested, 2),
     }
+
+
+def _derive_portfolio_totals(db: Session, code: str) -> dict:
+    """组合概要派生字段（issue #99）：total_value / total_profit。
+
+    total_profit = 最新快照 total_value − 净投入；净投入 = Σ confirmed 申购金额
+    − Σ confirmed 赎回金额，且仅计 confirm_date <= 最新快照日的记录（#250，
+    与 total_value 的快照时点口径对齐）。无快照时两者均为 None。
+
+    issue #905 PR2：台账型（kind='ledger'）走台账收益口径（当前市值 − 净入金，
+    step-forward），净值型走下方快照口径，逐字不变。
+    """
+    portfolio = db.query(Portfolio).filter(Portfolio.code == code).first()
+    if portfolio and portfolio.kind == "ledger":
+        from app.services.ledger_profit_service import compute_ledger_totals
+        totals = compute_ledger_totals(db, code)
+        return {"total_value": totals["total_value"], "total_profit": totals["total_profit"]}
+
+    latest = (
+        db.query(PortfolioValueSnapshot)
+        .filter(PortfolioValueSnapshot.portfolio_code == code)
+        .order_by(PortfolioValueSnapshot.snapshot_date.desc())
+        .first()
+    )
+    return _nav_totals_from_latest(db, code, latest)
 
 
 def get_latest_value_snapshot(db: Session, code: str) -> PortfolioValueSnapshot:

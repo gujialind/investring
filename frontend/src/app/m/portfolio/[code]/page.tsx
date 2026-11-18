@@ -13,6 +13,7 @@ import {
   usePositionList,
   usePortfolioInvestors,
   useActivatePortfolio,
+  useActivateLedgerPortfolio,
   useDeletePortfolio,
   usePortfolioPerformance,
 } from "@/hooks/usePortfolio";
@@ -27,6 +28,7 @@ import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
 import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
+import LedgerContent from "@/components/shared/LedgerContent";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
@@ -64,6 +66,7 @@ function MobilePortfolioDetailInner() {
     enabled: showInvestors,
   });
   const activatePortfolio = useActivatePortfolio();
+  const activateLedger = useActivateLedgerPortfolio();
   const deletePortfolio = useDeletePortfolio();
   const { isAdmin } = useRoleCheck();
   // 主题 hook 须在早退（isLoading/!portfolio）之前调用（rules-of-hooks）
@@ -108,6 +111,7 @@ function MobilePortfolioDetailInner() {
   }
 
   const isDraft = portfolio.status === "draft";
+  const isLedger = portfolio.kind === "ledger";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses, theme);
@@ -135,8 +139,8 @@ function MobilePortfolioDetailInner() {
         </div>
       </div>
 
-      {/* Status Alert */}
-      {isDraft && (
+      {/* Status Alert（台账型 draft 引导在 LedgerContent，不显示净值型首购文案） */}
+      {isDraft && !isLedger && (
         <Alert>
           <AlertDescription>
             组合尚未激活，请执行首次申购以启动组合。初始净值固定为 1.0000
@@ -144,7 +148,38 @@ function MobilePortfolioDetailInner() {
         </Alert>
       )}
 
-      {showInvestors ? (
+      {isLedger ? (
+        /* 台账型独立视图（issue #905 PR3）：操作区（激活/删除）+ LedgerContent；无净值/份额/投资人 Tab */
+        <>
+          {isAdmin && (
+            <PortfolioActionButtons
+              portfolioCode={code}
+              status={portfolio.status as "draft" | "active" | "closed"}
+              kind={portfolio.kind}
+              basePath="/m/portfolio"
+              variant="mobile"
+              onActivateClick={() => (isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code))}
+              isActivatePending={isDraft ? activateLedger.isPending : activatePortfolio.isPending}
+              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
+              isDeletePending={deletePortfolio.isPending}
+            />
+          )}
+          <DeletePortfolioDialog
+            open={isDeleteOpen}
+            onOpenChange={setIsDeleteOpen}
+            portfolioCode={portfolio.code}
+            portfolioName={portfolio.name}
+            isPending={deletePortfolio.isPending}
+            onConfirm={() =>
+              deletePortfolio.mutate(code, {
+                onSuccess: () => router.push("/m/portfolio"),
+                onSettled: () => setIsDeleteOpen(false),
+              })
+            }
+          />
+          <LedgerContent portfolio={portfolio} variant="mobile" />
+        </>
+      ) : showInvestors ? (
         /* ?tab=investors 投资人视图（draft 也允许）；占比用后端 ratio，不再传 totalShares（#693） */
         <PortfolioInvestorsList investors={investors} variant="mobile" />
       ) : (

@@ -51,6 +51,13 @@ COMMAND_SCHEMA_MAP = [
     ("asset-classification", "get", "AssetClassificationDetail", "object", None),
     ("task", "run", "TaskRunAcceptedResponse", "object", None),
     ("task", "execution", "TaskExecutionLogResponse", "object", None),
+    ("ledger", "entry-list", "LedgerEntryResponse", "list", "ledger_entry"),
+    ("ledger", "entry-add", "LedgerEntryResponse", "object", None),
+    ("ledger", "entry-update", "LedgerEntryResponse", "object", None),
+    ("ledger", "flow-list", "LedgerFlowResponse", "list", "ledger_flow"),
+    ("ledger", "flow-add", "LedgerFlowWriteResponse", "object", None),
+    ("ledger", "flow-update", "LedgerFlowWriteResponse", "object", None),
+    ("ledger", "totals", "LedgerTotalsResponse", "object", None),
 ]
 
 # 人工标注层：openapi 无法表达的业务语义（键为 "group.sub" 或 "group.sub.field"）
@@ -80,6 +87,13 @@ NOTES_OVERRIDES = {
     "task.run": "提交即返的受理回执（#714）：status 恒为 pending，任务在服务端后台跑，不代表已执行完；进度与结果看 ir task execution <execution_id>",
     "task.execution.status": "pending/running=进行中；success/failed/partial_success/interrupted=终态（interrupted=进程重启导致未完成，可重新触发）",
     "task.execution.trigger_type": "manual=手动；scheduled=定时首跑；retry=定时失败后自动重试（间隔2h、上限3次，#715）；cascade=重试成功后联动补跑当日快照（#715）",
+    "ledger.entry-list": "每平台每日一行绝对市值（唯一键 portfolio+platform+value_date）；非分页列表，一次返回全部",
+    "ledger.entry-list.market_value": "绝对市值（Numeric(15,4)，4位小数），手动登记非计算值",
+    "ledger.entry-list.asset_kind": "展示分类 cash/non_cash；隔离不依赖此标签（台账表不被净值型现金/在途口径消费，D1）",
+    "ledger.flow-add": "同平台同日可多笔；净入金为负时 warnings 附告警（S4，不硬拒不静默）",
+    "ledger.flow-add.direction": "inflow=注资/outflow=撤资；amount 恒>0",
+    "ledger.totals": "收益=当前市值−净入金（step-forward 取≤D每平台最近一条市值）；draft 各值 null，active 无记录→0；绩效口径A 另见 ir portfolio performance",
+    "ledger.totals.net_inflow": "≤D 累计流入−流出；可为负（撤资>注资），为负时 warnings 告警",
 }
 
 # openapi 类型 → 缩写

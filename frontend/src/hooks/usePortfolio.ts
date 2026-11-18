@@ -132,6 +132,33 @@ export function useActivatePortfolio() {
   });
 }
 
+// 台账型手动激活 Hook（issue #905 D4）：POST /activate，仅台账型 draft→active，绕开申购。
+// 与 useActivatePortfolio（reactivate，closed→active）区分；净值型调 /activate 由后端拒绝。
+export function useActivateLedgerPortfolio() {
+  const queryClient = useQueryClient();
+  const addToast = useUIStore((state) => state.addToast);
+
+  return useMutation({
+    mutationFn: (code: string) => portfolioApi.activateLedger(code),
+    onSuccess: (_, code) => {
+      queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
+      queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      addToast({
+        type: "success",
+        title: "激活成功",
+        message: "组合已激活，可开始登记台账",
+      });
+    },
+    onError: (error: unknown) => {
+      addToast({
+        type: "error",
+        title: "激活失败",
+        message: getErrorMessage(error, "请稍后重试"),
+      });
+    },
+  });
+}
+
 // 删除组合 Hook（#820 扩围：仅空壳 draft/closed 可删，不可恢复）
 export function useDeletePortfolio() {
   const queryClient = useQueryClient();

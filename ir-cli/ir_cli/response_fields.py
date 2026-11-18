@@ -147,5 +147,48 @@ RESPONSE_FIELDS: dict = {
                 "status": "pending/running=进行中；success/failed/partial_success/interrupted=终态（interrupted=进程重启导致未完成，可重新触发）"
             }
         }
+    },
+    "ledger": {
+        "entry-list": {
+            "shape": "list",
+            "fields": "*id:int,*portfolio_code:str,*platform_code:str,*value_date:date,*market_value:num,*asset_kind:str,*note:str?,created_by:str?,created_at:datetime?,updated_at:datetime?",
+            "notes": {
+                "_": "每平台每日一行绝对市值（唯一键 portfolio+platform+value_date）；非分页列表，一次返回全部",
+                "market_value": "绝对市值（Numeric(15,4)，4位小数），手动登记非计算值",
+                "asset_kind": "展示分类 cash/non_cash；隔离不依赖此标签（台账表不被净值型现金/在途口径消费，D1）"
+            }
+        },
+        "entry-add": {
+            "shape": "object",
+            "fields": "id:int,portfolio_code:str,platform_code:str,value_date:date,market_value:num,asset_kind:str,note:str?,created_by:str?,created_at:datetime?,updated_at:datetime?"
+        },
+        "entry-update": {
+            "shape": "object",
+            "fields": "id:int,portfolio_code:str,platform_code:str,value_date:date,market_value:num,asset_kind:str,note:str?,created_by:str?,created_at:datetime?,updated_at:datetime?"
+        },
+        "flow-list": {
+            "shape": "list",
+            "fields": "*id:int,*portfolio_code:str,*platform_code:str,*flow_date:date,*direction:str,*amount:num,*note:str?,created_by:str?,created_at:datetime?,updated_at:datetime?"
+        },
+        "flow-add": {
+            "shape": "object",
+            "fields": "id:int,portfolio_code:str,platform_code:str,flow_date:date,direction:str,amount:num,note:str?,created_by:str?,created_at:datetime?,updated_at:datetime?,warnings:list",
+            "notes": {
+                "_": "同平台同日可多笔；净入金为负时 warnings 附告警（S4，不硬拒不静默）",
+                "direction": "inflow=注资/outflow=撤资；amount 恒>0"
+            }
+        },
+        "flow-update": {
+            "shape": "object",
+            "fields": "id:int,portfolio_code:str,platform_code:str,flow_date:date,direction:str,amount:num,note:str?,created_by:str?,created_at:datetime?,updated_at:datetime?,warnings:list"
+        },
+        "totals": {
+            "shape": "object",
+            "fields": "portfolio_code:str,as_of_date:date?,total_value:num?,net_inflow:num?,total_profit:num?,warnings:list",
+            "notes": {
+                "_": "收益=当前市值−净入金（step-forward 取≤D每平台最近一条市值）；draft 各值 null，active 无记录→0；绩效口径A 另见 ir portfolio performance",
+                "net_inflow": "≤D 累计流入−流出；可为负（撤资>注资），为负时 warnings 告警"
+            }
+        }
     }
 }

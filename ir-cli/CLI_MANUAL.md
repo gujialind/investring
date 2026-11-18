@@ -1830,6 +1830,133 @@ ir dividend-config remove <ID> --yes
 
 ---
 
+### 4.22 `ir ledger` — 平台市值台账管理
+
+平台市值台账型组合（`kind=ledger`，issue #905）的市值登记与本金进出读写 + 收益汇总，与 REST `/api/portfolios/{code}/ledger/*` 同口径。创建与激活在 `ir portfolio` 命令组（`ir portfolio create --kind ledger --owner-investor-code <投资人>` → `ir portfolio activate <CODE>`）。写侧 admin、读侧登录用户；`draft` 不可预录（S3，须先激活）；净入金为负时响应附 `warnings`（S4，不静默）。
+
+#### `ir ledger entry-list`
+
+查询台账市值记录（每平台每日一行，非分页列表）。
+
+```bash
+ir ledger entry-list <CODE> [--platform-code <平台代码>] [--fields <字段>] [--full]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--platform-code` | — | 按平台代码筛选 |
+
+#### `ir ledger entry-add`
+
+登记平台市值（仅 `active` 台账型放行；同平台同日重复由后端唯一键拒绝）。
+
+```bash
+ir ledger entry-add <CODE> --platform-code <平台代码> --value-date <YYYY-MM-DD> --market-value <市值> [--asset-kind <cash|non_cash>] [--note <备注>]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--platform-code` | — | 平台代码（必填） |
+| `--value-date` | — | 市值日期 YYYY-MM-DD（必填，任意自然日，不要求交易日） |
+| `--market-value` | — | 市值（必填，≥0，4 位小数） |
+| `--asset-kind` | non_cash | 资产分类 `cash`/`non_cash`（展示标签，不并入净值型现金口径） |
+| `--note` | — | 备注 |
+
+#### `ir ledger entry-update`
+
+修改某日市值/分类/备注（平台与日期不可改，改日期请删后重建；写侧留痕）。
+
+```bash
+ir ledger entry-update <CODE> <ENTRY_ID> [--market-value <市值>] [--asset-kind <cash|non_cash>] [--note <备注>]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--market-value` | — | 市值（≥0） |
+| `--asset-kind` | — | 资产分类 `cash`/`non_cash` |
+| `--note` | — | 备注；清空用 `--json '{"note": null}'` |
+
+#### `ir ledger entry-delete`
+
+删除某日市值记录（删除后该日缺失、读侧回退前值）。
+
+```bash
+ir ledger entry-delete <CODE> <ENTRY_ID> --yes
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1） |
+
+#### `ir ledger flow-list`
+
+查询本金进出记录（同平台同日可多笔，非分页列表）。
+
+```bash
+ir ledger flow-list <CODE> [--platform-code <平台代码>] [--fields <字段>] [--full]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--platform-code` | — | 按平台代码筛选 |
+
+#### `ir ledger flow-add`
+
+登记本金进出（仅 `active` 台账型放行；净入金为负时响应附 `warnings`）。
+
+```bash
+ir ledger flow-add <CODE> --platform-code <平台代码> --flow-date <YYYY-MM-DD> --direction <inflow|outflow> --amount <金额> [--note <备注>]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--platform-code` | — | 平台代码（必填） |
+| `--flow-date` | — | 进出日期 YYYY-MM-DD（必填，任意自然日） |
+| `--direction` | — | 方向 `inflow`=注资 / `outflow`=撤资（必填） |
+| `--amount` | — | 本金金额（必填，>0，2 位小数） |
+| `--note` | — | 备注 |
+
+#### `ir ledger flow-update`
+
+修改某笔进出（平台不可改；写侧留痕）。
+
+```bash
+ir ledger flow-update <CODE> <FLOW_ID> [--flow-date <YYYY-MM-DD>] [--direction <inflow|outflow>] [--amount <金额>] [--note <备注>]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--flow-date` | — | 进出日期 YYYY-MM-DD |
+| `--direction` | — | 方向 `inflow`/`outflow` |
+| `--amount` | — | 本金金额（>0） |
+| `--note` | — | 备注；清空用 `--json '{"note": null}'` |
+
+#### `ir ledger flow-delete`
+
+删除某笔本金进出记录。
+
+```bash
+ir ledger flow-delete <CODE> <FLOW_ID> --yes
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--yes` | false | 必传。不带 `--yes` 时拒绝执行（`CONFIRM_REQUIRED`，退出码 1） |
+
+#### `ir ledger totals`
+
+查询台账收益汇总（当前市值/净入金/累计收益；收益=市值−净入金，step-forward）。
+
+```bash
+ir ledger totals <CODE> [--as-of-date <YYYY-MM-DD>]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|:------:|------|
+| `--as-of-date` | 业务今天 | 汇总截止日 YYYY-MM-DD |
+
+> **口径**：`draft` 各值 `null`；`active` 无记录→市值/收益 `0`（SPEC §5）；`net_inflow` 可为负（撤资>注资），为负时 `warnings` 告警。绩效（区间收益/年化，口径A）见 `ir portfolio performance <CODE>`。
+
 ---
 
 ## 5. 典型业务流程
