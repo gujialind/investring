@@ -49,7 +49,17 @@ import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductN
 import { Badge } from "@/components/ui/badge";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { Plus, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
+import { Plus, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info, X } from "lucide-react";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetBody,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import RowActionButton from "@/components/shared/RowActionButton";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
@@ -531,9 +541,9 @@ export default function TradesContent({
   // 控件统一 h-9，下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值）；
   // 平台为 SearchablePlatformSelect（Popover，null 哨兵）；
   // 产品为 ProductFilterDialog 多选弹窗触发按钮（#155），outline 风格同筛选栏
-  const rangeWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[240px]";
-  const selectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[150px]";
-  const productSelectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[220px]";
+  const rangeWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[240px]";
+  const selectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[150px]";
+  const productSelectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[220px]";
   const filterControls = (
     <>
       <DateRangePicker
@@ -609,7 +619,7 @@ export default function TradesContent({
           <SelectItem value="sell">卖出</SelectItem>
         </SelectContent>
       </Select>
-      {hasNonDefaultFilter && (
+      {hasNonDefaultFilter && variant !== "mobile" && (
         <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
           重置
         </Button>
@@ -1099,20 +1109,48 @@ export default function TradesContent({
           <CardDescription>买入和卖出记录</CardDescription>
         </CardHeader>
         <CardContent>
-          {/* 筛选栏（规范 §9：表格卡片内顶部）；移动端为折叠面板 + 激活计数 Badge */}
+          {/* 筛选栏（规范 §9）；移动端为底部 sheet + 激活计数 Badge（#904 P1c，控件 h-10） */}
           {variant === "mobile" ? (
-            <div className="mb-3 space-y-2">
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setFilterOpen((v) => !v)}>
-                <Filter className="mr-2 h-4 w-4" />
-                筛选
-                {activeFilterCount > 0 && (
-                  <Badge variant="default" className="ml-2">
-                    {activeFilterCount}
-                  </Badge>
-                )}
-              </Button>
-              {filterOpen && <div className="grid grid-cols-1 gap-2">{filterControls}</div>}
-            </div>
+            <Sheet open={filterOpen} onOpenChange={setFilterOpen}>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="sm" className="h-10">
+                  <Filter className="mr-2 h-4 w-4" />
+                  筛选
+                  {activeFilterCount > 0 && (
+                    <Badge variant="default" className="ml-2">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Button>
+              </SheetTrigger>
+              <SheetContent>
+                <SheetHeader>
+                  <SheetTitle>筛选</SheetTitle>
+                  <SheetClose asChild>
+                    <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </SheetClose>
+                </SheetHeader>
+                <SheetBody>
+                  <div className="grid grid-cols-1 gap-3">{filterControls}</div>
+                </SheetBody>
+                <SheetFooter>
+                  <div className="flex items-center justify-between">
+                    {hasNonDefaultFilter ? (
+                      <Button variant="ghost" size="sm" className="h-11" onClick={resetFilters}>
+                        重置
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
+                    <SheetClose asChild>
+                      <Button size="sm" className="h-11">完成</Button>
+                    </SheetClose>
+                  </div>
+                </SheetFooter>
+              </SheetContent>
+            </Sheet>
           ) : (
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
