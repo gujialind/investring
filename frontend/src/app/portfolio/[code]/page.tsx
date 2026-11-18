@@ -130,9 +130,11 @@ function PortfolioDetailInner() {
           crumbs={[{ href: "/portfolio", label: "组合", ariaLabel: "返回组合列表" }]}
           title={portfolio.name}
           badge={
-            <Badge variant={getStatusBadgeVariant(portfolio.status)}>
-              {portfolio.status === "active" ? "活跃" : isDraft ? "草稿" : "已关闭"}
-            </Badge>
+            portfolio.status !== "active" ? (
+              <Badge variant={getStatusBadgeVariant(portfolio.status)}>
+                {isDraft ? "草稿" : "已关闭"}
+              </Badge>
+            ) : undefined
           }
           meta={
             <>

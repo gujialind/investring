@@ -236,10 +236,6 @@ export default function AssetClassificationsContent({
 
   const pending = createItem.isPending || updateItem.isPending;
 
-  if (isLoading) {
-    return <LoadingState />;
-  }
-
   /** 状态徽标（停用 = neutral，见 visual-spec §1.3） */
   const inactiveBadge = (item: AssetClassificationItem) =>
     !item.is_active && <Badge variant="neutral">停用</Badge>;
@@ -476,6 +472,10 @@ export default function AssetClassificationsContent({
         }
       />
 
+      {isLoading ? (
+        <LoadingState />
+      ) : (
+      <>
       {/* 大区：asset_class 管理（规则摘要 + 编辑） */}
       <Card>
         <CardHeader>
@@ -599,6 +599,8 @@ export default function AssetClassificationsContent({
           </Card>
         );
       })}
+      </>
+      )}
     </div>
   );
 }

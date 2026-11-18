@@ -124,14 +124,6 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
     setPendingRemoveCode(code);
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   return (
     <div className={isMobile ? "space-y-4" : "space-y-6"}>
       <PageHeader
@@ -234,6 +226,11 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
         }
       />
 
+      {isLoading ? (
+        <div className="flex items-center justify-center h-[60vh]">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      ) : (
       <Card>
         {!isMobile && (
           <CardHeader>
@@ -348,6 +345,7 @@ export default function InvestorsContent({ variant = "desktop" }: InvestorsConte
           ) : null}
         </CardContent>
       </Card>
+      )}
 
       {resetTarget && (
         <ResetPasswordDialog

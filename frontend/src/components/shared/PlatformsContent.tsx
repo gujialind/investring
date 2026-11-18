@@ -111,14 +111,6 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
     setPendingDeleteCode(code);
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   return (
     <div className={isMobile ? "space-y-4" : "space-y-6"}>
       <PageHeader
@@ -188,6 +180,11 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
         }
       />
 
+      {isLoading ? (
+        <div className="flex items-center justify-center h-[60vh]">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      ) : (
       <Card>
         {!isMobile && (
           <CardHeader>
@@ -273,6 +270,7 @@ export default function PlatformsContent({ variant = "desktop" }: PlatformsConte
           ) : null}
         </CardContent>
       </Card>
+      )}
 
       <ConfirmDialog
         open={!!pendingDeleteCode}
