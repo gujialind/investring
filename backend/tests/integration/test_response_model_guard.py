@@ -44,6 +44,8 @@ WHITELIST: dict[tuple[str, str], str] = {
     ("DELETE", "/api/portfolios/{code}"): "删除空壳草稿回执，仅 {'message'}（#820）",
     ("DELETE", "/api/platforms/{code}"): "删除回执，仅 {'message'}",
     ("DELETE", "/api/dividend-configs/{config_id}"): "删除回执，仅 {'message'}（#887）",
+    ("DELETE", "/api/portfolios/{code}/ledger/entries/{entry_id}"): "台账市值删除回执，仅 {'message'}（#905）",
+    ("DELETE", "/api/portfolios/{code}/ledger/flows/{flow_id}"): "台账进出删除回执，仅 {'message'}（#905）",
     ("DELETE", "/api/products/{code}/{market}"): "删除回执，仅 {'message'}",
     ("DELETE", "/api/share-change-events/{id}"): "删除回执，仅 {'message'}",
     ("POST", "/api/share-change-events/{id}/cancel"): "取消回执，仅 {'message'}",

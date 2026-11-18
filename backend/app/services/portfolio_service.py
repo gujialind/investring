@@ -167,7 +167,16 @@ def _derive_portfolio_totals(db: Session, code: str) -> dict:
     total_profit = 最新快照 total_value − 净投入；净投入 = Σ confirmed 申购金额
     − Σ confirmed 赎回金额，且仅计 confirm_date <= 最新快照日的记录（#250，
     与 total_value 的快照时点口径对齐）。无快照时两者均为 None。
+
+    issue #905 PR2：台账型（kind='ledger'）走台账收益口径（当前市值 − 净入金，
+    step-forward），净值型走下方快照口径，逐字不变。
     """
+    portfolio = db.query(Portfolio).filter(Portfolio.code == code).first()
+    if portfolio and portfolio.kind == "ledger":
+        from app.services.ledger_profit_service import compute_ledger_totals
+        totals = compute_ledger_totals(db, code)
+        return {"total_value": totals["total_value"], "total_profit": totals["total_profit"]}
+
     latest = (
         db.query(PortfolioValueSnapshot)
         .filter(PortfolioValueSnapshot.portfolio_code == code)
@@ -701,7 +710,19 @@ def get_returns(db: Session, code: str) -> dict:
 
 def get_cash_flow(db: Session, code: str) -> dict:
     """查看组合资金流（confirmed 申赎汇总）。"""
-    _get_portfolio_or_404(db, code)
+    portfolio = _get_portfolio_or_404(db, code)
+    # issue #905 PR2：台账型走台账本金进出累计（ledger_flow），净值型走申赎汇总逐字不变。
+    if portfolio.kind == "ledger":
+        from app.models.ledger_flow import LedgerFlow
+        flows = db.query(LedgerFlow).filter(LedgerFlow.portfolio_code == code).all()
+        inflow = sum(float(f.amount) for f in flows if f.direction == "inflow")
+        outflow = sum(float(f.amount) for f in flows if f.direction == "outflow")
+        return {
+            "portfolio_code": code,
+            "total_inflow": round(inflow, 4),
+            "total_outflow": round(outflow, 4),
+            "net_inflow": round(inflow - outflow, 4),
+        }
     subs = db.query(Subscription).filter(
         Subscription.portfolio_code == code,
         Subscription.status == "confirmed",

@@ -42,6 +42,8 @@ from app.schemas.auth import ApiKeyInfo, AuthStatus
 from app.models.asset_classification import AssetClassification
 from app.models.audit_log import AuditLog
 from app.models.dividend_method_config import DividendMethodConfig
+from app.models.ledger_entry import LedgerEntry
+from app.models.ledger_flow import LedgerFlow
 from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
 from app.models.login_log import LoginLog
@@ -63,6 +65,9 @@ from app.models.trading_calendar import TradingCalendar
 from app.models.trade import Trade
 from app.schemas.asset_classification import AssetClassificationDetail
 from app.schemas.dividend_config import DividendConfigResponse
+from app.schemas.ledger import (
+    LedgerEntryResponse, LedgerFlowResponse, LedgerFlowWriteResponse,
+)
 from app.schemas.investor import InvestorResponse
 from app.schemas.market_data import PriceDataResponse
 from app.schemas.log import AuditLogResponse, LoginLogResponse, SystemErrorLogResponse
@@ -137,6 +142,13 @@ ORM_SCHEMA_PAIRS: list[tuple[type, type]] = [
     # updated_at（DateTime，响应均 Optional[datetime]），其余键与方法列 NOT NULL，
     # 收录后无违规、EXCEPTIONS 台账不增不减。
     (DividendMethodConfig, DividendConfigResponse),
+    # #905 PR2 纳入：台账型组合 REST 出口（entries/flows CRUD）。可空列仅 note /
+    # created_by / created_at / updated_at（响应均 Optional），其余键与方法列 NOT NULL，
+    # 收录后无违规、EXCEPTIONS 台账不增不减。LedgerFlowWriteResponse 是 flow 写入出口
+    # （附 warnings），与 LedgerFlow 同名字段同 LedgerFlowResponse。
+    (LedgerEntry, LedgerEntryResponse),
+    (LedgerFlow, LedgerFlowResponse),
+    (LedgerFlow, LedgerFlowWriteResponse),
 ]
 
 # (模型名, 字段名) -> (kind, 理由)。kind 的机制必须能被 MECHANISM_CHECKERS 机器复核。
