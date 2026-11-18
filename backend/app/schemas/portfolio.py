@@ -13,6 +13,10 @@ class PortfolioCreate(PortfolioBase):
     # 持仓明细二级分组维度覆盖（issue #144）：{"ASSET_STOCK": "style", ...}，
     # 仅存显式覆盖项；校验以 asset_class_dimension_rule 规则表为准
     display_config: Optional[Dict[str, str]] = None
+    # 组合类型（issue #905）：nav=净值型（默认）/ ledger=平台市值台账型；创建后不可改。
+    kind: str = "nav"
+    # 台账型归属投资人（issue #905）：ledger 必填、nav 禁填；创建后不可改。
+    owner_investor_code: Optional[str] = None
 
 
 class PortfolioUpdate(BaseModel):
@@ -23,10 +27,15 @@ class PortfolioUpdate(BaseModel):
     display_config: Optional[Dict[str, str]] = None
     # 自动快照开关（issue #156）：不传 = 不修改
     auto_snapshot_enabled: Optional[bool] = None
+    # 注意：kind / owner_investor_code 刻意不在白名单（issue #905，创建后不可改）；
+    # router 对 raw body 显式传 kind/owner 一律拒绝（INVALID_PARAM）。
 
 
 class PortfolioResponse(PortfolioBase):
     status: str = "draft"
+    # 组合类型与台账型归属投资人（issue #905）
+    kind: str = "nav"
+    owner_investor_code: Optional[str] = None
     started_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

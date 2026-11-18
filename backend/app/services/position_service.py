@@ -858,6 +858,8 @@ def update_cash_position(
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
         raise NotFoundError("PORTFOLIO_NOT_FOUND", f"组合 {portfolio_code} 不存在")
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
 
     platform = db.query(Platform).filter(Platform.code == platform_code).first()
     if not platform:
@@ -1027,6 +1029,8 @@ def delete_manual_cash_override(
     portfolio = db.query(Portfolio).filter(Portfolio.code == portfolio_code).first()
     if not portfolio:
         raise NotFoundError("PORTFOLIO_NOT_FOUND", f"组合 {portfolio_code} 不存在")
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
 
     manual = db.query(ManualMarketValue).filter(
         ManualMarketValue.portfolio_code == portfolio_code,

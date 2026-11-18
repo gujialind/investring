@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.investor import Investor
 from app.models.investor_holding import InvestorHolding
+from app.models.portfolio import Portfolio
 from app.models.auth import AuthSession, ApiKey
 from app.utils.security import get_password_hash
 from app.services.exceptions import BusinessError, NotFoundError
@@ -67,6 +68,16 @@ def delete_investor(db: Session, code: str) -> None:
     ).order_by(InvestorHolding.snapshot_date.desc()).first()
     if holding and holding.shares and holding.shares > 0:
         raise BusinessError("INVESTOR_HAS_SHARES", "投资人仍持有份额，需先全部赎回")
+
+    # issue #905：本次新增的台账型归属外键 portfolio.owner_investor_code 引用本投资人时拒删，
+    # 避免留下悬空归属（与份额保护同族；独立错误码区分「持有份额」与「被组合归属」）。
+    owning = db.query(Portfolio).filter(Portfolio.owner_investor_code == code).first()
+    if owning:
+        raise BusinessError(
+            "INVESTOR_HAS_PORTFOLIO",
+            "投资人仍被台账型组合归属，需先解除归属后再删除",
+            details={"portfolio_code": owning.code},
+        )
 
     # 删除账户时一并销毁凭证，避免同 code 重建账户后旧凭证复活；审计身份仍保留。
     db.query(AuthSession).filter(AuthSession.investor_code == code).delete(synchronize_session=False)

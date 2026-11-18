@@ -1151,6 +1151,8 @@ def create_trade(
         raise NotFoundError("NOT_FOUND", "组合不存在")
     if portfolio.status != "active":
         raise BusinessError("PORTFOLIO_NOT_ACTIVE", "组合未激活")
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
 
     # #83：market 省略时按产品唯一市场自动补全；LOF 一码多市场抛 MARKET_AMBIGUOUS。
     # 解析提前到交易日校验之前（#777）：HK_MUTUAL 的下单日须在 HKEX 日历上校验，

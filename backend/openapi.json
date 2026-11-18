@@ -923,6 +923,52 @@
         }
       }
     },
+    "/api/portfolios/{code}/activate": {
+      "post": {
+        "tags": [
+          "组合管理"
+        ],
+        "summary": "Activate Portfolio",
+        "description": "台账型组合手动激活（issue #905，D4）：draft→active，绕开申购激活路径。",
+        "operationId": "activate_portfolio_api_portfolios__code__activate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/portfolios/{code}/nav-history": {
       "get": {
         "tags": [
@@ -11733,6 +11779,22 @@
               }
             ],
             "title": "Display Config"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "nav"
+          },
+          "owner_investor_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Investor Code"
           }
         },
         "type": "object",
@@ -11884,6 +11946,22 @@
             "type": "string",
             "title": "Status",
             "default": "draft"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "nav"
+          },
+          "owner_investor_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Investor Code"
           },
           "started_at": {
             "anyOf": [
@@ -12246,6 +12324,22 @@
             "type": "string",
             "title": "Status",
             "default": "draft"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "nav"
+          },
+          "owner_investor_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Investor Code"
           },
           "started_at": {
             "anyOf": [

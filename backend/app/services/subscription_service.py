@@ -457,6 +457,8 @@ def create_subscription(
     if not portfolio:
         raise NotFoundError("NOT_FOUND", "组合不存在")
     # 首次申购时组合状态为 draft，确认后变为 active
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
     if portfolio.status not in ("active", "draft"):
         raise BusinessError("PORTFOLIO_NOT_ACTIVE", "组合未激活")
 

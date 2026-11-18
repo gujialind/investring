@@ -380,6 +380,7 @@ def _generate_snapshots_for_date(db: Session, target_date) -> dict:
     active_portfolios = db.query(Portfolio).filter(
         Portfolio.status == "active",
         Portfolio.auto_snapshot_enabled.is_(True),
+        Portfolio.kind == "nav",  # issue #905：台账型不进自动快照轮
     ).all()
     for portfolio in active_portfolios:
         latest_snapshot = db.query(func.max(PortfolioValueSnapshot.snapshot_date)).filter(

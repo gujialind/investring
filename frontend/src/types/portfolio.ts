@@ -3,6 +3,10 @@ export interface Portfolio {
   name: string;
   description?: string;
   status: string;
+  /** 组合类型（issue #905）：nav=净值型（默认）/ ledger=平台市值台账型；创建后不可改 */
+  kind: string;
+  /** 台账型归属投资人（issue #905）：ledger 必填、nav 为 null；创建后不可改 */
+  owner_investor_code?: string | null;
   /** 组合级自动快照开关（issue #156）：开启后由定时任务每个交易日自动补齐快照 */
   auto_snapshot_enabled: boolean;
   started_at?: string;
@@ -26,6 +30,10 @@ export interface PortfolioCreate {
   name: string;
   description?: string;
   display_config?: Record<string, string> | null;
+  /** 组合类型（issue #905）：nav（默认）/ ledger；创建后不可改 */
+  kind?: string;
+  /** 台账型归属投资人（issue #905）：ledger 必填、nav 禁填 */
+  owner_investor_code?: string | null;
 }
 
 export interface PortfolioUpdate {

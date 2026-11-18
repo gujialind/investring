@@ -52,6 +52,10 @@ def create(
         None, "--display-config",
         help='持仓明细二级分组维度 JSON，如 \'{"ASSET_STOCK": "style"}\'（issue #144）',
     ),
+    kind: Optional[str] = typer.Option(None, "--kind", help="组合类型 nav/ledger（默认 nav；issue #905）"),
+    owner_investor_code: Optional[str] = typer.Option(
+        None, "--owner-investor-code", help="台账型归属投资人代码（ledger 必填；issue #905）"
+    ),
     json_body: Optional[str] = typer.Option(None, "--json", help="完整 JSON 请求体，优先于逐项参数"),
 ):
     """创建组合"""
@@ -66,6 +70,8 @@ def create(
         display_config=(
             _parse_display_config(display_config) if json_body is None else None
         ),
+        kind=kind,
+        owner_investor_code=owner_investor_code,
     )
     result = client.post("/api/portfolios", json_data=body)
     success(data=result["data"])
@@ -163,6 +169,14 @@ def reactivate(code: str = typer.Argument(..., help="组合代码")):
     """重新激活组合"""
     client = APIClient.from_config()
     result = client.post(f"/api/portfolios/{code}/reactivate")
+    success(data=result["data"])
+
+
+@app.command("activate")
+def activate(code: str = typer.Argument(..., help="组合代码")):
+    """手动激活台账型组合（draft→active，绕开申购；issue #905）"""
+    client = APIClient.from_config()
+    result = client.post(f"/api/portfolios/{code}/activate")
     success(data=result["data"])
 
 

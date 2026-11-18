@@ -53,6 +53,8 @@ def create_cash_transfer(
         raise NotFoundError("PORTFOLIO_NOT_FOUND", f"组合 {portfolio_code} 不存在")
     if portfolio.status != "active":
         raise BusinessError("PORTFOLIO_NOT_ACTIVE", "组合未激活")
+    from app.services.portfolio_service import assert_nav_portfolio  # issue #905 类型闸门
+    assert_nav_portfolio(portfolio)
 
     if from_platform == to_platform:
         raise BusinessError("SAME_PLATFORM", "转出平台和转入平台不能相同")

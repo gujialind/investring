@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
@@ -44,6 +44,8 @@ def create_portfolio(
         name=portfolio.name,
         description=portfolio.description,
         display_config=portfolio.display_config,
+        kind=portfolio.kind,
+        owner_investor_code=portfolio.owner_investor_code,
     )
     db.commit()
     db.refresh(new_portfolio)
@@ -67,12 +69,21 @@ def get_portfolio(
 
 
 @router.put("/{code}", response_model=PortfolioResponse)
-def update_portfolio(
+async def update_portfolio(
     code: str,
     portfolio: PortfolioUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_admin),
 ):
+    # issue #905：kind/owner_investor_code 创建后不可改——白名单不含这两字段，
+    # 显式传入（raw body）一律拒绝，避免静默 no-op 让调用方误以为改成功。
+    raw = await request.json()
+    if isinstance(raw, dict) and ("kind" in raw or "owner_investor_code" in raw):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "INVALID_PARAM", "message": "组合类型与归属投资人创建后不可修改"},
+        )
     updates = portfolio.dict(exclude_unset=True)
     # 显式 null 收口（#579 口径 A，与 #573 同口径）：name / auto_snapshot_enabled
     # 是 NOT NULL 列，显式 null 此前被 service 的 `is not None` 静默跳过（恒 no-op，
@@ -121,6 +132,18 @@ def reactivate_portfolio(
     current_user=Depends(get_current_admin),
 ):
     portfolio_service.reactivate_portfolio(db, code)
+    db.commit()
+    return {"message": f"组合 {code} 激活成功"}
+
+
+@router.post("/{code}/activate")
+def activate_portfolio(
+    code: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_admin),
+):
+    """台账型组合手动激活（issue #905，D4）：draft→active，绕开申购激活路径。"""
+    portfolio_service.activate_ledger_portfolio(db, code)
     db.commit()
     return {"message": f"组合 {code} 激活成功"}
 
