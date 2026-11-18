@@ -40,6 +40,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetBody,
+  SheetFooter,
 } from "@/components/ui/sheet";
 import { Product } from "@/types/product";
 import { cn } from "@/lib/utils";
@@ -281,7 +282,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
   // 筛选栏控件（规范 §9：表格卡片内顶部，控件 h-9、无 Label、placeholder 表意）；
   // 下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值），
   // 数字型在 onChange 里 Number(v)（0 是合法筛选值，不能用真值判断）；每次变更页码归 1
-  const selectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[140px]";
+  const selectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[140px]";
   const filterControls = (
     <>
       <Input
@@ -291,7 +292,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           setPage(1);
         }}
         placeholder="搜索产品代码/名称"
-        className={variant === "mobile" ? "h-9 w-full" : "h-9 w-[200px]"}
+        className={variant === "mobile" ? "h-10 w-full" : "h-9 w-[200px]"}
       />
       <Select
         value={market ?? "all"}
@@ -446,7 +447,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           </SelectContent>
         </Select>
       ))}
-      {hasNonDefaultFilter && (
+      {hasNonDefaultFilter && variant !== "mobile" && (
         <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
           重置
         </Button>
@@ -591,20 +592,48 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {/* 筛选栏（规范 §9）；移动端为折叠面板 + 激活计数 Badge */}
+          {/* 筛选栏（规范 §9）；移动端为底部 sheet + 激活计数 Badge（#904 P1b，控件 h-10） */}
           {variant === "mobile" ? (
-            <div className="mb-3 space-y-2">
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setFilterOpen((v) => !v)}>
-                <Filter className="mr-2 h-4 w-4" />
-                筛选
-                {activeFilterCount > 0 && (
-                  <Badge variant="default" className="ml-2">
-                    {activeFilterCount}
-                  </Badge>
-                )}
-              </Button>
-              {filterOpen && <div className="grid grid-cols-1 gap-2">{filterControls}</div>}
-            </div>
+            <Sheet open={filterOpen} onOpenChange={setFilterOpen}>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="sm" className="h-10">
+                  <Filter className="mr-2 h-4 w-4" />
+                  筛选
+                  {activeFilterCount > 0 && (
+                    <Badge variant="default" className="ml-2">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Button>
+              </SheetTrigger>
+              <SheetContent>
+                <SheetHeader>
+                  <SheetTitle>筛选</SheetTitle>
+                  <SheetClose asChild>
+                    <Button variant="ghost" size="icon" aria-label="关闭">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </SheetClose>
+                </SheetHeader>
+                <SheetBody>
+                  <div className="grid grid-cols-1 gap-3">{filterControls}</div>
+                </SheetBody>
+                <SheetFooter>
+                  <div className="flex items-center justify-between">
+                    {hasNonDefaultFilter ? (
+                      <Button variant="ghost" size="sm" onClick={resetFilters}>
+                        重置
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
+                    <SheetClose asChild>
+                      <Button size="sm">完成</Button>
+                    </SheetClose>
+                  </div>
+                </SheetFooter>
+              </SheetContent>
+            </Sheet>
           ) : (
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
