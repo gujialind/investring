@@ -35,6 +35,7 @@ export { cashTransferApi } from "./cash-transfer";
 export { cashFlowApi } from "./cash-flow";
 export type { CashFlowListParams } from "./cash-flow";
 export { dividendConfigApi } from "./dividend-config";
+export { ledgerApi } from "./ledger";
 
 // 重新导出此前散落在 api.ts 中的类型，保持既有 import 兼容
 export type {

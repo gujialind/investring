@@ -63,6 +63,11 @@ export const portfolioApi = {
   activate: (code: string) =>
     request<Portfolio>({ method: "POST", url: `/portfolios/${code}/reactivate` }),
 
+  // 台账型手动激活（issue #905 D4）：POST /activate，仅台账型 draft 可激活，绕开申购路径；
+  // 与上面 activate（reactivate，closed→active）是不同端点。净值型调 /activate 由后端拒绝。
+  activateLedger: (code: string) =>
+    request<Portfolio>({ method: "POST", url: `/portfolios/${code}/activate` }),
+
   // 仅「draft 且无任何关联记录」的空壳组合可删（#820）；其余形态由 close/reactivate 管理
   delete: (code: string) =>
     request<{ message: string }>({ method: "DELETE", url: `/portfolios/${code}` }),

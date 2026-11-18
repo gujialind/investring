@@ -154,4 +154,13 @@ export const queryKeys = {
     resolve: (key: unknown, entitlementDate: string) =>
       ["dividend-configs", "resolve", key, entitlementDate] as const,
   },
+  // 平台市值台账型组合（issue #905 PR3）：entries/flows/totals 按组合分键。
+  // 写侧 mutation 失效 byPortfolio(code) 整段 + 组合详情/列表（台账收益喂详情 total_value/total_profit 与仪表盘）。
+  ledger: {
+    root: ["ledger"] as const,
+    byPortfolio: (code: string) => ["ledger", code] as const,
+    entries: (code: string, params?: unknown) => ["ledger", code, "entries", params] as const,
+    flows: (code: string, params?: unknown) => ["ledger", code, "flows", params] as const,
+    totals: (code: string, asOfDate?: string) => ["ledger", code, "totals", asOfDate ?? null] as const,
+  },
 };

@@ -15,6 +15,7 @@ export interface DashboardStats {
   trades: Trade[];
   investors: Investor[];
   totalValue: number;
+  totalProfit: number;
   avgReturn: number;
   pendingSubscriptions: Subscription[];
   pendingTrades: Trade[];
@@ -37,9 +38,15 @@ export function useDashboardStats(): DashboardStats {
   const investors = investorsData?.items || [];
 
   const activePortfolios = portfolios.filter((p) => p.status === "active");
+  // R8 跨口径合并（#905 PR3）：总资产/总收益 = 净值型 + 台账型。后端 list_portfolios 已按 kind
+  // 分流派生（净值型走快照口径、台账型走台账口径，两类语义均「市值−净投入」），前端直接求和。
   const totalValue = activePortfolios.reduce((sum, p) => sum + (p.total_value || 0), 0);
+  const totalProfit = activePortfolios.reduce((sum, p) => sum + (p.total_profit || 0), 0);
 
-  const portfoliosWithReturn = activePortfolios.filter(
+  // 平均收益率（a 口径，#905 PR3）：只在净值型集合计算（首末净值百分数）。台账型无净值序列、
+  // 收益率语义不同，不纳入平均（避免得到无定义量，P1 禁止静默失真）；UI 标注「不含台账型」。
+  const navActive = activePortfolios.filter((p) => p.kind !== "ledger");
+  const portfoliosWithReturn = navActive.filter(
     (p) => p.cumulative_return !== undefined && p.cumulative_return !== null
   );
   const avgReturn =
@@ -58,6 +65,7 @@ export function useDashboardStats(): DashboardStats {
     trades,
     investors,
     totalValue,
+    totalProfit,
     avgReturn,
     pendingSubscriptions,
     pendingTrades,

@@ -142,13 +142,14 @@ def main(
     pass
 
 
-# 注册 20 个命令组
+# 注册 21 个命令组（#905 PR3 增 ledger）
 from ir_cli.commands import (
     asset_classifications,
     auth,
     config_cmd,
     dividend_config,
     investors,
+    ledgers,
     portfolios,
     positions,
     subscriptions,
@@ -170,6 +171,7 @@ app.add_typer(auth.app, name="auth", help="认证管理")
 app.add_typer(config_cmd.app, name="config", help="本地配置管理")
 app.add_typer(investors.app, name="investor", help="投资人管理")
 app.add_typer(portfolios.app, name="portfolio", help="组合管理")
+app.add_typer(ledgers.app, name="ledger", help="平台市值台账管理")
 app.add_typer(positions.app, name="position", help="持仓管理")
 app.add_typer(subscriptions.app, name="sub", help="申购赎回管理")
 app.add_typer(trades.app, name="trade", help="调仓交易管理")

@@ -16,6 +16,7 @@ import {
   usePortfolioInvestors,
   usePositionList,
   useActivatePortfolio,
+  useActivateLedgerPortfolio,
   useDeletePortfolio,
   usePortfolioPerformance,
   usePortfolioReturns,
@@ -34,6 +35,7 @@ import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
+import LedgerContent from "@/components/shared/LedgerContent";
 import { buildAllocation } from "@/lib/allocation";
 import { getStatusBadgeVariant } from "@/lib/utils";
 import { useChartTheme } from "@/hooks/useChartTheme";
@@ -69,6 +71,7 @@ function PortfolioDetailInner() {
   const { data: assetClassDict, isLoading: dictLoading } =
     useAssetClassifications("asset_class");
   const activatePortfolio = useActivatePortfolio();
+  const activateLedger = useActivateLedgerPortfolio();
   const deletePortfolio = useDeletePortfolio();
   const { isAdmin } = useRoleCheck();
   // 主题 hook 须在早退（isLoading/!portfolio）之前调用（rules-of-hooks）
@@ -121,6 +124,7 @@ function PortfolioDetailInner() {
   }
 
   const isDraft = portfolio.status === "draft";
+  const isLedger = portfolio.kind === "ledger";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses, theme);
@@ -151,10 +155,13 @@ function PortfolioDetailInner() {
             <PortfolioActionButtons
               portfolioCode={code}
               status={portfolio.status as "draft" | "active" | "closed"}
+              kind={portfolio.kind}
               basePath="/portfolio"
               variant="desktop"
-              onActivateClick={() => activatePortfolio.mutate(code)}
-              isActivatePending={activatePortfolio.isPending}
+              onActivateClick={() =>
+                isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code)
+              }
+              isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
               onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
               isDeletePending={deletePortfolio.isPending}
             />
@@ -176,7 +183,7 @@ function PortfolioDetailInner() {
             }
           />
 
-        {isDraft && (
+        {isDraft && !isLedger && (
           <Alert>
             <AlertDescription>
               组合尚未激活，请执行首次申购以启动组合。初始净值固定为 1.0000
@@ -184,7 +191,10 @@ function PortfolioDetailInner() {
           </Alert>
         )}
 
-        {showInvestors ? (
+        {isLedger ? (
+          /* 台账型独立视图（issue #905 PR3）：按平台记市值/进出 + 口径A 绩效；无净值/份额/投资人 Tab */
+          <LedgerContent portfolio={portfolio} variant="desktop" />
+        ) : showInvestors ? (
           /* ?tab=investors 投资人视图（draft 也允许）；占比用后端 ratio，不再传 totalShares（#693） */
           <PortfolioInvestorsList investors={investors} />
         ) : (

@@ -18,6 +18,7 @@ export default function DashboardPage() {
     subscriptions,
     investors,
     totalValue,
+    totalProfit,
     avgReturn,
     pendingSubscriptions,
     pendingTrades,
@@ -45,6 +46,7 @@ export default function DashboardPage() {
         {/* Summary Cards */}
         <DashboardStatsCards
           totalValue={totalValue}
+          totalProfit={totalProfit}
           avgReturn={avgReturn}
           activeCount={activePortfolios.length}
           totalCount={portfolios.length}
@@ -145,10 +147,18 @@ export default function DashboardPage() {
                       <p className="text-sm text-muted-foreground">{portfolio.code}</p>
                     </div>
                     <div className="text-right">
-                      <p className="font-medium">{formatCurrency(portfolio.total_value || 0)}</p>
-                      <p className={`text-sm ${getReturnColorClass(portfolio.cumulative_return || 0)}`}>
-                        {formatReturnRate(portfolio.cumulative_return || 0)}
-                      </p>
+                      <p className="font-medium">{formatCurrency(portfolio.total_value ?? 0)}</p>
+                      {portfolio.kind === "ledger" ? (
+                        // 台账型无净值收益率（cumulative_return=None），改显累计收益（元），
+                        // 不把 None 当 0.00% 渲染（#905 PR3 问③）。
+                        <p className={`text-sm ${getReturnColorClass(portfolio.total_profit ?? 0)}`}>
+                          累计收益 {formatCurrency(portfolio.total_profit ?? 0)}
+                        </p>
+                      ) : (
+                        <p className={`text-sm ${getReturnColorClass(portfolio.cumulative_return || 0)}`}>
+                          {formatReturnRate(portfolio.cumulative_return || 0)}
+                        </p>
+                      )}
                     </div>
                   </Link>
                 ))}

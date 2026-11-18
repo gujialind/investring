@@ -8,6 +8,7 @@
 - SUMMARY_FIELDS: 各资源列表默认输出的摘要字段集
 """
 import json
+import math
 from datetime import date
 from typing import Any, Optional
 
@@ -26,6 +27,8 @@ ENUMS = {
     "dividend_method": ("cash_dividend", "reinvest_dividend"),
     "product_type": ("ETF", "OEF", "LOF", "CASH"),
     "role": ("admin", "viewer"),
+    "direction": ("inflow", "outflow"),
+    "asset_kind": ("cash", "non_cash"),
 }
 
 # 日期类字段名（后缀匹配）
@@ -41,6 +44,8 @@ SUMMARY_FIELDS = {
     "log_error": "id,error_type,error_code,error_message,request_path,created_at",
     "asset_classification": "code,dimension,name,sort_order,is_active,applicable_asset_classes",
     "dividend_config": "id,portfolio_code,product_code,market,platform_code,dividend_method,effective_from,source",
+    "ledger_entry": "id,portfolio_code,platform_code,value_date,market_value,asset_kind,note",
+    "ledger_flow": "id,portfolio_code,platform_code,flow_date,direction,amount,note",
 }
 
 
@@ -52,6 +57,9 @@ def validate_body(body: dict) -> None:
     for key, value in body.items():
         if value is None:
             continue
+        # S4（#905 PR3 L2）：nan/inf 本地拦截为输入类错误，避免序列化/后端量化抛 INTERNAL_ERROR。
+        if isinstance(value, float) and not math.isfinite(value):
+            error("VALIDATION_ERROR", f"字段 {key} 数值非法（nan/inf）: {value!r}")
         if isinstance(value, str) and any(key.endswith(suf) for suf in DATE_FIELDS):
             try:
                 # fromisoformat 也接受紧凑日期/周日期；CLI 契约只接受 YYYY-MM-DD。

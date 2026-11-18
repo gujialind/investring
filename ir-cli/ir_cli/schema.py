@@ -32,7 +32,7 @@ CONVENTIONS = {
     "--full": "list 类命令输出全字段（默认仅摘要字段）",
     "--quiet": "trade/sub 的 create/confirm 仅输出 {id,status,confirm_date}；cancel/unconfirm 后端只回 {message}，--quiet 即输出 {message}（无 id/status 可给，#520）",
     "output.fields": "命令条目 output.fields 为响应字段契约：`*`前缀=默认摘要字段，`?`后缀=可空；notes 含字段级警示（如恒为null的字段）",
-    "--index": "ir schema --index 输出极简命令索引（<1KB），再按 ir schema <group> 精确加载，较全量省约59% token",
+    "--index": "ir schema --index 输出极简命令索引（约1.4KB，仅组名+命令名），再按 ir schema <group> 精确加载，较全量大幅省 token",
     "env": ["IR_BASE_URL", "IR_TOKEN", "IR_PASSWORD", "IR_OLD_PASSWORD", "IR_NEW_PASSWORD", "IR_CONNECT_TIMEOUT", "IR_HTTP_TIMEOUT", "IR_RETRY", "IR_DEBUG"],
 }
 
@@ -211,7 +211,7 @@ def build_schema(root: Any, group_name: Optional[str] = None, index_only: bool =
     Args:
         root: typer.main.get_command(app) 得到的顶层命令组
         group_name: 仅输出指定命令组；None 输出全量（含协议/枚举/hints）
-        index_only: 仅输出极简命令索引（协议退出码 + 命令组索引字符串，<1KB），
+        index_only: 仅输出极简命令索引（协议退出码 + 命令组索引字符串，约1.4KB），
                     供 agent 先拿索引再按组加载，节省 token
 
     Raises:
@@ -222,7 +222,8 @@ def build_schema(root: Any, group_name: Optional[str] = None, index_only: bool =
         if is_group(cmd)
     }
     if index_only:
-        # 紧凑编码 "组名:子命令1 子命令2;..."：dict-of-lists 约 1.3KB，此编码 <1KB
+        # 紧凑编码 "组名:子命令1 子命令2;..."：dict-of-lists 更胖，此编码约1.4KB
+        # （#905 PR3 增 ledger 组 9 命令后；预算守卫见 tests/test_schema.py，1536）
         return {
             "protocol": {"exit_codes": "0=成功 1=业务错误 2=认证(ir auth login) 3=连接/超时 64=用法错误(选项/参数不存在或取值冲突)"},
             "groups": ";".join(
