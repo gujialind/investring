@@ -91,6 +91,16 @@ export async function openFilterPanelIfMobile(page: Page, testInfo: TestInfo): P
 }
 
 /**
+ * 关闭移动端筛选 sheet（#904 P1b）：sheet 是 modal Dialog，开着时表格外 aria-hidden，
+ * 行集 role 定位/点击不可达；设完筛选须回列表（点「完成」）再断言行集，与真实用户流一致。
+ * 桌面筛选栏恒展开、无 sheet，本函数 no-op。
+ */
+export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
+  if (testInfo.project.name !== 'mobile') return;
+  await page.getByRole('button', { name: '完成', exact: true }).click();
+}
+
+/**
  * 打开设置页某个分区（#878 双端形态分流）：桌面是三 Tab（点 tab），移动是分组列表 +
  * 行级钻取子页（点行 Link）。`goto('/settings')` 在 mobile project 经 proxy 落到
  * /m/settings，故按落地 pathname 是否带 /m/ 前缀分流，不依赖 testInfo（调用方未必持有）。

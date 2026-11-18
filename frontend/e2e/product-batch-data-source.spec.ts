@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { collectPageErrors, openFilterPanelIfMobile, openPopover } from "./helpers";
+import { collectPageErrors, openFilterPanelIfMobile, closeFilterPanelIfMobile, openPopover } from "./helpers";
 
 /**
  * #882 产品数据源批量切换（SPEC v1.1 Block 3 / V4）。
@@ -220,6 +220,8 @@ test.describe("产品数据源批量切换（#882）", () => {
     // 移动端筛选栏默认折叠，先展开（#383 口径）
     await openFilterPanelIfMobile(page, testInfo);
     await page.getByPlaceholder("搜索产品代码/名称").fill("沪深");
+    // 设完筛选回列表再断言行集（modal sheet 开着时表格外 aria-hidden，#904 P1b）
+    await closeFilterPanelIfMobile(page, testInfo);
     await expect.poll(() => listCalls).toBe(2);
     // 在途窗口：旧行勾选/全选禁用；参数变化已清空选择 → 无批量提交入口（旧缓存不得确认新查询）
     await expect(rowCheckbox(page, "华夏成长混合")).toBeDisabled();
