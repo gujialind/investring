@@ -27,6 +27,11 @@ EXPECTED_DEPENDENT_TABLES = {
     # （持有配置行的组合不能被 delete_draft_portfolio 删除），与 append-only 历史
     # 保全及 FK RESTRICT 一致；S2-3 语义裁决见 PR #888 处置回传。
     "dividend_method_config",
+    # #905 PR2：台账两表引用 portfolio.code（单列 FK RESTRICT）。语义=阻止删除
+    # （台账是账务事实，持有台账行的组合不能被 delete_draft_portfolio 连带删除），
+    # 与 #820 计数口径一致；反例见 test_ledger_entry.py::TestLedgerPortfolioDelete。
+    "ledger_entry",
+    "ledger_flow",
 }
 
 # 有 portfolio_code 列但**无外键**的表：元数据派生的删除判据对它们失明，

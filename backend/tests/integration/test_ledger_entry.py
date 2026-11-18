@@ -4,6 +4,9 @@
 
 import pytest
 
+from datetime import date
+from decimal import Decimal
+
 from tests.factories import create_portfolio, create_investor
 from app.models.ledger_entry import LedgerEntry
 from app.models.audit_log import AuditLog
@@ -155,3 +158,56 @@ class TestLedgerFlowCRUD:
         assert up.status_code == 200 and up.json()["amount"] == 200.0
         de = client.delete(f"/api/portfolios/LE_PORT/ledger/flows/{fid}", headers=admin_headers)
         assert de.status_code == 200
+
+
+class TestLedgerPortfolioDelete:
+    """带台账行的组合删除被拒（台账是账务事实，不随组合壳删除），三态台账行零删除。
+
+    补强 #905 验收断言面，对齐 #820 计数口径（_count_portfolio_dependents 元数据派生
+    含 ledger_entry/ledger_flow）。守门名单见 test_portfolio_delete_dependents.py。
+    """
+
+    def _add_ledger_row(self, db, code):
+        # 直接造行以测删除判据（draft 态写侧闸门要求 active，此处绕过仅测删除语义）
+        db.add(LedgerEntry(portfolio_code=code, platform_code="MYCF",
+                           value_date=date(2026, 1, 5), market_value=Decimal("100"),
+                           asset_kind="non_cash"))
+        db.flush()
+
+    def test_active_with_ledger_rejected(self, client, admin_headers, test_db):
+        create_investor(test_db, code="INV_DEL_A")
+        create_portfolio(test_db, code="DEL_ACT", kind="ledger",
+                         owner_investor_code="INV_DEL_A", status="active")
+        self._add_ledger_row(test_db, "DEL_ACT")
+        resp = client.delete("/api/portfolios/DEL_ACT", headers=admin_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error"] == "PORTFOLIO_NOT_DELETABLE"
+        assert test_db.query(LedgerEntry).filter_by(portfolio_code="DEL_ACT").count() == 1
+
+    def test_draft_with_ledger_rejected(self, client, admin_headers, test_db):
+        create_investor(test_db, code="INV_DEL_D")
+        create_portfolio(test_db, code="DEL_DRA", kind="ledger",
+                         owner_investor_code="INV_DEL_D", status="draft")
+        self._add_ledger_row(test_db, "DEL_DRA")
+        resp = client.delete("/api/portfolios/DEL_DRA", headers=admin_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error"] == "PORTFOLIO_HAS_DEPENDENT_DATA"
+        assert "ledger_entry" in resp.json()["detail"]["details"]["dependencies"]
+        assert test_db.query(LedgerEntry).filter_by(portfolio_code="DEL_DRA").count() == 1
+
+    def test_closed_with_ledger_rejected(self, client, admin_headers, test_db):
+        create_investor(test_db, code="INV_DEL_C")
+        create_portfolio(test_db, code="DEL_CLO", kind="ledger",
+                         owner_investor_code="INV_DEL_C", status="closed")
+        self._add_ledger_row(test_db, "DEL_CLO")
+        resp = client.delete("/api/portfolios/DEL_CLO", headers=admin_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error"] == "PORTFOLIO_HAS_DEPENDENT_DATA"
+        assert test_db.query(LedgerEntry).filter_by(portfolio_code="DEL_CLO").count() == 1
+
+    def test_empty_ledger_portfolio_deletable(self, client, admin_headers, test_db):
+        create_investor(test_db, code="INV_DEL_E")
+        create_portfolio(test_db, code="DEL_EMP", kind="ledger",
+                         owner_investor_code="INV_DEL_E", status="draft")
+        resp = client.delete("/api/portfolios/DEL_EMP", headers=admin_headers)
+        assert resp.status_code == 200  # 无台账行的空壳可删
