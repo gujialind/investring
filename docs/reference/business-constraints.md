@@ -244,6 +244,17 @@ InvestRing 是净值化记账系统：投资人按净值申购/赎回组合份�
 
 * 持仓表禁止手动 CRUD（`POSITION_TABLE_PROTECTED`），现金修正走 `cash-position` 覆盖层（见下）。
 
+<a id="rule-ledger-portfolio"></a>
+## 台账型组合（平台市值台账）
+
+台账型（`kind='ledger'`）组合用独立台账表记平台市值与本金进出，与净值化双层账本完全隔离（#905 PR2）。
+
+- **两表**：`ledger_entry`（平台市值台账，每平台每日一行绝对市值，唯一键 `(portfolio_code, platform_code, value_date)`，`asset_kind ∈ {cash, non_cash}` 展示分类）；`ledger_flow`（本金进出流水，`direction ∈ {inflow, outflow}`，`amount>0`，同平台同日可多笔，无唯一约束）。两表可 update/delete（D5），每次写入经 `record_audit` 留痕（old/new），无 ORM 禁改 hook。
+- **隔离（D1）**：`ledger_entry`/`ledger_flow` **不被** `calculate_available_cash`、`compute_cash_balance`、快照在途、`cash_flow_service` 消费——台账现金类记录不进可用现金/在途口径（守门 `test_ledger_cash_isolation`）。
+- **写侧闸门**：仅 `kind='ledger'` 且 `active` 可写（draft 拒 `PORTFOLIO_NOT_ACTIVE` 并提示先激活，S3）；净值型调台账端点拒 `PORTFOLIO_KIND_NOT_ALLOWED`。市值 ≥0、金额闸门同 `manual_market_value`（`INVALID_AMOUNT`）；`value_date`/`flow_date` 允许任意自然日（D3，不校交易日）。
+- **收益（D2）**：`ledger_profit_service.compute_ledger_totals`——当前市值 = Σ_platform（`value_date ≤ D` 最近一条市值，step-forward）；净入金 = Σ inflow − Σ outflow（`flow_date ≤ D`）；累计收益 = 当前市值 − 净入金。draft → None；active 无记录 → 0。净入金为负允许录入 + 告警（S4，不硬拒不静默）。读侧分流：`_derive_portfolio_totals`/`get_cash_flow` 台账型走台账口径，净值型逐字不变。
+- **绩效（P1=口径A）**：`compute_ledger_performance` 只给 `mwr`（XIRR，复用 `performance_service._xirr`，inflow 负流/outflow 正流 + 期末市值正流，`when=flow_date`）与区间收益 `return_1m/3m/6m/ytd/1y/3y`（Modified Dietz：`R=(EMV−BMV−CF)/(BMV+Σw_i·CF_i)`，`w_i=(T−t_i)/T`，BMV/EMV step-forward）；`twr`、波动率、回撤、nav 类恒 None（台账无净值序列，不硬算），不新增 `data_sparse` 字段，披露沿用 `annualization_reliable`（holding_days<90→False）。区间起点无记录（BMV=0）或不足窗口 → None。
+
 <a id="rule-lifecycle"></a>
 ## 生命周期通用错误码
 

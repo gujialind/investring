@@ -46,6 +46,10 @@ RESOURCE_PRODUCT = "product"
 RESOURCE_DIVIDEND_CONFIG = "dividend_config"
 # issue #893：管理员重置他人密码，resource_id 落目标投资人 code，载荷不含密码。
 RESOURCE_INVESTOR = "investor"
+# issue #905：台账型组合市值台账与本金进出写入审计（create/update/delete，D5 可改可删留痕）。
+# 列宽 String(50)，"ledger_entry"/"ledger_flow" 远小于上限。
+RESOURCE_LEDGER_ENTRY = "ledger_entry"
+RESOURCE_LEDGER_FLOW = "ledger_flow"
 
 # ---- sentinel ----
 

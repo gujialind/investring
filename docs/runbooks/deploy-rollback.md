@@ -130,6 +130,7 @@ commit）。
 | 0026 | `product.is_active` 停用标记（#856，`NOT NULL` + `server_default 1` 回填存量 true） | 已实现 | 无损（账务）但有前提：downgrade 直接 `drop_column`，**丢弃所有 `is_active=false` 标记**——「可逆」指 schema 往返、非停用状态无损；回滚后再 upgrade 列以 `server_default 1` 重建，曾停用产品全部变回 active、`create_trade` 闸门放开，如需维持停用须人工重新停用。列无外键引用、无账务下游；旧镜像不感知该列、按全 active 处理。`_has_column` 守卫幂等（仿 0021） |
 | 0027 | `dividend_method_config` 分红方式配置表（#887）+ CN_OTC 存量 `source='default'` 回填（值 reinvest_dividend、`effective_from`=迁移执行日） | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提（与 0019/0022/0025 同族）：downgrade 先探测「存在任何 `source='explicit'` 行」，命中即 `RuntimeError` 且拒绝发生在任何 DELETE/DROP 之前——用户显式声明是记账事实，删行等于销毁，只能走前滚（§4.1）或另行授权处置；仅 default 行（或空表）→ 删行 drop 表完整可逆。回填只覆盖 CN_OTC（HK_MUTUAL/CN_EXCHANGE 不回填，R10/A14），default 行仅预选、零账务影响（A9）；事件升降级均不触碰（A10）。`_has_table` 守卫 + 唯一键预去重幂等，双方言 |
 | 0028 | `portfolio.kind`（#905，`NOT NULL` + `server_default 'nav'` 回填存量）+ `portfolio.owner_investor_code`（可空 FK→`investor.code`） | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提（与 0019/0022/0027 同族）：downgrade 先探测「存在 `kind='ledger'` 行」或「`owner_investor_code` 非空」，任一命中即 `RuntimeError` 且拒绝发生在任何 DDL 之前——台账型组合一旦被使用即承载类型/归属事实，删列等于销毁，只能走前滚（§4.1）或另行授权处置；全 nav 且 owner 全 NULL（含 CI 空库往返）→ drop FK + drop 两列完整可逆。`batch_alter_table` 双方言加列/加 FK，`_columns` 守卫幂等 |
+| 0029 | `ledger_entry`（平台市值台账）+ `ledger_flow`（本金进出）两新表（#905 PR2） | 已实现，**有条件拒绝（零写入整体中止）** | 无损但有前提（与 0019/0022/0028 同族）：downgrade 先探测任一表「存在行」，命中即 `RuntimeError` 且拒绝发生在任何 DROP 之前——台账是账务数据，删表销毁记账事实，只能走前滚（§4.1）或另行授权处置；两表均空（含 CI 空库往返）→ drop_table 完整可逆。`_has_table` 守卫幂等，双方言 |
 
 > 新增迁移时同步维护本表；`downgrade()` 未实现或有损的迁移，路径 B 前必须先 RDS 快照。
 
