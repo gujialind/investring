@@ -91,3 +91,28 @@ class TestLedgerProfit:
         t = compute_ledger_totals(test_db, "P_LED_D")
         assert t["total_value"] is None
         assert t["total_profit"] is None
+
+
+class TestTotalsEndpointGuards:
+    """#911 L2 S1/S2 反例：非法日期 422；净值型 totals 422 且台账行零创建/改动。"""
+
+    def test_invalid_as_of_date_422(self, client, admin_headers, test_db, port):
+        # S1：as_of_date 为 Optional[date]，非法日期由 FastAPI 统一 422（不逃 500）
+        resp = client.get("/api/portfolios/P_LED/ledger/totals?as_of_date=not-a-date",
+                          headers=admin_headers)
+        assert resp.status_code == 422
+
+    def test_valid_as_of_date_ok(self, client, admin_headers, test_db, port):
+        resp = client.get("/api/portfolios/P_LED/ledger/totals?as_of_date=2026-01-05",
+                          headers=admin_headers)
+        assert resp.status_code == 200
+
+    def test_nav_totals_rejected_no_rows(self, client, admin_headers, test_db):
+        # S2：净值型组合调台账 totals → 422 PORTFOLIO_KIND_NOT_ALLOWED（非 200 全零）
+        create_portfolio(test_db, code="NAV_TOT", status="active")
+        resp = client.get("/api/portfolios/NAV_TOT/ledger/totals", headers=admin_headers)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "PORTFOLIO_KIND_NOT_ALLOWED"
+        # 同时断言不会创建/改动任何台账行
+        assert test_db.query(LedgerEntry).filter_by(portfolio_code="NAV_TOT").count() == 0
+        assert test_db.query(LedgerFlow).filter_by(portfolio_code="NAV_TOT").count() == 0

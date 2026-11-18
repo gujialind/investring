@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.ledger_entry import LedgerEntry
 from app.models.ledger_flow import LedgerFlow
 from app.models.portfolio import Portfolio
-from app.services.exceptions import NotFoundError
+from app.services.exceptions import BusinessError, NotFoundError
 from app.utils.business_time import business_today
 from app.utils.quantize import quantize_amount, quantize_nav
 
@@ -57,8 +57,19 @@ def _net_inflow(db: Session, code: str, as_of: date) -> Decimal:
 
 
 def compute_ledger_totals(db: Session, code: str, as_of_date: Optional[date] = None) -> dict:
-    """收益 = 当前市值 − 净入金。draft → None；active 无记录 → 0。"""
+    """收益 = 当前市值 − 净入金。draft → None；active 无记录 → 0。
+
+    S2（#911 L2）：kind 闸门集中在此——净值型组合调台账收益查询拒
+    PORTFOLIO_KIND_NOT_ALLOWED（与兄弟台账端点同口径），不返 200 全零。
+    调用方 _derive_portfolio_totals / _flow_warnings 均已 guard ledger，不受影响。
+    """
     portfolio = _get_portfolio(db, code)
+    if portfolio.kind != "ledger":
+        raise BusinessError(
+            "PORTFOLIO_KIND_NOT_ALLOWED",
+            f"组合 {code} 非平台市值台账型，不支持台账收益查询",
+            details={"portfolio_code": code, "kind": portfolio.kind},
+        )
     if portfolio.status == "draft":
         return {
             "portfolio_code": code, "as_of_date": as_of_date,

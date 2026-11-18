@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import Optional, List
+from datetime import date
 
 from app.database import get_db
 from app.dependencies import get_current_user, get_current_admin
@@ -43,8 +44,8 @@ def list_entries(
 
 
 @router.put("/{code}/ledger/entries/{entry_id}", response_model=LedgerEntryResponse)
-async def update_entry(
-    code: str, entry_id: int, body: LedgerEntryUpdate, request: Request,
+def update_entry(
+    code: str, entry_id: int, body: LedgerEntryUpdate,
     db: Session = Depends(get_db), current_user: Investor = Depends(get_current_admin),
 ):
     updates = body.dict(exclude_unset=True)
@@ -53,7 +54,7 @@ async def update_entry(
         db, entry_id=entry_id, portfolio_code=code,
         market_value=updates.get("market_value"),
         asset_kind=updates.get("asset_kind"),
-        note=updates["note"] if "note" in updates else ledger_service._UNSET,
+        note=updates["note"] if "note" in updates else ledger_service.UNSET,
     )
     db.commit()
     db.refresh(entry)
@@ -96,8 +97,8 @@ def list_flows(
 
 
 @router.put("/{code}/ledger/flows/{flow_id}", response_model=LedgerFlowWriteResponse)
-async def update_flow(
-    code: str, flow_id: int, body: LedgerFlowUpdate, request: Request,
+def update_flow(
+    code: str, flow_id: int, body: LedgerFlowUpdate,
     db: Session = Depends(get_db), current_user: Investor = Depends(get_current_admin),
 ):
     updates = body.dict(exclude_unset=True)
@@ -106,7 +107,7 @@ async def update_flow(
         db, flow_id=flow_id, portfolio_code=code,
         flow_date=updates.get("flow_date"), direction=updates.get("direction"),
         amount=updates.get("amount"),
-        note=updates["note"] if "note" in updates else ledger_service._UNSET,
+        note=updates["note"] if "note" in updates else ledger_service.UNSET,
     )
     db.commit()
     db.refresh(result["flow"])
@@ -127,9 +128,9 @@ def delete_flow(
 
 @router.get("/{code}/ledger/totals", response_model=LedgerTotalsResponse)
 def get_totals(
-    code: str, as_of_date: Optional[str] = None,
+    code: str, as_of_date: Optional[date] = None,
     db: Session = Depends(get_db), current_user: Investor = Depends(get_current_user),
 ):
-    from datetime import date as _date
-    as_of = _date.fromisoformat(as_of_date) if as_of_date else None
-    return compute_ledger_totals(db, code, as_of_date=as_of)
+    # S1（#911 L2）：日期参数用 Optional[date]，非法日期由 FastAPI 统一 422，不手工解析逃 500。
+    # S2：kind 闸门在 compute_ledger_totals 集中校验（净值型 → 422 PORTFOLIO_KIND_NOT_ALLOWED）。
+    return compute_ledger_totals(db, code, as_of_date=as_of_date)

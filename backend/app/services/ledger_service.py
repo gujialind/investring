@@ -26,7 +26,7 @@ from app.utils.quantize import quantize_amount, quantize_nav
 
 logger = logging.getLogger(__name__)
 
-_UNSET = object()
+UNSET = object()
 # Numeric(15,4) 列容量（11 位整数 + 4 位小数），与 manual_market_value 同口径
 _MAX_LEDGER_VALUE = Decimal("99999999999.9999")
 _MAX_LEDGER_ACCEPTED = Decimal("99999999999.99")
@@ -163,7 +163,7 @@ def create_entry(
 
 def update_entry(
     db: Session, *, entry_id: int, portfolio_code: str,
-    market_value=None, asset_kind: Optional[str] = None, note=_UNSET,
+    market_value=None, asset_kind: Optional[str] = None, note=UNSET,
 ) -> LedgerEntry:
     _get_ledger_portfolio(db, portfolio_code, require_active=True)
     entry = db.query(LedgerEntry).filter(
@@ -177,7 +177,7 @@ def update_entry(
     if asset_kind is not None:
         _validate_asset_kind(asset_kind)
         entry.asset_kind = asset_kind
-    if note is not _UNSET:
+    if note is not UNSET:
         entry.note = note
     db.flush()
     record_audit(
@@ -244,7 +244,7 @@ def create_flow(
 def update_flow(
     db: Session, *, flow_id: int, portfolio_code: str,
     flow_date: Optional[date] = None, direction: Optional[str] = None,
-    amount=None, note=_UNSET,
+    amount=None, note=UNSET,
 ) -> dict:
     _get_ledger_portfolio(db, portfolio_code, require_active=True)
     flow = db.query(LedgerFlow).filter(
@@ -260,7 +260,7 @@ def update_flow(
         flow.direction = direction
     if amount is not None:
         flow.amount = _validate_flow_amount(amount)
-    if note is not _UNSET:
+    if note is not UNSET:
         flow.note = note
     db.flush()
     record_audit(
