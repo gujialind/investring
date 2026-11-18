@@ -67,11 +67,11 @@ export default function Sidebar() {
                   "flex items-center rounded-lg text-sm font-medium transition-colors",
                   collapsed ? "h-10 w-10 justify-center" : "gap-3 px-3 py-2",
                   isActive
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
                 )}
               >
-                <Icon className="h-5 w-5 shrink-0" />
+                <Icon className={cn("h-5 w-5 shrink-0", isActive && "text-primary")} />
                 {!collapsed && item.label}
               </Link>
             );

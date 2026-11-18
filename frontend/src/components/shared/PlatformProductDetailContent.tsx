@@ -1,9 +1,10 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -319,21 +320,21 @@ export default function PlatformProductDetailContent({
 
   return (
     <div className={isMobile ? "space-y-3 p-3" : "space-y-4 p-6"}>
-      <div className="flex items-center gap-2">
-        <Button asChild variant="ghost" size="icon" aria-label="返回">
-          <Link href={`${basePath}/${portfolioCode}/platforms/${platformCode}`}>
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-lg font-semibold">
-            {slice.platform_name || platformCode} · {product.product_name || codeLabel}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {codeLabel}{market ? ` · ${formatMarketName(market)}` : ""}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        variant={variant}
+        crumbs={[
+          { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
+          {
+            href: `${basePath}/${portfolioCode}/platforms/${platformCode}`,
+            label: platformCode,
+            ariaLabel: "返回平台详情",
+          },
+        ]}
+        title={`${slice.platform_name || platformCode} · ${product.product_name || codeLabel}`}
+        truncateTitle
+        meta={`${codeLabel}${market ? ` · ${formatMarketName(market)}` : ""}`}
+      />
 
       {overview}
       {actionRow}

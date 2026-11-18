@@ -736,7 +736,8 @@ test.describe("现金市值更新 Dialog", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("heading", { name: "更新现金市值" })).toBeVisible();
     // 平台应预填 HBZQ（Dialog 的 Label htmlFor="cash-platform"，走 a11y 锚点而非元素类型 + id）
-    await expect(page.getByLabel("平台")).toContainText("华宝证券 (HBZQ)");
+    // exact: true —— #904 P0b 面包屑 aria「返回平台详情」含「平台」子串，松匹配会双命中
+    await expect(page.getByLabel("平台", { exact: true })).toContainText("华宝证券 (HBZQ)");
   });
 
   test("表单校验、成功反馈、写入日请求体锚定与撤销两段式", async ({ page }) => {

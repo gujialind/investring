@@ -1,12 +1,13 @@
 "use client";
 
+import PageHeader from "@/components/shared/PageHeader";
+
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { subYears } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import {
-  ArrowLeft,
   ArrowLeftRight,
   Filter,
   Info,
@@ -559,19 +560,15 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   return (
     <div className="space-y-6">
       {/* 页头 */}
-      <div className="flex items-center gap-4">
-        <Link href={`${basePath}/portfolio/${code}`}>
-          <Button variant="ghost" size="sm" aria-label="返回组合详情">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div>
-          <h1 className="text-2xl font-semibold">现金流水</h1>
-          <p className="text-muted-foreground">
-            组合代码: {code} ｜ 现金按平台分账，本页聚合全部现金来源
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        variant={variant}
+        crumbs={[
+          { href: `${basePath}/portfolio`, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/portfolio/${code}`, label: code, ariaLabel: "返回组合详情" },
+        ]}
+        title="现金流水"
+        meta={`组合代码: ${code} ｜ 现金按平台分账，本页聚合全部现金来源`}
+      />
 
       {/* 概览四卡 */}
       <Card>
@@ -589,7 +586,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : (wideValueDesktop ? "grid-cols-2" : "grid-cols-2 @min-[848px]:grid-cols-4"))}>
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
-                <span className="text-sm text-muted-foreground">{s.label}</span>
+                <span className="text-xs text-muted-foreground">{s.label}</span>
                 {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号，故降一档；
                     text-lg 是 §5 四档内的分区标题档（同 PortfolioStatsCards 移动分支），
                     不属 §6 禁止的「端侧独有字号」——此前的 text-xl 是四档外中间档。
