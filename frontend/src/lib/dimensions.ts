@@ -129,6 +129,98 @@ export function resolveSubDims(
 }
 
 /**
+ * 页面级临时子集覆盖（#915 B2）：大类 code → 维度子集（全序）。
+ * 视图状态，经 URL ?sub= 持久化（与 ?view= 先例同构），**不写回 display_config**、
+ * 不引入浏览器存储/个人偏好（SPEC §9.4 C-F 读法：URL 参数属视图状态）。
+ * 缺键 = 该大类跟随组合配置/默认子集（resolveSubDims）。
+ */
+export type SubDimOverrides = Record<string, SubDimension[]>;
+
+/**
+ * 解析 URL ?sub= 参数为临时子集覆盖（#915 B2）。
+ * 形态：`大类code.维.维~大类code.维`（`.`/`~` 均为 URL 非保留字符，地址栏可读）。
+ * 仅做形态解析（未知维度剔除/去重/按全序归一），不做规则校验——与
+ * parseDisplaySubset 同哲学；登记校验在 resolveViewSubDims 消费时做。
+ * 无有效维度的条目整条丢弃（空子集不支持强制平铺，Q8）。
+ */
+export function parseSubDimOverrides(raw: string | null): SubDimOverrides {
+  if (!raw) return {};
+  const result: SubDimOverrides = {};
+  for (const entry of raw.split("~")) {
+    const [classCode, ...dims] = entry.split(".");
+    if (!classCode) continue;
+    const selected = new Set<SubDimension>();
+    for (const dim of dims) {
+      if ((RULE_DIMENSIONS as readonly string[]).includes(dim)) {
+        selected.add(dim as SubDimension);
+      }
+    }
+    if (selected.size === 0) continue;
+    result[classCode] = RULE_DIMENSIONS.filter((d) => selected.has(d));
+  }
+  return result;
+}
+
+/**
+ * 序列化临时子集覆盖为 URL ?sub= 值（#915 B2）：大类 code 字典序、维度全序，
+ * 同一覆盖集恒产出同一串（可作缓存/断言锚）；空覆盖返回 null（调用方移除参数）。
+ */
+export function serializeSubDimOverrides(overrides: SubDimOverrides): string | null {
+  const entries: string[] = [];
+  for (const classCode of Object.keys(overrides).sort()) {
+    const dims = RULE_DIMENSIONS.filter((d) => overrides[classCode]?.includes(d));
+    if (dims.length > 0) entries.push(`${classCode}.${dims.join(".")}`);
+  }
+  return entries.length > 0 ? entries.join("~") : null;
+}
+
+/**
+ * 切换某大类的一个入选维（#915 B2 快捷切换 + 页面直切子集，同一交互）：
+ * - 该大类无覆盖（默认态）时首击 = 快捷切换到该单维（不是在默认子集上追加）；
+ * - 已有覆盖时点击为勾选/取消（多选子集）；
+ * - 取消最后一维 = 移除该大类覆盖、回默认（Q8 不支持强制平铺）。
+ * 返回新覆盖集（不改入参），恒按全序归一。
+ */
+export function toggleSubDimOverride(
+  overrides: SubDimOverrides,
+  classCode: string,
+  dim: SubDimension
+): SubDimOverrides {
+  const current = overrides[classCode] ?? [];
+  const next = current.includes(dim)
+    ? current.filter((d) => d !== dim)
+    : [...current, dim];
+  const result = { ...overrides };
+  if (next.length === 0) delete result[classCode];
+  else result[classCode] = RULE_DIMENSIONS.filter((d) => next.includes(d));
+  return result;
+}
+
+/**
+ * 消费侧生效子集解析（#915 B2）：页面临时覆盖优先于组合配置/默认子集表。
+ * 覆盖含规则未登记维（规则事后收紧的防御）时整条失效、回退 resolveSubDims——
+ * 与读侧对脏配置「整串回退默认」同语义（SPEC §3.3），不抛错、不白屏。
+ * 空覆盖/缺键同样走 resolveSubDims。不传 overrides 时行为与 resolveSubDims 全等。
+ */
+export function resolveViewSubDims(
+  displayConfig: Record<string, string> | null | undefined,
+  classCode: string,
+  dimensionRules?: DimensionRules | null,
+  overrides?: SubDimOverrides | null
+): SubDimension[] {
+  const override = overrides?.[classCode];
+  if (override && override.length > 0) {
+    const registered = dimensionRules
+      ? Object.keys(dimensionRules[classCode] ?? {})
+      : null;
+    if (!registered || override.every((d) => registered.includes(d))) {
+      return RULE_DIMENSIONS.filter((d) => override.includes(d));
+    }
+  }
+  return resolveSubDims(displayConfig, classCode, dimensionRules);
+}
+
+/**
  * 维度筛选下拉选项（issue #238 抽取，产品筛选弹窗与产品管理页共用）：
  * 启用值；选了 asset_class 则按 applicable_asset_classes 收窄。
  * dimension 含 "asset_class"：asset_class 维度值的 applicable_asset_classes 恒为空数组，

@@ -18,6 +18,13 @@ import {
   sumGroupPercent,
   type HoldingProductSection,
 } from "@/lib/holdings";
+import {
+  DIMENSION_LABELS,
+  RULE_DIMENSIONS,
+  toggleSubDimOverride,
+  type SubDimension,
+  type SubDimOverrides,
+} from "@/lib/dimensions";
 import { cn, formatNumber, largestRemainderPercents } from "@/lib/utils";
 import HoldingInTransitCard from "./HoldingInTransitCard";
 import HoldingProductCard from "./HoldingProductCard";
@@ -38,6 +45,10 @@ interface PortfolioHoldingsProps {
   /** 当前视图（D-7：URL ?view=product|platform 由页面持有，本组件不读路由） */
   view: HoldingsView;
   onViewChange: (view: HoldingsView) => void;
+  /** 页面级临时子集覆盖（#915 B2：URL ?sub= 由页面持有，本组件不读路由）；
+   * 与 onSubDimOverridesChange 同时提供时才渲染分区头下的切换 chip 行 */
+  subDimOverrides?: SubDimOverrides | null;
+  onSubDimOverridesChange?: (next: SubDimOverrides) => void;
   /** 标题右侧操作位（如「分组维度」按钮） */
   action?: ReactNode;
   variant: "desktop" | "mobile";
@@ -68,6 +79,69 @@ export function cardGridClass(variant: "desktop" | "mobile"): string {
     : "space-y-2.5";
 }
 
+/** 分区头下的子集切换 chip 行（#915 B2：快捷切换单维 + 页面直切子集，同一交互）。
+ * 「默认」= 跟随组合配置/默认子集（清掉该大类 URL 覆盖）；维度 chip 默认态首击
+ * 切换到该单维、覆盖态点击为勾选/取消（toggleSubDimOverride 单点持有语义）。
+ * 纯视图状态：仅经 onSubDimOverridesChange 回写 URL，不发任何写请求。
+ * 双端同形态（信息列双端一致，§6）：flex-wrap 换行，chip 触控档同净值区间先例。 */
+function SubDimSwitchRow({
+  sectionCode,
+  sectionName,
+  ruleDims,
+  overrides,
+  onChange,
+}: {
+  sectionCode: string;
+  sectionName: string;
+  ruleDims: SubDimension[];
+  overrides: SubDimOverrides;
+  onChange: (next: SubDimOverrides) => void;
+}) {
+  const override = overrides[sectionCode];
+  const overrideActive = !!override && override.length > 0;
+  const chipClass = (active: boolean) =>
+    `shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs transition-colors ${
+      active
+        ? "bg-primary font-semibold text-primary-foreground"
+        : "bg-muted text-muted-foreground hover:bg-accent"
+    }`;
+  return (
+    <div
+      role="group"
+      aria-label={`${sectionName}分组维度切换`}
+      data-testid={`sub-dim-switch-${sectionCode}`}
+      className="flex flex-wrap gap-1.5 px-1 pb-2"
+    >
+      <button
+        type="button"
+        data-testid={`sub-dim-chip-${sectionCode}-default`}
+        aria-pressed={!overrideActive}
+        title="跟随组合配置/默认子集分组"
+        onClick={() => {
+          const next = { ...overrides };
+          delete next[sectionCode];
+          onChange(next);
+        }}
+        className={chipClass(!overrideActive)}
+      >
+        默认
+      </button>
+      {ruleDims.map((d) => (
+        <button
+          key={d}
+          type="button"
+          data-testid={`sub-dim-chip-${sectionCode}-${d}`}
+          aria-pressed={overrideActive && override.includes(d)}
+          onClick={() => onChange(toggleSubDimOverride(overrides, sectionCode, d))}
+          className={chipClass(overrideActive && override.includes(d))}
+        >
+          {DIMENSION_LABELS[d] ?? d}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** 按产品分区渲染（V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724）。
  * #915：二级组为维度子集组合键，React key 用 code 元组串（同名不同 code 不冲突）；
  * showChip 判据（组名 ≠ 大类名）原样保留。 */
@@ -77,6 +151,9 @@ function ProductSections({
   snapshotDate,
   variant,
   productLinkPrefix,
+  dimensionRules,
+  subDimOverrides,
+  onSubDimOverridesChange,
 }: {
   sections: HoldingProductSection[];
   /** 行级占比查表（buildCardPercentMap 输出），§4 分区头 = 行占比加总后取整 */
@@ -85,6 +162,10 @@ function ProductSections({
   variant: "desktop" | "mobile";
   /** 产品卡跳转前缀：`${basePath}/${portfolioCode}/product`（market 走 ?market=，现金卡步骤⑤已接线） */
   productLinkPrefix: string;
+  /** 维度级适用矩阵（B2 切换 chip 行枚举非禁止维；缺失时不渲染切换行） */
+  dimensionRules?: Record<string, Record<string, string>> | null;
+  subDimOverrides?: SubDimOverrides | null;
+  onSubDimOverridesChange?: (next: SubDimOverrides) => void;
 }) {
   const theme = useChartTheme();
   return (
@@ -98,6 +179,14 @@ function ProductSections({
           (s, g) => s + sumGroupPercent(g.products, percentOf),
           0
         );
+        // B2 切换行：仅字典大类且规则矩阵有行者（现金 0 维/「其他」桶不出现）
+        const sectionCode = section.code;
+        const ruleDims =
+          sectionCode && dimensionRules
+            ? RULE_DIMENSIONS.filter((d) => d in (dimensionRules[sectionCode] ?? {}))
+            : [];
+        const showSwitch =
+          !!sectionCode && ruleDims.length > 0 && !!onSubDimOverridesChange;
         return (
           <div key={section.code ?? "__other__"}>
             {/* 大类分区头：色点 + 大类名 + 合计 + 取整占比 */}
@@ -117,6 +206,15 @@ function ProductSections({
                 </span>
               </span>
             </div>
+            {showSwitch && sectionCode && onSubDimOverridesChange && (
+              <SubDimSwitchRow
+                sectionCode={sectionCode}
+                sectionName={section.name}
+                ruleDims={ruleDims}
+                overrides={subDimOverrides ?? {}}
+                onChange={onSubDimOverridesChange}
+              />
+            )}
             <div className="space-y-3">
               {section.groups.map((g) => {
                 // V4 契约：chip 恒在产品卡之上，仅组名与大类同名（平铺组）时不渲染
@@ -203,6 +301,8 @@ export default function PortfolioHoldings({
   dimensionRules,
   view,
   onViewChange,
+  subDimOverrides,
+  onSubDimOverridesChange,
   action,
   variant,
 }: PortfolioHoldingsProps) {
@@ -222,7 +322,7 @@ export default function PortfolioHoldings({
 
   const sections =
     view === "product" && productData
-      ? buildProductSections(productData.products, assetClasses, displayConfig, dimensionRules)
+      ? buildProductSections(productData.products, assetClasses, displayConfig, dimensionRules, subDimOverrides)
       : [];
   const platforms = platformQuery.data?.platforms ?? [];
   /** 平台视图行级占比：平台市值在视图内最大余数法分配（§4） */
@@ -280,6 +380,9 @@ export default function PortfolioHoldings({
               snapshotDate={productData?.snapshot_date}
               variant={variant}
               productLinkPrefix={`${basePath}/${portfolioCode}/product`}
+              dimensionRules={dimensionRules}
+              subDimOverrides={subDimOverrides}
+              onSubDimOverridesChange={onSubDimOverridesChange}
             />
             {inTransitValue > 0 && (
               <div className={`mt-3 ${cardGridClass(variant)}`}>

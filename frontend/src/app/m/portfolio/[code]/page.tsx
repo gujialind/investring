@@ -40,6 +40,11 @@ import EmptyState from "@/components/shared/EmptyState";
 import { buildAllocation } from "@/lib/allocation";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { parseHoldingsView, type HoldingsView } from "@/types/holding";
+import {
+  parseSubDimOverrides,
+  serializeSubDimOverrides,
+  type SubDimOverrides,
+} from "@/lib/dimensions";
 
 function MobilePortfolioDetailInner() {
   const params = useParams();
@@ -54,6 +59,17 @@ function MobilePortfolioDetailInner() {
     const sp = new URLSearchParams(searchParams.toString());
     if (next === "product") sp.delete("view");
     else sp.set("view", next);
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+  // 二级分组子集的页面级临时切换（#915 B2）：URL ?sub= 持久化（视图状态，
+  // 与 ?view= 先例同构），不写回 display_config、不引入浏览器存储
+  const subDimOverrides = parseSubDimOverrides(searchParams.get("sub"));
+  const handleSubDimOverridesChange = (next: SubDimOverrides) => {
+    const sp = new URLSearchParams(searchParams.toString());
+    const serialized = serializeSubDimOverrides(next);
+    if (serialized) sp.set("sub", serialized);
+    else sp.delete("sub");
     const qs = sp.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
@@ -259,6 +275,8 @@ function MobilePortfolioDetailInner() {
                 dimensionRules={assetClassDict?.dimension_rules}
                 view={view}
                 onViewChange={handleViewChange}
+                subDimOverrides={subDimOverrides}
+                onSubDimOverridesChange={handleSubDimOverridesChange}
                 variant="mobile"
                 action={
                   isAdmin ? (

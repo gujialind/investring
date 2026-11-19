@@ -3,8 +3,9 @@
  *
  * 语义与 `PortfolioHoldings.tsx::ProductSections` 的持仓行分组一致（V4 契约见 #595/#109/#114）：
  * - 分区顺序由 asset_class 维度字典 sort_order 驱动（色板序位）；
- * - 二级分组为「维度子集组合键」（#915）：入选子集经 resolveSubDims（组合级
- *   display_config 显式子集优先，缺键/非法回退默认子集表 D3/D4）；键 = 入选维
+ * - 二级分组为「维度子集组合键」（#915）：入选子集经 resolveViewSubDims（页面级
+ *   临时覆盖优先〔B2，URL 视图状态、不写回配置〕，其次组合级 display_config 显式
+ *   子集，缺键/非法回退默认子集表 D3/D4）；键 = 入选维
  *   code 元组（按 code 分组、按 name 以「·」拼接显示），仅由实际持仓生成；
  * - 一卡恰属一组（互斥划分，承重不变量）：合计/占比/饼图口径与单维时代逐字相同；
  * - 组间按合计市值降序、含占位符「未分类」的组恒垫底；组内产品按市值降序；
@@ -14,9 +15,10 @@
 import type { HoldingProductAggregate } from "@/types/holding";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 import {
-  resolveSubDims,
+  resolveViewSubDims,
   type DimensionRules,
   type SubDimension,
+  type SubDimOverrides,
 } from "@/lib/dimensions";
 import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import { largestRemainderPercents } from "@/lib/utils";
@@ -115,7 +117,9 @@ export function buildProductSections(
   products: HoldingProductAggregate[],
   assetClasses: AssetClassificationItem[],
   displayConfig?: Record<string, string> | null,
-  dimensionRules?: DimensionRules | null
+  dimensionRules?: DimensionRules | null,
+  /** 页面级临时子集覆盖（#915 B2，URL 视图状态）：优先于 displayConfig，不写回配置 */
+  subDimOverrides?: SubDimOverrides | null
 ): HoldingProductSection[] {
   const sortedClasses = [...assetClasses].sort((a, b) => a.sort_order - b.sort_order);
   const knownCodes = new Set(assetClasses.map((a) => a.code));
@@ -125,7 +129,7 @@ export function buildProductSections(
   for (const ac of sortedClasses) {
     const items = products.filter((p) => p.asset_class_code === ac.code);
     if (!items.length) continue;
-    const subDims = resolveSubDims(displayConfig, ac.code, dimensionRules);
+    const subDims = resolveViewSubDims(displayConfig, ac.code, dimensionRules, subDimOverrides);
     const groups = groupProducts(items, subDims, ac.name);
     sections.push({
       code: ac.code,
