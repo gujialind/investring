@@ -151,7 +151,14 @@ export function registeredDimsFor(
   classCode: string,
   dimensionRules?: DimensionRules | null
 ): string[] | null {
-  return dimensionRules ? Object.keys(dimensionRules[classCode] ?? {}) : null;
+  if (!dimensionRules) return null;
+  // own-key 读取（ocr r5）：原型名 classCode（constructor 等）不得读到继承函数；
+  // 键缺失（如现金无规则行）仍 = 空数组「全禁止」，**不是** null「不校验」——
+  // ocr 建议的「缺 own 键回 null」会误放现金覆盖，违反 D4/Q8，不采
+  const row = Object.prototype.hasOwnProperty.call(dimensionRules, classCode)
+    ? dimensionRules[classCode]
+    : undefined;
+  return Object.keys(row ?? {});
 }
 
 /**
@@ -166,7 +173,12 @@ export function isOverrideRegistered(
   return (
     Array.isArray(override) &&
     override.length > 0 &&
-    (!registered || override.every((d) => registered.includes(d)))
+    // 维度成员资格自校验（ocr r5）：防未来调用方传未解析数据致空子集强制平铺（Q8）
+    override.every(
+      (d) =>
+        (RULE_DIMENSIONS as readonly string[]).includes(d) &&
+        (!registered || registered.includes(d))
+    )
   );
 }
 

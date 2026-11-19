@@ -361,6 +361,9 @@ describe("registeredDimsFor / isOverrideRegistered（判据单点，ocr r3）", 
       "segment",
     ]);
     expect(registeredDimsFor("ASSET_CASH", RULES)).toEqual([]);
+    // 原型名 classCode 不读继承函数；键缺失仍全禁止（ocr r5，现金语义不得误放）
+    expect(registeredDimsFor("constructor", RULES)).toEqual([]);
+    expect(registeredDimsFor("toString", RULES)).toEqual([]);
   });
 
   it("非数组/空/含未登记维 = false；null 判据不校验登记；空数组判据全拒", () => {
@@ -371,6 +374,8 @@ describe("registeredDimsFor / isOverrideRegistered（判据单点，ocr r3）", 
     expect(isOverrideRegistered(["style"], [])).toBe(false);
     expect(isOverrideRegistered(["region", "style"], ["region"])).toBe(false);
     expect(isOverrideRegistered(["region"], ["region", "style"])).toBe(true);
+    // 成员资格自校验（ocr r5）：非维度串即使 null 判据也拒
+    expect(isOverrideRegistered(["bogus"], null)).toBe(false);
   });
 
   it("ruleDimsFor：登记键 ∩ 可规则化四维、恒全序（门控与渲染同源）", () => {

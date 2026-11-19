@@ -91,6 +91,7 @@ function SubDimSwitchRow({
   sectionCode,
   sectionName,
   registered,
+  ruleDims,
   overrides,
   onToggle,
 }: {
@@ -98,11 +99,12 @@ function SubDimSwitchRow({
   sectionName: string;
   /** 该大类登记维（own 键，lib 单点判据产出）；切换行仅在其非空时渲染 */
   registered: string[];
+  /**  chip 枚举（ruleDimsFor 单点产出，门控与渲染同源） */
+  ruleDims: SubDimension[];
   overrides: SubDimOverrides;
   /** dim=null 表示「默认」项（清除该大类覆盖）；合并基由页面同步持有（ocr r2 竞态） */
   onToggle: (classCode: string, dim: SubDimension | null) => void;
 }) {
-  const ruleDims = ruleDimsFor(registered);
   const override = overrides[sectionCode];
   // 有效性判据与消费侧 resolveViewSubDims 结构同源（lib 单点，ocr r3）：
   // 继承成员/非数组/含未登记维（规则事后收紧/手工 URL）→ 按默认态渲染，
@@ -217,12 +219,13 @@ function ProductSections({
                 </span>
               </span>
             </div>
-            {showSwitch && sectionCode && onSubDimToggle && registered && (
+            {showSwitch && registered && (
               <SubDimSwitchRow
                 sectionCode={sectionCode}
                 sectionName={section.name}
                 registered={registered}
-                overrides={subDimOverrides ?? {}}
+                ruleDims={ruleDims}
+                overrides={subDimOverrides}
                 onToggle={onSubDimToggle}
               />
             )}
