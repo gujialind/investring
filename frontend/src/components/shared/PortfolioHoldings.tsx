@@ -21,7 +21,6 @@ import {
 import {
   DIMENSION_LABELS,
   RULE_DIMENSIONS,
-  toggleSubDimOverride,
   type SubDimension,
   type SubDimOverrides,
 } from "@/lib/dimensions";
@@ -46,9 +45,10 @@ interface PortfolioHoldingsProps {
   view: HoldingsView;
   onViewChange: (view: HoldingsView) => void;
   /** 页面级临时子集覆盖（#915 B2：URL ?sub= 由页面持有，本组件不读路由）；
-   * 与 onSubDimOverridesChange 同时提供时才渲染分区头下的切换 chip 行 */
+   * 与 onSubDimToggle 同时提供时才渲染分区头下的切换 chip 行 */
   subDimOverrides?: SubDimOverrides | null;
-  onSubDimOverridesChange?: (next: SubDimOverrides) => void;
+  /** 切换意图回调（dim=null = 「默认」项）；合并基与 URL 写入由页面同步持有（ocr r2 竞态） */
+  onSubDimToggle?: (classCode: string, dim: SubDimension | null) => void;
   /** 标题右侧操作位（如「分组维度」按钮） */
   action?: ReactNode;
   variant: "desktop" | "mobile";
@@ -89,24 +89,29 @@ function SubDimSwitchRow({
   sectionName,
   ruleDims,
   overrides,
-  onChange,
+  onToggle,
 }: {
   sectionCode: string;
   sectionName: string;
   ruleDims: SubDimension[];
   overrides: SubDimOverrides;
-  onChange: (next: SubDimOverrides) => void;
+  /** dim=null 表示「默认」项（清除该大类覆盖）；合并基由页面同步持有（ocr r2 竞态） */
+  onToggle: (classCode: string, dim: SubDimension | null) => void;
 }) {
   const override = overrides[sectionCode];
+  // Array.isArray 守卫与 lib 同判据（ocr r2：继承成员如 constructor 是函数、
+  // .length≥1 会骗过 truthy 检查致 .every 抛错白屏）
   // 覆盖含未登记维（规则事后收紧/手工 URL）时消费侧整条回退默认——此处须同判据
   // 按默认态渲染，且首击重建子集；否则 chip 点在失效覆盖上追加、分组恒不动（ocr r1 死胡同）
   const overrideValid =
-    !!override && override.length > 0 && override.every((d) => ruleDims.includes(d));
+    Array.isArray(override) &&
+    override.length > 0 &&
+    override.every((d) => ruleDims.includes(d));
   const active = overrideValid ? override : null;
   const overrideActive = active !== null;
-  const chipClass = (active: boolean) =>
+  const chipClass = (pressed: boolean) =>
     `shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs transition-colors ${
-      active
+      pressed
         ? "bg-primary font-semibold text-primary-foreground"
         : "bg-muted text-muted-foreground hover:bg-accent"
     }`;
@@ -122,11 +127,7 @@ function SubDimSwitchRow({
         data-testid={`sub-dim-chip-${sectionCode}-default`}
         aria-pressed={!overrideActive}
         title="跟随组合配置/默认子集分组"
-        onClick={() => {
-          const next = { ...overrides };
-          delete next[sectionCode];
-          onChange(next);
-        }}
+        onClick={() => onToggle(sectionCode, null)}
         className={chipClass(!overrideActive)}
       >
         默认
@@ -137,13 +138,7 @@ function SubDimSwitchRow({
           type="button"
           data-testid={`sub-dim-chip-${sectionCode}-${d}`}
           aria-pressed={active?.includes(d) ?? false}
-          onClick={() =>
-            onChange(
-              overrideValid
-                ? toggleSubDimOverride(overrides, sectionCode, d)
-                : { ...overrides, [sectionCode]: [d] }
-            )
-          }
+          onClick={() => onToggle(sectionCode, d)}
           className={chipClass(active?.includes(d) ?? false)}
         >
           {DIMENSION_LABELS[d] ?? d}
@@ -164,7 +159,7 @@ function ProductSections({
   productLinkPrefix,
   dimensionRules,
   subDimOverrides,
-  onSubDimOverridesChange,
+  onSubDimToggle,
 }: {
   sections: HoldingProductSection[];
   /** 行级占比查表（buildCardPercentMap 输出），§4 分区头 = 行占比加总后取整 */
@@ -176,7 +171,7 @@ function ProductSections({
   /** 维度级适用矩阵（B2 切换 chip 行枚举非禁止维；缺失时不渲染切换行） */
   dimensionRules?: Record<string, Record<string, string>> | null;
   subDimOverrides?: SubDimOverrides | null;
-  onSubDimOverridesChange?: (next: SubDimOverrides) => void;
+  onSubDimToggle?: (classCode: string, dim: SubDimension | null) => void;
 }) {
   const theme = useChartTheme();
   return (
@@ -190,17 +185,21 @@ function ProductSections({
           (s, g) => s + sumGroupPercent(g.products, percentOf),
           0
         );
-        // B2 切换行：仅字典大类且规则矩阵有行者（现金 0 维/「其他」桶不出现）
+        // B2 切换行：仅字典大类且规则矩阵有行者（现金 0 维/「其他」桶不出现）。
+        // 枚举判据与 resolveSubDims/resolveViewSubDims 同口径＝Object.keys own 键
+        // （ocr r2：`in` 走原型链且对非对象规则行抛错）
         const sectionCode = section.code;
         const ruleDims =
           sectionCode && dimensionRules
-            ? RULE_DIMENSIONS.filter((d) => d in (dimensionRules[sectionCode] ?? {}))
+            ? RULE_DIMENSIONS.filter((d) =>
+                Object.keys(dimensionRules[sectionCode] ?? {}).includes(d)
+              )
             : [];
         const showSwitch =
           !!sectionCode &&
           ruleDims.length > 0 &&
           subDimOverrides != null &&
-          !!onSubDimOverridesChange;
+          !!onSubDimToggle;
         return (
           <div key={section.code ?? "__other__"}>
             {/* 大类分区头：色点 + 大类名 + 合计 + 取整占比 */}
@@ -220,13 +219,13 @@ function ProductSections({
                 </span>
               </span>
             </div>
-            {showSwitch && sectionCode && onSubDimOverridesChange && (
+            {showSwitch && sectionCode && onSubDimToggle && (
               <SubDimSwitchRow
                 sectionCode={sectionCode}
                 sectionName={section.name}
                 ruleDims={ruleDims}
                 overrides={subDimOverrides ?? {}}
-                onChange={onSubDimOverridesChange}
+                onToggle={onSubDimToggle}
               />
             )}
             <div className="space-y-3">
@@ -316,7 +315,7 @@ export default function PortfolioHoldings({
   view,
   onViewChange,
   subDimOverrides,
-  onSubDimOverridesChange,
+  onSubDimToggle,
   action,
   variant,
 }: PortfolioHoldingsProps) {
@@ -396,7 +395,7 @@ export default function PortfolioHoldings({
               productLinkPrefix={`${basePath}/${portfolioCode}/product`}
               dimensionRules={dimensionRules}
               subDimOverrides={subDimOverrides}
-              onSubDimOverridesChange={onSubDimOverridesChange}
+              onSubDimToggle={onSubDimToggle}
             />
             {inTransitValue > 0 && (
               <div className={`mt-3 ${cardGridClass(variant)}`}>

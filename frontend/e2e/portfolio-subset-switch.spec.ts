@@ -262,4 +262,25 @@ test.describe('#915 B2 子集快捷切换（双端）', () => {
     expect(writes).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test('连点不丢更新：两次快速点击同步累积（ocr r2 竞态反例）', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 90_000);
+    const errors = collectPageErrors(page);
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    await expect(switchRow(page)).toBeVisible({ timeout: 10_000 });
+
+    // 不等 URL/重渲染收敛就连点两维：旧渲染期快照合并会丢首写（终态只剩 size）
+    await clickChip(page, 'style');
+    await clickChip(page, 'size');
+    await expect(page).toHaveURL(/[?&]sub=ASSET_STOCK\.style\.size/);
+    await expect(stockGroupHeader(page)).toContainText('平衡·大盘');
+    await expect(chip(page, 'style')).toHaveAttribute('aria-pressed', 'true');
+    await expect(chip(page, 'size')).toHaveAttribute('aria-pressed', 'true');
+    // 再连点「默认」+ 单维：清除与重建也不互相丢失
+    await clickChip(page, 'default');
+    await clickChip(page, 'region');
+    await expect(page).toHaveURL(/[?&]sub=ASSET_STOCK\.region(?![.\w])/);
+    await expect(stockGroupHeader(page)).toContainText('中国');
+    expect(errors).toEqual([]);
+  });
 });

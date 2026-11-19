@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
 import PageHeader from "@/components/shared/PageHeader";
@@ -39,40 +39,14 @@ import LedgerContent from "@/components/shared/LedgerContent";
 import { buildAllocation } from "@/lib/allocation";
 import { getStatusBadgeVariant } from "@/lib/utils";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { parseHoldingsView, type HoldingsView } from "@/types/holding";
-import {
-  parseSubDimOverrides,
-  serializeSubDimOverrides,
-  type SubDimOverrides,
-} from "@/lib/dimensions";
+import { useViewQueryState } from "@/hooks/useViewQueryState";
 
 function PortfolioDetailInner() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const pathname = usePathname();
   const code = params.code as string;
   const showInvestors = searchParams.get("tab") === "investors";
-  // 持仓明细视图（#595 D-7）：URL ?view=product|platform，默认 product（省略参数）
-  const view = parseHoldingsView(searchParams.get("view"));
-  const handleViewChange = (next: HoldingsView) => {
-    const sp = new URLSearchParams(searchParams.toString());
-    if (next === "product") sp.delete("view");
-    else sp.set("view", next);
-    const qs = sp.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  };
-  // 二级分组子集的页面级临时切换（#915 B2）：URL ?sub= 持久化（视图状态，
-  // 与 ?view= 先例同构），不写回 display_config、不引入浏览器存储
-  const subDimOverrides = parseSubDimOverrides(searchParams.get("sub"));
-  const handleSubDimOverridesChange = (next: SubDimOverrides) => {
-    const sp = new URLSearchParams(searchParams.toString());
-    const serialized = serializeSubDimOverrides(next);
-    if (serialized) sp.set("sub", serialized);
-    else sp.delete("sub");
-    const qs = sp.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  };
 
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(code);
   const { data: snapshot, isLoading: snapshotLoading } = useLatestSnapshot(code);
@@ -86,6 +60,14 @@ function PortfolioDetailInner() {
   // asset_class 维度字典（issue #128）：驱动饼图颜色/顺序与持仓分区
   const { data: assetClassDict, isLoading: dictLoading } =
     useAssetClassifications("asset_class");
+
+  // 视图状态 URL 单点（?view= ＋ #915 B2 ?sub=，双端共用 hook；连点竞态口径见 hook 注释）
+  const {
+    view,
+    onViewChange: handleViewChange,
+    subDimOverrides,
+    onSubDimToggle: handleSubDimToggle,
+  } = useViewQueryState(assetClassDict?.dimension_rules);
   const activatePortfolio = useActivatePortfolio();
   const activateLedger = useActivateLedgerPortfolio();
   const deletePortfolio = useDeletePortfolio();
@@ -246,7 +228,7 @@ function PortfolioDetailInner() {
                     view={view}
                     onViewChange={handleViewChange}
                     subDimOverrides={subDimOverrides}
-                    onSubDimOverridesChange={handleSubDimOverridesChange}
+                    onSubDimToggle={handleSubDimToggle}
                     variant="desktop"
                     action={
                       isAdmin ? (

@@ -140,29 +140,41 @@ export function resolveSubDims(
  */
 export type SubDimOverrides = Record<string, SubDimension[]>;
 
+/** 原型敏感键判据单点（ocr r1/r2：parse/toggle/serialize 三处同判据防漂移） */
+function isProtoSensitiveKey(code: string): boolean {
+  return code === "__proto__" || code === "constructor" || code === "prototype";
+}
+
+/** URL 逻辑分隔符为 `.`/`~`，但后端 code 校验仅「全大写+前缀」（分隔符大写不变、
+ * 可入 code，如 ASSET_A.B）——serialize 对 class 段转义、parse 解码，保证往返全等
+ * （ocr r2）。`%` 先转义防二次编码歧义。 */
+function encodeClassCode(code: string): string {
+  return code.replace(/%/g, "%25").replace(/\./g, "%2E").replace(/~/g, "%7E");
+}
+
 /**
  * 解析 URL ?sub= 参数为临时子集覆盖（#915 B2）。
- * 形态：`大类code.维.维~大类code.维`（逻辑分隔符；URLSearchParams 形式编码会把
- * `~` 写成 %7E、get 时解码还原，单大类条目不含分隔符、地址栏可读）。
+ * 形态：`大类code.维.维~大类code.维`（class 段含分隔符/`%` 时百分号转义；
+ * URLSearchParams 形式编码会把 `~` 写成 %7E、get 时解码还原，单大类条目地址栏可读）。
  * 仅做形态解析（未知维度剔除/去重/按全序归一），不做规则校验——与
  * parseDisplaySubset 同哲学；登记校验在 resolveViewSubDims 消费时做。
  * 无有效维度的条目整条丢弃（空子集不支持强制平铺，Q8）。
- * 原型敏感键（__proto__/constructor/prototype）整条丢弃：classCode 来自
- * 用户可控 URL，plain-object 赋值 __proto__ 会改原型链（ocr r1）。
+ * 原型敏感键（__proto__/constructor/prototype）与解码失败条目整条丢弃：
+ * classCode 来自用户可控 URL，plain-object 赋值 __proto__ 会改原型链（ocr r1）。
  */
 export function parseSubDimOverrides(raw: string | null): SubDimOverrides {
   if (!raw) return {};
   const result: SubDimOverrides = {};
   for (const entry of raw.split("~")) {
-    const [classCode, ...dims] = entry.split(".");
-    if (
-      !classCode ||
-      classCode === "__proto__" ||
-      classCode === "constructor" ||
-      classCode === "prototype"
-    ) {
+    const [rawClass, ...dims] = entry.split(".");
+    if (!rawClass) continue;
+    let classCode: string;
+    try {
+      classCode = decodeURIComponent(rawClass);
+    } catch {
       continue;
     }
+    if (isProtoSensitiveKey(classCode)) continue;
     const selected = new Set<SubDimension>();
     for (const dim of dims) {
       if ((RULE_DIMENSIONS as readonly string[]).includes(dim)) {
@@ -182,8 +194,9 @@ export function parseSubDimOverrides(raw: string | null): SubDimOverrides {
 export function serializeSubDimOverrides(overrides: SubDimOverrides): string | null {
   const entries: string[] = [];
   for (const classCode of Object.keys(overrides).sort()) {
+    if (isProtoSensitiveKey(classCode)) continue;
     const dims = RULE_DIMENSIONS.filter((d) => overrides[classCode]?.includes(d));
-    if (dims.length > 0) entries.push(`${classCode}.${dims.join(".")}`);
+    if (dims.length > 0) entries.push(`${encodeClassCode(classCode)}.${dims.join(".")}`);
   }
   return entries.length > 0 ? entries.join("~") : null;
 }
@@ -192,23 +205,28 @@ export function serializeSubDimOverrides(overrides: SubDimOverrides): string | n
  * 切换某大类的一个入选维（#915 B2 快捷切换 + 页面直切子集，同一交互）：
  * - 该大类无覆盖（默认态）时首击 = 快捷切换到该单维（不是在默认子集上追加）；
  * - 已有覆盖时点击为勾选/取消（多选子集）；
- * - 取消最后一维 = 移除该大类覆盖、回默认（Q8 不支持强制平铺）。
+ * - 取消最后一维 = 移除该大类覆盖、回默认（Q8 不支持强制平铺）；
+ * - 传 registeredDims 且现有覆盖含未登记维（规则事后收紧/手工 URL）时按无覆盖
+ *   处理＝首击重建子集，避免「点任何 chip 都追加到失效覆盖上、分组恒不动」的死胡同
+ *   （ocr r1；与 resolveViewSubDims 的整条回退同判据）。
  * 返回新覆盖集（不改入参），恒按全序归一。
  */
 export function toggleSubDimOverride(
   overrides: SubDimOverrides,
   classCode: string,
-  dim: SubDimension
+  dim: SubDimension,
+  registeredDims?: readonly string[] | null
 ): SubDimOverrides {
   // 与 parse 同判据：原型敏感键不接受写入（防 plain-object 原型链污染）
-  if (classCode === "__proto__" || classCode === "constructor" || classCode === "prototype") {
+  if (isProtoSensitiveKey(classCode)) {
     return { ...overrides };
   }
   // Array.isArray 守卫：继承成员（如 constructor）不是子集，按无覆盖处理
-  const current = Array.isArray(overrides[classCode]) ? overrides[classCode] : [];
-  const next = current.includes(dim)
-    ? current.filter((d) => d !== dim)
-    : [...current, dim];
+  const raw = overrides[classCode];
+  const current = Array.isArray(raw) ? raw : [];
+  const base =
+    registeredDims && !current.every((d) => registeredDims.includes(d)) ? [] : current;
+  const next = base.includes(dim) ? base.filter((d) => d !== dim) : [...base, dim];
   const result = { ...overrides };
   if (next.length === 0) delete result[classCode];
   else result[classCode] = RULE_DIMENSIONS.filter((d) => next.includes(d));

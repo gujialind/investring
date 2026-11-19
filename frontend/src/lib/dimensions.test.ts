@@ -187,6 +187,23 @@ describe("parseSubDimOverrides（#915 B2 URL ?sub= 形态解析）", () => {
     expect(Object.getPrototypeOf(mixed)).toBe(Object.prototype);
     expect(serializeSubDimOverrides(mixed)).toBe("ASSET_STOCK.style");
   });
+
+  it("code 含逻辑分隔符/百分号时转义往返全等（ocr r2：后端 code 仅约束全大写+前缀）", () => {
+    for (const code of ["ASSET_A.B", "ASSET_A~B", "ASSET_A%B", "ASSET_A%2EB"]) {
+      const map = { [code]: ["style" as const] };
+      const raw = serializeSubDimOverrides(map);
+      expect(raw).not.toBeNull();
+      expect(parseSubDimOverrides(raw)).toEqual(map);
+    }
+    expect(serializeSubDimOverrides({ "ASSET_A.B": ["style"] })).toBe("ASSET_A%2EB.style");
+    // 解码失败条目整条丢弃（不抛错）
+    expect(parseSubDimOverrides("ASSET_A%zz.style")).toEqual({});
+  });
+
+  it("serialize 跳过原型敏感键（与 parse 对称，ocr r2：JSON.parse 来源自有键）", () => {
+    const map = JSON.parse('{"__proto__":["style"],"ASSET_STOCK":["region"]}');
+    expect(serializeSubDimOverrides(map)).toBe("ASSET_STOCK.region");
+  });
 });
 
 describe("serializeSubDimOverrides（#915 B2 URL 写入）", () => {
@@ -237,6 +254,22 @@ describe("toggleSubDimOverride（#915 B2 快捷切换 + 直切子集同一交互
       expect(next).toEqual({});
       expect(Object.getPrototypeOf(next)).toBe(Object.prototype);
     }
+  });
+
+  it("传登记维且覆盖含未登记维 → 首击重建子集（ocr r1 死胡同收口进 lib）", () => {
+    const stale = { ASSET_STOCK: ["style" as const, "segment" as const] };
+    const registered = ["region", "size", "segment"]; // style 被收紧
+    expect(toggleSubDimOverride(stale, "ASSET_STOCK", "region", registered)).toEqual({
+      ASSET_STOCK: ["region"],
+    });
+    // 覆盖全登记时正常追加/取消（不误伤）
+    expect(toggleSubDimOverride(stale, "ASSET_STOCK", "region", ["region", "style", "segment"])).toEqual({
+      ASSET_STOCK: ["region", "style", "segment"],
+    });
+    // 不传登记维时保持原语义（追加）
+    expect(toggleSubDimOverride(stale, "ASSET_STOCK", "region")).toEqual({
+      ASSET_STOCK: ["region", "style", "segment"],
+    });
   });
 });
 
