@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
+import { DialogPortalContainerContext } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 /**
@@ -28,22 +29,36 @@ SheetOverlay.displayName = "SheetOverlay";
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>
->(({ className, children, ...props }, ref) => (
-  <SheetPrimitive.Portal>
-    <SheetOverlay />
-    <SheetPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed inset-x-0 bottom-0 z-50 flex max-h-[min(80dvh,44rem)] flex-col rounded-t-lg border-t bg-card",
-        className,
-      )}
-      {...props}
-    >
-      <div className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-full bg-muted" />
-      {children}
-    </SheetPrimitive.Content>
-  </SheetPrimitive.Portal>
-));
+>(({ className, children, ...props }, forwardedRef) => {
+  // #191 同款机制（#917 L2 硬前置落地）：把已挂载 Content 节点经 dialog 的
+  // DialogPortalContainerContext 暴露给子树 Popover——modal 给 body 置
+  // pointer-events:none，弹层挂 body 时日历点击不可达且误关 sheet；
+  // popover.tsx 消费同一 context，故 sheet 内日期 picker 自动 Portal 进 Content。
+  const [contentNode, setContentNode] = React.useState<HTMLElement | null>(null);
+  const setRefs = (node: HTMLDivElement | null) => {
+    setContentNode(node);
+    if (typeof forwardedRef === "function") forwardedRef(node);
+    else if (forwardedRef) forwardedRef.current = node;
+  };
+  return (
+    <SheetPrimitive.Portal>
+      <SheetOverlay />
+      <SheetPrimitive.Content
+        ref={setRefs}
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-50 flex max-h-[min(80dvh,44rem)] flex-col rounded-t-lg border-t bg-card",
+          className,
+        )}
+        {...props}
+      >
+        <div className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-full bg-muted" />
+        <DialogPortalContainerContext.Provider value={contentNode}>
+          {children}
+        </DialogPortalContainerContext.Provider>
+      </SheetPrimitive.Content>
+    </SheetPrimitive.Portal>
+  );
+});
 SheetContent.displayName = "SheetContent";
 
 const SheetHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (

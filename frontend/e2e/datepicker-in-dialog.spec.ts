@@ -397,3 +397,26 @@ test.describe('弹窗内 DatePicker 矮视口（评审新增）', () => {
     }
   });
 });
+
+test.describe('sheet 内 DatePicker（#904 P1c，visual-spec §13 硬前置）', () => {
+  test('调仓筛选 sheet：日期区间 picker 可点选且不误关 sheet', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile', 'sheet 仅移动形态；桌面筛选栏恒展开不走 sheet');
+    await gotoPortfolioSubpage(page, E2E_ACTIVE, 'trades');
+    await page.getByRole('button', { name: /^筛选/ }).click();
+    const sheet = page.getByRole('dialog', { name: '筛选' });
+    await expect(sheet).toBeVisible();
+    const trigger = sheet.locator('button').filter({ hasText: /交易日期|\d{4}-\d{2}-\d{2}/ }).first();
+    await openPopover(page, trigger, page.locator('button.rdp-day_button').first());
+    // 机制断言：日历浮层须 Portal 注入 sheet Content（#191 方案 C 同款）；
+    // 若挂 body 则 sheet.locator 0 命中且点击被 pointer-events:none 拦截
+    await expect(sheet.locator('button.rdp-day_button').first()).toBeVisible();
+    await page.locator(DAY_17).click({ timeout: 10_000 });
+    await page.locator(DAY_18).click({ timeout: 10_000 });
+    // range 草稿态：选两日后日历不关（§10），footer「确定」提交
+    await sheet.getByRole('button', { name: '确定' }).click();
+    await expect(page.locator('button.rdp-day_button')).toHaveCount(0);
+    // sheet 不被误关，区间写入 trigger
+    await expect(sheet).toBeVisible();
+    await expect(trigger).toContainText('~');
+  });
+});
