@@ -10,39 +10,39 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2 } from "lucide-react";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { useUpdatePortfolio } from "@/hooks/usePortfolio";
-import { DIMENSION_LABELS, SUB_DIM_BY_CLASS } from "@/lib/dimensions";
-
-/** Select 中「默认」选项的哨兵值（Radix Select 不允许空字符串 value） */
-const DEFAULT_VALUE = "__default__";
+import {
+  DEFAULT_SUB_DIMS_BY_CLASS,
+  DIMENSION_LABELS,
+  RULE_DIMENSIONS,
+  filterRegisteredDims,
+  parseDisplaySubset,
+  type SubDimension,
+} from "@/lib/dimensions";
 
 interface DisplayConfigDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   portfolioCode: string;
-  /** 组合当前 display_config（null/缺省 = 未配置） */
+  /** 组合当前 display_config（null/缺省 = 未配置；值为逗号分隔维度子集串，#915） */
   currentConfig?: Record<string, string> | null;
 }
 
 /**
- * 持仓明细二级分组维度配置弹窗（issue #144，双端共用）。
+ * 持仓明细二级组合键维度子集配置弹窗（issue #144 创建、#915 单选改多选，双端共用）。
  * 枚举维度规则矩阵中有行的全部大类（不限当前持仓，支持预配置；
- * 现金大类无规则行天然不出现），可选维度以 asset_class_dimension_rule
- * 登记为准（required/optional 均可）。保存仅提交显式覆盖项，
- * 全部默认时传 null 清空配置。
+ * 现金大类无规则行天然不出现），每大类列出全部非禁止维度（required/optional
+ * 均可）供勾选。保存仅提交显式覆盖项（勾选子集按固定全序拼逗号串）；
+ * 清空某大类全部勾选（或点「恢复默认」）= 提交时省略该键 = 走默认子集，
+ * 不是平铺（#915 Q8 不支持强制平铺）；全部大类默认时传 null 清空配置。
  *
  * 字典查询与详情页同 key（"asset_class"，顶层 dimension_rules 不受
  * 维度过滤影响），复用页面缓存且被页面 loading 闸门覆盖，打开弹窗时
- * 字典必然就绪，不存在初始化竞态。
+ * 字典必然就绪；初始化 effect 仍依赖字典数据——晚到（缓存未命中）时
+ * 数据到达后重跑初始化，避免 selections 停留在空状态导致保存误清空配置。
  */
 export default function DisplayConfigDialog({
   open,
@@ -67,25 +67,46 @@ export default function DisplayConfigDialog({
     [dictData]
   );
 
-  // 各大类当前选择：维度键或 DEFAULT_VALUE；打开时从既有配置回填，
-  // 依赖 configurableClasses/currentConfig——字典晚到（缓存未命中）时
-  // 数据到达后重跑初始化，避免 selections 停留在空状态导致保存误清空配置
-  const [selections, setSelections] = useState<Record<string, string>>({});
+  // 各大类当前勾选子集（恒按全序）：打开时从既有配置回填；空数组 = 默认。
+  // 回填按 dimension_rules 过滤已失效维度（L2 r1：与展示/提交同一登记判据，
+  // 规则事后收紧时「不改直接保存」不回提失效维度触发 422）。
+  // 依赖 configurableClasses/currentConfig——字典晚到时数据到达后重跑初始化
+  const [selections, setSelections] = useState<Record<string, SubDimension[]>>({});
   useEffect(() => {
     if (!open) return;
-    const init: Record<string, string> = {};
+    const init: Record<string, SubDimension[]> = {};
     for (const cls of configurableClasses) {
-      init[cls.code] = currentConfig?.[cls.code] ?? DEFAULT_VALUE;
+      init[cls.code] = filterRegisteredDims(
+        parseDisplaySubset(currentConfig?.[cls.code]),
+        cls.code,
+        dictData?.dimension_rules
+      );
     }
     setSelections(init);
-  }, [open, configurableClasses, currentConfig]);
+  }, [open, configurableClasses, currentConfig, dictData]);
+
+  const toggleDim = (classCode: string, dim: SubDimension, checked: boolean) => {
+    setSelections((prev) => {
+      const cur = prev[classCode] ?? [];
+      const next = checked ? [...cur, dim] : cur.filter((d) => d !== dim);
+      return {
+        ...prev,
+        [classCode]: RULE_DIMENSIONS.filter((d) => next.includes(d)),
+      };
+    });
+  };
 
   const handleSave = () => {
     const overrides: Record<string, string> = {};
     for (const cls of configurableClasses) {
-      const value = selections[cls.code] ?? DEFAULT_VALUE;
-      if (value !== DEFAULT_VALUE) {
-        overrides[cls.code] = value;
+      // 提交前再按登记过滤（弹窗开着期间字典可能刷新收紧）；全过滤空 = 省略该键
+      const dims = filterRegisteredDims(
+        selections[cls.code] ?? [],
+        cls.code,
+        dictData?.dimension_rules
+      );
+      if (dims.length > 0) {
+        overrides[cls.code] = dims.join(",");
       }
     }
     updatePortfolio.mutate(
@@ -100,41 +121,58 @@ export default function DisplayConfigDialog({
         <DialogHeader>
           <DialogTitle>分组维度</DialogTitle>
           <DialogDescription>
-            为各大类设置持仓明细的二级分组维度；选「默认」的大类按内置维度分组。
+            为各大类勾选参与持仓明细二级组合键拼接的维度；不勾选任何维度即按默认子集分组。
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="space-y-4">
           {configurableClasses.map((cls) => {
-            const defaultDim = SUB_DIM_BY_CLASS[cls.code] ?? null;
-            const defaultLabel = defaultDim
-              ? `默认（${DIMENSION_LABELS[defaultDim] ?? defaultDim}）`
-              : "默认（平铺）";
-            const ruleDims = Object.keys(
-              dictData?.dimension_rules?.[cls.code] ?? {}
+            const ruleDims = RULE_DIMENSIONS.filter(
+              (d) => d in (dictData?.dimension_rules?.[cls.code] ?? {})
             );
+            const selected = selections[cls.code] ?? [];
+            const defaultDims = (DEFAULT_SUB_DIMS_BY_CLASS[cls.code] ?? []).filter(
+              (d) => ruleDims.includes(d)
+            );
+            const dimNames = (dims: SubDimension[]) =>
+              dims.map((d) => DIMENSION_LABELS[d] ?? d).join("·");
+            const effectiveLabel =
+              selected.length > 0
+                ? dimNames(selected)
+                : defaultDims.length > 0
+                  ? `默认（${dimNames(defaultDims)}）`
+                  : "默认（平铺）";
             return (
-              <div key={cls.code} className="flex items-center justify-between gap-4">
-                <span className="text-sm">{cls.name}</span>
-                <Select
-                  value={selections[cls.code] ?? DEFAULT_VALUE}
-                  onValueChange={(v) =>
-                    setSelections((prev) => ({ ...prev, [cls.code]: v }))
-                  }
-                >
-                  <SelectTrigger className="w-40">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_VALUE}>{defaultLabel}</SelectItem>
-                    {/* 不剔除 defaultDim：显式覆盖值等于内置默认维度时（CLI/API 可
-                        合法落库）需有匹配选项，否则触发器渲染空白 */}
-                    {ruleDims.map((d) => (
-                      <SelectItem key={d} value={d}>
-                        {DIMENSION_LABELS[d] ?? d}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div
+                key={cls.code}
+                data-testid={`display-config-class-${cls.code}`}
+                className="space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-sm font-medium">{cls.name}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setSelections((prev) => ({ ...prev, [cls.code]: [] }))
+                    }
+                  >
+                    恢复默认
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                  {ruleDims.map((d) => (
+                    <label key={d} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={selected.includes(d)}
+                        onCheckedChange={(checked) =>
+                          toggleDim(cls.code, d, checked === true)
+                        }
+                      />
+                      {DIMENSION_LABELS[d] ?? d}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">当前：{effectiveLabel}</p>
               </div>
             );
           })}

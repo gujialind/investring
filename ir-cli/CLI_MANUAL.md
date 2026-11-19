@@ -394,7 +394,7 @@ ir portfolio create --code <代码> --name <名称> [--description <描述>] [--
 
 | 参数 | 默认值 | 说明 |
 |------|:------:|------|
-| `--display-config` | — | 持仓明细二级分组维度 JSON 对象，如 `'{"ASSET_STOCK": "style"}'`（issue #144） |
+| `--display-config` | — | 持仓明细二级组合键维度子集 JSON 对象，值为逗号分隔维度名，如 `'{"ASSET_STOCK": "region,segment"}'`（单值=单元素子集，如 `'{"ASSET_STOCK": "style"}'`；不配该键=默认子集；issue #144/#915） |
 | `--kind` | nav | 组合类型：`nav`=净值型（默认）/ `ledger`=平台市值台账型（issue #905）；创建后不可改 |
 | `--owner-investor-code` | — | 台账型归属投资人代码（`ledger` 必填、`nav` 禁填；issue #905）；创建后不可改 |
 
@@ -416,7 +416,7 @@ ir portfolio update <CODE> [--name <名称>] [--description <描述>] [--display
 
 | 参数 | 默认值 | 说明 |
 |------|:------:|------|
-| `--display-config` | — | 持仓明细二级分组维度 JSON 对象，如 `'{"ASSET_STOCK": "style"}'`（issue #144）；清空配置请用 `--json '{"display_config": null}'` |
+| `--display-config` | — | 持仓明细二级组合键维度子集 JSON 对象，值为逗号分隔维度名，如 `'{"ASSET_STOCK": "region,segment"}'`（单值=单元素子集；不配该键=默认子集；issue #144/#915）；清空配置请用 `--json '{"display_config": null}'` |
 
 #### `ir portfolio close`
 

@@ -10,8 +10,9 @@ class PortfolioBase(BaseModel):
 
 
 class PortfolioCreate(PortfolioBase):
-    # 持仓明细二级分组维度覆盖（issue #144）：{"ASSET_STOCK": "style", ...}，
-    # 仅存显式覆盖项；校验以 asset_class_dimension_rule 规则表为准
+    # 持仓明细二级组合键维度子集覆盖（issue #144 创建、#915 子集化）：
+    # {"ASSET_STOCK": "region,segment", ...}，值为逗号分隔维度子集（单值=单元素子集），
+    # 写侧按全序归一；仅存显式覆盖项；校验以 asset_class_dimension_rule 规则表为准
     display_config: Optional[Dict[str, str]] = None
     # 组合类型（issue #905）：nav=净值型（默认）/ ledger=平台市值台账型；创建后不可改。
     kind: str = "nav"

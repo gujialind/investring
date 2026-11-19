@@ -12,6 +12,7 @@ from typing import List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.constants.asset_dimensions import RULE_DIMENSIONS
 from app.constants.audit_actions import ACTION_ACTIVATE, ACTION_DELETE, RESOURCE_PORTFOLIO
 from app.models.asset_classification import AssetClassDimensionRule, AssetClassification
 from app.models.base import Base
@@ -40,17 +41,24 @@ def _get_portfolio_or_404(db: Session, code: str) -> Portfolio:
 
 
 def validate_display_config(db: Session, config: Optional[dict]) -> Optional[dict]:
-    """校验并归一持仓明细二级分组维度配置（issue #144）。
+    """校验并归一持仓明细二级组合键的维度子集配置（issue #144 / #915）。
 
-    返回归一后的配置：空 dict 归一为 None（语义等同默认，保持「仅存显式
-    覆盖项」单一表示，DB 不出现 {} 与 NULL 双表示）。
+    值形态（#915 Q1=A）：值为逗号分隔维度名（如 "region,segment"），单值
+    天然兼容为单元素子集。返回归一后的配置：空 dict 归一为 None（语义等同
+    默认，保持「仅存显式覆盖项」单一表示，DB 不出现 {} 与 NULL 双表示）；
+    每个子集按固定全序 region→style→size→segment 重排入库（Q5），顺序不
+    表达语义，"segment,region" 与 "region,segment" 归一后同值。
 
-    校验规则（失败抛 INVALID_DISPLAY_CONFIG 422）：
+    校验规则（失败抛 INVALID_DISPLAY_CONFIG 422，拒绝即零写入）：
     - key 必须是字典中 dimension==asset_class 的维度值（不校验 is_active，
       停用大类无持仓时配置无副作用）；
-    - value 必须在该大类的 asset_class_dimension_rule 登记（required/optional
-      均可；无行 = forbidden，如 ASSET_CASH 任何配置均拒绝）。值域不硬编码，
-      规则矩阵新登记维度运行期即可配（#135 理念）。
+    - value 必须是非空字符串，按逗号拆分、逐项 strip；空串/纯空白/拆分后
+      为空一律拒绝（本批不支持「强制平铺」，Q8）；
+    - 拆分后每项必须 ∈ RULE_DIMENSIONS，且在该大类的
+      asset_class_dimension_rule 登记（required/optional 均可；无行 =
+      forbidden，如 ASSET_CASH 任何配置均拒绝）。值域不硬编码，规则矩阵
+      新登记维度运行期即可配（#135 理念）；
+    - 重复项拒绝（子集语义无二义）。
     """
     if config is None:
         return None
@@ -67,20 +75,67 @@ def validate_display_config(db: Session, config: Optional[dict]) -> Optional[dic
     rules: dict = {}
     for row in db.query(AssetClassDimensionRule).all():
         rules.setdefault(row.asset_class_code, set()).add(row.dimension)
-    for class_code, dimension in config.items():
+    normalized: dict = {}
+    for class_code, value in config.items():
         if class_code not in class_codes:
             raise BusinessError(
                 "INVALID_DISPLAY_CONFIG",
                 f"display_config key {class_code} 不是 asset_class 维度值",
+                details={"asset_class_code": class_code, "value": value},
             )
         allowed = rules.get(class_code, set())
-        if dimension not in allowed:
+        if not isinstance(value, str) or not value.strip():
             raise BusinessError(
                 "INVALID_DISPLAY_CONFIG",
-                f"大类 {class_code} 不可按维度 {dimension} 二级分组"
-                + ("（该大类无维度规则行）" if not allowed else "（未在规则矩阵登记）"),
+                f"大类 {class_code} 的分组维度子集不能为空",
+                details={"asset_class_code": class_code, "value": value},
             )
-    return config
+        parts = [part.strip() for part in value.split(",")]
+        selected: set = set()
+        for dimension in parts:
+            if not dimension:
+                raise BusinessError(
+                    "INVALID_DISPLAY_CONFIG",
+                    f"大类 {class_code} 的分组维度子集不能为空",
+                    details={"asset_class_code": class_code, "value": value},
+                )
+            if dimension not in RULE_DIMENSIONS:
+                raise BusinessError(
+                    "INVALID_DISPLAY_CONFIG",
+                    f"大类 {class_code} 的分组维度子集含非法维度 {dimension}"
+                    "（限 region/style/size/segment）",
+                    details={
+                        "asset_class_code": class_code,
+                        "dimension": dimension,
+                        "value": value,
+                    },
+                )
+            if dimension not in allowed:
+                raise BusinessError(
+                    "INVALID_DISPLAY_CONFIG",
+                    f"大类 {class_code} 不可按维度 {dimension} 二级分组"
+                    + ("（该大类无维度规则行）" if not allowed else "（未在规则矩阵登记）"),
+                    details={
+                        "asset_class_code": class_code,
+                        "dimension": dimension,
+                        "value": value,
+                    },
+                )
+            if dimension in selected:
+                raise BusinessError(
+                    "INVALID_DISPLAY_CONFIG",
+                    f"大类 {class_code} 的分组维度子集含重复维度 {dimension}",
+                    details={
+                        "asset_class_code": class_code,
+                        "dimension": dimension,
+                        "value": value,
+                    },
+                )
+            selected.add(dimension)
+        normalized[class_code] = ",".join(
+            dimension for dimension in RULE_DIMENSIONS if dimension in selected
+        )
+    return normalized
 
 
 def list_portfolios(

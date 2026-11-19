@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
-  resolveSubDim,
+  resolveSubDims,
+  parseDisplaySubset,
+  filterRegisteredDims,
   getDimensionOptions,
   clearInapplicableDims,
-  SUB_DIM_BY_CLASS,
+  DEFAULT_SUB_DIMS_BY_CLASS,
 } from "@/lib/dimensions";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 
@@ -19,29 +21,126 @@ function item(over: Partial<AssetClassificationItem>): AssetClassificationItem {
   };
 }
 
-describe("resolveSubDim", () => {
-  it("组合级覆盖优先", () => {
-    expect(resolveSubDim({ ASSET_STOCK: "style" }, "ASSET_STOCK")).toBe("style");
-  });
+/** 种子规则矩阵形态（backend/app/constants/asset_dimensions.py::DIMENSION_RULES） */
+const RULES = {
+  ASSET_STOCK: { region: "required", style: "required", size: "required", segment: "optional" },
+  ASSET_BOND: { region: "required", segment: "required" },
+  ASSET_COMMODITY: { segment: "optional" },
+};
 
-  it("覆盖值为未知维度时回退内置默认（防御）", () => {
-    expect(resolveSubDim({ ASSET_STOCK: "bogus" }, "ASSET_STOCK")).toBe("region");
-  });
-
-  it("无覆盖走内置默认；现金平铺；未知大类返回 null", () => {
-    expect(resolveSubDim(null, "ASSET_STOCK")).toBe("region");
-    expect(resolveSubDim(undefined, "ASSET_BOND")).toBe("segment");
-    expect(resolveSubDim({}, "ASSET_CASH")).toBeNull();
-    expect(resolveSubDim(null, "ASSET_UNKNOWN")).toBeNull();
-  });
-
-  it("内置默认表与文档口径一致（股票→地区、债券/商品→细分、现金平铺）", () => {
-    expect(SUB_DIM_BY_CLASS).toEqual({
-      ASSET_STOCK: "region",
-      ASSET_BOND: "segment",
-      ASSET_COMMODITY: "segment",
-      ASSET_CASH: null,
+describe("默认子集表（#915 D3/D4）", () => {
+  it("与文档口径一致（backend/AGENTS.md §1.4）：股票/债券 region,segment、商品 segment、现金平铺", () => {
+    expect(DEFAULT_SUB_DIMS_BY_CLASS).toEqual({
+      ASSET_STOCK: ["region", "segment"],
+      ASSET_BOND: ["region", "segment"],
+      ASSET_COMMODITY: ["segment"],
+      ASSET_CASH: [],
     });
+  });
+
+  it("默认子集恒为该大类非禁止维度的子集（规则矩阵种子）", () => {
+    for (const [code, dims] of Object.entries(DEFAULT_SUB_DIMS_BY_CLASS)) {
+      const allowed = Object.keys(RULES[code as keyof typeof RULES] ?? {});
+      for (const d of dims) expect(allowed).toContain(d);
+    }
+  });
+});
+
+describe("resolveSubDims", () => {
+  it("组合级显式子集优先，按全序返回", () => {
+    expect(resolveSubDims({ ASSET_STOCK: "style" }, "ASSET_STOCK")).toEqual(["style"]);
+    expect(resolveSubDims({ ASSET_STOCK: "region,segment" }, "ASSET_STOCK")).toEqual([
+      "region",
+      "segment",
+    ]);
+  });
+
+  it("子集顺序无语义：乱序串归一为固定全序 region→style→size→segment", () => {
+    expect(resolveSubDims({ ASSET_STOCK: "segment,region" }, "ASSET_STOCK")).toEqual([
+      "region",
+      "segment",
+    ]);
+    expect(
+      resolveSubDims({ ASSET_STOCK: "segment,size,style,region" }, "ASSET_STOCK")
+    ).toEqual(["region", "style", "size", "segment"]);
+  });
+
+  it("拆分项 strip；单值 = 单元素子集（存量兼容）", () => {
+    expect(resolveSubDims({ ASSET_STOCK: " region , segment " }, "ASSET_STOCK")).toEqual([
+      "region",
+      "segment",
+    ]);
+    expect(resolveSubDims({ ASSET_BOND: "segment" }, "ASSET_BOND")).toEqual(["segment"]);
+  });
+
+  it("无覆盖走默认子集表；现金平铺；未知大类空子集", () => {
+    expect(resolveSubDims(null, "ASSET_STOCK")).toEqual(["region", "segment"]);
+    expect(resolveSubDims(undefined, "ASSET_BOND")).toEqual(["region", "segment"]);
+    expect(resolveSubDims({}, "ASSET_COMMODITY")).toEqual(["segment"]);
+    expect(resolveSubDims({}, "ASSET_CASH")).toEqual([]);
+    expect(resolveSubDims(null, "ASSET_UNKNOWN")).toEqual([]);
+  });
+
+  it("非法值防御回退默认子集（空串/纯空白/未知维度/重复项/空拆分项）", () => {
+    const def = ["region", "segment"];
+    for (const bad of ["", "   ", "bogus", "region,bogus", "region,region", "region,", "region,,segment"]) {
+      expect(resolveSubDims({ ASSET_STOCK: bad }, "ASSET_STOCK")).toEqual(def);
+    }
+  });
+
+  it("传规则矩阵时：未登记维度整串回退默认（规则事后收紧的防御）", () => {
+    expect(resolveSubDims({ ASSET_BOND: "region,style" }, "ASSET_BOND", RULES)).toEqual([
+      "region",
+      "segment",
+    ]);
+    expect(resolveSubDims({ ASSET_CASH: "segment" }, "ASSET_CASH", RULES)).toEqual([]);
+    // 合法子集不受影响
+    expect(resolveSubDims({ ASSET_BOND: "segment,region" }, "ASSET_BOND", RULES)).toEqual([
+      "region",
+      "segment",
+    ]);
+  });
+
+  it("传规则矩阵时：默认子集也按登记过滤（默认含被收紧维度时剔除）", () => {
+    const tightened = { ASSET_STOCK: { region: "required" } };
+    expect(resolveSubDims(null, "ASSET_STOCK", tightened)).toEqual(["region"]);
+  });
+});
+
+describe("parseDisplaySubset（弹窗回填形态解析）", () => {
+  it("拆分/strip/去重/全序归一", () => {
+    expect(parseDisplaySubset("segment, region ,segment")).toEqual(["region", "segment"]);
+    expect(parseDisplaySubset("style")).toEqual(["style"]);
+  });
+
+  it("空值与非法项：空串/null/缺省 → 空数组；未知维度剔除（尽力回显合法部分）", () => {
+    expect(parseDisplaySubset("")).toEqual([]);
+    expect(parseDisplaySubset(null)).toEqual([]);
+    expect(parseDisplaySubset(undefined)).toEqual([]);
+    expect(parseDisplaySubset("bogus,region")).toEqual(["region"]);
+  });
+});
+
+describe("filterRegisteredDims（弹窗回填/提交登记过滤，L2 r1）", () => {
+  it("仅保留已登记维度、保持全序；与 resolveSubDims 同一登记判据", () => {
+    expect(filterRegisteredDims(["region", "style"], "ASSET_STOCK", RULES)).toEqual([
+      "region",
+      "style",
+    ]);
+    const tightened = { ASSET_STOCK: { region: "required", segment: "optional" } };
+    expect(filterRegisteredDims(["region", "style"], "ASSET_STOCK", tightened)).toEqual([
+      "region",
+    ]);
+    expect(filterRegisteredDims(["style"], "ASSET_STOCK", tightened)).toEqual([]);
+  });
+
+  it("大类无规则行（现金）→ 全过滤空；不传 rules → 原样返回", () => {
+    expect(filterRegisteredDims(["segment"], "ASSET_CASH", RULES)).toEqual([]);
+    expect(filterRegisteredDims(["style", "region"], "ASSET_STOCK")).toEqual([
+      "style",
+      "region",
+    ]);
+    expect(filterRegisteredDims(["style"], "ASSET_STOCK", null)).toEqual(["style"]);
   });
 });
 

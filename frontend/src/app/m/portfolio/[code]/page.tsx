@@ -250,12 +250,13 @@ function MobilePortfolioDetailInner() {
               </Card>
 
               {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
-                  二级分组维度优先取组合级 display_config（issue #144） */}
+                  二级组合键子集优先取组合级 display_config（issue #144/#915） */}
               <PortfolioHoldings
                 portfolioCode={code}
                 basePath="/m/portfolio"
                 assetClasses={assetClasses}
                 displayConfig={portfolio.display_config}
+                dimensionRules={assetClassDict?.dimension_rules}
                 view={view}
                 onViewChange={handleViewChange}
                 variant="mobile"
