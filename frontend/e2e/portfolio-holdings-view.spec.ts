@@ -6,6 +6,7 @@ import {
   authHeaders,
   closePortfolioViaApi,
   gotoPortfolioDetail,
+  openMobilePageActionsIfMobile,
   toISODate,
 } from './helpers';
 
@@ -307,11 +308,21 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await expect(
       page.getByRole('link', { name: isMobile ? '调仓' : '调仓交易', exact: true }),
     ).toBeVisible();
+    // #904 P1c-3：移动 active 的事件/快照收 ⋯ 抽屉，先开再断；modal aria-hidden
+    // 会遮抽屉外节点，断完须关抽屉才能断管理卡
+    if (isMobile) {
+      await openMobilePageActionsIfMobile(page, testInfo);
+    }
     await expect(page.getByRole('link', { name: '份额变动事件' })).toBeVisible();
     await expect(page.getByRole('link', { name: '快照管理' })).toBeVisible();
-    // 唯一性守卫：active+admin 详情页同名 link 仅页头一处（管理卡去重后不得双匹配）
+    // 唯一性守卫：active+admin 详情页同名 link 仅操作区一处（桌面页头/移动 ⋯ 抽屉；
+    // 管理卡去重后不得双匹配）
     await expect(page.getByRole('link', { name: '份额变动事件' })).toHaveCount(1);
     await expect(page.getByRole('link', { name: '快照管理' })).toHaveCount(1);
+    if (isMobile) {
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('link', { name: '份额变动事件' })).toHaveCount(0);
+    }
     // 管理卡：保留其余 4 入口，事件/快照不再重复出现
     const card = page.getByTestId('manage-links-card');
     await expect(card.getByRole('link', { name: '持仓管理' })).toBeVisible();
