@@ -20,9 +20,10 @@ import {
 } from "@/lib/holdings";
 import {
   DIMENSION_LABELS,
-  RULE_DIMENSIONS,
   isOverrideRegistered,
   registeredDimsFor,
+  ruleDimsFor,
+  type DimensionRules,
   type SubDimension,
   type SubDimOverrides,
 } from "@/lib/dimensions";
@@ -42,7 +43,7 @@ interface PortfolioHoldingsProps {
   /** 组合级二级组合键维度子集覆盖（issue #144/#915，portfolio.display_config 契约原样传入） */
   displayConfig?: Record<string, string> | null;
   /** 维度级适用矩阵（#915：读侧子集解析按登记防御回退；页面自字典响应下传，零额外请求） */
-  dimensionRules?: Record<string, Record<string, string>> | null;
+  dimensionRules?: DimensionRules | null;
   /** 当前视图（D-7：URL ?view=product|platform 由页面持有，本组件不读路由） */
   view: HoldingsView;
   onViewChange: (view: HoldingsView) => void;
@@ -101,7 +102,7 @@ function SubDimSwitchRow({
   /** dim=null 表示「默认」项（清除该大类覆盖）；合并基由页面同步持有（ocr r2 竞态） */
   onToggle: (classCode: string, dim: SubDimension | null) => void;
 }) {
-  const ruleDims = RULE_DIMENSIONS.filter((d) => registered.includes(d));
+  const ruleDims = ruleDimsFor(registered);
   const override = overrides[sectionCode];
   // 有效性判据与消费侧 resolveViewSubDims 结构同源（lib 单点，ocr r3）：
   // 继承成员/非数组/含未登记维（规则事后收紧/手工 URL）→ 按默认态渲染，
@@ -169,7 +170,7 @@ function ProductSections({
   /** 产品卡跳转前缀：`${basePath}/${portfolioCode}/product`（market 走 ?market=，现金卡步骤⑤已接线） */
   productLinkPrefix: string;
   /** 维度级适用矩阵（B2 切换 chip 行枚举非禁止维；缺失时不渲染切换行） */
-  dimensionRules?: Record<string, Record<string, string>> | null;
+  dimensionRules?: DimensionRules | null;
   subDimOverrides?: SubDimOverrides | null;
   onSubDimToggle?: (classCode: string, dim: SubDimension | null) => void;
 }) {
@@ -191,9 +192,7 @@ function ProductSections({
         const registered = sectionCode
           ? registeredDimsFor(sectionCode, dimensionRules)
           : null;
-        const ruleDims = registered
-          ? RULE_DIMENSIONS.filter((d) => registered.includes(d))
-          : [];
+        const ruleDims = registered ? ruleDimsFor(registered) : [];
         const showSwitch =
           !!sectionCode &&
           ruleDims.length > 0 &&

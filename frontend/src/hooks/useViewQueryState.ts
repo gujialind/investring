@@ -70,17 +70,26 @@ export function useViewQueryState(dimensionRules?: DimensionRules | null) {
       return;
     }
     if (pending.qs === committedQs) {
+      // 目标已 commit。取消类写入（qs 回到 committed）时链上更早的在途写可能
+      // 仍未 commit：再发一次当前 URL 顶掉它，否则陈旧 commit 会把已取消的
+      // 覆盖写回地址栏（ocr r4 high；同 URL replace 在无在途写时是无害 no-op）
+      if (pending.issued.some((q) => q !== committedQs)) {
+        router.replace(committedQs ? `${pathname}?${committedQs}` : pathname, {
+          scroll: false,
+        });
+      }
       setPending(null);
       return;
     }
     if (pending.issued.includes(committedQs)) {
-      // 自身中间 commit：推进 base 保留 pending（guard 防更新循环）
+      // 自身中间 commit：推进 base 保留 pending（guard 防更新循环）；
+      // **不 return**——fall through 下发 pending.qs 保证收敛：批处理合并/回退
+      // 中断在途写时目标可能尚未交给 router，仅推进 base 会让后续写恒不发车
+      // （ocr r4 high；重发同目标幂等）
       setPending((prev) =>
         prev && prev.base !== committedQs ? { ...prev, base: committedQs } : prev
       );
-      return;
-    }
-    if (committedQs !== pending.base) {
+    } else if (committedQs !== pending.base) {
       setPending(null);
       return;
     }

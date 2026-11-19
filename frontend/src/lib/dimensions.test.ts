@@ -9,6 +9,7 @@ import {
   resolveViewSubDims,
   registeredDimsFor,
   isOverrideRegistered,
+  ruleDimsFor,
   getDimensionOptions,
   clearInapplicableDims,
   DEFAULT_SUB_DIMS_BY_CLASS,
@@ -370,6 +371,11 @@ describe("registeredDimsFor / isOverrideRegistered（判据单点，ocr r3）", 
     expect(isOverrideRegistered(["style"], [])).toBe(false);
     expect(isOverrideRegistered(["region", "style"], ["region"])).toBe(false);
     expect(isOverrideRegistered(["region"], ["region", "style"])).toBe(true);
+  });
+
+  it("ruleDimsFor：登记键 ∩ 可规则化四维、恒全序（门控与渲染同源）", () => {
+    expect(ruleDimsFor(["segment", "region", "bogus"])).toEqual(["region", "segment"]);
+    expect(ruleDimsFor([])).toEqual([]);
   });
 });
 

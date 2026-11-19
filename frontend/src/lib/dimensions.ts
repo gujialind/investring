@@ -86,9 +86,8 @@ export function filterRegisteredDims(
   classCode: string,
   dimensionRules?: DimensionRules | null
 ): SubDimension[] {
-  if (!dimensionRules) return [...dims];
-  const registered = Object.keys(dimensionRules[classCode] ?? {});
-  return dims.filter((d) => registered.includes(d));
+  const registered = registeredDimsFor(classCode, dimensionRules);
+  return registered ? dims.filter((d) => registered.includes(d)) : [...dims];
 }
 
 /**
@@ -169,6 +168,11 @@ export function isOverrideRegistered(
     override.length > 0 &&
     (!registered || override.every((d) => registered.includes(d)))
   );
+}
+
+/** 切换行 chip 枚举单点（ocr r4：门控集合与渲染集合同源防漂移） */
+export function ruleDimsFor(registered: readonly string[]): SubDimension[] {
+  return RULE_DIMENSIONS.filter((d) => registered.includes(d));
 }
 
 /** URL 逻辑分隔符为 `.`/`~`，但后端 code 校验仅「全大写+前缀」（分隔符大写不变、
