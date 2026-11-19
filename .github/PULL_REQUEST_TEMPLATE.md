@@ -4,7 +4,7 @@
 
 ## 关联 issue
 
-<!-- 有关联时填写 fixes #N；无关联时说明理由。 -->
+<!-- 关联 issue；实施已有方案时注明方案版本及偏差，按[方案承载约定](../docs/reference/documentation.md#doc-issue-spec)回填正文；仅完整解决时用 fixes #N，无关联时说明理由。 -->
 
 ## 自审清单
 
