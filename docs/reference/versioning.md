@@ -62,7 +62,7 @@ python3 scripts/release.py tag v0.1.1 --pr 123 # 4. 阶段二：以发布 PR #12
 # 或使用 --sha <40位完整合并SHA>，与 --pr 互斥且必须选择一个
 ```
 
-* **前提**（阶段一）：main 分支、工作区干净、与 origin/main 同步；钉版契约环境 `.venv-openapi/` 存在（缺失时脚本给出重建命令：`python3 -m venv .venv-openapi && .venv-openapi/bin/pip install -r backend/requirements.txt`）。
+* **前提**（阶段一）：main 分支、工作区干净、与 origin/main 同步；钉版契约环境 `.venv-openapi/` 存在（缺失时脚本给出重建命令：`python3 -m venv .venv-openapi && .venv-openapi/bin/pip install -r backend/requirements.txt`）。重建该环境的解释器须满足 `backend/pyproject.toml` 的 `requires-python >=3.12`（钉版 `numpy==2.5.4` 即其体现）；脚本打印的重建命令写死 `python3`，若本机 `python3` 低于 3.12 会解析失败，须改用 ≥3.12 的解释器建环境（如 `uv venv --seed --python 3.12`）。
 * **阶段一原子完成**：同步 5 处版本文件（含 package-lock 两处；读写保留原行尾，CRLF 文件不翻转）→ 经 `export_openapi.py --offline` 在独立临时 SQLite 子进程重导出 `openapi.json`（不继承业务环境或 `APP_VERSION`）→ `check_openapi.py` + `gen_response_fields.py --check` 验证 → CHANGELOG 顶部插入新条目 → 在 `release/vX.Y.Z` 分支单 commit `chore(release): vX.Y.Z` → 推送分支并创建发布 PR（有 `gh` CLI 时自动建）。
 * **PR 身份**：阶段一输出创建的 PR 编号与 URL，提示合并后使用 `tag --pr`；创建时尚无合并 SHA，不记录未来 SHA。阶段二通过 `gh` 查询 origin 对应的 github.com 仓库，要求 PR 已合并、base 为 main、head 为同仓库 `release/vX.Y.Z`、标题为 `chore(release): vX.Y.Z`。`--sha` 也必须唯一对应这样的 PR 的合并提交，不能拿后续普通提交替代。
 * **阶段二校验后打 tag**：仅 fetch main（不 fetch tags、不 force），验证目标 SHA 从 origin/main 可达，目标提交的 VERSION 及版本同步矩阵中的静态投影一致；要求该 SHA 最新的可信 CI run 成功完成（同仓库、main、push，workflow 为 `.github/workflows/ci.yml` / `CI`，不是 PR 或手动触发的绿灯）。main 已前进不改变标签目标。缺数据、查询失败或任一校验不通过均停止；无需切换或改写工作区版本文件。
