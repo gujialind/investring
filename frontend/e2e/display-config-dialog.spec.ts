@@ -11,7 +11,7 @@ import {
 } from './helpers';
 
 /**
- * #915 DisplayConfigDialog 双端操作用例（SPEC §7.3 六场景）。
+ * #915 DisplayConfigDialog 双端操作用例（SPEC §7.3 六场景＋L2 r1 增补规则收紧场景）。
  * git 历史上本文件先以「现状单选型态」落 characterization 用例并实跑绿
  * （硬前置 commit），再随多选改造更新为本形态——「先补后改」顺序可证。
  *
@@ -32,6 +32,9 @@ import {
  *   字典未就绪」经 UI 不可达（组件注释明写）。本用例钉住组合保障：字典未就绪
  *   时不存在可触发清空的保存入口；就绪后初始化 effect 回填完整、保存不清空。
  *   若未来去掉闸门且初始化 effect 依赖退化（如只依赖 open），本用例必红。
+ * - 「规则事后收紧」（L2 r1 增补）的构造边界：写侧无规则收紧入口（规则矩阵种子），
+ *   故经 page.route 摘读侧字典响应的 style 登记模拟；后端写侧保持真规则，存量预置
+ *   合法可落库。mock 须装于首次导航前（字典 staleTime 5min，缓存命中后 route 不生效）。
  */
 
 /** 大类配置块（组件侧 data-testid 锚点，#382 口径） */
@@ -309,6 +312,59 @@ test.describe('#915 DisplayConfigDialog 维度子集多选（双端）', () => {
     expect(payload).toEqual({ display_config: { ASSET_STOCK: 'style' } });
     await expect(dlg).toHaveCount(0);
     expect(await getConfigViaApi(page, headers, code)).toEqual({ ASSET_STOCK: 'style' });
+    expect(errors).toEqual([]);
+  });
+
+  test('规则事后收紧：存量显式配置引用已失效维度——回填不持有该勾选、直接保存提交过滤后子集或 null', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 120_000);
+    const errors = collectPageErrors(page);
+    // 读侧 mock 须在首次导航前装好（字典 staleTime 5min，缓存命中后 route 不生效）：
+    // 摘掉 ASSET_STOCK 的 style 登记模拟规则事后收紧；后端写侧仍真规则，
+    // 故 region,style / style 的存量预置合法可落库
+    await page.route(/\/api\/asset-classifications(\?|$)/, async (route) => {
+      const resp = await route.fetch();
+      const json = (await resp.json()) as {
+        dimension_rules?: Record<string, Record<string, string>>;
+      };
+      if (json.dimension_rules?.ASSET_STOCK) delete json.dimension_rules.ASSET_STOCK.style;
+      const headers = { ...resp.headers() };
+      delete headers['content-length'];
+      delete headers['content-encoding'];
+      await route.fulfill({ status: resp.status(), headers, json });
+    });
+    const { code, headers } = await setupIsolatedActive(page, testInfo, 'T');
+    await setConfigViaApi(page, headers, code, { ASSET_STOCK: 'region,style' });
+    await gotoOwnPortfolio(page, code);
+    const dlg = await openDisplayConfigDialog(page);
+    const stock = classBlock(dlg, 'ASSET_STOCK');
+
+    // 展示：style 勾选项不再枚举；回填：仅保留已登记 region（不持有失效勾选）
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '风格')).toHaveCount(0);
+    await expect(stock.getByRole('checkbox')).toHaveCount(3);
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '地区')).toBeChecked();
+    await expect(stock).toContainText('当前：地区');
+
+    // 不改选直接保存：提交过滤后子集（不回提失效维度、不 422）
+    const payload = await saveAndCapturePayload(page, dlg, code);
+    expect(payload).toEqual({ display_config: { ASSET_STOCK: 'region' } });
+    await expect(dlg).toHaveCount(0);
+    expect(await getConfigViaApi(page, headers, code)).toEqual({ ASSET_STOCK: 'region' });
+
+    // 第二段：存量维度全部失效 → 回填零勾选、提示回默认；直接保存提交 null
+    await setConfigViaApi(page, headers, code, { ASSET_STOCK: 'style' });
+    await page.reload();
+    await page
+      .getByRole('heading', { level: 1 })
+      .first()
+      .waitFor({ state: 'visible', timeout: 15_000 });
+    const dlg2 = await openDisplayConfigDialog(page);
+    const stock2 = classBlock(dlg2, 'ASSET_STOCK');
+    await expect(stock2.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await expect(stock2).toContainText('当前：默认（地区·细分）');
+    const payload2 = await saveAndCapturePayload(page, dlg2, code);
+    expect(payload2).toEqual({ display_config: null });
+    await expect(dlg2).toHaveCount(0);
+    expect(await getConfigViaApi(page, headers, code)).toBeNull();
     expect(errors).toEqual([]);
   });
 });

@@ -265,7 +265,7 @@ describe("buildProductSections", () => {
     expect(other.total).toBe(80);
   });
 
-  it("占比自洽（组合键下）：chip 占比之和=分区头占比；全部卡行级占比加总=100.0", () => {
+  it("占比独立期望（组合键下）：行级/逐组 chip/分区头均为手工推算写死值；末尾保留自洽总式", () => {
     const products = [
       makeStockProduct({ product_code: "A", market_value: 100 }),
       makeStockProduct({ product_code: "B", segment_code: "SEG_DIVIDEND", segment_name: "红利", market_value: 300 }),
@@ -275,15 +275,54 @@ describe("buildProductSections", () => {
     const inTransit = 100;
     const map = buildCardPercentMap(products, inTransit);
     const percentOf = (p: HoldingProductAggregate) => map.get(productCardKey(p)) ?? 0;
+    // 手工最大余数法（总额 1100）：千分位 floor 90/272/181/363/90、余 4 席按余数
+    // 降序给 A/在途/C/B → 行级 9.1/27.3/18.2/36.3/9.1（写死，独立于分组实现）
+    expect(map.get(productCardKey(products[0]))).toBe(9.1);
+    expect(map.get(productCardKey(products[1]))).toBe(27.3);
+    expect(map.get(productCardKey(products[2]))).toBe(18.2);
+    expect(map.get(productCardKey(products[3]))).toBe(36.3);
+    expect(map.get(PSEUDO_IN_TRANSIT_CODE)).toBe(9.1);
+
     const sections = buildProductSections(products, DICT);
-    let sectionPercentSum = 0;
-    for (const section of sections) {
-      const chipSum = section.groups.reduce((s, g) => s + sumGroupPercent(g.products, percentOf), 0);
-      const sectionPercent = sumGroupPercent(section.groups.flatMap((g) => g.products), percentOf);
-      expect(chipSum).toBeCloseTo(sectionPercent, 5);
-      sectionPercentSum += sectionPercent;
-    }
+    const [stock, cash] = sections;
+    expect(stock.groups.map((g) => g.name)).toEqual(["中国·红利", "美国·综合", "中国·综合"]);
+    // 逐组 chip 合计 = 组内行级写死值之和（改任一组归属即独立变红）
+    const expectedChip = [27.3, 18.2, 9.1];
+    stock.groups.forEach((g, i) => {
+      expect(sumGroupPercent(g.products, percentOf)).toBeCloseTo(expectedChip[i], 5);
+    });
+    // 分区头 = 名下全部行级写死值之和（54.6 / 36.3），不再与 chip 同集合互算
+    expect(sumGroupPercent(stock.groups.flatMap((g) => g.products), percentOf)).toBeCloseTo(54.6, 5);
+    expect(sumGroupPercent(cash.groups.flatMap((g) => g.products), percentOf)).toBeCloseTo(36.3, 5);
+    // 自洽总式保留：分区头加总 + 在途 = 100.0
+    const sectionPercentSum = sections.reduce(
+      (s, sec) => s + sumGroupPercent(sec.groups.flatMap((g) => g.products), percentOf),
+      0
+    );
     expect(sectionPercentSum + (map.get(PSEUDO_IN_TRANSIT_CODE) ?? 0)).toBeCloseTo(100.0, 5);
+  });
+
+  it("code 有值/name 为空（字典行缺失脏数据）：占位判据与显示层对齐，含空 name 组恒垫底", () => {
+    const products = [
+      makeStockProduct({ product_code: "A", segment_code: "SEG_DIVIDEND", segment_name: null, market_value: 999 }),
+      makeStockProduct({ product_code: "B", market_value: 100 }),
+    ];
+    const [section] = buildProductSections(products, DICT);
+    expect(section.groups.map((g) => g.name)).toEqual(["中国·综合", "中国·未分类"]);
+    expect(section.groups[1].hasPlaceholder).toBe(true);
+    expect(section.groups[1].total).toBe(999); // 最大仍垫底
+  });
+
+  it("code 全有值但 name 全空 → 收敛单个「未分类」（不重复占位符）且垫底", () => {
+    const products = [
+      makeStockProduct({ product_code: "A", segment_code: "SEG_DIVIDEND", region_name: null, segment_name: null, market_value: 100 }),
+      makeStockProduct({ product_code: "B", segment_code: "SEG_DIVIDEND", region_name: null, segment_name: null, market_value: 50 }),
+      makeStockProduct({ product_code: "C", market_value: 10 }),
+    ];
+    const [section] = buildProductSections(products, DICT);
+    expect(section.groups.map((g) => g.name)).toEqual(["中国·综合", UNCATEGORIZED_GROUP_NAME]);
+    expect(section.groups[1].hasPlaceholder).toBe(true);
+    expect(section.groups[1].total).toBe(150);
   });
 
   it("空输入返回空数组", () => {

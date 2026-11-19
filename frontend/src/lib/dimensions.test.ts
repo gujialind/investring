@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveSubDims,
   parseDisplaySubset,
+  filterRegisteredDims,
   getDimensionOptions,
   clearInapplicableDims,
   DEFAULT_SUB_DIMS_BY_CLASS,
@@ -117,6 +118,29 @@ describe("parseDisplaySubset（弹窗回填形态解析）", () => {
     expect(parseDisplaySubset(null)).toEqual([]);
     expect(parseDisplaySubset(undefined)).toEqual([]);
     expect(parseDisplaySubset("bogus,region")).toEqual(["region"]);
+  });
+});
+
+describe("filterRegisteredDims（弹窗回填/提交登记过滤，L2 r1）", () => {
+  it("仅保留已登记维度、保持全序；与 resolveSubDims 同一登记判据", () => {
+    expect(filterRegisteredDims(["region", "style"], "ASSET_STOCK", RULES)).toEqual([
+      "region",
+      "style",
+    ]);
+    const tightened = { ASSET_STOCK: { region: "required", segment: "optional" } };
+    expect(filterRegisteredDims(["region", "style"], "ASSET_STOCK", tightened)).toEqual([
+      "region",
+    ]);
+    expect(filterRegisteredDims(["style"], "ASSET_STOCK", tightened)).toEqual([]);
+  });
+
+  it("大类无规则行（现金）→ 全过滤空；不传 rules → 原样返回", () => {
+    expect(filterRegisteredDims(["segment"], "ASSET_CASH", RULES)).toEqual([]);
+    expect(filterRegisteredDims(["style", "region"], "ASSET_STOCK")).toEqual([
+      "style",
+      "region",
+    ]);
+    expect(filterRegisteredDims(["style"], "ASSET_STOCK", null)).toEqual(["style"]);
   });
 });
 

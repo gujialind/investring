@@ -35,7 +35,7 @@ export interface HoldingProductGroup {
   name: string;
   /** code 元组键（按 code 分组，同名不同 code 不合并）；平铺组为哨兵 */
   codeKey: string;
-  /** 任一入选维为空（占位符进键内）；排序用：含占位符的组恒垫底（SPEC §6.3） */
+  /** 任一入选维槽位为占位位（code 空或 name 空）；排序用：含占位符的组恒垫底（SPEC §6.3） */
   hasPlaceholder: boolean;
   products: HoldingProductAggregate[];
   total: number;
@@ -82,12 +82,16 @@ function groupProducts(
   const groups: HoldingProductGroup[] = [...byCodeKey.entries()].map(
     ([codeKey, ps]) => {
       const codes = codeKey.split(CODE_KEY_SEPARATOR);
-      const hasPlaceholder = codes.some((c) => !c);
-      // 入选维全空 → 收敛为单个「未分类」（不重复占位符）；部分空 → 空位填占位符
-      const name = codes.every((c) => !c)
+      const names = dims.map((d) => ps[0][`${d}_name`] ?? "");
+      // 占位位判据 = code 空 OR name 空（L2 r1 判据侧对齐：不依赖 code/name 恒一致
+      // 的隐含前提；字典行缺失致 name 空而 code 有值时，与显示层「未分类」同判垫底）
+      const placeholder = codes.map((c, i) => !c || !names[i]);
+      const hasPlaceholder = placeholder.some(Boolean);
+      // 入选维全为占位位 → 收敛为单个「未分类」（不重复占位符）；部分占位 → 空位填占位符
+      const name = placeholder.every(Boolean)
         ? UNCATEGORIZED_GROUP_NAME
         : dims
-            .map((d, i) => (codes[i] ? ps[0][`${d}_name`] ?? UNCATEGORIZED_GROUP_NAME : UNCATEGORIZED_GROUP_NAME))
+            .map((d, i) => (placeholder[i] ? UNCATEGORIZED_GROUP_NAME : names[i]))
             .join(COMBO_KEY_SEPARATOR);
       const sorted = [...ps].sort((a, b) => b.market_value - a.market_value);
       return {

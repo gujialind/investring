@@ -627,7 +627,7 @@ class TestPortfolioInvestorsEndpoint:
 
 
 class TestPortfolioDisplayConfig:
-    """组合级 display_config（issue #144）：持仓明细二级分组维度配置"""
+    """组合级 display_config（issue #144 创建、#915 子集化）：持仓明细二级组合键维度子集配置"""
 
     def test_create_with_display_config(self, client, admin_headers):
         """创建时携带配置，GET 往返一致"""

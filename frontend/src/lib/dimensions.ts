@@ -17,7 +17,7 @@ export type DimensionFilterKey = "asset_class" | RuleDimension;
 /** 维度筛选集：缺键 / 显式 undefined 均为「未筛选」（undefined 供联动清空写入） */
 export type DimensionFilters = Partial<Record<DimensionFilterKey, string>>;
 
-/** 二级分组维度（= 可规则化四维；内置默认按大类固定，组合级覆盖见 #144/#915） */
+/** 二级组合键可选维度（= 可规则化四维；默认子集表见 DEFAULT_SUB_DIMS_BY_CLASS，组合级显式子集覆盖见 #915） */
 export type SubDimension = RuleDimension;
 
 /** 维度级适用矩阵形态（GET /api/asset-classifications 顶层 dimension_rules） */
@@ -72,6 +72,23 @@ export function parseDisplaySubset(value: string | null | undefined): SubDimensi
     }
   }
   return RULE_DIMENSIONS.filter((d) => selected.has(d));
+}
+
+/**
+ * 按登记矩阵过滤显式子集（L2 r1：弹窗回填/提交与 resolveSubDims 同一登记判据
+ * d ∈ dimensionRules[classCode]），仅保留已登记维度、保持传入全序。
+ * 与 resolveSubDims 的整串回退不同：弹窗须尽力回显合法已登记部分（勾选态），
+ * 读侧分组对脏串仍整串回退默认——两处语义各自成文，不混用。
+ * 不传 rules 时不做登记过滤（形态解析结果原样返回）。
+ */
+export function filterRegisteredDims(
+  dims: SubDimension[],
+  classCode: string,
+  dimensionRules?: DimensionRules | null
+): SubDimension[] {
+  if (!dimensionRules) return [...dims];
+  const registered = Object.keys(dimensionRules[classCode] ?? {});
+  return dims.filter((d) => registered.includes(d));
 }
 
 /**

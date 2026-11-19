@@ -29,7 +29,7 @@ interface PortfolioHoldingsProps {
   portfolioCode: string;
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio"（产品卡 → 产品详情页，#595 步骤③） */
   basePath: string;
-  /** asset_class 维度字典（分区顺序/颜色/二级分组维度驱动，issue #128） */
+  /** asset_class 维度字典（分区顺序/颜色驱动，issue #128；二级组合键子集见 displayConfig/dimensionRules） */
   assetClasses: AssetClassificationItem[];
   /** 组合级二级组合键维度子集覆盖（issue #144/#915，portfolio.display_config 契约原样传入） */
   displayConfig?: Record<string, string> | null;

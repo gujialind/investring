@@ -18,6 +18,7 @@ import {
   DEFAULT_SUB_DIMS_BY_CLASS,
   DIMENSION_LABELS,
   RULE_DIMENSIONS,
+  filterRegisteredDims,
   parseDisplaySubset,
   type SubDimension,
 } from "@/lib/dimensions";
@@ -67,16 +68,22 @@ export default function DisplayConfigDialog({
   );
 
   // 各大类当前勾选子集（恒按全序）：打开时从既有配置回填；空数组 = 默认。
+  // 回填按 dimension_rules 过滤已失效维度（L2 r1：与展示/提交同一登记判据，
+  // 规则事后收紧时「不改直接保存」不回提失效维度触发 422）。
   // 依赖 configurableClasses/currentConfig——字典晚到时数据到达后重跑初始化
   const [selections, setSelections] = useState<Record<string, SubDimension[]>>({});
   useEffect(() => {
     if (!open) return;
     const init: Record<string, SubDimension[]> = {};
     for (const cls of configurableClasses) {
-      init[cls.code] = parseDisplaySubset(currentConfig?.[cls.code]);
+      init[cls.code] = filterRegisteredDims(
+        parseDisplaySubset(currentConfig?.[cls.code]),
+        cls.code,
+        dictData?.dimension_rules
+      );
     }
     setSelections(init);
-  }, [open, configurableClasses, currentConfig]);
+  }, [open, configurableClasses, currentConfig, dictData]);
 
   const toggleDim = (classCode: string, dim: SubDimension, checked: boolean) => {
     setSelections((prev) => {
@@ -92,7 +99,12 @@ export default function DisplayConfigDialog({
   const handleSave = () => {
     const overrides: Record<string, string> = {};
     for (const cls of configurableClasses) {
-      const dims = selections[cls.code] ?? [];
+      // 提交前再按登记过滤（弹窗开着期间字典可能刷新收紧）；全过滤空 = 省略该键
+      const dims = filterRegisteredDims(
+        selections[cls.code] ?? [],
+        cls.code,
+        dictData?.dimension_rules
+      );
       if (dims.length > 0) {
         overrides[cls.code] = dims.join(",");
       }

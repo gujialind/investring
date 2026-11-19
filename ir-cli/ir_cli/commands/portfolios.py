@@ -24,7 +24,7 @@ def _parse_display_config(value: Optional[str]) -> Optional[dict]:
     if not isinstance(parsed, dict):
         error(
             "VALIDATION_ERROR",
-            '--display-config 必须是 JSON 对象，如 \'{"ASSET_STOCK": "style"}\'',
+            '--display-config 必须是 JSON 对象，如 \'{"ASSET_STOCK": "region,segment"}\'',
         )
     return parsed
 

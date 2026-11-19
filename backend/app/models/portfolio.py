@@ -18,8 +18,9 @@ class Portfolio(Base):
         ForeignKey("investor.code", name="fk_portfolio_owner_investor_code"),
         nullable=True,
     )
-    # 持仓明细二级分组维度覆盖（issue #144）：{"ASSET_STOCK": "style", ...}，
-    # 仅存显式覆盖项；NULL = 未配置 = 前端内置默认；校验见 portfolio_service
+    # 持仓明细二级组合键维度子集覆盖（issue #144 创建、#915 子集化）：
+    # {"ASSET_STOCK": "region,segment", ...}，值为逗号分隔维度子集（单值=单元素子集）；
+    # 仅存显式覆盖项；NULL = 未配置 = 前端默认子集；校验见 portfolio_service
     display_config = Column(JSON)
     # 自动快照开关（issue #156）：默认 False（opt-in），仅约束自动任务
     # （snapshot_generate），手动生成/重算端点不受影响
