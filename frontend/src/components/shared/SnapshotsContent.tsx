@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/table";
 import RowActionButton from "@/components/shared/RowActionButton";
 import EmptyState from "@/components/shared/EmptyState";
+import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
 import {
   formatCurrency,
   formatNav,
@@ -275,6 +276,48 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
   const jobParams = job?.params as { start_date?: string; end_date?: string } | null | undefined;
   const jobRunning = job?.status === "pending" || job?.status === "running";
 
+  const isMobile = variant === "mobile";
+
+  // 移动快照卡（#907，visual-spec §8 流水卡解剖）：日期标题 + 涨跌 chip（getSignedReturn 单点）
+  // → kv（净值/份额/市值/在途）→ 删除（仅最新日，disabledHint 保留快照连续原则）。
+  const renderSnapshotCard = (item: (typeof items)[number], i: number) => {
+    // 涨跌 = 当日净值 / 前一交易日净值 − 1（数组倒序，i+1 即前一交易日；快照连续原则保证相邻）
+    const prev = items[i + 1];
+    const pct = prev ? (item.unit_price / prev.unit_price - 1) * 100 : null;
+    const ret = getSignedReturn(pct);
+    const isLatest = i === 0;
+    return (
+      <FlowCard key={item.snapshot_date} testId="snapshot-card">
+        <FlowCardHeader
+          title={item.snapshot_date}
+          aside={
+            <Badge variant="neutral">
+              <span className={ret.colorClass}>{ret.text}</span>
+            </Badge>
+          }
+        />
+        <FlowCardKVGrid
+          items={[
+            { label: "净值", value: formatNav(item.unit_price) },
+            { label: "份额", value: formatSharesUnit(item.total_shares) },
+            { label: "市值", value: formatCurrency(item.total_value) },
+            { label: "在途", value: formatCurrency(item.in_transit_total) },
+          ]}
+        />
+        <FlowCardActions>
+          <RowActionButton
+            icon={Trash2}
+            label="删除"
+            destructive
+            disabled={!isLatest || deleteSnapshot.isPending}
+            disabledHint={isLatest ? undefined : "快照连续原则：仅可删除最新日快照"}
+            onClick={() => isLatest && setPendingDeleteDate(item.snapshot_date)}
+          />
+        </FlowCardActions>
+      </FlowCard>
+    );
+  };
+
   return (
     <div className={variant === "mobile" ? "space-y-4 p-4" : "space-y-6"}>
       {/* 1. Header（#904 PageHeader：面包屑返回组合详情，缩进收敛） */}
@@ -492,7 +535,12 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
             )
           ) : (
             <>
-              <div className={variant === "mobile" ? "overflow-x-auto" : undefined}>
+              {isMobile ? (
+                <div className="space-y-3" data-testid="snapshot-card-list">
+                  {items.map((item, i) => renderSnapshotCard(item, i))}
+                </div>
+              ) : (
+              <div>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -538,6 +586,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
                   </TableBody>
                 </Table>
               </div>
+              )}
               {listData && listData.total > items.length && (
                 <p className="text-xs text-muted-foreground mt-2">
                   {snapshotRange

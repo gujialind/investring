@@ -45,7 +45,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, toDateOnly, parseDateOnly, getStatusBadgeVariant, getTradeStatusLabel, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductName, formatProductCodeLabel, formatMarketName, toDateOnly, parseDateOnly, getStatusBadgeVariant, getTradeStatusLabel, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
@@ -77,7 +77,7 @@ import {
   groupTradeRows,
   isCashLeg,
 } from "@/lib/tradePairs";
-import type { SubLeg } from "@/lib/tradePairs";
+import type { SubLeg, TradeRow } from "@/lib/tradePairs";
 import { applyBuyAmountLinkage, netFromActual, sellDerivedAmounts } from "@/lib/tradeAmounts";
 import {
   useTradeList,
@@ -98,6 +98,7 @@ import PaginationBar from "@/components/shared/PaginationBar";
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import ProductCell from "@/components/shared/ProductCell";
 import DatePairCell from "@/components/shared/DatePairCell";
+import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions, FlowCardSubBlock } from "@/components/shared/FlowCard";
 import ProductFilterSelect from "@/components/shared/ProductFilterSelect";
 import SearchableProductSelect from "@/components/shared/SearchableProductSelect";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
@@ -627,6 +628,82 @@ export default function TradesContent({
     </>
   );
 
+  const isMobile = variant === "mobile";
+
+  // 操作按钮矩阵单点（#907：桌面操作列与移动卡操作行共用，避免两处漂移）：
+  // #789 只读详情入口**每一行**都有（含 CASH 腿）；详情弹窗无写操作，不触碰生命周期矩阵。
+  // 生命周期对齐后端允许矩阵（#176）：pending=编辑/确认/取消（场内无取消，与 cancel_trade 的
+  // CANNOT_CANCEL_EXCHANGE 一致）/删除；confirmed=取消确认/修改引导，无删除。
+  // #493：调仓 CASH 腿（含孤儿行）不露出任何生命周期按钮——后端对其 confirm/unconfirm/cancel/delete
+  // 一律 CASH_TRADE_FORBIDDEN，唯一驱动入口是基金腿。
+  const renderTradeActions = (trade: Trade) => (
+    <>
+      <RowActionButton
+        icon={Info}
+        label="详情"
+        onClick={() => openTradeDetail(trade.id)}
+      />
+      {isAdmin && !isRebalCashLeg(trade) && (
+        <>
+          {trade.status === "pending" && (
+            <>
+              <RowActionButton
+                icon={Pencil}
+                label="编辑"
+                onClick={() => openEditDialog(trade)}
+              />
+              <RowActionButton
+                icon={CheckCircle}
+                label="确认"
+                onClick={() => setConfirmState({ action: "confirm", id: trade.id })}
+                disabled={confirmTrade.isPending}
+              />
+              {trade.market !== "CN_EXCHANGE" && (
+                <RowActionButton
+                  icon={XCircle}
+                  label="取消"
+                  destructive
+                  onClick={() => setConfirmState({ action: "cancel", id: trade.id })}
+                  disabled={cancelTrade.isPending}
+                />
+              )}
+              <RowActionButton
+                icon={Trash2}
+                label="删除"
+                destructive
+                onClick={() => setConfirmState({ action: "delete", id: trade.id })}
+                disabled={deleteTradeMutation.isPending}
+              />
+            </>
+          )}
+          {trade.status === "confirmed" && (
+            <>
+              <RowActionButton
+                icon={Undo}
+                label="取消确认"
+                destructive
+                onClick={() => setConfirmState({ action: "unconfirm", id: trade.id })}
+              />
+              {canEditArrivalDate(trade) ? (
+                // 已确认**基金**卖出的窄例外（#493）：只开放到账日期 + 备注，其他财务字段
+                // 仍先取消确认。CASH 卖出腿（赎回 sub_ 腿 / 现金转移主腿）走 #525 门控排除：
+                // 它们没有可改的到账日语义（后端 PUT 一律 CASH_TRADE_FORBIDDEN，读侧派生
+                // 的 cash_confirm_date 恒 null），露出按钮即死路入口
+                <RowActionButton
+                  icon={CalendarClock}
+                  label="修改到账日期"
+                  onClick={() => openArrivalDialog(trade)}
+                />
+              ) : (
+                <RowActionButton icon={Pencil} label="修改" onClick={() => setEditHint(true)} />
+              )}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+
   // 主行（普通单行 / 结对主行共用）；结对主行去下边框使主+子视觉成组（规范 §8 结对行）
   // keepCashSourceLabel（#719）：派生 pair 的主行就是那条现金腿本身，产品列**保持来源标注**
   // （现金 · 调仓）而非换成「现金类资产」——补出对手腿时读的是资金去向，不是产品名，
@@ -688,77 +765,7 @@ export default function TradesContent({
           {getTradeStatusLabel(trade.status)}
         </Badge>
       </TableCell>
-      <TableCell className="text-right">
-        {/* #789 只读详情入口：**每一行**都有（含 CASH 腿——移出下方 isRebalCashLeg
-            的 null 分支）；详情弹窗无任何写操作，不触碰本列生命周期按钮矩阵 */}
-        <RowActionButton
-          icon={Info}
-          label="详情"
-          onClick={() => openTradeDetail(trade.id)}
-        />
-        {/* 操作按钮对齐后端允许矩阵（#176）：pending=确认/删除（场内无取消，
-            与后端 cancel_trade 的 CANNOT_CANCEL_EXCHANGE 一致）；confirmed=取消确认/修改引导，无删除。
-            #493：调仓 CASH 腿（含孤儿行）不露出任何生命周期按钮——后端对其
-            confirm/unconfirm/cancel/delete 一律 CASH_TRADE_FORBIDDEN，唯一驱动入口是基金腿 */}
-        {isAdmin && !isRebalCashLeg(trade) && (
-          <>
-            {trade.status === "pending" && (
-              <>
-                <RowActionButton
-                  icon={Pencil}
-                  label="编辑"
-                  onClick={() => openEditDialog(trade)}
-                />
-                <RowActionButton
-                  icon={CheckCircle}
-                  label="确认"
-                  onClick={() => setConfirmState({ action: "confirm", id: trade.id })}
-                  disabled={confirmTrade.isPending}
-                />
-                {trade.market !== "CN_EXCHANGE" && (
-                  <RowActionButton
-                    icon={XCircle}
-                    label="取消"
-                    destructive
-                    onClick={() => setConfirmState({ action: "cancel", id: trade.id })}
-                    disabled={cancelTrade.isPending}
-                  />
-                )}
-                <RowActionButton
-                  icon={Trash2}
-                  label="删除"
-                  destructive
-                  onClick={() => setConfirmState({ action: "delete", id: trade.id })}
-                  disabled={deleteTradeMutation.isPending}
-                />
-              </>
-            )}
-            {trade.status === "confirmed" && (
-              <>
-                <RowActionButton
-                  icon={Undo}
-                  label="取消确认"
-                  destructive
-                  onClick={() => setConfirmState({ action: "unconfirm", id: trade.id })}
-                />
-                {canEditArrivalDate(trade) ? (
-                  // 已确认**基金**卖出的窄例外（#493）：只开放到账日期 + 备注，其他财务字段
-                  // 仍先取消确认。CASH 卖出腿（赎回 sub_ 腿 / 现金转移主腿）走 #525 门控排除：
-                  // 它们没有可改的到账日语义（后端 PUT 一律 CASH_TRADE_FORBIDDEN，读侧派生
-                  // 的 cash_confirm_date 恒 null），露出按钮即死路入口
-                  <RowActionButton
-                    icon={CalendarClock}
-                    label="修改到账日期"
-                    onClick={() => openArrivalDialog(trade)}
-                  />
-                ) : (
-                  <RowActionButton icon={Pencil} label="修改" onClick={() => setEditHint(true)} />
-                )}
-              </>
-            )}
-          </>
-        )}
-      </TableCell>
+      <TableCell className="text-right">{renderTradeActions(trade)}</TableCell>
     </TableRow>
   );
 
@@ -853,6 +860,111 @@ export default function TradesContent({
         </TableCell>
         <TableCell colSpan={2} />
       </TableRow>
+    );
+  };
+
+  // ── 移动卡分支（#907，visual-spec §8 流水卡解剖）─────────────────────────────
+  // 与桌面表格同一份语义、同一组 format/tradePairs 单点；桌面 Table JSX 不动。
+  // 子块文案/状态判据消费 tradePairs（cashSubMeta+cashLegArrived / counterpartSubLabel /
+  // counterpartDateText）：± 只给真现金腿、派生金额无 ±、子块无操作入口，与桌面子行同纪律。
+
+  // 现金子块（仅限结果集里的真实现金腿）：标签 nowrap + 金额 text-foreground 手工 ± + 生效日
+  // （买入=扣款日 T、卖出=到账日 A；无生效日留空不渲，与桌面子行空串例外一致）。
+  const renderCashSubBlock = (main: Trade, sub: SubLeg) => {
+    const meta = cashSubMeta(main, { arrived: cashLegArrived(sub) });
+    const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
+    return (
+      <FlowCardSubBlock
+        testId="trade-cash-subrow"
+        label={<>{meta.label}{platformName ? ` · ${platformName}` : ""}</>}
+      >
+        <span className="text-foreground">{meta.sign}{formatCurrency(sub.amount ?? 0)}</span>
+        {sub.confirm_date && (
+          <span className="whitespace-nowrap text-muted-foreground">{formatDate(sub.confirm_date)}</span>
+        )}
+      </FlowCardSubBlock>
+    );
+  };
+
+  // 派生对手子块（#719）：↳ 标签 + 金额无 ± + 份额@净值·费（仅基金对手）+ 生效日（counterpartDateText）。
+  // 标签为 null（转移腿两侧平台名都取不到）→ 不渲子块，与桌面 renderCounterpartSubRow 一致。
+  const renderCounterpartSubBlock = (sub: SubLeg) => {
+    const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
+    const label = counterpartSubLabel(sub, platformName);
+    if (!label) return null;
+    const dateText = counterpartDateText(sub);
+    return (
+      <FlowCardSubBlock testId="trade-counterpart-subrow" label={label}>
+        <span className="text-foreground">{formatCurrency(sub.amount ?? 0)}</span>
+        {!isCashLeg(sub) && sub.shares != null && (
+          <span className="whitespace-nowrap text-muted-foreground tabular-nums">
+            {formatSharesUnit(sub.shares)} @ {formatNav(sub.price)}
+            {sub.fee ? ` · 费 ${formatCurrency(sub.fee)}` : ""}
+          </span>
+        )}
+        {dateText && <span className="whitespace-nowrap text-muted-foreground">{dateText}</span>}
+      </FlowCardSubBlock>
+    );
+  };
+
+  // 主卡：头行（名称 + code·市场·平台次行 / 类型 chip neutral / 状态 badge）→ kv 数值网格
+  // （金额/份额/手续费/价格）→ 日期行（交易/确认，pending 预计）→ 操作行（仅主行）。
+  // 结对主行卡内追加子块（现金腿/派生对手），与桌面主+子成组同语义。
+  const renderTradeCard = (row: TradeRow) => {
+    const trade = row.kind === "pair" ? row.main : row.trade;
+    const isPairMain = row.kind === "pair";
+    const keepCashSourceLabel = row.kind === "pair" ? row.derived : false;
+    const isCash = isCashLeg(trade);
+    const platformName = trade.platform_code ? platformNameMap.get(trade.platform_code) : undefined;
+    const codeText = formatProductCodeLabel(trade.display_code, trade.product_code, trade.market);
+    const marketName = trade.market ? formatMarketName(trade.market) : "";
+    const showCashSource = isCash && (!isPairMain || keepCashSourceLabel);
+    const title = showCashSource ? cashOrphanLabel(trade) : trade.product_name || codeText;
+    const metaParts = showCashSource ? [] : [trade.product_name ? codeText : "", marketName];
+    if (trade.platform_code) metaParts.push(platformName || trade.platform_code);
+    const meta = metaParts.filter(Boolean).join(" · ");
+    return (
+      <FlowCard key={trade.id} testId="trade-card">
+        <FlowCardHeader
+          title={title}
+          meta={meta || undefined}
+          aside={
+            <>
+              <Badge variant="neutral">
+                <span
+                  className="mr-1.5 h-1.5 w-1.5 rounded-full"
+                  style={{ background: tradeDirectionColors(theme)[trade.trade_type === "buy" ? "buy" : "sell"] }}
+                />
+                {trade.trade_type === "buy" ? "买入" : "卖出"}
+              </Badge>
+              <Badge variant={getStatusBadgeVariant(trade.status)}>{getTradeStatusLabel(trade.status)}</Badge>
+            </>
+          }
+        />
+        <FlowCardKVGrid
+          items={[
+            { label: "金额", value: formatCurrency(trade.amount) },
+            { label: "份额", value: formatSharesUnit(isCash ? null : trade.shares), testId: "trade-card-shares" },
+            { label: "手续费", value: formatCurrency(trade.fee) },
+            { label: "价格", value: formatNav(isCash ? null : trade.price), testId: "trade-card-price" },
+          ]}
+        />
+        <div>
+          <DatePairCell
+            topLabel="交易日期"
+            topValue={formatDate(trade.trade_date)}
+            bottomLabel="确认日期"
+            bottomValue={trade.confirm_date ? formatDate(trade.confirm_date) : "--"}
+            estimated={trade.status === "pending" && !!trade.confirm_date}
+            showLabels
+          />
+        </div>
+        <FlowCardActions>{renderTradeActions(trade)}</FlowCardActions>
+        {row.kind === "pair" &&
+          (row.derived || !isCashLeg(row.sub)
+            ? renderCounterpartSubBlock(row.sub)
+            : renderCashSubBlock(row.main, row.sub))}
+      </FlowCard>
     );
   };
 
@@ -1159,6 +1271,15 @@ export default function TradesContent({
             {isFetching && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
+            {isMobile ? (
+              <div
+                className={cn("space-y-3", isFetching && "opacity-50")}
+                aria-busy={isFetching}
+                data-testid="trade-card-list"
+              >
+                {tradeRows.map((row) => renderTradeCard(row))}
+              </div>
+            ) : (
             <Table className={cn(isFetching && "opacity-50")}>
               <TableHeader>
                 <TableRow>
@@ -1192,6 +1313,7 @@ export default function TradesContent({
                 )}
               </TableBody>
             </Table>
+            )}
           </div>
           {/* #683C 判序承重：失败 → 有筛选为空 → 无筛选为空，三支各自成立，**失败不并入任一 EmptyState**。
               本页失败若落进带筛选那一支，会连带给出「重置筛选」按钮——把后端故障引导成「你筛错了」，

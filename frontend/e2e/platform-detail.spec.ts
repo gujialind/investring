@@ -110,7 +110,8 @@ test.describe("平台详情页", () => {
     await page.waitForURL(/\/trades\?/);
     expect(page.url()).toContain("platform=HBZQ");
     expect(page.url()).toContain("trade_type=buy");
-    await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 10_000 });
+    // #907 移动卡化后无表格：双形态定位（桌面 tr / 移动卡），只断「列表非空」
+    await expect(page.locator('table tbody tr, [data-testid="trade-card"]').first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("操作行买入：跳转即开录入 Dialog，平台已预填（#646）", async ({ page }) => {
@@ -406,7 +407,7 @@ test.describe("平台-产品详情页", () => {
     await expect(overview).toContainText("*累计收益含已卖出实现盈亏");
   });
 
-  test("操作行买入：trades 页平台+产品预填且过滤生效", async ({ page }) => {
+  test("操作行买入：trades 页平台+产品预填且过滤生效", async ({ page }, testInfo) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
     await page.getByTestId("platform-product-action-row").getByRole("link", { name: "买入" }).click();
     await page.waitForURL(/\/trades\?/);
@@ -414,9 +415,14 @@ test.describe("平台-产品详情页", () => {
     expect(page.url()).toContain("platform=HBZQ");
     expect(page.url()).toContain("trade_type=buy");
     // S7：产品过滤的结果集仍只有 2 条基金腿（现金腿不入行、`total` 与页数不变）。
-    // #719「只补信息、不补行」把各自的现金腿以**派生子行**补回 → 2 主行 + 2 子行 = 4 个 tr，
+    // #719「只补信息、不补行」把各自的现金腿以**派生子行**补回 → 桌面 2 主行 + 2 子行 = 4 个 tr；
+    // #907 移动卡化后结对折进一卡、派生对手是卡内子块 → 2 张顶层卡（子块另按 testid 数）。
     // 按 testid 数子行而非按 class（定位器契约 #382）
-    await expect(page.locator("table tbody tr")).toHaveCount(4, { timeout: 10_000 });
+    if (testInfo.project.name === "mobile") {
+      await expect(page.getByTestId("trade-card")).toHaveCount(2, { timeout: 10_000 });
+    } else {
+      await expect(page.locator("table tbody tr")).toHaveCount(4, { timeout: 10_000 });
+    }
     // #721 评审 S1：现金对手腿是**派生**的，按 §8 走对手腿形态（`↳ 转出 平台名`、金额不带 ±），
     // 不再是 ± 现金子行——± 只属于结果集里的真实现金腿（未筛选态见 trade-cash-pairing.spec.ts）
     const cashSubRows = page.getByTestId("trade-counterpart-subrow");

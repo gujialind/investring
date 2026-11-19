@@ -75,6 +75,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import DatePairCell from "@/components/shared/DatePairCell";
+import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import { SubscriptionConfirmDialog } from "@/components/shared/SubscriptionConfirmDialog";
 
@@ -416,6 +417,102 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
     </>
   );
 
+  const isMobile = variant === "mobile";
+
+  // 操作按钮对齐后端允许矩阵（issue #202）：pending=编辑/确认/取消/删除；
+  // confirmed=取消确认/修改引导，无删除（后端 CANNOT_DELETE_CONFIRMED）。桌面/移动共用。
+  const renderSubActions = (sub: Subscription) => (
+    <>
+      {sub.status === "pending" && (
+        <>
+          <RowActionButton icon={Pencil} label="编辑" onClick={() => openEditDialog(sub)} />
+          <RowActionButton
+            icon={CheckCircle}
+            label="确认"
+            onClick={() => setConfirmState({ action: "confirm", id: sub.id })}
+            disabled={confirmSubscription.isPending}
+          />
+          <RowActionButton
+            icon={XCircle}
+            label="取消"
+            destructive
+            onClick={() => setConfirmState({ action: "cancel", id: sub.id })}
+            disabled={cancelSubscription.isPending}
+          />
+          <RowActionButton
+            icon={Trash2}
+            label="删除"
+            destructive
+            onClick={() => setConfirmState({ action: "delete", id: sub.id })}
+            disabled={deleteSubscriptionMutation.isPending}
+          />
+        </>
+      )}
+      {sub.status === "confirmed" && (
+        <>
+          <RowActionButton
+            icon={Undo}
+            label="取消确认"
+            destructive
+            onClick={() => setConfirmState({ action: "unconfirm", id: sub.id })}
+          />
+          <RowActionButton icon={Pencil} label="修改" onClick={() => setEditHint(true)} />
+        </>
+      )}
+    </>
+  );
+
+  // 移动流水卡（#907，visual-spec §8 流水卡解剖）：头行（投资人名 + code·平台次行 /
+  // 类型 chip neutral / 状态 badge）→ kv（金额/份额/净值，pending 空值 `--` 不折 0.00 #424）
+  // → 申请/确认日期行（pending 预计）→ 操作行。字段集合与桌面列逐一对应（§6）。
+  const renderSubCard = (sub: Subscription) => {
+    const investorName = investorNameMap.get(sub.investor_code);
+    const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
+    const platformLabel = sub.platform_code ? platformName || sub.platform_code : "";
+    const title = investorName || sub.investor_code;
+    const meta = [investorName ? sub.investor_code : "", platformLabel].filter(Boolean).join(" · ");
+    return (
+      <FlowCard key={sub.id} testId="subscription-card">
+        <FlowCardHeader
+          title={title}
+          meta={meta || undefined}
+          aside={
+            <>
+              <Badge variant="neutral">
+                <span
+                  className="mr-1.5 h-1.5 w-1.5 rounded-full"
+                  style={{ background: tradeDirectionColors(theme)[sub.sub_type === "subscribe" ? "buy" : "sell"] }}
+                />
+                {sub.sub_type === "subscribe" ? "申购" : "赎回"}
+              </Badge>
+              <Badge variant={getStatusBadgeVariant(sub.status)}>
+                {sub.status === "confirmed" ? "已确认" : sub.status === "pending" ? "待确认" : "已取消"}
+              </Badge>
+            </>
+          }
+        />
+        <FlowCardKVGrid
+          items={[
+            { label: "金额", value: formatCurrency(sub.amount) },
+            { label: "份额", value: formatSharesUnit(sub.shares) },
+            { label: "净值", value: formatNav(sub.unit_price) },
+          ]}
+        />
+        <div>
+          <DatePairCell
+            topLabel="申请日期"
+            topValue={formatDate(sub.apply_date)}
+            bottomLabel="确认日期"
+            bottomValue={sub.confirm_date ? formatDate(sub.confirm_date) : "--"}
+            estimated={sub.status === "pending" && !!sub.confirm_date}
+            showLabels
+          />
+        </div>
+        <FlowCardActions>{renderSubActions(sub)}</FlowCardActions>
+      </FlowCard>
+    );
+  };
+
   if (isLoading) return <LoadingState />;
 
   return (
@@ -596,6 +693,15 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
             {isFetching && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
+            {isMobile ? (
+              <div
+                className={cn("space-y-3", isFetching && "opacity-50")}
+                aria-busy={isFetching}
+                data-testid="subscription-card-list"
+              >
+                {subscriptions.map((sub) => renderSubCard(sub))}
+              </div>
+            ) : (
             <Table className={cn(isFetching && "opacity-50")}>
               <TableHeader>
                 <TableRow>
@@ -648,58 +754,12 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                         {sub.status === "confirmed" ? "已确认" : sub.status === "pending" ? "待确认" : "已取消"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right">
-                      {/* 操作按钮对齐后端允许矩阵（issue #202）：pending=编辑/确认/取消/删除；
-                          confirmed=取消确认/修改引导，无删除（后端 CANNOT_DELETE_CONFIRMED） */}
-                      {sub.status === "pending" && (
-                        <>
-                          <RowActionButton
-                            icon={Pencil}
-                            label="编辑"
-                            onClick={() => openEditDialog(sub)}
-                          />
-                          <RowActionButton
-                            icon={CheckCircle}
-                            label="确认"
-                            onClick={() => setConfirmState({ action: "confirm", id: sub.id })}
-                            disabled={confirmSubscription.isPending}
-                          />
-                          <RowActionButton
-                            icon={XCircle}
-                            label="取消"
-                            destructive
-                            onClick={() => setConfirmState({ action: "cancel", id: sub.id })}
-                            disabled={cancelSubscription.isPending}
-                          />
-                          <RowActionButton
-                            icon={Trash2}
-                            label="删除"
-                            destructive
-                            onClick={() => setConfirmState({ action: "delete", id: sub.id })}
-                            disabled={deleteSubscriptionMutation.isPending}
-                          />
-                        </>
-                      )}
-                      {sub.status === "confirmed" && (
-                        <>
-                          <RowActionButton
-                            icon={Undo}
-                            label="取消确认"
-                            destructive
-                            onClick={() => setConfirmState({ action: "unconfirm", id: sub.id })}
-                          />
-                          <RowActionButton
-                            icon={Pencil}
-                            label="修改"
-                            onClick={() => setEditHint(true)}
-                          />
-                        </>
-                      )}
-                    </TableCell>
+                    <TableCell className="text-right">{renderSubActions(sub)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            )}
           </div>
           {/* 空态：默认筛选集下为空 = 暂无记录；非默认筛选下为空 = 引导重置（规范 §8 变体②） */}
           {subscriptions.length === 0 &&

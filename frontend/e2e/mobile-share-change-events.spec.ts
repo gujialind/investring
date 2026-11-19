@@ -44,7 +44,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
     await expect(page.getByRole('button', { name: '筛选' })).toBeVisible();
     // 列表渲染：事件行或空态二者必居其一
     await expect(
-      page.getByText('暂无份额变动事件').or(page.locator('table tbody tr')).first()
+      page.getByText('暂无份额变动事件').or(page.locator('[data-testid^="share-event-"]')).first()
     ).toBeVisible({ timeout: 15_000 });
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
@@ -116,7 +116,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
       // #705：行内代码位是显示码而非机器码，故按列表端点派生的 display_code 定位（产品列表
       // 端点必带该字段；创建响应是单对象端点、不批量派生，故不用 created.product_code）
       const shownCode = product.display_code;
-      const row = page.locator('table tbody tr').filter({ hasText: shownCode }).first();
+      const row = page.locator('[data-testid^="share-event-"]').filter({ hasText: shownCode }).first();
       await expect(row).toBeVisible({ timeout: 15_000 });
       if (product.name) {
         await expect(row.getByText(product.name)).toBeVisible();
@@ -249,7 +249,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
       await openMobilePageActionsIfMobile(page, testInfo);
       await page.getByRole('link', { name: '份额变动事件' }).click();
       // 同产品两条事件，按事件类型文案区分行
-      const row = page.locator('table tbody tr')
+      const row = page.locator('[data-testid^="share-event-"]')
         .filter({ hasText: heldDisplay })
         .filter({ hasText: '强制调整' })
         .first();
@@ -261,7 +261,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
       await expect(row.getByText('¥-12.34')).toBeVisible();
 
       // 自动计算型事件 pending 行两列恒 NULL → 显示「--」而非误导性的 0.00（#424 附带项守门）
-      const divRow = page.locator('table tbody tr')
+      const divRow = page.locator('[data-testid^="share-event-"]')
         .filter({ hasText: heldDisplay })
         .filter({ hasText: '现金分红' })
         .first();

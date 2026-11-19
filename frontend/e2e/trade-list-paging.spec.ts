@@ -326,10 +326,11 @@ async function seedCrossDaySellGroup(
   return { fundLegId: fundLeg.id, cashLegId: cashLeg.id };
 }
 
-/** 卖出基金主行（按产品名 + 方向收窄：现金子行首列是「现金…」标签，不含产品名） */
+/** 卖出基金主行/主卡（按产品名 + 方向收窄：现金子行/子块标签是「现金…」，不含产品名）。
+ *  #907 移动卡化：桌面 tr 与移动 trade-card 双模定位；主行↔主卡 1:1，故 toHaveCount 两端同值。 */
 function sellFundRow(page: Page) {
   return page
-    .getByRole('row')
+    .locator('table tbody tr, [data-testid="trade-card"]')
     .filter({ hasText: OTC_PRODUCT.name })
     .filter({ hasText: '卖出' });
 }
@@ -405,6 +406,7 @@ test.describe('交易列表分页与组锚点排序（#734 / #752）', () => {
     ).toBe(false);
 
     // ---- 2. UI 层第 1 页：真实结对行（主行 + 现金子行），零派生子行 ----
+    const isMobile = testInfo.project.name === 'mobile';
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
     await clearTradeDateRange(page, testInfo);
 
@@ -413,18 +415,26 @@ test.describe('交易列表分页与组锚点排序（#734 / #752）', () => {
       timeout: 15_000,
     });
     // 紧邻其后的是**真实**现金子行（trade-cash-subrow）；被拆页时这一格会变成
-    // #719 的派生对手腿子行（trade-counterpart-subrow），故下一条断言同时钉住两者
-    await expect(
-      mainRow.first().locator('xpath=following-sibling::tr[1]'),
-      '卖出主行的下一行必须是真实现金子行（同组两腿同页相邻）',
-    ).toHaveAttribute('data-testid', 'trade-cash-subrow');
+    // #719 的派生对手腿子行（trade-counterpart-subrow），故下一条断言同时钉住两者。
+    // #907 卡化：桌面现金腿是主行的兄弟 tr，移动是主卡内子块（无兄弟关系），故分端断言。
+    if (isMobile) {
+      await expect(
+        mainRow.first().getByTestId('trade-cash-subrow'),
+        '卖出主卡内必须含真实现金子块（同组两腿同页成组）',
+      ).toHaveCount(1);
+    } else {
+      await expect(
+        mainRow.first().locator('xpath=following-sibling::tr[1]'),
+        '卖出主行的下一行必须是真实现金子行（同组两腿同页相邻）',
+      ).toHaveAttribute('data-testid', 'trade-cash-subrow');
+    }
     await expect(
       page.getByTestId('trade-counterpart-subrow'),
       '第 1 页每个组都完整 ⇒ 不应出现任何派生对手腿子行',
     ).toHaveCount(0);
     // 分页条的页数取后端 `total_pages`（#752）：移动端直接以「第 x / N 页」呈现，桌面端
     // 是页码原语，两端由 PaginationBar 的同一个 `pages` 变量驱动。
-    if (testInfo.project.name === 'mobile') {
+    if (isMobile) {
       await expect(page.getByText('第 1 / 2 页')).toBeVisible();
     }
 
