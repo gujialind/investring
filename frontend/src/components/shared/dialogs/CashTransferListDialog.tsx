@@ -98,7 +98,8 @@ export default function CashTransferListDialog({
           // （模式同 ProductsContent/SnapshotsContent 的表容器 overflow-x-auto）
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader>
+              {/* 弹窗为 bg-background 灰底（非白卡），覆写 thead 默认 lg:bg-card，免吸顶表头白底浮灰底（#920） */}
+              <TableHeader className="lg:bg-background">
                 <TableRow>
                   {/* 短文本列 nowrap：窄视口下 CJK 不被压成逐字竖排（#355 类），
                       超宽由外层 overflow-x-auto 承接横向滚动 */}

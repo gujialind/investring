@@ -1061,7 +1061,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                     </div>
                   ) : (
                     <Table>
-                      <TableHeader>
+                      {/* 弹窗灰底非白卡，覆写 thead 默认 lg:bg-card（#920 同批） */}
+                      <TableHeader className="lg:bg-background">
                         <TableRow>
                           <TableHead>流水类型</TableHead>
                           <TableHead>来源 / 去向</TableHead>
@@ -1158,7 +1159,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                 </div>
               ) : (
                 <Table data-testid="breakdown-table">
-                  <TableHeader>
+                  {/* 弹窗灰底非白卡，覆写 thead 默认 lg:bg-card（#920 同批） */}
+                  <TableHeader className="lg:bg-background">
                     <TableRow>
                       <TableHead>平台</TableHead>
                       <TableHead className="number-cell">可用现金</TableHead>
