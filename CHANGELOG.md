@@ -4,6 +4,79 @@
 
 
 
+
+## v0.4.0 - 2026-11-19
+
+### Features
+
+- **frontend**: #904 P1b 移动筛选面板迁 bottom sheet + 控件 h-10 触控专项 (f276ef9)
+- **frontend**: #904 P1a sheet 基件 + 移动产品页 ⋯ 抽屉（r9 页头形态） (115d5e1)
+- **ledger**: 台账型组合前端视图 + ir-cli 命令组 + 仪表盘跨口径合并 (#905 PR3) (c269021)
+- **frontend**: #904 P0b-2 统计卡 chip/首页同解剖 + 详情族页头收敛 PageHeader (35ec6b6)
+- **frontend**: #904 P0b-1 侧栏软激活 + 组合统计卡桌面解剖统一 (aa6b46a)
+- **ledger**: 台账型组合市值台账与本金进出读写 + 收益绩效口径A (#905 PR2) (da7dc45)
+- **portfolio**: 台账型组合类型列 + 迁移 0028 + 逐入口类型闸门 (#905 PR1) (a96c9e4)
+- **frontend**: #904 P0a PageHeader 组件化 + 出口迁移面包屑 + 六类页头收敛 (c2cbe56)
+- **frontend**: #901 A 路径——吸收 main 并补移动卡片重置密码入口 (#897 #898) (621d403)
+- **frontend**: 投资人/平台管理页移动改卡片列表 + 移动 E2E 门禁 (#897) (30791b7)
+- **auth**: 管理员免旧密码重置他人密码，联动解锁与操作者审计 (#893) (320237e)
+- **product**: 数据源批量切换——异步 job + 逐产品台账 + 多选 UI + CLI (#882) (ee8d909)
+- **dividend-config**: PR2 检测接线——消费 pay_date、explicit 配置自动入账 (#887) (421e4ce)
+- **dividend-config**: S4 方案 B 沉淀 effective_from=max(权益登记日,业务当日) (#887) (9bc2413)
+- **dividend-config**: CN_OTC 持仓行配置入口/管理弹窗 + 前端 E2E + 文档同步 (#887 PR1) (f4ca41a)
+- **dividend-config**: 分红方式配置层/CLI/确认预选与沉淀（#887 PR1） (7786887)
+- **akshare**: 场外分红检测接入源无关检测器（#881） (5c105ea)
+- **product**: 净值型产品数据源单只切换 + 连通检测前置 (#880) (fffda16)
+- **nav**: 导航与设置重设计 + 侧栏整合收起 + 品牌 Logo (#878) (7f6a503)
+
+### Bug Fixes
+
+- **frontend**: #917 L2 处置——触控 44px + §13/§9 措辞同步 + sheet #191 已知限制登记 (f456e2f)
+- **ledger**: L2 打回 9 项一次处置——绩效失败≠空态、列表失效键、nav 批量读放大、激活失效、单层的 toast、nan/inf 输入码、索引预算上调 (#905 PR3) (f90399e)
+- **ledger**: 对齐 main#912 语义——仪表盘总收益改 chip 保四列单行守护，活跃卡台账不渲染 None 收益率 (#905 PR3) (bacb874)
+- **frontend**: #912 L2 打回修复——chip 走 soft 轨 foreground + §5 #774 段历史标注明晰 (d5ac7e4)
+- **ledger**: totals 日期参数改 date + kind 闸门，去多余 async/私有哨兵 (#905 PR2 L2 S1/S2) (56237b9)
+- **frontend**: #908 L2 打回修复——viewer 出口兜底 + badge 条件挂载 + 出口提至 loading 门前 (ea14a36)
+- **portfolio**: 重算入口 kind 过滤 + delete_investor 归属校验 (#905 PR1 L2 修复) (8868e92)
+- **frontend**: #903 评审处置 S2/N1/N2（S1 回填远端）(#900) (d02ca1e)
+- **frontend**: 投资人页读侧失败态收敛 QueryErrorState + #214 toast 对齐 (#900) (9764b6d)
+- **frontend**: #901 修后复核——顺序无关锚点、长串换行兜底、移动收 CardHeader (#897) (42e19b3)
+- **auth**: L2 打回修复——改密目标 code 归一化 + 重置校验 inline Alert (#893) (ef0a1cd)
+- **e2e**: 分红配置删除用例生效日改取后端业务日，消除 CI 时区窗确定性红 (#896) (6daaa1a)
+- **product**: 处置 L2 B1–B5——受理同值 no-op、列表在途门控、会话隔离、读侧失败可见、异常终态如实 (#882) (67a6cd9)
+- **frontend**: 保留 mobileExitPaths 导出名，避免 compare baseline import 失败 (#894) (6b979aa)
+- **e2e**: dividend-config 生效日锚到后端业务日，消除 CI UTC 窗口必红 (#882, #887) (05907ab)
+- **frontend**: 桌面管理页补站内返回出口，图标返回按钮补可访问名 (#894) (d3ea2c0)
+- **e2e**: 产品列表名称列宽度断言改组件锚点，适配批量勾选列 (#882) (74e8288)
+- **dividend-config**: 处置 PR #888 L2 findings B1/B2/S1/S2/S3 (#887) (1e5020e)
+- **dividend-config**: 新增 schema 改用 ConfigDict 消除 Pydantic 弃用告警 (#887) (60b3aea)
+- **tushare**: 分红取数 ts_code 剥已有 .OF 后缀，修双后缀静默漏检 (1771289)
+- **frontend**: 同步 akshare 分红检测文案与留痕口径（#881 L2 处置批） (978d31d)
+- **product**: akshare 场外探测纳入交易日窗口，堵任意历史净值假通过（外部评审 Blocker）(#880) (fd1a3eb)
+- **product**: 收口批次 F1/F2/F3/Nit/S4（L2 覆盖 fb30ad7 的 3S+1N + 维护者授权 S4）(#880) (a61dbfa)
+- **e2e**: #878 viewer 切换先落同源页再清凭证，避免 about:blank 读 localStorage SecurityError (32b171b)
+- **nav**: #878 L2 修后——设置 viewer 门控/跨 UA 设置子页映射/改密关闭收口/收起 aria/全幅图标 (e12432d)
+- **product**: 补创建探测失败反例与缺市场归因修正，披露换源分红/硬拦例外 (#880) (72dffda)
+- **product**: 数据源省略推导对 REST/CLI 生效 + 补探测取数覆盖与分母门禁 (#880) (2544e48)
+
+### Other
+
+- test(frontend): #917 CI 红修复——B2 设完筛选关 sheet 再断言行集 (2cbfcef)
+- Merge remote-tracking branch 'origin/main' into feature/905-pr3-ledger-ui (2e4719d)
+- test(frontend): #912 复审处置——chip draft 断言改自建隔离组合 + utils 注释同步 (6a6773e)
+- chore(ci): E2E 固定 apt 源到 azure + 成对放宽护栏，修门禁反复红 (#913) (bf1a989)
+- test(ledger): 补依赖表守门期望集合 + 台账组合删除反例 (#905 PR2 CI 修复) (7544d58)
+- docs(runbook): 登记迁移 0028 可逆性速查 (#905 PR1) (3a25b22)
+- docs(frontend): 补齐 #897 移动卡片操作枚举登记与 spec 末尾换行 (#897) (fc5a70a)
+- Merge remote-tracking branch 'origin/main' into feature/897-mobile-card-list (cca5c92)
+- Merge remote-tracking branch 'origin/main' into feature/893-admin-password-reset (50a3758)
+- Merge origin/main into feature/894-desktop-back-exit (#894) (552618a)
+- docs(dividend-config): 恢复 CLI_MANUAL.md 混合行尾，仅保留第 1183 行文案改动 (#887) (7f89e7a)
+- docs(dividend-config): PR2 复审第 2 轮前置——修两处用户可见旧口径（发放日消费条件化，#887） (47e07b9)
+- docs(dividend-config): PR2 复审第 1 轮前置修复 S1/S2/N4/S3（行为零改动，#887） (eb9de0d)
+- docs(runbook): 更正 §7.2 步骤 2 待迁移状态核对判据（建表型迁移 missing_tables 非空）(#889) (95939d7)
+- merge: 合并 origin/main（#883 导航/设置重设计）；SettingsContent 冲突取新通用 Tab 结构，akshare 可用性展示文案落 settingsSections.DataSourceCard（桌面通用+移动子页共用）(#880) (1335a02)
+- docs(cli): 清理 CLI_MANUAL 行尾空白 churn 并保留 #880 披露 (#880) (fb30ad7)
 ## v0.3.0 - 2026-11-13
 
 ### Features
