@@ -8,7 +8,7 @@ const Table = React.forwardRef<
   // #904 P1c：桌面限高内滚容器 + sticky thead（overflow-x:auto 必成 scroll container，
   // viewport 级 sticky 不可行，故桌面改内滚；移动保持页滚、thead 不 sticky，§6 端侧布局差异）。
   // 限高扣除页头/筛选/分页大致占位，矮视口由 min() 兜底。
-  <div className="relative w-full overflow-auto lg:max-h-[min(calc(100dvh-16rem),44rem)]">
+  <div className="relative w-full overflow-auto lg:max-h-[min(calc(100dvh_-_16rem),44rem)]">
     <table
       ref={ref}
       className={cn("w-full caption-bottom text-sm", className)}

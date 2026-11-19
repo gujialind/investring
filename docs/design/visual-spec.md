@@ -208,7 +208,7 @@
 ## 8. 表格规范
 
 - **数字列右对齐 + `number-cell`**（等宽 tabular-nums；份额/金额/净值与整数计数列一视同仁），文本列左对齐，操作列右对齐（`text-right`）；列表头与数据列对齐方式一致（数字列表头同样 `number-cell`）。禁止对数值单元格手写裸 `text-right` 或内联 `font-mono tabular-nums`（#249 起 ESLint 拦截）；需与其他类拼接时（如 `cn("text-muted-foreground", …)`）用 `lib/utils.ts` 的 `getNumberCellClass()`。
-- **表头**：`text-muted-foreground` 常规字重，不加底色、不加粗（层级靠字号与文字色，不靠底纹）。**sticky 表头（#904 P1c）**：桌面 Table wrapper 限高内滚（`lg:max-h-[min(calc(100dvh-16rem),44rem)]`）+ `thead lg:sticky lg:top-0 lg:z-10 lg:bg-card`——实底为 sticky 功能必需（非色带），文字口径不变；`overflow-x:auto` 必成 scroll container、viewport 级 sticky 不可行，故桌面改内滚；移动保持页滚、thead 不 sticky（§6 端侧布局差异）。
+- **表头**：`text-muted-foreground` 常规字重，不加底色、不加粗（层级靠字号与文字色，不靠底纹）。**sticky 表头（#904 P1c）**：桌面 Table wrapper 限高内滚（`lg:max-h-[min(calc(100dvh_-_16rem),44rem)]`）+ `thead lg:sticky lg:top-0 lg:z-10 lg:bg-card`——实底为 sticky 功能必需（非色带），文字口径不变；`overflow-x:auto` 必成 scroll container、viewport 级 sticky 不可行，故桌面改内滚；移动保持页滚、thead 不 sticky（§6 端侧布局差异）。**已知边界（#920 L2 登记）**：`lg:bg-card` 预设 Table 处于白卡上下文；非卡上下文直挂 Table（现实例：`CashTransferListDialog` 的 `bg-background` 弹窗）lg+ 行数超限高时，吸顶表头白底浮于灰底弹窗、存在可见色差（暗色同理）；该场景消费方可覆写 thead 背景（如 `lg:bg-background`），未覆写前为已知取舍。
 - **斑马纹**：不用。行分隔靠 `border-b`，hover 行 `hover:bg-muted/50` 足够表达可点行。
 - **空态**：表体空时表下方居中 `text-muted-foreground` 文案（或 `EmptyState` 组件），不渲染空表壳外的额外颜色。空态变体登记：① 数据空（默认）；② 筛选无结果——文案「无符合筛选条件的记录」+ 内嵌「重置筛选」入口（见 §9）；③ 无权限——文案「无权限访问本页」+ 返回入口按钮（`EmptyState` action 位）。
 - **加载态**：表体区域居中 `Loader2 animate-spin` + `text-muted-foreground`，不清空表头。此为首次全量加载形态；筛选/翻页等局部刷新的加载态见 §14。
