@@ -1,0 +1,2 @@
+# 行尾规则仅对该文件生效（复盘 P1-6，Collyn 授权方案 A）；不扩到全仓
+ir-cli/CLI_MANUAL.md text eol=lf
