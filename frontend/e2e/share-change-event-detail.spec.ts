@@ -143,7 +143,7 @@ test.describe('份额变动事件详情弹窗（#754，双端）', () => {
     await gotoEvents(page, s);
     // count() 不自动重试：先等目标行渲染，避免列表首帧读到 0（竞态 flake）
     await expect(page.getByTestId(`share-event-${event.id}`)).toBeVisible({ timeout: 10_000 });
-    const rowCount = await page.locator('table tbody tr').count();
+    const rowCount = await page.locator('[data-testid^="share-event-"]').count();
     expect(rowCount).toBeGreaterThan(0);
     const row = page.getByTestId(`share-event-${event.id}`);
     const dlg = await openDetail(page, row);
@@ -173,7 +173,7 @@ test.describe('份额变动事件详情弹窗（#754，双端）', () => {
     // 关闭后列表状态不变（行数不重置）
     await dlg.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(dlg).toBeHidden({ timeout: 15_000 });
-    await expect(page.locator('table tbody tr')).toHaveCount(rowCount);
+    await expect(page.locator('[data-testid^="share-event-"]')).toHaveCount(rowCount);
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 

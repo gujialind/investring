@@ -26,6 +26,11 @@
  * 从**同一次响应**里算出应补的派生行数，再断言屏上与预测一致：这样钉的是「哪些行该补、
  * 补几行」这条契约本身，而不是某一天的种子快照。
  *
+ * #907 移动卡化：桌面仍是 table（主行 + 子行各占一 tr），移动改为流水卡（结对折进一卡、
+ * 现金/派生子腿是卡内子块）。子块 testid（trade-cash-subrow / trade-counterpart-subrow）双端
+ * 一致，故派生形态断言不分端；**总数**与**槽位**断言按 project 分支：桌面数 tr / 读 cell nth，
+ * 移动数卡 + 子块（卡数 + 现金子块数 = 结果集行数）/ 读 kv 值 testid。
+ *
  * 数据（backend/tests/seed_base.py::seed_e2e_active，平台恒 HBZQ）：
  * - D2 confirmed 买入 15,000@4.0（¥60,000）+ 配对 CASH sell（confirmed、现金日 D2）；
  * - D4 pending 买入 2,000@4.1（¥8,200）+ 配对 CASH sell（#493：创建即扣款 confirmed）；
@@ -46,9 +51,15 @@ import {
 
 const CASH_CODE = "CASH";
 
-/** 主表格的行（主行与子行都是 tr，故只用于「总数不变」这类形态断言） */
+/** 桌面主表格的行（主行与子行都是 tr，故只用于桌面「总数不变」这类形态断言） */
 function tableRows(page: Page) {
   return page.locator("table tbody tr");
+}
+
+/** 双形态行定位（#907）：桌面 tr / 移动卡。用于「找到某行并交互/读文案」，不用于总数断言
+ * （桌面主+子各占一 tr，移动结对折进一卡、子腿是卡内子块，基数不同）。 */
+function flowRows(page: Page) {
+  return page.locator('table tbody tr, [data-testid="trade-card"]');
 }
 
 /** 列表响应的 trade 行（只取本用例要推导的四个字段） */
@@ -96,6 +107,18 @@ async function expectSingleLineLabel(label: Locator, what: string) {
   await expectSingleLine(label, `${what}：首列标签`, { nowrap: true });
 }
 
+/** 子块/子行首列标签定位：桌面是首 td 内 span，移动卡内子块是首个直接子 span（#907） */
+function subRowLabel(row: Locator, isMobile: boolean) {
+  return isMobile ? row.locator("> span").first() : row.locator("td").first().locator("span");
+}
+
+/** 移动卡总数 invariant：每条结果腿要么是顶层卡、要么是卡内现金子块（派生对手子块不是结果腿） */
+async function expectMobileCardCount(page: Page, resultRows: number) {
+  const cards = await page.getByTestId("trade-card").count();
+  const cashSubs = await page.getByTestId("trade-cash-subrow").count();
+  expect(cards + cashSubs, "移动卡数 + 现金子块数应等于结果集行数").toBe(resultRows);
+}
+
 /** 按状态下筛并返回该次响应行集（waiter 先于点击挂上：换键请求可能早于下一行完成） */
 async function filterByStatus(
   page: Page,
@@ -124,7 +147,8 @@ async function filterByStatus(
 }
 
 test.describe("交易列表的配对现金信息（#719）", () => {
-  test("未筛选：真实腿结对，不出现派生子行（零回归 + 真实行优先）", async ({ page }) => {
+  test("未筛选：真实腿结对，不出现派生子行（零回归 + 真实行优先）", async ({ page }, testInfo) => {
+    const isMobile = testInfo.project.name === "mobile";
     const errors = collectPageErrors(page);
     // 首屏响应即未筛选态：行集、应结对的真实现金腿数都从这一次响应推导
     const firstQuery = page.waitForResponse(
@@ -132,7 +156,7 @@ test.describe("交易列表的配对现金信息（#719）", () => {
       { timeout: 15_000 },
     );
     await gotoPortfolioSubpage(page, E2E_ACTIVE, "trades");
-    await expect(tableRows(page).first()).toBeVisible({ timeout: 10_000 });
+    await expect(flowRows(page).first()).toBeVisible({ timeout: 10_000 });
     const rows = (await (await firstQuery).json()).items as RespTrade[];
     const expect_ = predictRowCounts(rows);
     // 前提自证：种子形态未退化（有结对的真实现金腿），否则下面的断言会空转
@@ -141,16 +165,17 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     // 同组对手腿已在结果集内 → 绝不重复渲染派生子行（同一组现金信息只出现一次）
     expect(expect_.derived, "未筛选态不应有落单对手腿").toBe(0);
     // 主行 + 子行总数 = 结果集行数（现金腿折进子行仍占一个 tr，不增不减）
-    await expect(tableRows(page)).toHaveCount(expect_.tr);
+    if (isMobile) {
+      await expectMobileCardCount(page, rows.length);
+    } else {
+      await expect(tableRows(page)).toHaveCount(expect_.tr);
+    }
     await expect(page.getByTestId("trade-counterpart-subrow")).toHaveCount(0);
     const cashSubRows = page.getByTestId("trade-cash-subrow");
     await expect(cashSubRows).toHaveCount(realCashSubRows(rows));
     await expect(cashSubRows.first()).toContainText("现金扣款");
     // 子行首列标签不折行（#733）：首列是表内最窄的一档，CJK 逐字断行会把「华宝证券」切成两半
-    await expectSingleLineLabel(
-      cashSubRows.first().locator("td").first().locator("span"),
-      "现金子行",
-    );
+    await expectSingleLineLabel(subRowLabel(cashSubRows.first(), isMobile), "现金子行");
 
     // 现金腿作**主行**（落单 `sub_` 组）：份额与价格两槽都必须是 `--`。#732 前价格槽渲
     // `1.0000`（后端 price 恒为记账单位 1），与卡片侧（#719 已修）两种口径，把现金读成净值型产品
@@ -158,31 +183,40 @@ test.describe("交易列表的配对现金信息（#719）", () => {
       (r) => r.product_code === CASH_CODE && r.transfer_group?.startsWith("sub_"),
     ).length;
     expect(cashMainCount, "种子应含一条落单现金主行").toBeGreaterThan(0);
-    const cashMain = page.getByRole("row").filter({ hasText: "现金 · 申赎确认" }).first();
-    // 主行列数 = §8 槽位算术的对侧：cell 数一变，子行的 colSpan 折叠就整体错位
-    await expect(cashMain.getByRole("cell")).toHaveCount(10);
+    const cashMain = flowRows(page).filter({ hasText: "现金 · 申赎确认" }).first();
     // 断言分级（#740 L2 S1）：份额槽与 `-- @ 1.0000` 是**既有行为护栏（修复前即绿）**——
     // CASH 腿 shares 写入侧本就为 NULL（trade_service / subscription_service 均不设 shares），
     // `-- @ 1.0000` 是详情卡形态、交易表两个槽位分开渲染，修复前后都不可能出现在表里；
-    // 保留它们是防形态漂移，不是 #732 的承重点。承重点只有价格槽（nth(6)，修复前为红）。
-    await expect(cashMain.getByRole("cell").nth(4)).toHaveText("--"); // 份额（既有行为护栏）
-    await expect(cashMain.getByRole("cell").nth(6)).toHaveText("--"); // 价格（#732 承重）
-    await expect(page.locator("table")).not.toContainText("-- @ 1.0000"); // 既有行为护栏
+    // 保留它们是防形态漂移，不是 #732 的承重点。承重点只有价格槽（修复前为红）。
+    if (isMobile) {
+      await expect(cashMain.getByTestId("trade-card-shares")).toHaveText("--"); // 份额（既有行为护栏）
+      await expect(cashMain.getByTestId("trade-card-price")).toHaveText("--"); // 价格（#732 承重）
+      await expect(page.getByTestId("trade-card-list")).not.toContainText("-- @ 1.0000");
+    } else {
+      // 主行列数 = §8 槽位算术的对侧：cell 数一变，子行的 colSpan 折叠就整体错位
+      await expect(cashMain.getByRole("cell")).toHaveCount(10);
+      await expect(cashMain.getByRole("cell").nth(4)).toHaveText("--"); // 份额（既有行为护栏）
+      await expect(cashMain.getByRole("cell").nth(6)).toHaveText("--"); // 价格（#732 承重）
+      await expect(page.locator("table")).not.toContainText("-- @ 1.0000"); // 既有行为护栏
+    }
     // 原整表 not.toContainText("1.0000") 已收窄为「现金主行价格单元格集合」：整表子串否定
     // 会在种子未来新增任何净值 1.0000 的基金腿（货基/新基金面值）时误红，而 #732 的
     // 承重面只在现金主行的价格槽
-    const cashMainRows = page.getByRole("row").filter({ hasText: "现金 · 申赎确认" });
+    const cashMainRows = flowRows(page).filter({ hasText: "现金 · 申赎确认" });
     await expect(cashMainRows).toHaveCount(cashMainCount);
     for (const row of await cashMainRows.all()) {
-      await expect(row.getByRole("cell").nth(6)).toHaveText("--");
+      await expect(
+        isMobile ? row.getByTestId("trade-card-price") : row.getByRole("cell").nth(6),
+      ).toHaveText("--");
     }
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 
   test("筛已确认：现金锚点行补出基金对手腿", async ({ page }, testInfo) => {
+    const isMobile = testInfo.project.name === "mobile";
     const errors = collectPageErrors(page);
     await gotoPortfolioSubpage(page, E2E_ACTIVE, "trades");
-    await expect(tableRows(page).first()).toBeVisible({ timeout: 10_000 });
+    await expect(flowRows(page).first()).toBeVisible({ timeout: 10_000 });
     const items = await filterByStatus(page, testInfo, "confirmed");
     const expect_ = predictRowCounts(items);
     // 前提自证：这轮筛选确实造出了「落单行 + 对手腿被挡」的形态，否则下面的
@@ -190,22 +224,23 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     expect(expect_.derived, "本轮筛选未造出落单行，用例形态已退化").toBeGreaterThan(0);
 
     // 屏上行数 = 同一次响应推导出的预测值
-    await expect(tableRows(page)).toHaveCount(expect_.tr);
+    if (isMobile) {
+      await expectMobileCardCount(page, items.length);
+    } else {
+      await expect(tableRows(page)).toHaveCount(expect_.tr);
+    }
     const counterparts = page.getByTestId("trade-counterpart-subrow");
     await expect(counterparts).toHaveCount(expect_.derived);
     // 派生子行的份额 @ 净值取自对手基金腿（现金腿自身无份额无净值语义，不该出现在子行槽位外）
     await expect(counterparts.filter({ hasText: "份 @" })).toHaveCount(expect_.derived);
     // 派生子行首列同样不折行（#733）：`↳ 买入 沪深300ETF（待确认）` 是种子里最长的一档
-    await expectSingleLineLabel(
-      counterparts.first().locator("td").first().locator("span"),
-      "对手腿子行",
-    );
+    await expectSingleLineLabel(subRowLabel(counterparts.first(), isMobile), "对手腿子行");
     // 申赎腿（sub_ 组）刻意不补对手：对手方是 subscription 记录、不是 trade 行
     const subCash = items.filter(
       (r) => r.product_code === CASH_CODE && r.transfer_group?.startsWith("sub_"),
     );
     expect(subCash.length, "种子应含至少一条申赎现金腿").toBeGreaterThan(0);
-    await expect(page.getByRole("row").filter({ hasText: "现金 · 申赎确认" })).toHaveCount(
+    await expect(flowRows(page).filter({ hasText: "现金 · 申赎确认" })).toHaveCount(
       subCash.length,
     );
     await expect(counterparts.filter({ hasText: "申赎" })).toHaveCount(0);
@@ -223,9 +258,10 @@ test.describe("交易列表的配对现金信息（#719）", () => {
    * 渲成「现金到账 · 平台 +¥N」，与三处详情卡两种形态；旧预测器在这里比屏幕少 1。
    */
   test("筛待确认：基金锚点行补出现金对手腿（↳ 形态、无 ± 前缀）", async ({ page }, testInfo) => {
+    const isMobile = testInfo.project.name === "mobile";
     const errors = collectPageErrors(page);
     await gotoPortfolioSubpage(page, E2E_ACTIVE, "trades");
-    await expect(tableRows(page).first()).toBeVisible({ timeout: 10_000 });
+    await expect(flowRows(page).first()).toBeVisible({ timeout: 10_000 });
     const items = await filterByStatus(page, testInfo, "pending");
     const expect_ = predictRowCounts(items);
     // 前提自证：这轮筛选确实留下基金锚点并把现金对手腿挡在外面
@@ -235,7 +271,11 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     ).toBeGreaterThan(0);
     expect(expect_.derived, "pending 筛选未造出落单基金行，用例形态已退化").toBeGreaterThan(0);
 
-    await expect(tableRows(page)).toHaveCount(expect_.tr);
+    if (isMobile) {
+      await expectMobileCardCount(page, items.length);
+    } else {
+      await expect(tableRows(page)).toHaveCount(expect_.tr);
+    }
     const counterparts = page.getByTestId("trade-counterpart-subrow");
     await expect(counterparts).toHaveCount(expect_.derived);
     // 形态：首列 ↳ 转出/转入 + 平台名；金额格不带 +¥/-¥（± 是现金子行的资金流向语义）

@@ -75,9 +75,7 @@ test.describe('份额变动事件行级取消二次确认（#845）', () => {
 
     try {
       await gotoPortfolioSubpage(page, E2E_PORT, 'share-change-events');
-      const row = page
-        .locator('table tbody tr')
-        .filter({ has: page.getByTestId(`event-detail-open-${id}`) });
+      const row = page.getByTestId(`share-event-${id}`);
       await expect(row).toBeVisible({ timeout: 15_000 });
 
       await row.locator('button[title="取消"]').click();
@@ -107,9 +105,7 @@ test.describe('份额变动事件行级取消二次确认（#845）', () => {
 
     try {
       await gotoPortfolioSubpage(page, E2E_PORT, 'share-change-events');
-      const row = page
-        .locator('table tbody tr')
-        .filter({ has: page.getByTestId(`event-detail-open-${id}`) });
+      const row = page.getByTestId(`share-event-${id}`);
       await expect(row).toBeVisible({ timeout: 15_000 });
 
       await row.locator('button[title="取消"]').click();

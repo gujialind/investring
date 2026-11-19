@@ -279,10 +279,11 @@ async function pickFundPlatform(page: Page, dlg: Locator): Promise<void> {
   await settlePopovers(page);
 }
 
-/** 基金腿主行（按产品名收窄：现金子行首列是「现金…」标签，不含产品名） */
+/** 基金腿主行/主卡（按产品名收窄：现金子行/子块标签是「现金…」，不含产品名）。
+ *  #907 移动卡化：桌面 tr 与移动 trade-card 双模定位，下游 filter/按钮/getByText 两端同构。 */
 function fundRow(page: Page, tradeType: '买入' | '卖出'): Locator {
   return page
-    .getByRole('row')
+    .locator('table tbody tr, [data-testid="trade-card"]')
     .filter({ hasText: OTC_PRODUCT.name })
     .filter({ hasText: tradeType })
     .first();
@@ -414,7 +415,8 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     const buyRow = fundRow(page, '买入');
     await expect(buyRow).toBeVisible({ timeout: 15_000 });
     await expect(buyRow.getByText('待确认')).toBeVisible();
-    await expect(page.getByRole('row').filter({ hasText: '现金扣款' }).first()).toBeVisible();
+    // 现金子行/子块 testid 双端保留（#907），直接锚定它比按行文本更精确
+    await expect(page.getByTestId('trade-cash-subrow').filter({ hasText: '现金扣款' }).first()).toBeVisible();
 
     // ---- 3. D 日快照：现金已扣、出现等额买入在途、total_value 无缺口 ----
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'snapshots');
@@ -522,7 +524,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // 滤出列表——先清除日期区间再断言行可见性
     await clearTradeDateRange(page, testInfo);
     await expect(fundRow(page, '卖出')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('row').filter({ hasText: '现金到账' })).toHaveCount(0);
+    await expect(page.getByTestId('trade-cash-subrow').filter({ hasText: '现金到账' })).toHaveCount(0);
 
     // ---- 4. 确认弹窗：到账日期/平台可录入，缺省 A = C、平台 = 基金平台 ----
     //
@@ -751,7 +753,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // 选完回列表再断言行集（modal sheet 开着时表格外 aria-hidden，#904 P1c-1）
     await closeFilterPanelIfMobile(page, testInfo);
 
-    const orphan = page.getByRole('row').filter({ hasText: '现金 · 调仓' }).first();
+    const orphan = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '现金 · 调仓' }).first();
     await expect(orphan).toBeVisible({ timeout: 15_000 });
     await expect(orphan.locator('button[title="确认"]')).toHaveCount(0);
     await expect(orphan.locator('button[title="取消"]')).toHaveCount(0);
@@ -825,7 +827,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
     await clearTradeDateRange(page, testInfo);
 
-    const redeemRow = page.getByRole('row').filter({ hasText: '现金 · 申赎确认' }).first();
+    const redeemRow = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '现金 · 申赎确认' }).first();
     await expect(redeemRow).toBeVisible({ timeout: 15_000 });
     await expect(redeemRow.locator('button[title="修改到账日期"]')).toHaveCount(0);
     // 回到 PR #518 之前的行为：普通「修改」按钮 → 点出「请先取消确认」提示
@@ -834,7 +836,7 @@ test.describe('调仓在途资金生命周期（#493）', () => {
     // 转移主行 = pair 主行（产品列是 CASH 产品、带类型 badge）；子行是「现金到账」、
     // 无类型 badge，故按「金额 + 卖出」双条件收窄到主行
     const transferRow = page
-      .getByRole('row')
+      .locator('table tbody tr, [data-testid="trade-card"]')
       .filter({ hasText: `${TRANSFER_AMOUNT.toLocaleString('en-US')}.00` })
       .filter({ hasText: '卖出' })
       .first();

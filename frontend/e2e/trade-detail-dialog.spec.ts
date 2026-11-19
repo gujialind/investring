@@ -213,7 +213,7 @@ test.describe('只读交易详情弹窗与深链（#789，双端）', () => {
 
     // CASH 腿详情（调仓页行内入口）：转移卖出主行 = 现金类资产产品行
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'trades');
-    const cashMain = page.getByRole('row')
+    const cashMain = page.locator('table tbody tr, [data-testid="trade-card"]')
       .filter({ hasText: '现金类资产' }).filter({ hasText: '¥5,000.00' });
     await cashMain.getByRole('button', { name: '详情' }).click();
     await page.waitForURL((url) => url.searchParams.get('trade') === String(target.sell_trade_id));
@@ -413,9 +413,9 @@ test.describe('只读交易详情弹窗与深链（#789，双端）', () => {
     const trade = page.getByTestId('trade-detail-dialog');
     const body = trade.getByTestId('trade-detail-body');
     await page.goto(tradesUrl);
-    const fundRow = page.getByRole('row').filter({ hasText: '000300' });
+    const fundRow = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '000300' });
     await expect(fundRow).toContainText('待确认');
-    await expect(page.getByRole('row').filter({ hasText: '现金 · 申赎确认' })).toContainText('已确认');
+    await expect(page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '现金 · 申赎确认' })).toContainText('已确认');
     await expect(writeButtons).toHaveCount(0);
     await expect(fundRow.getByRole('button', { name: '详情', exact: true })).toBeVisible();
     await fundRow.getByRole('button', { name: '详情', exact: true }).click();
@@ -429,7 +429,7 @@ test.describe('只读交易详情弹窗与深链（#789，双端）', () => {
     await expect(trade).toBeHidden();
 
     await page.goto(`${tradesUrl}?trade_type=sell`);
-    const cashRow = page.getByRole('row').filter({ hasText: '现金 · 调仓' });
+    const cashRow = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '现金 · 调仓' });
     await expect(cashRow).toContainText('已确认');
     await expect(writeButtons).toHaveCount(0);
     await expect(cashRow.getByRole('button', { name: '详情', exact: true })).toBeVisible();

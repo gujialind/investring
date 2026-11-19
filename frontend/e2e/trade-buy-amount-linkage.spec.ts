@@ -270,7 +270,8 @@ test.describe('买入金额双字段联动（#193）', () => {
     await expect(dlg).toBeHidden({ timeout: 15_000 });
 
     // 列表「金额」列为净额（#173 口径）：1234.56 − 5 = 1229.56
-    const row = page.getByRole('row').filter({ hasText: '¥1,229.56' }).first();
+    // #907 移动卡化：桌面 tr 与移动 trade-card 双模定位（金额在卡内 kv 网格，编辑/删除在卡操作行）
+    const row = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '¥1,229.56' }).first();
     await row.waitFor({ timeout: 15_000 });
 
     // 编辑预填双维度：实付 = actual_amount、净投入 = amount，差恰为手续费

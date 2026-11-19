@@ -34,7 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, formatProductCodeLabel, formatMarketName, cn } from "@/lib/utils";
 import { Plus, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Info } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
 import { ShareChangeEventCreate, ApiException } from "@/lib/api";
@@ -76,6 +76,7 @@ import { EVENT_STATUS_LABELS, EventDetailDialog } from "@/components/shared/even
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import ProductCell from "@/components/shared/ProductCell";
 import DatePairCell from "@/components/shared/DatePairCell";
+import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
 
 interface ShareChangeEventsContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
@@ -450,6 +451,110 @@ export default function ShareChangeEventsContent({
   // 表单双列布局窄屏降为单列（移动端控件全宽）
   const formGrid = variant === "mobile" ? "grid grid-cols-1 gap-4" : "grid grid-cols-2 gap-4";
 
+  const isMobile = variant === "mobile";
+
+  // 操作矩阵桌面/移动共用：详情全状态可读（#754）；pending 父记录可编辑/确认/取消（#342/#845）；
+  // confirmed 父记录可取消确认（#274），子记录（基金级确认拆出）不展示推进入口。
+  const renderEventActions = (event: ShareChangeEvent) => (
+    <>
+      <RowActionButton
+        icon={Info}
+        label="详情"
+        testId={`event-detail-open-${event.id}`}
+        onClick={() => setDetailEventId(event.id)}
+      />
+      {event.status === "pending" && (
+        <>
+          {!event.parent_event_id && (
+            <RowActionButton icon={Pencil} label="编辑" onClick={() => setEditingEvent(event)} />
+          )}
+          <RowActionButton icon={CheckCircle} label="确认" onClick={() => setConfirmEventId(event.id)} />
+          <RowActionButton
+            icon={XCircle}
+            label="取消"
+            destructive
+            onClick={() => setCancelEventId(event.id)}
+            disabled={cancelEvent.isPending}
+          />
+        </>
+      )}
+      {event.status === "confirmed" && !event.parent_event_id && (
+        <RowActionButton
+          icon={Undo}
+          label="取消确认"
+          destructive
+          onClick={() => setUnconfirmEventId(event.id)}
+        />
+      )}
+    </>
+  );
+
+  // 移动流水卡（#907，visual-spec §8 流水卡解剖）：头行（产品名 + code·市场·平台次行 /
+  // 事件类型 chip neutral / 状态 badge）→ kv（份额变化/现金变化，自动计算型 pending `--` #424）
+  // → 权益登记/除息日 + 现金到账日（默认除息日次行）→ 操作行。平台级事件无产品时以事件类型为
+  // 主行名称、平台（或「全部」）为次行。卡容器与值槽保留桌面 E2E testid（share-event-/event-*）。
+  const renderEventCard = (event: ShareChangeEvent) => {
+    const hasProduct = !!event.product_code;
+    const platformName = event.platform_code ? platformNameMap.get(event.platform_code) : undefined;
+    const platformLabel = event.platform_code ? platformName || event.platform_code : "全部";
+    const codeText = event.product_code
+      ? formatProductCodeLabel(event.display_code, event.product_code, event.market)
+      : "";
+    const marketName = event.market ? formatMarketName(event.market) : "";
+    const typeLabel = EVENT_TYPE_LABELS[event.event_type] || event.event_type;
+    const title = hasProduct ? event.product_name || codeText : typeLabel;
+    const meta = (hasProduct ? [event.product_name ? codeText : "", marketName, platformLabel] : [platformLabel])
+      .filter(Boolean)
+      .join(" · ");
+    const cashPayDateText = formatDate(
+      event.event_type === "cash_dividend" ? event.cash_pay_date ?? event.ex_date : "",
+    );
+    const showDefaultNote = event.event_type === "cash_dividend" && event.cash_pay_date == null;
+    return (
+      <FlowCard key={event.id} testId={`share-event-${event.id}`}>
+        <FlowCardHeader
+          title={title}
+          meta={meta || undefined}
+          aside={
+            <>
+              {hasProduct && <Badge variant="neutral">{typeLabel}</Badge>}
+              <Badge variant={getStatusBadgeVariant(event.status)}>
+                {EVENT_STATUS_LABELS[event.status] || event.status}
+              </Badge>
+            </>
+          }
+        />
+        <FlowCardKVGrid
+          items={[
+            { label: "份额变化", value: formatSharesUnit(event.shares_change), testId: "event-shares-change" },
+            { label: "现金变化", value: formatCurrency(event.cash_change), testId: "event-cash-change" },
+          ]}
+        />
+        <div>
+          <DatePairCell
+            topLabel="权益登记日"
+            topValue={formatDate(event.entitlement_date)}
+            bottomLabel="除息日"
+            bottomValue={formatDate(event.ex_date)}
+            showLabels
+          />
+        </div>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-xs text-muted-foreground">现金到账日</span>
+          <div data-testid="event-cash-pay-date" className="text-right">
+            <div className="whitespace-nowrap text-sm" title="现金到账日">
+              {cashPayDateText}
+            </div>
+            {showDefaultNote && (
+              <div className="whitespace-nowrap text-xs text-muted-foreground">默认除息日</div>
+            )}
+          </div>
+        </div>
+        <FlowCardActions>{renderEventActions(event)}</FlowCardActions>
+      </FlowCard>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -754,6 +859,15 @@ export default function ShareChangeEventsContent({
                 {isFetching && (
                   <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
                 )}
+                {isMobile ? (
+                  <div
+                    className={cn("space-y-3", isFetching && "opacity-50")}
+                    aria-busy={isFetching}
+                    data-testid="event-card-list"
+                  >
+                    {events.map((event) => renderEventCard(event))}
+                  </div>
+                ) : (
                 <Table className={cn(isFetching && "opacity-50")}>
                   <TableHeader>
                     <TableRow>
@@ -828,54 +942,13 @@ export default function ShareChangeEventsContent({
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <div className="flex gap-2">
-                            {/* 详情（#754）：全状态、父/子记录一律可读 */}
-                            <RowActionButton
-                              icon={Info}
-                              label="详情"
-                              testId={`event-detail-open-${event.id}`}
-                              onClick={() => setDetailEventId(event.id)}
-                            />
-                            {event.status === "pending" && (
-                              <>
-                                {/* 编辑（#342）：仅 pending 父记录；子记录恒为 confirmed，parent 守卫为防御性 */}
-                                {!event.parent_event_id && (
-                                  <RowActionButton
-                                    icon={Pencil}
-                                    label="编辑"
-                                    onClick={() => setEditingEvent(event)}
-                                  />
-                                )}
-                                <RowActionButton
-                                  icon={CheckCircle}
-                                  label="确认"
-                                  onClick={() => setConfirmEventId(event.id)}
-                                />
-                                {/* 取消（#845）：先开二次确认弹窗，确认后才发起取消请求 */}
-                                <RowActionButton
-                                  icon={XCircle}
-                                  label="取消"
-                                  destructive
-                                  onClick={() => setCancelEventId(event.id)}
-                                  disabled={cancelEvent.isPending}
-                                />
-                              </>
-                            )}
-                            {/* 取消确认（#274）：子记录（基金级确认时拆出）不展示入口 */}
-                            {event.status === "confirmed" && !event.parent_event_id && (
-                              <RowActionButton
-                                icon={Undo}
-                                label="取消确认"
-                                destructive
-                                onClick={() => setUnconfirmEventId(event.id)}
-                              />
-                            )}
-                          </div>
+                          <div className="flex gap-2">{renderEventActions(event)}</div>
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
+                )}
               </div>
               {/* 空态：默认筛选集下为空 = 暂无记录；非默认筛选下为空 = 引导重置（规范 §8 变体②） */}
               {events.length === 0 &&

@@ -144,12 +144,13 @@ test.describe('#705 产品标准码展示', () => {
     await gotoPortfolioSubpage(page, E2E_ACTIVE, 'trades');
 
     // ProductCell 次行：`显示码 · 市场名`（#355 收敛点，调仓/份额事件两页共用）
-    const etfRow = page.getByRole('row').filter({ hasText: '沪深300ETF' }).first();
+    // #907 移动卡化：桌面 tr / 移动 trade-card 双形态定位（卡 meta 含同一显示码文案）
+    const etfRow = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: '沪深300ETF' }).first();
     await expect(etfRow).toBeVisible({ timeout: 10_000 });
     await expect(etfRow).toContainText(`${ETF_DISPLAY} · A股场内`);
     await expect(etfRow).not.toContainText(ETF_CODE);
 
-    const hkRow = page.getByRole('row').filter({ hasText: HK_NAME }).first();
+    const hkRow = page.locator('table tbody tr, [data-testid="trade-card"]').filter({ hasText: HK_NAME }).first();
     await expect(hkRow).toBeVisible();
     await expect(hkRow).toContainText(`${HK_SALE_CODE}（${HK_CODE}）`);
     await expect(hkRow).toContainText('香港互认');

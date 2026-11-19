@@ -207,7 +207,7 @@ test.describe('现金分红到账日（#522，双端）', () => {
 
     try {
       await expectStoredDate(page, s, event.id, s.weekend);
-      const row = page.locator('table tbody tr').filter({ hasText: '现金分红' });
+      const row = page.locator('[data-testid^="share-event-"]').filter({ hasText: '现金分红' });
       await expect(row.getByTestId('event-cash-pay-date')).toHaveText(s.weekend);
       // 创建表单显式提交 shares_change/cash_change=0（既有表单行为），故为 0 值而非
       // #424 的 NULL「--」形态；REST 直造 NULL 行由 mobile-share-change-events.spec.ts 断言。
@@ -259,7 +259,7 @@ test.describe('现金分红到账日（#522，双端）', () => {
       createdIds.push(defaultEvent.event.id);
       expect(defaultEvent.payload).not.toHaveProperty('cash_pay_date');
       await expectStoredDate(page, s, defaultEvent.event.id, null);
-      const cashRow = page.locator('table tbody tr').filter({ hasText: '现金分红' });
+      const cashRow = page.locator('[data-testid^="share-event-"]').filter({ hasText: '现金分红' });
       await expect(cashRow.getByTestId('event-cash-pay-date')).toHaveText(`${s.ex}默认除息日`);
 
       const nextCreate = await openCreate(page, s);
@@ -283,7 +283,7 @@ test.describe('现金分红到账日（#522，双端）', () => {
       createdIds.push(nonCash.event.id);
       expect(nonCash.payload).not.toHaveProperty('cash_pay_date');
       await expectStoredDate(page, s, nonCash.event.id, null);
-      const row = page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+      const row = page.locator('[data-testid^="share-event-"]').filter({ hasText: '分红再投资' });
       await expect(row.getByTestId('event-cash-pay-date')).toHaveText('--');
       await row.getByTitle('编辑', { exact: true }).click();
       const edit = dialogByTitle(page, '编辑份额变动事件');
@@ -319,7 +319,7 @@ test.describe('红利再投资净值留空与确认预览（#744，双端）', (
     try {
       const stored = await page.request.get(`/api/share-change-events/${event.id}`, { headers: s.headers });
       expect((await stored.json()).reinvest_nav).toBeNull();
-      const row = page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+      const row = page.locator('[data-testid^="share-event-"]').filter({ hasText: '分红再投资' });
 
       // 真实预览：种子 000300.OF 在 D+2（= 除息日）净值 1.6000；持仓 1500/1.5 = 1000 份
       const [response] = await Promise.all([
@@ -465,7 +465,7 @@ test.describe('红利再投资份额确认日（#743，双端）', () => {
       const standard = await submitEvent(page, standardDlg);
       createdIds.push(standard.event.id);
 
-      const reinvestRows = () => page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+      const reinvestRows = () => page.locator('[data-testid^="share-event-"]').filter({ hasText: '分红再投资' });
       const standardRow = reinvestRows().filter({ hasText: s.entitlement });
       const sameDayRow = reinvestRows().filter({ hasText: s.ex }).filter({ hasNotText: s.entitlement });
       await expect(standardRow).toHaveCount(1);
@@ -566,7 +566,7 @@ test.describe('同日现金分红（#765，双端）', () => {
       entitlement_date: s.ex, ex_date: s.ex, cash_pay_date: s.confirmDay,
     });
 
-    const row = page.locator('table tbody tr').filter({ hasText: '现金分红' });
+    const row = page.locator('[data-testid^="share-event-"]').filter({ hasText: '现金分红' });
     await expect(row.getByTestId('event-cash-pay-date')).toHaveText(s.confirmDay);
 
     // ⑤ pending 期除息日快照放行（统一前会被闸门阻断）：事件仍未确认也能生成
@@ -676,7 +676,7 @@ test.describe('每份分红金额正数校验（#764，双端）', () => {
       expect((await getStored(page, s.headers, created.event.id)).div_cash).toBe(0.5);
 
       // 编辑弹窗同口径：0/负值内联拦截不发 PUT，正值可保存
-      const row = page.locator('table tbody tr').filter({ hasText: '分红再投资' });
+      const row = page.locator('[data-testid^="share-event-"]').filter({ hasText: '分红再投资' });
       await row.getByTitle('编辑', { exact: true }).click();
       const edit = dialogByTitle(page, '编辑份额变动事件');
       const editDivCash = edit.getByLabel('每份分红金额（元）', { exact: true });
