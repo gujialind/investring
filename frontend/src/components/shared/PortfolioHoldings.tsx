@@ -21,6 +21,8 @@ import {
 import {
   DIMENSION_LABELS,
   RULE_DIMENSIONS,
+  isOverrideRegistered,
+  registeredDimsFor,
   type SubDimension,
   type SubDimOverrides,
 } from "@/lib/dimensions";
@@ -82,31 +84,29 @@ export function cardGridClass(variant: "desktop" | "mobile"): string {
 /** 分区头下的子集切换 chip 行（#915 B2：快捷切换单维 + 页面直切子集，同一交互）。
  * 「默认」= 跟随组合配置/默认子集（清掉该大类 URL 覆盖）；维度 chip 默认态首击
  * 切换到该单维、覆盖态点击为勾选/取消（toggleSubDimOverride 单点持有语义）。
- * 纯视图状态：仅经 onSubDimOverridesChange 回写 URL，不发任何写请求。
+ * 纯视图状态：仅经 onSubDimToggle（行内 onToggle）回写 URL，不发任何写请求。
  * 双端同形态（信息列双端一致，§6）：flex-wrap 换行，chip 触控档同净值区间先例。 */
 function SubDimSwitchRow({
   sectionCode,
   sectionName,
-  ruleDims,
+  registered,
   overrides,
   onToggle,
 }: {
   sectionCode: string;
   sectionName: string;
-  ruleDims: SubDimension[];
+  /** 该大类登记维（own 键，lib 单点判据产出）；切换行仅在其非空时渲染 */
+  registered: string[];
   overrides: SubDimOverrides;
   /** dim=null 表示「默认」项（清除该大类覆盖）；合并基由页面同步持有（ocr r2 竞态） */
   onToggle: (classCode: string, dim: SubDimension | null) => void;
 }) {
+  const ruleDims = RULE_DIMENSIONS.filter((d) => registered.includes(d));
   const override = overrides[sectionCode];
-  // Array.isArray 守卫与 lib 同判据（ocr r2：继承成员如 constructor 是函数、
-  // .length≥1 会骗过 truthy 检查致 .every 抛错白屏）
-  // 覆盖含未登记维（规则事后收紧/手工 URL）时消费侧整条回退默认——此处须同判据
-  // 按默认态渲染，且首击重建子集；否则 chip 点在失效覆盖上追加、分组恒不动（ocr r1 死胡同）
-  const overrideValid =
-    Array.isArray(override) &&
-    override.length > 0 &&
-    override.every((d) => ruleDims.includes(d));
+  // 有效性判据与消费侧 resolveViewSubDims 结构同源（lib 单点，ocr r3）：
+  // 继承成员/非数组/含未登记维（规则事后收紧/手工 URL）→ 按默认态渲染，
+  // 且首击重建子集（lib toggle 同判据），避免「点任何 chip 分组恒不动」死胡同（ocr r1）
+  const overrideValid = isOverrideRegistered(override, registered);
   const active = overrideValid ? override : null;
   const overrideActive = active !== null;
   const chipClass = (pressed: boolean) =>
@@ -186,19 +186,18 @@ function ProductSections({
           0
         );
         // B2 切换行：仅字典大类且规则矩阵有行者（现金 0 维/「其他」桶不出现）。
-        // 枚举判据与 resolveSubDims/resolveViewSubDims 同口径＝Object.keys own 键
-        // （ocr r2：`in` 走原型链且对非对象规则行抛错）
+        // 枚举与有效性判据走 lib 单点（ocr r2/r3：与 resolver 同口径 own 键）
         const sectionCode = section.code;
-        const ruleDims =
-          sectionCode && dimensionRules
-            ? RULE_DIMENSIONS.filter((d) =>
-                Object.keys(dimensionRules[sectionCode] ?? {}).includes(d)
-              )
-            : [];
+        const registered = sectionCode
+          ? registeredDimsFor(sectionCode, dimensionRules)
+          : null;
+        const ruleDims = registered
+          ? RULE_DIMENSIONS.filter((d) => registered.includes(d))
+          : [];
         const showSwitch =
           !!sectionCode &&
           ruleDims.length > 0 &&
-          subDimOverrides != null &&
+          !!subDimOverrides &&
           !!onSubDimToggle;
         return (
           <div key={section.code ?? "__other__"}>
@@ -219,11 +218,11 @@ function ProductSections({
                 </span>
               </span>
             </div>
-            {showSwitch && sectionCode && onSubDimToggle && (
+            {showSwitch && sectionCode && onSubDimToggle && registered && (
               <SubDimSwitchRow
                 sectionCode={sectionCode}
                 sectionName={section.name}
-                ruleDims={ruleDims}
+                registered={registered}
                 overrides={subDimOverrides ?? {}}
                 onToggle={onSubDimToggle}
               />

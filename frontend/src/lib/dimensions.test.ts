@@ -7,6 +7,8 @@ import {
   serializeSubDimOverrides,
   toggleSubDimOverride,
   resolveViewSubDims,
+  registeredDimsFor,
+  isOverrideRegistered,
   getDimensionOptions,
   clearInapplicableDims,
   DEFAULT_SUB_DIMS_BY_CLASS,
@@ -344,6 +346,30 @@ describe("resolveViewSubDims（#915 B2 消费侧：临时覆盖优先于配置/�
     expect(
       resolveViewSubDims(null, "constructor", RULES, JSON.parse('{"constructor":["style"]}'))
     ).toEqual([]);
+  });
+});
+
+describe("registeredDimsFor / isOverrideRegistered（判据单点，ocr r3）", () => {
+  it("rules 缺失 = null（不校验）；有 rules = own 键；无规则行 = 空数组（全禁止）", () => {
+    expect(registeredDimsFor("ASSET_STOCK", null)).toBeNull();
+    expect(registeredDimsFor("ASSET_STOCK", undefined)).toBeNull();
+    expect(registeredDimsFor("ASSET_STOCK", RULES)).toEqual([
+      "region",
+      "style",
+      "size",
+      "segment",
+    ]);
+    expect(registeredDimsFor("ASSET_CASH", RULES)).toEqual([]);
+  });
+
+  it("非数组/空/含未登记维 = false；null 判据不校验登记；空数组判据全拒", () => {
+    expect(isOverrideRegistered(undefined, null)).toBe(false);
+    expect(isOverrideRegistered([], null)).toBe(false);
+    expect(isOverrideRegistered(Object, ["region"])).toBe(false);
+    expect(isOverrideRegistered(["style"], null)).toBe(true);
+    expect(isOverrideRegistered(["style"], [])).toBe(false);
+    expect(isOverrideRegistered(["region", "style"], ["region"])).toBe(false);
+    expect(isOverrideRegistered(["region"], ["region", "style"])).toBe(true);
   });
 });
 

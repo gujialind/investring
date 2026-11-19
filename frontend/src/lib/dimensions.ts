@@ -103,9 +103,7 @@ export function resolveSubDims(
   classCode: string,
   dimensionRules?: DimensionRules | null
 ): SubDimension[] {
-  const registered = dimensionRules
-    ? Object.keys(dimensionRules[classCode] ?? {})
-    : null;
+  const registered = registeredDimsFor(classCode, dimensionRules);
   const fallback = (): SubDimension[] => {
     // own-property 判据：classCode 撞原型成员（constructor 等）时 ?? [] 不生效、
     // def 会拿到 Object 函数致 .filter 抛错（ocr r1 同类白屏链，B1 遗留一并收口）
@@ -143,6 +141,34 @@ export type SubDimOverrides = Record<string, SubDimension[]>;
 /** 原型敏感键判据单点（ocr r1/r2：parse/toggle/serialize 三处同判据防漂移） */
 function isProtoSensitiveKey(code: string): boolean {
   return code === "__proto__" || code === "constructor" || code === "prototype";
+}
+
+/**
+ * 登记维判据单点（ocr r3：resolver/toggle/hook/切换行五处共用防漂移）：
+ * rules 缺失 = null（不做登记校验）；有 rules = 该大类 own 键数组（可为空＝全禁止）。
+ * 空数组与 null 语义不同：前者「任何覆盖都失效」，后者「不校验」，调用方不得混用。
+ */
+export function registeredDimsFor(
+  classCode: string,
+  dimensionRules?: DimensionRules | null
+): string[] | null {
+  return dimensionRules ? Object.keys(dimensionRules[classCode] ?? {}) : null;
+}
+
+/**
+ * 覆盖登记有效性单点（ocr r3）：非数组/空/含未登记维 = false。
+ * 与读侧「整串回退默认」同判据；切换行 pressed 态与消费侧分组共用本判据，
+ * 保证 chip 态与实际分组结构上同源而非注释约定。
+ */
+export function isOverrideRegistered(
+  override: unknown,
+  registered: readonly string[] | null
+): override is SubDimension[] {
+  return (
+    Array.isArray(override) &&
+    override.length > 0 &&
+    (!registered || override.every((d) => registered.includes(d)))
+  );
 }
 
 /** URL 逻辑分隔符为 `.`/`~`，但后端 code 校验仅「全大写+前缀」（分隔符大写不变、
@@ -224,8 +250,7 @@ export function toggleSubDimOverride(
   // Array.isArray 守卫：继承成员（如 constructor）不是子集，按无覆盖处理
   const raw = overrides[classCode];
   const current = Array.isArray(raw) ? raw : [];
-  const base =
-    registeredDims && !current.every((d) => registeredDims.includes(d)) ? [] : current;
+  const base = isOverrideRegistered(current, registeredDims ?? null) ? current : [];
   const next = base.includes(dim) ? base.filter((d) => d !== dim) : [...base, dim];
   const result = { ...overrides };
   if (next.length === 0) delete result[classCode];
@@ -246,15 +271,9 @@ export function resolveViewSubDims(
   overrides?: SubDimOverrides | null
 ): SubDimension[] {
   const override = overrides?.[classCode];
-  // Array.isArray 守卫：classCode 若撞继承成员（如字典值 code=constructor），
-  // 无守卫时 override=Object 函数、.every 抛 TypeError 白屏（ocr r1）
-  if (Array.isArray(override) && override.length > 0) {
-    const registered = dimensionRules
-      ? Object.keys(dimensionRules[classCode] ?? {})
-      : null;
-    if (!registered || override.every((d) => registered.includes(d))) {
-      return RULE_DIMENSIONS.filter((d) => override.includes(d));
-    }
+  // 守卫与判据单点化（ocr r1/r2/r3）：继承成员/非数组/未登记维一律回退，不抛错不白屏
+  if (isOverrideRegistered(override, registeredDimsFor(classCode, dimensionRules))) {
+    return RULE_DIMENSIONS.filter((d) => override.includes(d));
   }
   return resolveSubDims(displayConfig, classCode, dimensionRules);
 }
