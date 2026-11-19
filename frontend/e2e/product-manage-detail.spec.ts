@@ -113,21 +113,37 @@ async function expectProductMetaLayout(row: Locator, label: string) {
   ).toBeGreaterThanOrEqual(single.scrollWidth - 1);
 }
 
+// #904 P1d：移动卡化后行=卡片（product-card），桌面仍表格行；.or 双形态单定位
+function productRow(card: Locator, name: string) {
+  return card
+    .getByRole("row")
+    .filter({ hasText: name })
+    .first()
+    .or(card.getByTestId("product-card").filter({ hasText: name }).first());
+}
+
 test.describe("产品管理表格列合并（#824 Part 1）", () => {
-  test("三列合并为单一「产品名称」列，次行为 显示码 · 中文市场名", async ({ page }) => {
+  test("三列合并为单一「产品名称」列，次行为 显示码 · 中文市场名", async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
     await page.goto("/products");
     const card = page.getByTestId("products-list-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
 
-    // 旧三列消失、新单列存在（columnheader 角色双端同形）
-    await expect(page.getByRole("columnheader", { name: "产品名称" })).toBeVisible();
-    for (const removed of ["代码", "市场", "名称"]) {
-      await expect(page.getByRole("columnheader", { name: removed, exact: true })).toHaveCount(0);
+    if (testInfo.project.name === "mobile") {
+      // 卡形态无表头：旧列名不得作为独立 kv 标签出现（名称/代码/市场已并入名称单元格）
+      for (const removed of ["代码", "市场", "名称"]) {
+        await expect(card.getByText(removed, { exact: true })).toHaveCount(0);
+      }
+    } else {
+      // 旧三列消失、新单列存在（columnheader 角色双端同形）
+      await expect(page.getByRole("columnheader", { name: "产品名称" })).toBeVisible();
+      for (const removed of ["代码", "市场", "名称"]) {
+        await expect(page.getByRole("columnheader", { name: removed, exact: true })).toHaveCount(0);
+      }
     }
 
     // 单元格两行：主行产品名、次行 `显示码 · 中文市场名`（不再吐英文枚举 CN_EXCHANGE）
-    const etfRow = card.getByRole("row").filter({ hasText: "沪深300ETF" }).first();
+    const etfRow = productRow(card, "沪深300ETF");
     await expect(etfRow).toContainText("510300 · A股场内");
     await expect(etfRow).not.toContainText("CN_EXCHANGE");
 
@@ -151,7 +167,7 @@ test.describe("产品管理表格列合并（#824 Part 1）", () => {
     await expect(card).toBeVisible({ timeout: 15_000 });
 
     for (const { name, expectedMeta } of LAYOUT_ROWS) {
-      const row = card.getByRole("row").filter({ hasText: name });
+      const row = productRow(card, name);
       await expect(row, `${name}：应唯一命中一行`).toHaveCount(1);
       await expect(row.getByTestId("product-cell-meta")).toContainText(expectedMeta);
       await expectProductMetaLayout(row, name);
@@ -177,11 +193,7 @@ test.describe("产品管理表格列合并（#824 Part 1）", () => {
     // 回到列表：虚拟产品（CASH）产品名**不**是链接（无详情页）
     await page.goto("/products");
     await expect(page.getByTestId("products-list-card")).toBeVisible({ timeout: 15_000 });
-    const cashRow = page
-      .getByTestId("products-list-card")
-      .getByRole("row")
-      .filter({ hasText: "现金类资产" })
-      .first();
+    const cashRow = productRow(page.getByTestId("products-list-card"), "现金类资产");
     await expect(cashRow).toBeVisible();
     await expect(cashRow.getByTestId("product-detail-link")).toHaveCount(0);
   });
@@ -377,7 +389,7 @@ test.describe("产品行「更多」菜单与停用徽章（#856 块1/块2）", 
 
     // 净值型（ETF）与虚拟产品（CASH）行同形：行内唯一按钮即「更多操作」
     for (const name of ["沪深300ETF", "现金类资产"]) {
-      const row = card.getByRole("row").filter({ hasText: name }).first();
+      const row = productRow(card, name);
       await expect(row.getByRole("button")).toHaveCount(1);
       await row.getByRole("button", { name: "更多操作" }).click();
       const menu = page.getByRole("menu");
@@ -399,7 +411,7 @@ test.describe("产品行「更多」菜单与停用徽章（#856 块1/块2）", 
     await page.goto("/products");
     const card = page.getByTestId("products-list-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
-    const row = card.getByRole("row").filter({ hasText: "沪深300ETF" }).first();
+    const row = productRow(card, "沪深300ETF");
     await row.getByRole("button", { name: "更多操作" }).click();
     await page.getByRole("menuitem", { name: "编辑" }).click();
     await expect(dialogByTitle(page, "编辑产品")).toBeVisible();
@@ -421,7 +433,7 @@ test.describe("产品行「更多」菜单与停用徽章（#856 块1/块2）", 
     await page.goto("/products");
     const card = page.getByTestId("products-list-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
-    const row = card.getByRole("row").filter({ hasText: "沪深300ETF" }).first();
+    const row = productRow(card, "沪深300ETF");
     await expect(row).toHaveCount(1);
     await row.getByRole("button", { name: "更多操作" }).click();
     await page.getByRole("menuitem", { name: "删除" }).click();
@@ -431,7 +443,7 @@ test.describe("产品行「更多」菜单与停用徽章（#856 块1/块2）", 
     const deleted = page.waitForRequest((r) => r.method() === "DELETE" && DETAIL_ENDPOINT.test(r.url()));
     await confirm.getByRole("button", { name: "删除", exact: true }).click();
     await deleted;
-    await expect(card.getByRole("row").filter({ hasText: "沪深300ETF" })).toHaveCount(0);
+    await expect(productRow(card, "沪深300ETF")).toHaveCount(0);
   });
 
   test("停用产品主行内联「已停用」徽章，启用产品无", async ({ page }) => {
@@ -450,9 +462,9 @@ test.describe("产品行「更多」菜单与停用徽章（#856 块1/块2）", 
     await page.goto("/products");
     const card = page.getByTestId("products-list-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
-    const inactiveRow = card.getByRole("row").filter({ hasText: "沪深300ETF" }).first();
+    const inactiveRow = productRow(card, "沪深300ETF");
     await expect(inactiveRow.getByText("已停用")).toBeVisible();
-    const activeRow = card.getByRole("row").filter({ hasText: "富国中证500指数增强(LOF)A" }).first();
+    const activeRow = productRow(card, "富国中证500指数增强(LOF)A");
     await expect(activeRow.getByText("已停用")).toHaveCount(0);
   });
 });

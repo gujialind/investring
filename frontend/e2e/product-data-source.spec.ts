@@ -169,7 +169,12 @@ test.describe("产品数据源切换表单（#880）", () => {
     await page.goto("/products");
     const card = page.getByTestId("products-list-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
-    const row = card.getByRole("row").filter({ hasText: "现金类资产" }).first();
+    // #904 P1d：移动卡化后行=卡片，桌面仍表格行；.or 双形态单定位
+    const row = card
+      .getByRole("row")
+      .filter({ hasText: "现金类资产" })
+      .first()
+      .or(card.getByTestId("product-card").filter({ hasText: "现金类资产" }).first());
     await row.getByRole("button", { name: "更多操作" }).click();
     await page.getByRole("menuitem", { name: "编辑" }).click();
     const dlg = dialogByTitle(page, "编辑产品");

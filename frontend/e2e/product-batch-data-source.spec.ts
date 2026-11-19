@@ -59,12 +59,20 @@ async function gotoProducts(page: Page) {
 }
 
 function rowCheckbox(page: Page, name: string) {
+  // #904 P1d：移动卡化后行=卡片（product-card），桌面仍表格行；.or 双形态单定位
   return page
     .getByTestId("products-list-card")
     .getByRole("row")
     .filter({ hasText: name })
     .first()
-    .getByTestId("batch-row-checkbox");
+    .getByTestId("batch-row-checkbox")
+    .or(
+      page
+        .getByTestId("product-card")
+        .filter({ hasText: name })
+        .first()
+        .getByTestId("batch-row-checkbox"),
+    );
 }
 
 async function pickTarget(page: Page, dlg: Locator, source: string) {
@@ -229,7 +237,20 @@ test.describe("产品数据源批量切换（#882）", () => {
     await expect(page.getByTestId("batch-action-bar")).toHaveCount(0);
 
     release!();
-    await expect(page.getByTestId("products-list-card").getByRole("row").filter({ hasText: "沪深300ETF" })).toBeVisible();
+    // #904 P1d：移动卡化后行=卡片，桌面仍表格行；.or 双形态单定位
+    await expect(
+      page
+        .getByTestId("products-list-card")
+        .getByRole("row")
+        .filter({ hasText: "沪深300ETF" })
+        .first()
+        .or(
+          page
+            .getByTestId("product-card")
+            .filter({ hasText: "沪深300ETF" })
+            .first(),
+        ),
+    ).toBeVisible();
     // 新响应后选择集清空（旧查询产品不会残留进清单）
     await expect(page.getByTestId("batch-action-bar")).toHaveCount(0);
     await rowCheckbox(page, "沪深300ETF").click();

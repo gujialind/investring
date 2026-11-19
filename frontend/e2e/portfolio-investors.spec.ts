@@ -119,11 +119,20 @@ test.describe('#693 组合投资人列表（?tab=investors）', () => {
     const code = await setupInvestorsPortfolio(page, testInfo, 'a');
     await gotoInvestorsTab(page, code);
 
-    const table = page.getByTestId('portfolio-investors-table');
-    await expect(table).toBeVisible();
+    const list = page
+      .getByTestId('portfolio-investors-table')
+      .or(page.getByTestId('portfolio-investors-cards'));
+    await expect(list).toBeVisible();
     await expect(page.getByTestId('investor-row')).toHaveCount(3);
-    for (const header of ['投资人', '份额', '占比', '市值', '总成本', '成本价', '持仓收益', '冻结']) {
-      await expect(table.getByRole('columnheader', { name: header })).toBeVisible();
+    if (testInfo.project.name === 'mobile') {
+      // #904 P1d 卡化：无表头，改断 kv 标签（字段集合与桌面列一致）
+      for (const label of ['份额', '占比', '市值', '总成本', '成本价', '持仓收益', '冻结']) {
+        await expect(list.getByText(label, { exact: true }).first()).toBeVisible();
+      }
+    } else {
+      for (const header of ['投资人', '份额', '占比', '市值', '总成本', '成本价', '持仓收益', '冻结']) {
+        await expect(list.getByRole('columnheader', { name: header })).toBeVisible();
+      }
     }
 
     // 行级占比加总 = 100.0（§4 最大余数法；手法照 portfolio-holdings-view 的占比加总断言）
@@ -133,7 +142,7 @@ test.describe('#693 组合投资人列表（?tab=investors）', () => {
     expect(Math.abs(sum - 100.0), `占比加总应恒为 100.0，实际 ${ratioTexts.join(' + ')}`).toBeLessThanOrEqual(0.05);
 
     // 纯现金无净值波动：profit=0 是「真 0」，显示 ¥0.00 而非 --（§12 边界）
-    await expect(table).toContainText('¥0.00');
+    await expect(list).toContainText('¥0.00');
   });
 
   test('历史快照派生列 NULL → 单元格 --，不伪装成 ¥0.00', async ({ page }, testInfo) => {
@@ -161,12 +170,14 @@ test.describe('#693 组合投资人列表（?tab=investors）', () => {
     );
     await gotoInvestorsTab(page, code);
 
-    const table = page.getByTestId('portfolio-investors-table');
+    const list = page
+      .getByTestId('portfolio-investors-table')
+      .or(page.getByTestId('portfolio-investors-cards'));
     await expect(page.getByTestId('investor-row')).toHaveCount(1);
     // 未计算列一律 --（份额列恒有值：100,000.00 份）
     await expect(page.getByTestId('investor-ratio')).toHaveText('--');
-    await expect(table).toContainText('--');
-    await expect(table).not.toContainText('¥0.00');
+    await expect(list).toContainText('--');
+    await expect(list).not.toContainText('¥0.00');
   });
 
   test('#694 清仓行合并：2 持仓 + 1 清仓（Badge 与 testid）、占比加总含 0.0% 仍 100.0', async ({ page }, testInfo) => {
@@ -189,8 +200,14 @@ test.describe('#693 组合投资人列表（?tab=investors）', () => {
     const code = await setupInvestorsPortfolio(page, testInfo, 'd', true);
     await gotoInvestorsTab(page, code);
 
-    const table = page.getByTestId('portfolio-investors-table');
-    await expect(table.getByRole('columnheader', { name: '累计收益*' })).toBeVisible();
+    const list = page
+      .getByTestId('portfolio-investors-table')
+      .or(page.getByTestId('portfolio-investors-cards'));
+    if (testInfo.project.name === 'mobile') {
+      await expect(list.getByText('累计收益*', { exact: true }).first()).toBeVisible();
+    } else {
+      await expect(list.getByRole('columnheader', { name: '累计收益*' })).toBeVisible();
+    }
     const note = page.getByTestId('investor-cumulative-note');
     await expect(note).toBeVisible();
     await expect(note).toContainText('与「持仓收益」');
