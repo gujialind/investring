@@ -921,7 +921,7 @@ export default function TradesContent({
     const showCashSource = isCash && (!isPairMain || keepCashSourceLabel);
     const title = showCashSource ? cashOrphanLabel(trade) : trade.product_name || codeText;
     const metaParts = showCashSource ? [] : [trade.product_name ? codeText : "", marketName];
-    if (platformName) metaParts.push(platformName);
+    if (trade.platform_code) metaParts.push(platformName || trade.platform_code);
     const meta = metaParts.filter(Boolean).join(" · ");
     return (
       <FlowCard key={trade.id} testId="trade-card">

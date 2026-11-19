@@ -216,7 +216,8 @@ test.describe("产品详情页", () => {
     expect(page.url()).toContain("market=CN_EXCHANGE");
     expect(page.url()).toContain("trade_type=buy");
     // 预填后服务端过滤生效：510300.SH 的已确认买入在列表中
-    await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 10_000 });
+    // #907 移动卡化后无表格：双形态定位（桌面 tr / 移动卡），只断「列表非空」
+    await expect(page.locator('table tbody tr, [data-testid="trade-card"]').first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("操作行买入：跳转即开录入 Dialog，方向与产品/市场已预填（#646）", async ({ page }) => {

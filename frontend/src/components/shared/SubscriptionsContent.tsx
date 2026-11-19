@@ -468,8 +468,9 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
   const renderSubCard = (sub: Subscription) => {
     const investorName = investorNameMap.get(sub.investor_code);
     const platformName = sub.platform_code ? platformNameMap.get(sub.platform_code) : undefined;
+    const platformLabel = sub.platform_code ? platformName || sub.platform_code : "";
     const title = investorName || sub.investor_code;
-    const meta = [investorName ? sub.investor_code : "", platformName ?? ""].filter(Boolean).join(" · ");
+    const meta = [investorName ? sub.investor_code : "", platformLabel].filter(Boolean).join(" · ");
     return (
       <FlowCard key={sub.id} testId="subscription-card">
         <FlowCardHeader
