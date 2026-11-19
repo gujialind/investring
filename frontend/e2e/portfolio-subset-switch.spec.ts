@@ -225,4 +225,41 @@ test.describe('#915 B2 子集快捷切换（双端）', () => {
     expect(writes).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test('失效覆盖不死胡同：规则收紧后 URL 覆盖含未登记维——按默认态渲染、首击重建子集（ocr r1 反例）', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 120_000);
+    const errors = collectPageErrors(page);
+    const writes = collectPortfolioWrites(page);
+    // 读侧 mock 摘掉股票 style 登记（先例 display-config-dialog.spec.ts 规则收紧），
+    // 深链覆盖 ?sub=ASSET_STOCK.style 遂含未登记维：消费侧整条回退默认
+    await page.route(/\/api\/asset-classifications(\?|$)/, async (route) => {
+      const resp = await route.fetch();
+      const json = (await resp.json()) as {
+        dimension_rules?: Record<string, Record<string, string>>;
+      };
+      if (json.dimension_rules?.ASSET_STOCK) delete json.dimension_rules.ASSET_STOCK.style;
+      const headers = { ...resp.headers() };
+      delete headers['content-length'];
+      delete headers['content-encoding'];
+      await route.fulfill({ status: resp.status(), headers, json });
+    });
+    await page.goto(`/portfolio/${E2E_ACTIVE}?sub=ASSET_STOCK.style`);
+    await page
+      .getByRole('heading', { level: 1 })
+      .first()
+      .waitFor({ state: 'visible', timeout: 15_000 });
+
+    // 分组回退默认组合键；切换行按默认态渲染（默认项激活），失效维不枚举
+    await expect(stockGroupHeader(page)).toContainText('中国·综合', { timeout: 10_000 });
+    await expect(chip(page, 'default')).toHaveAttribute('aria-pressed', 'true');
+    await expect(chip(page, 'style')).toHaveCount(0);
+    // 首击已登记维 = 重建子集（不是追加到失效覆盖上）：分组立即生效、URL 替换
+    await clickChip(page, 'region');
+    await expect(stockGroupHeader(page)).toContainText('中国');
+    await expect(stockGroupHeader(page)).not.toContainText('中国·综合');
+    await expect(page).toHaveURL(/[?&]sub=ASSET_STOCK\.region(?![.\w])/);
+    await expect(chip(page, 'region')).toHaveAttribute('aria-pressed', 'true');
+    expect(writes).toEqual([]);
+    expect(errors).toEqual([]);
+  });
 });

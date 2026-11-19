@@ -177,6 +177,16 @@ describe("parseSubDimOverrides（#915 B2 URL ?sub= 形态解析）", () => {
     const raw = "ASSET_BOND.region.segment~ASSET_STOCK.style";
     expect(serializeSubDimOverrides(parseSubDimOverrides(raw))).toBe(raw);
   });
+
+  it("原型敏感键整条丢弃（URL 信任边界，ocr r1）：不污染结果原型、合法条目保留", () => {
+    expect(parseSubDimOverrides("__proto__.region")).toEqual({});
+    expect(parseSubDimOverrides("constructor.style")).toEqual({});
+    expect(parseSubDimOverrides("prototype.segment")).toEqual({});
+    const mixed = parseSubDimOverrides("__proto__.region~ASSET_STOCK.style");
+    expect(mixed).toEqual({ ASSET_STOCK: ["style"] });
+    expect(Object.getPrototypeOf(mixed)).toBe(Object.prototype);
+    expect(serializeSubDimOverrides(mixed)).toBe("ASSET_STOCK.style");
+  });
 });
 
 describe("serializeSubDimOverrides（#915 B2 URL 写入）", () => {
@@ -219,6 +229,14 @@ describe("toggleSubDimOverride（#915 B2 快捷切换 + 直切子集同一交互
     const next = toggleSubDimOverride(base, "ASSET_STOCK", "size");
     expect(next).toEqual({ ASSET_BOND: ["region"], ASSET_STOCK: ["size"] });
     expect(base).toEqual({ ASSET_BOND: ["region"] });
+  });
+
+  it("原型敏感键不写入、继承成员不抛错（与 parse 同判据，ocr r1）", () => {
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      const next = toggleSubDimOverride({}, key, "style");
+      expect(next).toEqual({});
+      expect(Object.getPrototypeOf(next)).toBe(Object.prototype);
+    }
   });
 });
 
@@ -284,6 +302,15 @@ describe("resolveViewSubDims（#915 B2 消费侧：临时覆盖优先于配置/�
     expect(resolveViewSubDims(null, "ASSET_STOCK", null, { ASSET_STOCK: ["style"] })).toEqual([
       "style",
     ]);
+  });
+
+  it("继承成员守卫（ocr r1）：classCode 撞 Object.prototype 成员不抛错、回退默认解析", () => {
+    // 无守卫时 override=Object/toString 函数，.every 抛 TypeError 白屏
+    expect(resolveViewSubDims(null, "constructor", null, {})).toEqual([]);
+    expect(resolveViewSubDims(null, "toString", RULES, {})).toEqual([]);
+    expect(
+      resolveViewSubDims(null, "constructor", RULES, JSON.parse('{"constructor":["style"]}'))
+    ).toEqual([]);
   });
 });
 

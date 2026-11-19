@@ -98,7 +98,12 @@ function SubDimSwitchRow({
   onChange: (next: SubDimOverrides) => void;
 }) {
   const override = overrides[sectionCode];
-  const overrideActive = !!override && override.length > 0;
+  // 覆盖含未登记维（规则事后收紧/手工 URL）时消费侧整条回退默认——此处须同判据
+  // 按默认态渲染，且首击重建子集；否则 chip 点在失效覆盖上追加、分组恒不动（ocr r1 死胡同）
+  const overrideValid =
+    !!override && override.length > 0 && override.every((d) => ruleDims.includes(d));
+  const active = overrideValid ? override : null;
+  const overrideActive = active !== null;
   const chipClass = (active: boolean) =>
     `shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs transition-colors ${
       active
@@ -131,9 +136,15 @@ function SubDimSwitchRow({
           key={d}
           type="button"
           data-testid={`sub-dim-chip-${sectionCode}-${d}`}
-          aria-pressed={overrideActive && override.includes(d)}
-          onClick={() => onChange(toggleSubDimOverride(overrides, sectionCode, d))}
-          className={chipClass(overrideActive && override.includes(d))}
+          aria-pressed={active?.includes(d) ?? false}
+          onClick={() =>
+            onChange(
+              overrideValid
+                ? toggleSubDimOverride(overrides, sectionCode, d)
+                : { ...overrides, [sectionCode]: [d] }
+            )
+          }
+          className={chipClass(active?.includes(d) ?? false)}
         >
           {DIMENSION_LABELS[d] ?? d}
         </button>
@@ -186,7 +197,10 @@ function ProductSections({
             ? RULE_DIMENSIONS.filter((d) => d in (dimensionRules[sectionCode] ?? {}))
             : [];
         const showSwitch =
-          !!sectionCode && ruleDims.length > 0 && !!onSubDimOverridesChange;
+          !!sectionCode &&
+          ruleDims.length > 0 &&
+          subDimOverrides != null &&
+          !!onSubDimOverridesChange;
         return (
           <div key={section.code ?? "__other__"}>
             {/* 大类分区头：色点 + 大类名 + 合计 + 取整占比 */}
