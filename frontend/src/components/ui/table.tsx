@@ -5,7 +5,10 @@ const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
 >(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  // #904 P1c：桌面限高内滚容器 + sticky thead（overflow-x:auto 必成 scroll container，
+  // viewport 级 sticky 不可行，故桌面改内滚；移动保持页滚、thead 不 sticky，§6 端侧布局差异）。
+  // 限高扣除页头/筛选/分页大致占位，矮视口由 min() 兜底。
+  <div className="relative w-full overflow-auto lg:max-h-[min(calc(100dvh_-_16rem),44rem)]">
     <table
       ref={ref}
       className={cn("w-full caption-bottom text-sm", className)}
@@ -19,7 +22,12 @@ const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("[&_tr]:border-b", className)} {...props} />
+  // sticky 实底为功能必需（#904 P1c，§8 登记）：header 文字仍 muted 常规字重、无色带
+  <thead
+    ref={ref}
+    className={cn("[&_tr]:border-b lg:sticky lg:top-0 lg:z-10 lg:bg-card", className)}
+    {...props}
+  />
 ))
 TableHeader.displayName = "TableHeader"
 

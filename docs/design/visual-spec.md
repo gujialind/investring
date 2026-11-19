@@ -208,7 +208,7 @@
 ## 8. 表格规范
 
 - **数字列右对齐 + `number-cell`**（等宽 tabular-nums；份额/金额/净值与整数计数列一视同仁），文本列左对齐，操作列右对齐（`text-right`）；列表头与数据列对齐方式一致（数字列表头同样 `number-cell`）。禁止对数值单元格手写裸 `text-right` 或内联 `font-mono tabular-nums`（#249 起 ESLint 拦截）；需与其他类拼接时（如 `cn("text-muted-foreground", …)`）用 `lib/utils.ts` 的 `getNumberCellClass()`。
-- **表头**：`text-muted-foreground` 常规字重，不加底色、不加粗（层级靠字号与文字色，不靠底纹）。
+- **表头**：`text-muted-foreground` 常规字重，不加底色、不加粗（层级靠字号与文字色，不靠底纹）。**sticky 表头（#904 P1c）**：桌面 Table wrapper 限高内滚（`lg:max-h-[min(calc(100dvh_-_16rem),44rem)]`）+ `thead lg:sticky lg:top-0 lg:z-10 lg:bg-card`——实底为 sticky 功能必需（非色带），文字口径不变；`overflow-x:auto` 必成 scroll container、viewport 级 sticky 不可行，故桌面改内滚；移动保持页滚、thead 不 sticky（§6 端侧布局差异）。**已知边界（#920 L2 登记）**：`lg:bg-card` 预设 Table 处于白卡上下文；非卡上下文直挂 Table（现实例：`CashTransferListDialog` 的 `bg-background` 弹窗）lg+ 行数超限高时，吸顶表头白底浮于灰底弹窗、存在可见色差（暗色同理）；该场景消费方可覆写 thead 背景（如 `lg:bg-background`），未覆写前为已知取舍。
 - **斑马纹**：不用。行分隔靠 `border-b`，hover 行 `hover:bg-muted/50` 足够表达可点行。
 - **空态**：表体空时表下方居中 `text-muted-foreground` 文案（或 `EmptyState` 组件），不渲染空表壳外的额外颜色。空态变体登记：① 数据空（默认）；② 筛选无结果——文案「无符合筛选条件的记录」+ 内嵌「重置筛选」入口（见 §9）；③ 无权限——文案「无权限访问本页」+ 返回入口按钮（`EmptyState` action 位）。
 - **加载态**：表体区域居中 `Loader2 animate-spin` + `text-muted-foreground`，不清空表头。此为首次全量加载形态；筛选/翻页等局部刷新的加载态见 §14。
@@ -278,7 +278,7 @@
 ## 13. 组件复用红线
 
 - 新 UI **先查 `components/ui/`（基件）与 `components/shared/`（业务件）**，能复用不新造；状态徽标一律 `Badge` + variant（#127 的 9 处手写 badge 收敛为首个执行案例），禁止再出现 `inline-flex items-center rounded-full … bg-*-100 text-*-800` 手写件。
-- **页头单点 = `components/shared/PageHeader.tsx`**（#904）：面包屑 / 标题+badge / meta / 操作四槽；新页禁止手写页头 flex 组合。标题走 §5 页面标题档 24px（长基金名 `truncateTitle`，组合名等短标题不压缩 #786）；badge 仅非默认态挂载；操作权重三档：语境入口 ghost 链接档 → 次动作 outline → 主动作 filled 最右。
+- **页头单点 = `components/shared/PageHeader.tsx`**（#904）：面包屑 / 标题+badge / meta / 操作四槽；新页禁止手写页头 flex 组合。标题走 §5 页面标题档 24px（长基金名 `truncateTitle`，组合名等短标题不压缩 #786）；badge 仅非默认态挂载；操作权重三档：语境入口 ghost 链接档 → 次动作 outline → 主动作 filled 最右。**sticky 折叠（P1c）**：viewport 吸顶 top-0（负 margin bleed 到 main padding 边缘、bg-background），滚动 >32px 折叠——面包屑隐去、首 crumb 收标题行内图标返回（aria 不变）、标题 24→18px、meta 隐去、出 border-b；即时切换不做尺寸动画（§14）。
 - 双端页面优先 `components/shared/` + `variant`，只有布局本质差异才拆 `components/mobile/` / `components/desktop/`。
 - 弹窗一律走 `Dialog` / `AlertDialog` 基件；提示一律走 `Alert` / toast，不自绘浮层。
 - **待建基件登记**（规格已定、随首个使用页面落地；未建前禁止手写同功能件）：`checkbox`（#146 首个使用，shadcn 基件，`rounded-sm`、选中态 `bg-primary`）、`date-range-picker`（#125，形态见 §10）、`pagination`（#125/#126，形态见 §11）。
