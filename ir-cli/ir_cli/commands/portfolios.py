@@ -50,7 +50,8 @@ def create(
     description: Optional[str] = typer.Option(None, "--description", help="描述"),
     display_config: Optional[str] = typer.Option(
         None, "--display-config",
-        help='持仓明细二级分组维度 JSON，如 \'{"ASSET_STOCK": "style"}\'（issue #144）',
+        help='持仓明细二级组合键维度子集 JSON，值为逗号分隔维度名，如 \'{"ASSET_STOCK": "region,segment"}\''
+        '（单值=单元素子集；不配该键=默认子集；issue #144/#915）',
     ),
     kind: Optional[str] = typer.Option(None, "--kind", help="组合类型 nav/ledger（默认 nav；issue #905）"),
     owner_investor_code: Optional[str] = typer.Option(
@@ -128,8 +129,9 @@ def update(
     description: Optional[str] = typer.Option(None, "--description", help="描述"),
     display_config: Optional[str] = typer.Option(
         None, "--display-config",
-        help='持仓明细二级分组维度 JSON，如 \'{"ASSET_STOCK": "style"}\'；'
-        '清空配置请用 --json \'{"display_config": null}\'（issue #144）',
+        help='持仓明细二级组合键维度子集 JSON，值为逗号分隔维度名，如 \'{"ASSET_STOCK": "region,segment"}\''
+        '（单值=单元素子集；不配该键=默认子集）；'
+        '清空配置请用 --json \'{"display_config": null}\'（issue #144/#915）',
     ),
     json_body: Optional[str] = typer.Option(None, "--json", help="完整 JSON 请求体，优先于逐项参数"),
 ):

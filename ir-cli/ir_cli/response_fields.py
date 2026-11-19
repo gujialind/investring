@@ -44,14 +44,14 @@ RESPONSE_FIELDS: dict = {
             "shape": "object",
             "fields": "code:str,name:str,description:str?,status:str,kind:str,owner_investor_code:str?,started_at:datetime?,closed_at:datetime?,created_at:datetime?,updated_at:datetime?,display_config:obj?,auto_snapshot_enabled:bool,total_value:num?,total_profit:num?",
             "notes": {
-                "display_config": "持仓明细二级分组维度覆盖{'ASSET_STOCK': 'style'}；null=未配置=前端内置默认；仅存显式覆盖项，清空传null"
+                "display_config": "持仓明细二级组合键维度子集覆盖{'ASSET_STOCK': 'region,segment'}（逗号分隔维度名，单值=单元素子集，入库按全序归一）；null=未配置=默认子集表；仅存显式覆盖项，清空传null"
             }
         },
         "update": {
             "shape": "object",
             "fields": "code:str,name:str,description:str?,status:str,kind:str,owner_investor_code:str?,started_at:datetime?,closed_at:datetime?,created_at:datetime?,updated_at:datetime?,display_config:obj?,auto_snapshot_enabled:bool,total_value:num?,total_profit:num?",
             "notes": {
-                "display_config": "显式传null=清空配置；不传=不修改（exclude_unset 语义）"
+                "display_config": "维度子集覆盖（逗号分隔维度名，如'region,segment'）；显式传null=清空配置；不传=不修改（exclude_unset 语义）"
             }
         },
         "nav-history": {

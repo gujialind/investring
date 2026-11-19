@@ -31,8 +31,10 @@ interface PortfolioHoldingsProps {
   basePath: string;
   /** asset_class 维度字典（分区顺序/颜色/二级分组维度驱动，issue #128） */
   assetClasses: AssetClassificationItem[];
-  /** 组合级二级分组维度覆盖（issue #144，portfolio.display_config 契约原样传入） */
+  /** 组合级二级组合键维度子集覆盖（issue #144/#915，portfolio.display_config 契约原样传入） */
   displayConfig?: Record<string, string> | null;
+  /** 维度级适用矩阵（#915：读侧子集解析按登记防御回退；页面自字典响应下传，零额外请求） */
+  dimensionRules?: Record<string, Record<string, string>> | null;
   /** 当前视图（D-7：URL ?view=product|platform 由页面持有，本组件不读路由） */
   view: HoldingsView;
   onViewChange: (view: HoldingsView) => void;
@@ -66,7 +68,9 @@ export function cardGridClass(variant: "desktop" | "mobile"): string {
     : "space-y-2.5";
 }
 
-/** 按产品分区渲染（V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724） */
+/** 按产品分区渲染（V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724）。
+ * #915：二级组为维度子集组合键，React key 用 code 元组串（同名不同 code 不冲突）；
+ * showChip 判据（组名 ≠ 大类名）原样保留。 */
 function ProductSections({
   sections,
   percentOf,
@@ -95,7 +99,7 @@ function ProductSections({
           0
         );
         return (
-          <div key={section.name}>
+          <div key={section.code ?? "__other__"}>
             {/* 大类分区头：色点 + 大类名 + 合计 + 取整占比 */}
             <div className="flex items-baseline justify-between px-1 pb-2 pt-4">
               <span className="flex items-center text-sm font-bold">
@@ -118,7 +122,7 @@ function ProductSections({
                 // V4 契约：chip 恒在产品卡之上，仅组名与大类同名（平铺组）时不渲染
                 const showChip = g.name !== section.name;
                 return (
-                  <div key={g.name} data-testid="asset-group">
+                  <div key={g.codeKey} data-testid="asset-group">
                     {showChip && (
                       <div
                         data-testid="asset-group-header"
@@ -196,6 +200,7 @@ export default function PortfolioHoldings({
   basePath,
   assetClasses,
   displayConfig,
+  dimensionRules,
   view,
   onViewChange,
   action,
@@ -217,7 +222,7 @@ export default function PortfolioHoldings({
 
   const sections =
     view === "product" && productData
-      ? buildProductSections(productData.products, assetClasses, displayConfig)
+      ? buildProductSections(productData.products, assetClasses, displayConfig, dimensionRules)
       : [];
   const platforms = platformQuery.data?.platforms ?? [];
   /** 平台视图行级占比：平台市值在视图内最大余数法分配（§4） */

@@ -141,7 +141,8 @@ test.describe('持仓明细维度二级分组（防 #109 / #114 复发，#128 �
   // V4 定稿 + #114 修正：分组 chip 始终位于产品名之上（与大类同名除外），
   // chip 行合计恒显示（无论名下 1 卡还是多卡）；
   // data-testid="asset-group-header" 挂在所有 chip 行上
-  // #128：分组数据源从 asset_name 换成维度 name（股票→region、债券/商品→segment）
+  // #128：分组数据源从 asset_name 换成维度 name；#915：二级分组改为维度子集
+  // 组合键（默认子集 D3：股票/债券 region,segment、商品 segment、现金平铺）
   // #595：卡片改为跨平台聚合卡（holding-product-card），分组契约不变
   test('子分组头合计金额应等于名下各卡市值之和（含单卡分组）', async ({ page }) => {
     // E2E_ACTIVE 种子契约：2 日快照 + 510300.SH 持仓 → 持仓明细区必渲染（不再优雅 skip）。
@@ -155,7 +156,8 @@ test.describe('持仓明细维度二级分组（防 #109 / #114 复发，#128 �
     // count() 无重试，先等首个 chip 可见再计数（防数据未回时的 0 计数竞态）
     await expect(headers.first()).toBeVisible({ timeout: 10_000 });
     const headerCount = await headers.count();
-    // 510300.SH=ASSET_STOCK 按 region 分组、组名与大类「股票」不同名 → 子分组 chip 必渲染
+    // 510300.SH=ASSET_STOCK 按默认子集 region,segment 组合键分组（#915，键「中国·综合」）、
+    // 组名与大类「股票」不同名 → 子分组 chip 必渲染
     expect(headerCount, 'E2E_ACTIVE 持仓应渲染出至少一个子分组头').toBeGreaterThanOrEqual(1);
 
     // 卡内首个两位小数数字 = 市值大数字（行 1）；占比一位小数不匹配

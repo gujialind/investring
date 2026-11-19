@@ -786,6 +786,217 @@ class TestPortfolioDisplayConfig:
         item = next(i for i in resp.json()["items"] if i["code"] == "P_DC_L")
         assert item["display_config"] == {"ASSET_STOCK": "style"}
 
+    # ---- #915 维度子集组合键：多值形态（Q1=A 逗号分隔字符串） ----
+
+    def test_put_multi_value_subset_roundtrip(self, client, admin_headers, test_db):
+        """多值子集往返一致（股票/债券二维、商品单维）"""
+        create_portfolio(test_db, code="P_DC_MV")
+        config = {
+            "ASSET_STOCK": "region,segment",
+            "ASSET_BOND": "region,segment",
+            "ASSET_COMMODITY": "segment",
+        }
+        resp = client.put(
+            "/api/portfolios/P_DC_MV",
+            json={"display_config": config},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_config"] == config
+        detail = client.get("/api/portfolios/P_DC_MV", headers=admin_headers)
+        assert detail.json()["display_config"] == config
+
+    def test_create_multi_value_subset_roundtrip(self, client, admin_headers):
+        """创建时携带多值子集，GET 往返一致"""
+        resp = client.post(
+            "/api/portfolios",
+            json={
+                "code": "P_DC_MVC",
+                "name": "多值配置组合",
+                "display_config": {"ASSET_STOCK": "region,style,size,segment"},
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_config"] == {
+            "ASSET_STOCK": "region,style,size,segment"
+        }
+
+    @pytest.mark.parametrize(
+        "raw,canonical",
+        [
+            ("segment,region", "region,segment"),
+            ("segment,size,style,region", "region,style,size,segment"),
+            (" region , segment ", "region,segment"),
+            ("style", "style"),
+        ],
+    )
+    def test_put_subset_normalized_to_canonical_order(
+        self, client, admin_headers, test_db, raw, canonical
+    ):
+        """Q5：顺序无语义，入库归一为固定全序 region→style→size→segment；
+        拆分项 strip 后归一，单值表示不变"""
+        create_portfolio(test_db, code="P_DC_ORD")
+        resp = client.put(
+            "/api/portfolios/P_DC_ORD",
+            json={"display_config": {"ASSET_STOCK": raw}},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_config"] == {"ASSET_STOCK": canonical}
+        detail = client.get("/api/portfolios/P_DC_ORD", headers=admin_headers)
+        assert detail.json()["display_config"] == {"ASSET_STOCK": canonical}
+
+    def test_put_equivalent_orderings_store_identically(
+        self, client, admin_headers, test_db
+    ):
+        """"segment,region" 与 "region,segment" 语义等价且落库同值"""
+        create_portfolio(test_db, code="P_DC_EQ")
+        first = client.put(
+            "/api/portfolios/P_DC_EQ",
+            json={"display_config": {"ASSET_STOCK": "segment,region"}},
+            headers=admin_headers,
+        )
+        second = client.put(
+            "/api/portfolios/P_DC_EQ",
+            json={"display_config": {"ASSET_STOCK": "region,segment"}},
+            headers=admin_headers,
+        )
+        assert first.status_code == second.status_code == 200
+        assert first.json()["display_config"] == second.json()["display_config"]
+
+    def test_put_multi_value_then_empty_dict_normalized_to_null(
+        self, client, admin_headers, test_db
+    ):
+        """归一语义扩展到多值形态：{} → NULL"""
+        create_portfolio(test_db, code="P_DC_MVE")
+        client.put(
+            "/api/portfolios/P_DC_MVE",
+            json={"display_config": {"ASSET_STOCK": "region,segment"}},
+            headers=admin_headers,
+        )
+        resp = client.put(
+            "/api/portfolios/P_DC_MVE",
+            json={"display_config": {}},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_config"] is None
+
+    def test_put_multi_value_then_null_clears(self, client, admin_headers, test_db):
+        """归一语义扩展到多值形态：显式 null 清空恢复默认"""
+        create_portfolio(test_db, code="P_DC_MVN")
+        client.put(
+            "/api/portfolios/P_DC_MVN",
+            json={"display_config": {"ASSET_STOCK": "region,segment"}},
+            headers=admin_headers,
+        )
+        resp = client.put(
+            "/api/portfolios/P_DC_MVN",
+            json={"display_config": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_config"] is None
+
+    @pytest.mark.parametrize(
+        "bad_value",
+        [
+            "",                        # 空串
+            "   ",                     # 纯空白
+            "region,",                 # 拆分后为空
+            "region,,segment",         # 拆分后含空项
+            "duration",                # 未知维度名
+            "region,duration",         # 多值含未知维度名
+            "region,region",           # 重复项
+            "segment,region,segment",  # 多值重复项
+        ],
+    )
+    def test_put_invalid_subset_422(self, client, admin_headers, test_db, bad_value):
+        """非法子集值 422 INVALID_DISPLAY_CONFIG（§4.3 规则 2/3/5/6）"""
+        create_portfolio(test_db, code="P_DC_SBAD")
+        resp = client.put(
+            "/api/portfolios/P_DC_SBAD",
+            json={"display_config": {"ASSET_STOCK": bad_value}},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DISPLAY_CONFIG"
+
+    @pytest.mark.parametrize("bad_value", [123, ["region"], None, True])
+    def test_put_non_string_value_rejected_zero_write(
+        self, client, admin_headers, test_db, bad_value
+    ):
+        """非字符串值在 schema 层（Dict[str, str]，契约不变）即 422 拒绝、
+        零写入；服务层纵深防御的 INVALID_DISPLAY_CONFIG 断言见下一条"""
+        create_portfolio(test_db, code="P_DC_NS")
+        client.put(
+            "/api/portfolios/P_DC_NS",
+            json={"display_config": {"ASSET_STOCK": "style"}},
+            headers=admin_headers,
+        )
+        resp = client.put(
+            "/api/portfolios/P_DC_NS",
+            json={"display_config": {"ASSET_STOCK": bad_value}},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        detail = client.get("/api/portfolios/P_DC_NS", headers=admin_headers)
+        assert detail.json()["display_config"] == {"ASSET_STOCK": "style"}
+
+    @pytest.mark.parametrize("bad_value", [123, ["region"], None, True])
+    def test_validate_display_config_non_string_service_level(self, test_db, bad_value):
+        """服务层对非字符串值抛 INVALID_DISPLAY_CONFIG（§4.3 规则 2；
+        API 层由 schema 先拦，此路径覆盖绕过 schema 的内部调用方）"""
+        from app.services.exceptions import BusinessError
+        from app.services.portfolio_service import validate_display_config
+
+        with pytest.raises(BusinessError) as excinfo:
+            validate_display_config(test_db, {"ASSET_STOCK": bad_value})
+        assert excinfo.value.code == "INVALID_DISPLAY_CONFIG"
+
+    @pytest.mark.parametrize(
+        "bad_config",
+        [
+            {"ASSET_BOND": "region,style"},      # 债券无 style 规则行
+            {"ASSET_BOND": "style,region"},      # 同上（乱序不改变拒绝）
+            {"ASSET_COMMODITY": "region"},       # 商品仅 segment 登记
+            {"ASSET_CASH": "region,segment"},    # 现金任何非空配置拒绝
+        ],
+    )
+    def test_put_unregistered_dim_in_subset_422(
+        self, client, admin_headers, test_db, bad_config
+    ):
+        """子集每项必须在该大类规则矩阵登记（§4.3 规则 4）"""
+        create_portfolio(test_db, code="P_DC_UR")
+        resp = client.put(
+            "/api/portfolios/P_DC_UR",
+            json={"display_config": bad_config},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "INVALID_DISPLAY_CONFIG"
+
+    def test_put_invalid_subset_zero_write(self, client, admin_headers, test_db):
+        """拒绝即零写入：既有配置保持原值（§7.2 第 4 条）"""
+        create_portfolio(test_db, code="P_DC_ZW")
+        client.put(
+            "/api/portfolios/P_DC_ZW",
+            json={"display_config": {"ASSET_STOCK": "style"}},
+            headers=admin_headers,
+        )
+        resp = client.put(
+            "/api/portfolios/P_DC_ZW",
+            json={"display_config": {"ASSET_STOCK": "region,region"}},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+        test_db.expire_all()
+        row = test_db.query(Portfolio).filter(Portfolio.code == "P_DC_ZW").first()
+        assert row.display_config == {"ASSET_STOCK": "style"}
+        detail = client.get("/api/portfolios/P_DC_ZW", headers=admin_headers)
+        assert detail.json()["display_config"] == {"ASSET_STOCK": "style"}
+
 
 class TestPortfolioUpdateNullGuard:
     """PUT 显式 null 收口（#579 口径 A，与 #573 同口径）：

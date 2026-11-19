@@ -8,27 +8,25 @@ import {
   dialogByTitle,
   gotoPortfolioDetail,
   isolatedPortfolioCode,
-  openPopover,
 } from './helpers';
 
 /**
- * #915 硬前置：DisplayConfigDialog 双端操作用例（改多选之前先补防线，SPEC §7.3）。
- * 本文件先以「现状单选型态」落 characterization 用例（打开 / 改选与回退 / 保存显式
- * 覆盖项 / 全默认提交 null / 回填既有配置 / 字典晚到不静默清空），多选改造随 #915
- * 主实施同 PR 更新本文件——git 历史上「先补后改」顺序可证。
+ * #915 DisplayConfigDialog 双端操作用例（SPEC §7.3 六场景）。
+ * git 历史上本文件先以「现状单选型态」落 characterization 用例并实跑绿
+ * （硬前置 commit），再随多选改造更新为本形态——「先补后改」顺序可证。
  *
  * 测试层口径（frontend/AGENTS.md §3）：vitest 只测 lib 纯逻辑、不引 jsdom/RTL，
  * 组件交互与运行时行为归 Playwright 双端 E2E，故本弹窗用例全部落 E2E、双端同跑。
  *
  * 数据说明：
- * - 只读用例（打开/改选/回填断言）用种子 E2E_ACTIVE，不写入、不污染共享种子。
+ * - 只读用例（打开/勾选/回填断言）用种子 E2E_ACTIVE，不写入、不污染共享种子。
  * - 写入用例（保存/null 清空/字典晚到）自建隔离 active 组合（首购确认激活，
  *   现金-only 也渲染持仓区与「分组维度」入口），code 经 isolatedPortfolioCode
  *   区分 project/worker/retry；残留由每轮重建的 E2E 库吸收。
- * - 可配置大类与选项来自种子规则矩阵（backend/app/constants/asset_dimensions.py
+ * - 可配置大类与勾选项来自种子规则矩阵（backend/app/constants/asset_dimensions.py
  *   ::DIMENSION_RULES）：股票 region/style/size/segment、债券 region/segment、
- *   商品 segment；现金无规则行 → 不出现。内置默认（lib/dimensions.ts
- *   ::SUB_DIM_BY_CLASS）：股票 region、债券/商品 segment。
+ *   商品 segment；现金无规则行 → 不出现。默认子集（lib/dimensions.ts
+ *   ::DEFAULT_SUB_DIMS_BY_CLASS，D3）：股票/债券 region,segment、商品 segment。
  * - 「字典晚到」的构造边界：双端详情页 loading 闸门含字典查询（page.tsx
  *   isLoading 含 dictLoading），弹窗与页面同 query key，冷加载下「弹窗已开而
  *   字典未就绪」经 UI 不可达（组件注释明写）。本用例钉住组合保障：字典未就绪
@@ -36,13 +34,13 @@ import {
  *   若未来去掉闸门且初始化 effect 依赖退化（如只依赖 open），本用例必红。
  */
 
-/** 大类行：行 div 的直接子 span 文本恰为大类名（结构锚点，不按 Tailwind 类定位） */
-function classRow(dlg: Locator, className: string): Locator {
-  return dlg.locator(`div:has(> span:text-is("${className}"))`);
+/** 大类配置块（组件侧 data-testid 锚点，#382 口径） */
+function classBlock(dlg: Locator, classCode: string): Locator {
+  return dlg.getByTestId(`display-config-class-${classCode}`);
 }
 
-function classSelect(dlg: Locator, className: string): Locator {
-  return classRow(dlg, className).getByRole('combobox');
+function dimCheckbox(dlg: Locator, classCode: string, dimName: string): Locator {
+  return classBlock(dlg, classCode).getByRole('checkbox', { name: dimName, exact: true });
 }
 
 /** 打开弹窗（入口仅管理员可见，E2E 登录 ADMIN） */
@@ -57,19 +55,6 @@ async function openDisplayConfigDialog(page: Page): Promise<Locator> {
   const dlg = dialogByTitle(page, '分组维度');
   await expect(dlg).toBeVisible();
   return dlg;
-}
-
-/** 在某大类的单选 Select 里选项，并断言触发器回显 */
-async function pickOption(
-  page: Page,
-  dlg: Locator,
-  className: string,
-  optionName: string,
-): Promise<void> {
-  const trigger = classSelect(dlg, className);
-  await openPopover(page, trigger, page.getByRole('listbox'));
-  await page.getByRole('option', { name: optionName, exact: true }).click();
-  await expect(trigger).toHaveText(optionName);
 }
 
 /** 自建隔离 active 组合（现金-only；首购确认激活，无需行情/快照） */
@@ -138,36 +123,47 @@ function mobileTimeout(testInfo: TestInfo, ms: number): void {
   if (testInfo.project.name === 'mobile') test.setTimeout(ms);
 }
 
-test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端）', () => {
-  test('打开：可配置大类按字典序枚举、默认回显、现金不出现；取消关闭', async ({ page }) => {
+test.describe('#915 DisplayConfigDialog 维度子集多选（双端）', () => {
+  test('打开：可配置大类按字典序枚举、默认态零勾选、现金不出现；取消关闭', async ({ page }) => {
     const errors = collectPageErrors(page);
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });
 
     const dlg = await openDisplayConfigDialog(page);
     // 枚举规则矩阵有行的三大类（不限当前持仓，支持预配置）；现金无规则行不出现
-    for (const name of ['股票', '债券', '商品']) {
-      await expect(classRow(dlg, name)).toBeVisible();
+    for (const code of ['ASSET_STOCK', 'ASSET_BOND', 'ASSET_COMMODITY']) {
+      await expect(classBlock(dlg, code)).toBeVisible();
     }
-    await expect(classRow(dlg, '现金')).toHaveCount(0);
+    await expect(classBlock(dlg, 'ASSET_CASH')).toHaveCount(0);
     // sort_order 排序：股票(1) → 债券(2) → 商品(3)
     const text = await dlg.innerText();
     expect(text.indexOf('股票')).toBeLessThan(text.indexOf('债券'));
     expect(text.indexOf('债券')).toBeLessThan(text.indexOf('商品'));
-    // 未配置组合：各大类回显内置默认（股票 region、债券/商品 segment）
-    await expect(classSelect(dlg, '股票')).toHaveText('默认（地区）');
-    await expect(classSelect(dlg, '债券')).toHaveText('默认（细分）');
-    await expect(classSelect(dlg, '商品')).toHaveText('默认（细分）');
+
+    // 未配置组合：各大类零勾选、提示回显默认子集（D3）
+    for (const code of ['ASSET_STOCK', 'ASSET_BOND', 'ASSET_COMMODITY']) {
+      const checked = classBlock(dlg, code).getByRole('checkbox', { checked: true });
+      await expect(checked).toHaveCount(0);
+    }
+    await expect(classBlock(dlg, 'ASSET_STOCK')).toContainText('当前：默认（地区·细分）');
+    await expect(classBlock(dlg, 'ASSET_BOND')).toContainText('当前：默认（地区·细分）');
+    await expect(classBlock(dlg, 'ASSET_COMMODITY')).toContainText('当前：默认（细分）');
+
+    // 勾选项集 = 该大类全部非禁止维（required/optional 均可勾）
+    await expect(classBlock(dlg, 'ASSET_STOCK').getByRole('checkbox')).toHaveCount(4);
+    await expect(classBlock(dlg, 'ASSET_BOND').getByRole('checkbox')).toHaveCount(2);
+    await expect(classBlock(dlg, 'ASSET_COMMODITY').getByRole('checkbox')).toHaveCount(1);
+    for (const name of ['地区', '风格', '规模', '细分']) {
+      await expect(dimCheckbox(dlg, 'ASSET_STOCK', name)).toBeVisible();
+    }
 
     await dlg.getByRole('button', { name: '取消' }).click();
     await expect(dlg).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 
-  test('改选与回退（单选形态的勾选/取消）：选项集=默认+规则维度；取消零写入', async ({ page }, testInfo) => {
-    // 本用例浮层开合最多（7 轮），mobile webkit stable 等待按帧率计费（#763），
-    // 90s 实测仍耗尽在点击中途，按 trade-in-transit 先例放宽到 180s
-    mobileTimeout(testInfo, 180_000);
+  test('勾选/取消：提示随勾选更新、全序拼接；取消零写入', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 120_000);
     const errors = collectPageErrors(page);
     const puts: string[] = [];
     page.on('request', (r) => {
@@ -176,30 +172,23 @@ test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端�
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });
     const dlg = await openDisplayConfigDialog(page);
+    const stock = classBlock(dlg, 'ASSET_STOCK');
 
-    // 股票选项集 = 默认 + 4 个非禁止维（required/optional 均可选）
-    await openPopover(page, classSelect(dlg, '股票'), page.getByRole('listbox'));
-    const listbox = page.getByRole('listbox');
-    await expect(listbox.getByRole('option')).toHaveCount(5);
-    for (const name of ['默认（地区）', '地区', '风格', '规模', '细分']) {
-      await expect(listbox.getByRole('option', { name, exact: true })).toBeVisible();
-    }
-    // 点当前值收起弹层（不改值）
-    await listbox.getByRole('option', { name: '默认（地区）', exact: true }).click();
+    // 勾选 → 提示为已选子集；取消 → 回到默认提示
+    await dimCheckbox(dlg, 'ASSET_STOCK', '风格').check();
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '风格')).toBeChecked();
+    await expect(stock).toContainText('当前：风格');
+    await dimCheckbox(dlg, 'ASSET_STOCK', '风格').uncheck();
+    await expect(stock).toContainText('当前：默认（地区·细分）');
 
-    // 债券/商品选项集 = 默认 + 各自规则矩阵维度
-    await openPopover(page, classSelect(dlg, '债券'), page.getByRole('listbox'));
-    await expect(page.getByRole('listbox').getByRole('option')).toHaveCount(3);
-    await page.getByRole('option', { name: '默认（细分）', exact: true }).click();
-    await openPopover(page, classSelect(dlg, '商品'), page.getByRole('listbox'));
-    await expect(page.getByRole('listbox').getByRole('option')).toHaveCount(2);
-    await page.getByRole('option', { name: '默认（细分）', exact: true }).click();
-
-    // 改选 → 回显；回退默认 → 回显默认；显式选等于内置默认的维度也有匹配选项
-    await pickOption(page, dlg, '股票', '风格');
-    await pickOption(page, dlg, '股票', '默认（地区）');
-    await pickOption(page, dlg, '股票', '地区');
-    await pickOption(page, dlg, '股票', '默认（地区）');
+    // 乱序勾选（先细分后地区）→ 提示按固定全序拼接「地区·细分」
+    await dimCheckbox(dlg, 'ASSET_STOCK', '细分').check();
+    await dimCheckbox(dlg, 'ASSET_STOCK', '地区').check();
+    await expect(stock).toContainText('当前：地区·细分');
+    // 「恢复默认」= 清空该大类全部勾选（提交时省略该键 = 走默认子集，不是平铺）
+    await stock.getByRole('button', { name: '恢复默认' }).click();
+    await expect(stock.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await expect(stock).toContainText('当前：默认（地区·细分）');
 
     // 取消：不产生任何组合写请求
     await dlg.getByRole('button', { name: '取消' }).click();
@@ -208,31 +197,33 @@ test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端�
     expect(errors).toEqual([]);
   });
 
-  test('保存显式覆盖项：仅提交非默认键，弹窗关闭+成功提示+后端落库', async ({ page }, testInfo) => {
-    mobileTimeout(testInfo, 60_000);
+  test('保存显式覆盖项：仅提交非默认键、子集全序串；弹窗关闭+成功提示+后端落库', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 90_000);
     const errors = collectPageErrors(page);
     const { code, headers } = await setupIsolatedActive(page, testInfo, 'S');
     await gotoOwnPortfolio(page, code);
     const dlg = await openDisplayConfigDialog(page);
 
-    await pickOption(page, dlg, '股票', '风格');
-    await pickOption(page, dlg, '债券', '地区');
+    // 股票乱序勾两个维（先细分后地区）→ 提交归一为 "region,segment"（Q5）
+    await dimCheckbox(dlg, 'ASSET_STOCK', '细分').check();
+    await dimCheckbox(dlg, 'ASSET_STOCK', '地区').check();
+    await dimCheckbox(dlg, 'ASSET_BOND', '地区').check();
     // 商品保持默认 → 提交体不含该键（仅显式覆盖项）
     const payload = await saveAndCapturePayload(page, dlg, code);
     expect(payload).toEqual({
-      display_config: { ASSET_STOCK: 'style', ASSET_BOND: 'region' },
+      display_config: { ASSET_STOCK: 'region,segment', ASSET_BOND: 'region' },
     });
     await expect(dlg).toHaveCount(0);
     await expect(page.getByTestId('toast-card').filter({ hasText: '更新成功' })).toBeVisible();
     expect(await getConfigViaApi(page, headers, code)).toEqual({
-      ASSET_STOCK: 'style',
+      ASSET_STOCK: 'region,segment',
       ASSET_BOND: 'region',
     });
     expect(errors).toEqual([]);
   });
 
-  test('全默认提交 null：既有配置全部回退默认 → 清空落库', async ({ page }, testInfo) => {
-    mobileTimeout(testInfo, 90_000);
+  test('全默认提交 null：既有配置全部恢复默认 → 清空落库', async ({ page }, testInfo) => {
+    mobileTimeout(testInfo, 120_000);
     const errors = collectPageErrors(page);
     const { code, headers } = await setupIsolatedActive(page, testInfo, 'N');
     await setConfigViaApi(page, headers, code, {
@@ -243,9 +234,9 @@ test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端�
     await gotoOwnPortfolio(page, code);
     const dlg = await openDisplayConfigDialog(page);
 
-    await pickOption(page, dlg, '股票', '默认（地区）');
-    await pickOption(page, dlg, '债券', '默认（细分）');
-    await pickOption(page, dlg, '商品', '默认（细分）');
+    for (const classCode of ['ASSET_STOCK', 'ASSET_BOND', 'ASSET_COMMODITY']) {
+      await classBlock(dlg, classCode).getByRole('button', { name: '恢复默认' }).click();
+    }
     const payload = await saveAndCapturePayload(page, dlg, code);
     expect(payload).toEqual({ display_config: null });
     await expect(dlg).toHaveCount(0);
@@ -253,22 +244,26 @@ test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端�
     expect(errors).toEqual([]);
   });
 
-  test('回填既有配置：显式值回显，等于内置默认的显式值不渲染空白', async ({ page }, testInfo) => {
+  test('回填既有配置：多值子集按勾选回显；等于默认子集的显式配置仍为勾选态', async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
     const { code, headers } = await setupIsolatedActive(page, testInfo, 'B');
     await setConfigViaApi(page, headers, code, {
-      ASSET_STOCK: 'style',
+      ASSET_STOCK: 'region,segment',
       ASSET_BOND: 'region',
-      // 显式覆盖值 == 商品内置默认（segment）：CLI/API 可合法落库，
-      // 触发器须渲染匹配选项「细分」，不得空白、也不得误显示「默认（细分）」
+      // 显式覆盖值 == 商品默认子集（segment）：须回显为勾选态而非默认态
       ASSET_COMMODITY: 'segment',
     });
     await gotoOwnPortfolio(page, code);
     const dlg = await openDisplayConfigDialog(page);
 
-    await expect(classSelect(dlg, '股票')).toHaveText('风格');
-    await expect(classSelect(dlg, '债券')).toHaveText('地区');
-    await expect(classSelect(dlg, '商品')).toHaveText('细分');
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '地区')).toBeChecked();
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '细分')).toBeChecked();
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '风格')).not.toBeChecked();
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '规模')).not.toBeChecked();
+    await expect(dimCheckbox(dlg, 'ASSET_BOND', '地区')).toBeChecked();
+    await expect(dimCheckbox(dlg, 'ASSET_BOND', '细分')).not.toBeChecked();
+    await expect(dimCheckbox(dlg, 'ASSET_COMMODITY', '细分')).toBeChecked();
+    await expect(classBlock(dlg, 'ASSET_COMMODITY')).toContainText('当前：细分');
 
     await dlg.getByRole('button', { name: '取消' }).click();
     await expect(dlg).toHaveCount(0);
@@ -276,7 +271,7 @@ test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端�
   });
 
   test('字典晚到不静默清空：未就绪无保存入口，就绪后回填完整、保存不清空', async ({ page }, testInfo) => {
-    mobileTimeout(testInfo, 60_000);
+    mobileTimeout(testInfo, 90_000);
     const errors = collectPageErrors(page);
     const { code, headers } = await setupIsolatedActive(page, testInfo, 'L');
     await setConfigViaApi(page, headers, code, { ASSET_STOCK: 'style' });
@@ -307,7 +302,7 @@ test.describe('#915 硬前置 DisplayConfigDialog（现状单选型态，双端�
       .first()
       .waitFor({ state: 'visible', timeout: 15_000 });
     const dlg = await openDisplayConfigDialog(page);
-    await expect(classSelect(dlg, '股票')).toHaveText('风格');
+    await expect(dimCheckbox(dlg, 'ASSET_STOCK', '风格')).toBeChecked();
 
     // 不做任何改选直接保存：提交既有显式配置，绝不因初始化竞态误提交 null
     const payload = await saveAndCapturePayload(page, dlg, code);
