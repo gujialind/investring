@@ -27,10 +27,10 @@ EXPECTED_DEPENDENT_TABLES = {
     "dividend_method_config",
 }
 
-# 有 product_code 列但**无外键**、且**不计入**删除判据的表：逐个显式豁免并写明
-# 理由（#820 同口径）。新增此类表必须改这里，强迫评审看见决定。
-NON_FK_PRODUCT_CODE_EXEMPT_TABLES: dict[str, str] = {
-    "nav_sync_detail": (
+# 无 FK 产品码**列**（列级普查，含 *_product_code，L2 r5）且**不计入**删除判据：
+# 逐个显式豁免并写明理由（#820 同口径）。新增此类列必须改这里，强迫评审看见决定。
+NON_FK_PRODUCT_CODE_EXEMPT_COLUMNS: dict[tuple[str, str], str] = {
+    ("nav_sync_detail", "product_code"): (
         "净值同步明细日志（observability，append-only）：记录每次同步尝试的"
         "产品码/日期/结果，读侧不参与估值与账务聚合，悬空产品码不会造成静默"
         "错值。与 audit_log 保留已删资源 resource_id 同语义——历史日志不因"
@@ -39,8 +39,16 @@ NON_FK_PRODUCT_CODE_EXEMPT_TABLES: dict[str, str] = {
     ),
 }
 
-# 无 FK 但**显式补查计入**判据的表（SPEC §3：现金重估台账是账务事实）
-NON_FK_COUNTED_TABLES = {"manual_market_value"}
+# 无 FK 但**显式补查计入**判据的列（账务事实/业务引用，非纯日志）：
+# manual_market_value=现金重估台账（SPEC §3）；share_change_event.cash_product_code
+# =分红现金腿业务引用（L2 r5，账务实体上的产品码，同 manual_market_value 类计入）。
+NON_FK_COUNTED_COLUMNS: dict[tuple[str, str], str] = {
+    ("manual_market_value", "product_code"): "现金重估台账，账务事实（SPEC §3）",
+    ("share_change_event", "cash_product_code"): (
+        "分红现金腿业务引用（账务实体非纯日志），计入判据；仅统计只经该列引用"
+        "的行，复合 FK 已计过的行不双计（L2 r5）"
+    ),
+}
 
 
 def _derived_tables():
@@ -98,45 +106,42 @@ class TestDependentTableSet:
 
 
 class TestNonForeignKeyReferences:
-    """元数据派生只看外键；带 product_code 列而无 FK 的表逐表决定（计入/豁免）。"""
+    """元数据派生只看外键；无 FK 的产品码**列**（列级普查，含 *_product_code）
+    逐列决定（计入/豁免）。列级而非表级：share_change_event 已经复合 FK 进派生
+    集合，但其 cash_product_code 列无 FK，表级普查会漏（L2 r5）。"""
 
-    def _tables_with_product_code_column(self) -> set:
-        return {
-            table.name
-            for table in Base.metadata.tables.values()
-            if "product_code" in table.columns
-        }
+    def _non_fk_product_code_columns(self) -> set:
+        out = set()
+        for table in Base.metadata.tables.values():
+            for column in table.columns:
+                if not (column.name == "product_code" or column.name.endswith("_product_code")):
+                    continue
+                if any(
+                    fk.column.table.name == Product.__tablename__
+                    for fk in column.foreign_keys
+                ):
+                    continue  # 有 FK → 已由元数据派生覆盖
+                out.add((table.name, column.name))
+        return out
 
-    def test_all_product_code_tables_are_fk_counted_or_explained(self):
-        derived = _derived_tables()
-        unexplained = (
-            self._tables_with_product_code_column()
-            - derived
-            - set(NON_FK_PRODUCT_CODE_EXEMPT_TABLES)
-            - NON_FK_COUNTED_TABLES
-        )
+    def test_all_non_fk_product_code_columns_are_counted_or_exempt(self):
+        accounted = set(NON_FK_COUNTED_COLUMNS) | set(NON_FK_PRODUCT_CODE_EXEMPT_COLUMNS)
+        unexplained = self._non_fk_product_code_columns() - accounted
         assert unexplained == set(), (
-            f"新表带 product_code 列却无外键且未登记：{sorted(unexplained)}；"
-            "删除判据对它失明，须显式决定计入判据（如 manual_market_value）"
+            f"新无 FK 产品码列未登记：{sorted(unexplained)}；删除判据对它失明，"
+            "须显式决定计入判据（如 manual_market_value / cash_product_code）"
             "或登记豁免理由（如 nav_sync_detail）"
         )
 
-    def test_exempted_tables_truly_have_no_fk_to_product(self):
-        for name in NON_FK_PRODUCT_CODE_EXEMPT_TABLES:
-            table = Base.metadata.tables[name]
+    def test_registered_columns_truly_have_no_fk_to_product(self):
+        for table_name, column_name in (
+            set(NON_FK_COUNTED_COLUMNS) | set(NON_FK_PRODUCT_CODE_EXEMPT_COLUMNS)
+        ):
+            column = Base.metadata.tables[table_name].columns[column_name]
             assert not any(
                 fk.column.table.name == Product.__tablename__
-                for fk in table.foreign_keys
-            ), f"{name} 已有指向 product 的外键，豁免条目应删除"
-
-    def test_counted_non_fk_table_truly_has_no_fk_to_product(self):
-        # manual_market_value 若将来补了 FK，会同时进元数据派生集合——
-        # 显式补查仍在（幂等），但本断言提醒把 NON_FK_COUNTED_TABLES 收敛掉
-        table = Base.metadata.tables["manual_market_value"]
-        assert not any(
-            fk.column.table.name == Product.__tablename__
-            for fk in table.foreign_keys
-        )
+                for fk in column.foreign_keys
+            ), f"{table_name}.{column_name} 已有指向 product 的外键，登记条目应删除"
 
     def test_no_overlap_between_exempt_and_counted(self):
-        assert set(NON_FK_PRODUCT_CODE_EXEMPT_TABLES) & NON_FK_COUNTED_TABLES == set()
+        assert set(NON_FK_PRODUCT_CODE_EXEMPT_COLUMNS) & set(NON_FK_COUNTED_COLUMNS) == set()

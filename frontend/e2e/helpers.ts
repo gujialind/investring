@@ -839,6 +839,7 @@ export async function prevOpenDays(
   headers: { Authorization: string },
   n: number,
 ): Promise<string[]> {
+  expect(Number.isInteger(n) && n > 0, `prevOpenDays 需要正整数 n，收到 ${n}`).toBeTruthy();
   const today = toISODate(new Date());
   const days: string[] = [];
   for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
@@ -855,6 +856,20 @@ export async function prevOpenDays(
   days.sort();
   expect(days.length, `交易日历不足 ${n} 个历史开市日`).toBeGreaterThanOrEqual(n);
   return days.slice(-n);
+}
+
+/**
+ * 停更基线日期约定单点（#906 ocr r5）：最新快照停在「today 前第 4 个开市日」——
+ * 申购申请日 = 前第 5 个开市日、确认日(T+1) = 前第 4 个 = latest。其后至今至少
+ * 2 个开市日缺口（周末形态亦成立），trailing 缺口确定性非空。E2E 与 visual-shot
+ * 共用，防「5/[0]/[1]」偏移约定在两路漂移。
+ */
+export async function staleBaselineDates(
+  page: Page,
+  headers: { Authorization: string },
+): Promise<{ applyDate: string; latest: string }> {
+  const prev5 = await prevOpenDays(page, headers, 5);
+  return { applyDate: prev5[0], latest: prev5[1] };
 }
 
 /**

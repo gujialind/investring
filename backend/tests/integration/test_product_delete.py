@@ -114,6 +114,28 @@ class TestProductDeleteReferenced:
         assert deps["trade"] >= 1
         assert deps["price_record"] >= 1
 
+    def test_cash_product_code_only_reference_rejected(
+        self, client, admin_headers, test_db, ref_setup
+    ):
+        """L2 r5：仅经 share_change_event.cash_product_code（无 FK）引用也拒删。
+
+        事件复合 FK 指向另一产品（510300.SH），cash_product_code 指向待删产品——
+        复合 FK 计数为 0、现金-only 增量计数 1，判据不得失明。
+        """
+        create_product(test_db, code="CASHONLY", market="CN_OTC", product_type="CASH",
+                       asset_class_code=None, region_code=None, style_code=None,
+                       size_code=None, segment_code=None)
+        create_share_change_event(
+            test_db, ref_setup.code, "510300.SH", "CN_EXCHANGE",
+            event_type="cash_dividend", ex_date=D0, entitlement_date=D0,
+            cash_product_code="CASHONLY",
+        )
+        resp = client.delete("/api/products/CASHONLY/CN_OTC", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "PRODUCT_HAS_DEPENDENT_DATA"
+        assert detail["details"]["dependencies"].get("share_change_event", 0) >= 1
+
     @pytest.mark.dialect
     def test_mysql_referenced_delete_is_409_not_500(
         self, client, admin_headers, test_db, ref_setup

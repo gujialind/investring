@@ -22,7 +22,7 @@ import {
   gotoPortfolioDetail,
   isolatedPortfolioCode,
   openAppAndAuth,
-  prevOpenDays,
+  staleBaselineDates,
   seedStaleBaseline,
   toISODate,
   E2E_PORT,
@@ -48,11 +48,8 @@ async function lastOpenDayOnOrBeforeYesterday(page: Page, headers: Headers): Pro
 }
 
 /**
- * 建隔离组合并把最新快照停在「today 前第 4 个开市日」：
- * 申购申请日 = 前第 5 个开市日 → 确认日 = 次一开市日（T+1）= 前第 4 个开市日，
- * 首购确认激活后 generate 该日快照（纯 CASH 持仓，无需行情）。
- * 其后至今至少有 2 个开市日缺口（周末形态亦成立），trailing 缺口确定性非空。
- * 造数链与 visual-shot 共用 helpers 单点（prevOpenDays/seedStaleBaseline，ocr r3）。
+ * 建隔离组合并把最新快照停在「today 前第 4 个开市日」（日期约定单点
+ * staleBaselineDates，造数链 seedStaleBaseline，均 helpers 共用，ocr r3/r5）。
  */
 async function setupStalePortfolio(
   page: Page,
@@ -60,9 +57,8 @@ async function setupStalePortfolio(
   code: string,
 ): Promise<{ latest: string }> {
   await createPortfolioViaApi(page, headers, code);
-  const prev5 = await prevOpenDays(page, headers, 5);
-  const latest = prev5[1]; // 申请日的次一开市日 = T+1 确认日
-  await seedStaleBaseline(page, headers, code, prev5[0], latest);
+  const { applyDate, latest } = await staleBaselineDates(page, headers);
+  await seedStaleBaseline(page, headers, code, applyDate, latest);
   return { latest };
 }
 

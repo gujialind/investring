@@ -7,7 +7,7 @@ service 层只抛领域异常，不 commit。
 import logging
 from typing import Optional, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -748,9 +748,13 @@ def _product_dependent_tables() -> list:
 def _count_product_dependents(db: Session, product: Product) -> dict:
     """返回引用本产品且**有行**的依赖表 → 计数（空 dict 即可删）。
 
-    `manual_market_value.product_code` 是纯列、无外键（现金重估台账），元数据
-    派生对它失明，显式补查（#906 SPEC §3）；按统一删除规则计入判据，不给
-    CASH 特殊保护或豁免。
+    元数据派生只看外键；两张无 FK 产品码列显式补查（#906 SPEC §3 + L2 r5）：
+    - `manual_market_value.product_code`（现金重估台账，账务事实）；
+    - `share_change_event.cash_product_code`（分红现金腿业务引用，账务实体非
+      纯日志，同 manual_market_value 类计入；仅统计「只经该列引用」的行，
+      复合 FK 已计过的行不双计）。
+    按统一删除规则计入判据，不给 CASH 特殊保护或豁免。纯日志类无 FK 产品码
+    （nav_sync_detail）显式豁免，名单守门见 test_product_delete_dependents.py。
     """
     key_values = {"code": product.code, "market": product.market}
     counts: dict = {}
@@ -771,6 +775,21 @@ def _count_product_dependents(db: Session, product: Product) -> dict:
     )
     if n:
         counts[ManualMarketValue.__tablename__] = n
+    cash_only = (
+        db.query(func.count())
+        .select_from(ShareChangeEvent)
+        .filter(
+            ShareChangeEvent.cash_product_code == product.code,
+            ~and_(
+                ShareChangeEvent.product_code == product.code,
+                ShareChangeEvent.market == product.market,
+            ),
+        )
+        .scalar()
+    )
+    if cash_only:
+        name = ShareChangeEvent.__tablename__
+        counts[name] = counts.get(name, 0) + cash_only
     return counts
 
 

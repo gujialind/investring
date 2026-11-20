@@ -42,7 +42,7 @@ if (Number(process.versions.node.split('.')[0]) < 24) {
   process.exit(2);
 }
 // 停更夹具造数与认证头与 E2E 共用 helpers 单点（ocr r3/r4 防漂移）
-const { authHeaders, prevOpenDays, seedStaleBaseline } = await import('../e2e/helpers.ts');
+const { authHeaders, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
@@ -168,8 +168,8 @@ async function runScenario(page, scenario, device) {
         throw new Error(`目检夹具建组合失败: ${create.status()} ${body}`);
       }
     } else {
-      const prev5 = await prevOpenDays(page, headers, 5);
-      await seedStaleBaseline(page, headers, code, prev5[0], prev5[1]);
+      const { applyDate, latest } = await staleBaselineDates(page, headers);
+      await seedStaleBaseline(page, headers, code, applyDate, latest);
     }
     const status = await okJson(
       await page.request.get(`/api/snapshots/portfolios/${code}/status`, { headers }),
