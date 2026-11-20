@@ -1,6 +1,6 @@
 import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
 import { subMonths } from "date-fns";
-import { collectPageErrors, expectSingleLine, dialogByTitle, pickCalendarDay, toISODate } from "./helpers";
+import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate } from "./helpers";
 
 /**
  * #824 产品管理页列合并与净值型产品详情页。
@@ -479,7 +479,13 @@ test.describe("详情页头部动作与同步周期（#856 块2/块3）", () => 
     await page.goto(DETAIL_PATH);
     await expect(page.getByTestId("product-basic-info-card")).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: "编辑", exact: true }).click();
-    await expect(dialogByTitle(page, "编辑产品")).toBeVisible();
+    const dlg = dialogByTitle(page, "编辑产品");
+    await expect(dlg).toBeVisible();
+    // #910：详情编辑入口复用同一滚动契约（长表单仅内层滚动、保存可达），
+    // 完整表单行为由 product-data-source.spec.ts 覆盖，此处不重复
+    await expectDialogSingleScroll(dlg, "详情头部编辑", {
+      bottomAction: dlg.getByRole("button", { name: "保存修改" }),
+    });
   });
 
   test("停用/启用经确认对话框即时翻转：标题徽章与按钮文案随 is_active 切换", async ({ page }) => {

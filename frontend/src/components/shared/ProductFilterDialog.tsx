@@ -172,12 +172,7 @@ export default function ProductFilterDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent
-        className={cn(
-          "max-h-[90vh] overflow-y-auto",
-          variant === "desktop" && "max-w-2xl"
-        )}
-      >
+      <DialogContent className={variant === "desktop" ? "max-w-2xl" : undefined}>
           <DialogHeader>
             <DialogTitle>筛选产品</DialogTitle>
             <DialogDescription>按条件过滤后勾选产品，确定后生效</DialogDescription>
@@ -297,6 +292,7 @@ export default function ProductFilterDialog({
                 <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
               )}
               <div
+                data-testid="product-filter-results"
                 className={cn(
                   "h-[40vh] overflow-y-auto rounded-md border px-3",
                   isFetching && "opacity-50"
