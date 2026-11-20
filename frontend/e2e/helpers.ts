@@ -906,6 +906,122 @@ export async function seedStaleBaseline(
   });
 }
 
+// ===========================================================================
+// Dialog 单滚动容器契约（#910，延伸 #640 U-1）
+//
+// 业务 DialogContent 本体不得自带限高/overflow：整体内容滚动只归 ui/dialog.tsx
+// 的唯一直接子内容 div（max-h-[min(100dvh-2rem,44rem)] overflow-y-auto）。
+// 本 helper 供产品表单 / 资产分类 / 产品高级筛选三个业务 spec 复用：
+// 先校验节点归属与外层契约，再（可选）滚内层到底验证底部动作可达。
+// 必须在 scrollIntoViewIfNeeded / 提交点击等自动滚动动作**之前**调用——
+// Chromium 的自动滚动会把外层缺陷救回、掩盖双滚动条（#640 第四轮口径）。
+// ===========================================================================
+
+/** 滚动测量结果；调用方可追加各自判据（如长列表 innerOverflow > 0） */
+export type DialogScrollMetrics = {
+  outerOverflow: number;
+  innerOverflow: number;
+};
+
+/**
+ * 断言 Dialog 只由内层容器负责整体滚动（#910 A1）。
+ *
+ * `dlg` 必须是 dialogByTitle 的返回（DialogContent 本体，role=dialog）。
+ * 节点归属校验：当前结构下 DialogContent 的直接子 div 有且只有一个（内容容器；
+ * Close 是 button）。Radix Popover 打开时会把 popper div 注入 DialogContent，
+ * 故调用前须无浮层挂载（本函数先 settlePopovers）；Select 的浮层默认 Portal 到
+ * body、外部 Sheet 不在本节点内，均不计数。不按 Tailwind 类名定位。
+ *
+ * 判据（几何允许 ≤1 CSS px 的边框/取整误差；不比较滚动条宽度、不强制常驻滚动条）：
+ * - 外层 computed overflow-x/y 为 visible、max-height 为 none（不限高、不裁剪）；
+ * - 外层 scrollHeight ≤ clientHeight + 1 且 scrollTop ≈ 0（不独立滚动）；
+ * - 外层盒完整落在视口内（居中定位不被自身滚动/裁剪破坏）；
+ * - 内层 computed overflow-y 为 auto（短内容 innerOverflow 可为 0，不算失败）。
+ *
+ * 传 `bottomAction` 时：断言完外层后把内层滚到底，验证该按钮可见且盒在视口内
+ * （真实可达，而非仅 DOM 存在），并复查外层仍未滚动。
+ */
+export async function expectDialogSingleScroll(
+  dlg: Locator,
+  label: string,
+  options: { bottomAction?: Locator } = {},
+): Promise<DialogScrollMetrics> {
+  await settlePopovers(dlg.page());
+  await expect(dlg, `${label}: Dialog 应可见`).toBeVisible();
+
+  const measure = (el: Element) => {
+    const outer = el as HTMLElement;
+    const divChildren = Array.from(outer.children).filter((c) => c.tagName === 'DIV');
+    if (divChildren.length !== 1) {
+      throw new Error(
+        `DialogContent 直接子 div 数=${divChildren.length}，预期唯一内容容器（浮层未收干净或结构已变）`,
+      );
+    }
+    const inner = divChildren[0] as HTMLElement;
+    const os = getComputedStyle(outer);
+    const is = getComputedStyle(inner);
+    const rect = outer.getBoundingClientRect();
+    return {
+      outerOverflowY: os.overflowY,
+      outerOverflowX: os.overflowX,
+      outerMaxHeight: os.maxHeight,
+      outerScrollTop: outer.scrollTop,
+      outerOverflow: outer.scrollHeight - outer.clientHeight,
+      innerOverflowY: is.overflowY,
+      innerOverflow: inner.scrollHeight - inner.clientHeight,
+      top: rect.top,
+      bottom: rect.bottom,
+      viewportH: window.innerHeight,
+    };
+  };
+
+  const m = await dlg.evaluate(measure);
+  expect(m.outerOverflowY, `${label}: 外层 overflow-y 应为 visible，实际 ${m.outerOverflowY}`).toBe('visible');
+  expect(m.outerOverflowX, `${label}: 外层 overflow-x 应为 visible，实际 ${m.outerOverflowX}`).toBe('visible');
+  expect(m.outerMaxHeight, `${label}: 外层不得限高，实际 max-height=${m.outerMaxHeight}`).toBe('none');
+  expect(m.outerScrollTop, `${label}: 外层不得独立滚动（scrollTop=${m.outerScrollTop}）`).toBeLessThanOrEqual(1);
+  expect(m.outerOverflow, `${label}: 外层可滚动距离 ${m.outerOverflow}px 应 ≤1（双滚动条缺陷）`).toBeLessThanOrEqual(1);
+  expect(m.top, `${label}: 外层盒顶 ${m.top}px 应在视口内`).toBeGreaterThanOrEqual(-1);
+  expect(m.bottom, `${label}: 外层盒底 ${m.bottom}px 应 ≤ 视口高 ${m.viewportH}px`).toBeLessThanOrEqual(m.viewportH + 1);
+  expect(m.innerOverflowY, `${label}: 内层应承担滚动（overflow-y=${m.innerOverflowY}）`).toBe('auto');
+
+  if (options.bottomAction) {
+    await dlg.evaluate((outer) => {
+      const inner = Array.from(outer.children).find((c) => c.tagName === 'DIV') as HTMLElement;
+      inner.scrollTop = inner.scrollHeight;
+    });
+    await expect(options.bottomAction, `${label}: 底部动作应可见`).toBeVisible();
+    const box = await options.bottomAction.boundingBox();
+    if (!box) throw new Error(`${label}: 底部动作没有可见盒`);
+    expect(box.y, `${label}: 底部动作 y=${box.y} 应在视口内`).toBeGreaterThanOrEqual(-1);
+    expect(box.y + box.height, `${label}: 底部动作底边应 ≤ 视口高 ${m.viewportH}`).toBeLessThanOrEqual(m.viewportH + 1);
+    const after = await dlg.evaluate(measure);
+    expect(after.outerOverflow, `${label}: 内层滚动后外层仍不得溢出`).toBeLessThanOrEqual(1);
+    expect(after.outerScrollTop, `${label}: 内层滚动后外层仍不得滚动`).toBeLessThanOrEqual(1);
+  }
+
+  return { outerOverflow: m.outerOverflow, innerOverflow: m.innerOverflow };
+}
+
+/**
+ * #910 弹窗滚动回归的视口档：chromium 跑三档桌面（1280×720 / 1280×600 / 1440×900，
+ * 前两档是 issue 已复现双滚动条的矮视口），mobile project 用自身原生视口
+ * （iPhone 13 webkit 390×664），不改设备形态。调用方逐档 setViewportSize。
+ */
+export function dialogTestViewports(
+  testInfo: TestInfo,
+  page: Page,
+): { width: number; height: number }[] {
+  if (testInfo.project.name === 'mobile') {
+    return [page.viewportSize() ?? { width: 390, height: 664 }];
+  }
+  return [
+    { width: 1280, height: 720 },
+    { width: 1280, height: 600 },
+    { width: 1440, height: 900 },
+  ];
+}
+
 /**
  * 清除交易列表的默认「近1年」日期区间（trade_date_end = today）。
  *
