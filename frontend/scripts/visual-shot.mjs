@@ -12,7 +12,9 @@
  *             snapshot-delete-confirm = 快照删除确认 AlertDialog；
  *             trade-date-range = 交易日期区间 Popover（移动端先展开折叠筛选面板）；
  *             investor-reset-password = 投资人管理页重置密码 Dialog（#893，只开不提交，
- *             填短密码截校验 Alert 态）
+ *             填短密码截校验 Alert 态）；
+ *             snapshot-catchup-alert = 快照停更提示态（#906，API 造隔离组合把最新快照
+ *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -24,12 +26,23 @@
  * 故同一个 --path 双端通用。认证状态仅保存在本次输出目录。
  *
  * 通常由 scripts/visual-verify.sh 调用（那个脚本负责起后端与 standalone 前端）。
+ * 直跑要求 Node ≥ 24（动态 import e2e/helpers.ts 依赖原生类型剥离，启动期有版本守卫）。
  * 造数与红线见 frontend/AGENTS.md §5「目检」。
  */
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium, webkit, devices } from '@playwright/test';
+
+// helpers.ts 为 TypeScript：依赖 Node 原生类型剥离（22.18+/23.6+ 默认开启，本仓
+// .nvmrc=24）。守卫必须先于 helpers 加载生效，故用动态 import（静态 import 提升会
+// 让旧 Node 在守卫前就抛 ERR_UNKNOWN_FILE_EXTENSION）；提前给可操作诊断（ocr r4）。
+if (Number(process.versions.node.split('.')[0]) < 24) {
+  console.error('visual-shot 需 Node ≥ 24（原生类型剥离加载 e2e/helpers.ts）；请先 nvm use');
+  process.exit(2);
+}
+// 停更夹具造数与认证头与 E2E 共用 helpers 单点（ocr r3/r4 防漂移）
+const { authHeaders, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
@@ -41,7 +54,9 @@ const DEFAULT_PATHS = [
   '/portfolio/E2E_ACTIVE/subscriptions',
   '/portfolio/E2E_ACTIVE/share-change-events',
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert'];
+// 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
+const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 
 const opts = {
   base: 'http://localhost:3000',
@@ -52,6 +67,7 @@ const opts = {
   scenario: null,
 };
 const argv = process.argv.slice(2);
+let pathsExplicit = false;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => {
@@ -64,7 +80,7 @@ for (let i = 0; i < argv.length; i++) {
   };
   if (a === '--base') opts.base = next();
   else if (a === '--out') opts.out = next();
-  else if (a === '--path') opts.paths.push(next());
+  else if (a === '--path') { opts.paths.push(next()); pathsExplicit = true; }
   else if (a === '--device') opts.devices.push(next());
   else if (a === '--theme') opts.theme = next();
   else if (a === '--scenario') opts.scenario = next();
@@ -82,6 +98,14 @@ if (opts.scenario && !SCENARIOS.includes(opts.scenario)) {
   process.exit(2);
 }
 if (opts.paths.length === 0) opts.paths = DEFAULT_PATHS;
+// 页面态 scenario 自行导航到夹具组合、忽略调用方 path：无条件收敛为单一路径，
+// 避免多 path 产出同名异slug 的重复截图（L2 r1/r2）；显式 --path 给警告不静默
+if (opts.scenario === 'snapshot-catchup-alert') {
+  if (pathsExplicit) {
+    console.warn(`⚠ scenario snapshot-catchup-alert 忽略 --path，统一截 /portfolio/${CATCHUP_FIXTURE_CODE}`);
+  }
+  opts.paths = [`/portfolio/${CATCHUP_FIXTURE_CODE}`];
+}
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
   if (!(d in DEVICES)) {
@@ -119,6 +143,46 @@ function shotName(path, device, theme) {
 
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
+  if (scenario === 'snapshot-catchup-alert') {
+    // #906：API 造隔离组合（申购+确认+generate，纯 CASH 无需行情），最新快照停在
+    // today 前第 4 个开市日 → trailing 缺口确定性非空（与 E2E setupStalePortfolio 同形）。
+    // 目检库按运行独占新建，固定 code 不撞；同一运行内第二端/第二主题复用已造组合，
+    // 复用与否都以 status 的 trailing 缺口非空为准（L2 r1：任何非 OK create 都当
+    // 「已存在」会把真实后端错误掩成 15s 定位超时）。
+    const headers = await authHeaders(page);
+    const code = CATCHUP_FIXTURE_CODE;
+    const okJson = async (resp, what) => {
+      if (!resp.ok()) throw new Error(`目检夹具${what}失败: ${resp.status()} ${await resp.text()}`);
+      return resp.json();
+    };
+    const create = await page.request.post('/api/portfolios', {
+      headers, data: { code, name: '目检停更夹具' },
+    });
+    if (!create.ok()) {
+      // 仅容忍结构化「已存在」（400 + detail.error=ALREADY_EXISTS，同运行第二端/
+      // 第二主题复用）；其余带响应体响亮失败，不掩真实后端错误（L2 r2/r3）
+      const body = await create.text();
+      let errCode = null;
+      try { errCode = JSON.parse(body)?.detail?.error ?? null; } catch { /* 非 JSON 一律响亮失败 */ }
+      if (!(create.status() === 400 && errCode === 'ALREADY_EXISTS')) {
+        throw new Error(`目检夹具建组合失败: ${create.status()} ${body}`);
+      }
+    } else {
+      const { applyDate, latest } = await staleBaselineDates(page, headers);
+      await seedStaleBaseline(page, headers, code, applyDate, latest);
+    }
+    const status = await okJson(
+      await page.request.get(`/api/snapshots/portfolios/${code}/status`, { headers }),
+      'status 查询',
+    );
+    if (!(status.catchup_pending_dates ?? []).length) {
+      throw new Error(`目检夹具 ${code} trailing 缺口为空（create=${create.status()}），不可取证停更态`);
+    }
+    await page.goto(`/portfolio/${code}`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('snapshot-catchup-alert').waitFor({ state: 'visible', timeout: 15_000 });
+    return { close: async () => {} }; // 页面态而非浮层，无需收口
+  }
   if (scenario === 'investor-reset-password') {
     // 本人（ADMIN）行无此按钮，first() 命中的是首个他人行；只开不提交，取消收口。
     // 填短密码触发校验 Alert 取证（#893 L2 S1：inline Alert 形态；校验拦截不发请求）

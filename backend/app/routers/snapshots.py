@@ -25,6 +25,7 @@ from app.schemas.snapshot import (
 from app.services.exceptions import BusinessError
 from app.services.snapshot_service import (
     catch_up_snapshots,
+    compute_catchup_pending_dates,
     compute_missing_snapshot_dates,
     generate_daily_snapshots,
     generate_next_snapshot,
@@ -391,12 +392,24 @@ def get_snapshot_status(
             ).all()
         ]
     
+    # issue #906：最新快照日之后至业务昨日的 trailing 缺口（停更信号）。
+    # 台账型（kind='ledger'）无净值快照恒空（与 PR1 闸门对齐）；非 active 恒空——
+    # 自动快照只推进 active，closed 属刻意停更而非故障，报停更是永久误报
+    # （L2 r1 发现；draft 无基线自然空）。
+    catchup_pending_dates: List[str] = []
+    if latest and portfolio.kind != "ledger" and portfolio.status == "active":
+        catchup_pending_dates = [
+            d.isoformat()
+            for d in compute_catchup_pending_dates(db, latest.snapshot_date)
+        ]
+
     return SnapshotStatusResponse(
         portfolio_code=code,
         latest_snapshot_date=latest.snapshot_date if latest else None,
         total_snapshots=total,
         first_snapshot_date=earliest.snapshot_date if earliest else None,
         missing_dates=missing_dates,
+        catchup_pending_dates=catchup_pending_dates,
         negative_cash_platforms=negative_cash_platforms,
         auto_snapshot_enabled=portfolio.auto_snapshot_enabled,
     )

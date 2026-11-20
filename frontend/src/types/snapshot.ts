@@ -59,6 +59,8 @@ export interface SnapshotStatusResponse {
   total_snapshots: number;
   first_snapshot_date?: string;
   missing_dates: string[];
+  /** 最新快照日之后至业务昨日应生成而未生成的 SSE 交易日（#906 trailing 缺口；台账型/无基线恒空） */
+  catchup_pending_dates?: string[];
   /** 最新快照日 CASH 持仓 cash_amount < 0 的平台清单（正常为空） */
   negative_cash_platforms?: string[];
   /** 组合级自动快照开关（issue #156），随组合配置返回 */

@@ -16318,6 +16318,14 @@
             "type": "array",
             "title": "Missing Dates"
           },
+          "catchup_pending_dates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Catchup Pending Dates",
+            "default": []
+          },
           "negative_cash_platforms": {
             "items": {
               "type": "string"

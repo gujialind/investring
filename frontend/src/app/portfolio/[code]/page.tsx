@@ -35,6 +35,7 @@ import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
+import SnapshotCatchupAlert from "@/components/shared/SnapshotCatchupAlert";
 import LedgerContent from "@/components/shared/LedgerContent";
 import { buildAllocation } from "@/lib/allocation";
 import { getStatusBadgeVariant } from "@/lib/utils";
@@ -188,6 +189,9 @@ function PortfolioDetailInner() {
             </AlertDescription>
           </Alert>
         )}
+
+        {/* 快照停更可见提示（#906 SPEC §4）：trailing 缺口非空才渲染；台账型恒空不请求 */}
+        {!isLedger && <SnapshotCatchupAlert portfolioCode={code} />}
 
         {isLedger ? (
           /* 台账型独立视图（issue #905 PR3）：按平台记市值/进出 + 口径A 绩效；无净值/份额/投资人 Tab */
