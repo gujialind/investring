@@ -49,7 +49,7 @@ from app.constants.share_change_events import (
     PENDING_DIVIDEND_TYPE,
 )
 from app.models.manual_market_value import ManualMarketValue
-from app.utils.business_time import business_today
+from app.utils.business_time import business_today, business_yesterday
 from app.utils.quantize import quantize_nav, quantize_shares
 
 logger = logging.getLogger(__name__)
@@ -942,6 +942,37 @@ def compute_missing_snapshot_dates(
     return sorted(trading_days - snapshot_days)
 
 
+def compute_catchup_pending_dates(
+    db: Session,
+    portfolio_code: str,
+    latest_snapshot_date: Optional[date],
+) -> List[date]:
+    """最新快照日之后至业务昨日应生成而未生成的 SSE 交易日（升序，#906）。
+
+    与 compute_missing_snapshot_dates 的内部空洞互补：trailing gap 属 catch-up
+    语义、不算 missing（#146），本函数把这段缺口量化为读侧「停更」信号——
+    修复 A 挡住的正是最新快照日之后的推进，missing_dates 检测不到。
+    区间 (latest_snapshot_date, business_yesterday()]，无快照基线
+    （latest=None）返回空，与 missing_dates「无基线为空」同构；
+    台账型（kind='ledger'）排除由调用方（status 端点）负责。
+    """
+    if latest_snapshot_date is None:
+        return []
+    yesterday = business_yesterday()
+    if yesterday <= latest_snapshot_date:
+        return []
+    return [
+        row[0]
+        for row in db.query(TradingCalendar.calendar_date).filter(
+            TradingCalendar.calendar_date > latest_snapshot_date,
+            TradingCalendar.calendar_date <= yesterday,
+            TradingCalendar.is_open.is_(True),
+            # 快照日序列是 SSE 口径（与 compute_missing_snapshot_dates 同，#777）
+            TradingCalendar.exchange == SSE_EXCHANGE,
+        ).order_by(TradingCalendar.calendar_date.asc()).all()
+    ]
+
+
 def validate_snapshot_dependencies(
     db: Session,
     portfolio_code: str,
@@ -1565,7 +1596,13 @@ def _generate_portfolio_position(
                 market_value = quantize_nav(pos_data["shares"] * unit_price)
             else:
                 missing_nav.append(f"{product_code}({market}) [{nav_rule}={nav_date}]")
-        
+        else:
+            # #906：悬空产品码（product 行缺失）视同缺价，并入 MISSING_NAV 响亮失败。
+            # 不得静默留 None 市值——汇总侧对 None 按 0 累加，会产出系统性偏小且
+            # 无告警的净值（#701「『缺价』只有一种形态」同族）。抛出点在 db.add_all
+            # 之前，调用方整体回滚，不留半截快照。
+            missing_nav.append(f"{product_code}({market}) [产品行缺失]")
+
         # 计算冻结份额（pending卖出）
         if is_in_transit:
             frozen_shares = Decimal("0")
@@ -2461,7 +2498,9 @@ def _check_price_data_completeness(
     
     # 缺失项按取价规则分组（"T" / "T-1" / "T-N"…），保持 message 可读且规则可辨
     missing_by_rule: Dict[str, list] = {}
-    
+    # #906：悬空产品码（product 行缺失）单列收集，与缺价同报 price_data failed
+    missing_products: list = []
+
     for product_code, market in products_to_check:
         # #93: CASH 和 IN_TRANSIT 虚拟产品均无净值，跳过价格完整性校验
         if product_code == "CASH" or product_code in IN_TRANSIT_PRODUCTS.values():
@@ -2471,8 +2510,13 @@ def _check_price_data_completeness(
             Product.code == product_code,
             Product.market == market
         ).first()
-        
+
         if not product:
+            # #906：产品行缺失视同缺价（#701 同族），不再静默 continue。
+            # 保持 check_type=price_data：纯净值/产品缺失在 generate_daily_snapshots
+            # 的 all(check_type == "price_data") 分流下归 MISSING_NAV，混合失败仍
+            # VALIDATION_FAILED，与现有缺价分流逐字同构。
+            missing_products.append(f"{product_code}({market})")
             continue
         
         # issue #228：与生成侧同一实现（nav_lag_days 驱动），禁止向前回退
@@ -2489,6 +2533,8 @@ def _check_price_data_completeness(
             )
 
     all_missing = []
+    if missing_products:
+        all_missing.append(f"产品行缺失（视同缺价）: {', '.join(missing_products)}")
     for nav_rule, items in sorted(missing_by_rule.items()):
         label = "当日" if nav_rule == "T" else f"{nav_rule}日"
         all_missing.append(f"缺少{label}净值: {', '.join(items)}")

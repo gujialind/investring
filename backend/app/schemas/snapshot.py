@@ -142,6 +142,9 @@ class SnapshotStatusResponse(BaseModel):
     total_snapshots: int
     first_snapshot_date: Optional[date] = None
     missing_dates: List[str]  # 缺失的交易日（ISO格式）
+    # issue #906：最新快照日之后至业务昨日应生成而未生成的 SSE 交易日（trailing
+    # 缺口，与 missing_dates 内部空洞互补）；台账型恒空、无快照基线恒空
+    catchup_pending_dates: List[str] = []
     # issue #71：最新快照日 CASH 持仓 cash_amount < 0 的平台清单（正常为空）
     negative_cash_platforms: List[str] = []
     # issue #156：组合自动快照开关（仅约束自动任务，手动生成/重算不受影响）

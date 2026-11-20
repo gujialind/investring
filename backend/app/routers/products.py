@@ -216,6 +216,8 @@ def delete_product(
     if not product:
         raise HTTPException(status_code=404, detail=f"产品 {code}({market}) 不存在")
 
-    db.delete(product)
+    # #906：删除逻辑下沉 service——统一引用校验（PRODUCT_HAS_DEPENDENT_DATA 409）
+    # + 审计 + IntegrityError 兜底；404 回显形状由本层保持（locale 守门钉住）。
+    product_service.delete_product(db, code=code, market=market)
     db.commit()
     return {"message": f"产品 {code}({market}) 删除成功"}

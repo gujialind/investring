@@ -4,24 +4,33 @@
 confirm_days 计算（单一实现）与产品 CRUD，从路由层提取供 REST 与 CLI 共用。
 service 层只抛领域异常，不 commit。
 """
+import logging
 from typing import Optional, Tuple
 
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.constants.asset_dimensions import RULE_DIMENSIONS, RULE_REQUIRED
+from app.constants.audit_actions import ACTION_DELETE, RESOURCE_PRODUCT
 from app.models.asset_classification import (
     AssetClassification,
     AssetClassDimensionRule,
     AssetDimensionApplicability,
 )
+from app.models.base import Base
+from app.models.manual_market_value import ManualMarketValue
 from app.models.portfolio_position import PortfolioPosition
 from app.models.price_record import PriceRecord
 from app.models.product import Product
 from app.models.share_change_event import ShareChangeEvent
 from app.models.trade import Trade
+from app.services.audit_service import record_audit
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.null_guard import reject_explicit_nulls
 from app.utils.product_code import HK_MUTUAL_MARKET, display_code
+
+logger = logging.getLogger(__name__)
 
 # issue #232：product_type 合法枚举（create/update 共用校验）；
 # market 枚举仅 update 守卫使用（create 不校验 market）
@@ -710,4 +719,120 @@ def update_product(
             old_value={"data_source": old_data_source},
             new_value={"data_source": updates["data_source"]},
         )
+    return product
+
+
+def _product_dependent_tables() -> list:
+    """按元数据派生「有外键引用 product(code, market)」的表（#906，同构 #820）。
+
+    返回 (表, [(本侧列, 被引用列名), …]) 列表。产品主键是复合键，判据按**整条
+    约束**逐列等值过滤（与 portfolio 单列判据的差异点）；名单不手写，新增外键
+    引用表自动进入删除判据，集合变化由
+    `tests/unit/test_product_delete_dependents.py` 的快照断言翻红暴露。
+    """
+    entries = []
+    for table in Base.metadata.tables.values():
+        for constraint in table.foreign_key_constraints:
+            if constraint.elements and all(
+                fk.column.table.name == Product.__tablename__
+                for fk in constraint.elements
+            ):
+                pairs = [(fk.parent, fk.column.name) for fk in constraint.elements]
+                entries.append((table, pairs))
+                break
+    return entries
+
+
+def _count_product_dependents(db: Session, product: Product) -> dict:
+    """返回引用本产品且**有行**的依赖表 → 计数（空 dict 即可删）。
+
+    `manual_market_value.product_code` 是纯列、无外键（现金重估台账），元数据
+    派生对它失明，显式补查（#906 SPEC §3）；按统一删除规则计入判据，不给
+    CASH 特殊保护或豁免。
+    """
+    key_values = {"code": product.code, "market": product.market}
+    counts: dict = {}
+    for table, pairs in _product_dependent_tables():
+        n = (
+            db.query(func.count())
+            .select_from(table)
+            .filter(*[column == key_values[referred] for column, referred in pairs])
+            .scalar()
+        )
+        if n:
+            counts[table.name] = n
+    n = (
+        db.query(func.count())
+        .select_from(ManualMarketValue)
+        .filter(ManualMarketValue.product_code == product.code)
+        .scalar()
+    )
+    if n:
+        counts[ManualMarketValue.__tablename__] = n
+    return counts
+
+
+def delete_product(db: Session, *, code: str, market: str) -> Product:
+    """删除产品（#906 统一规则：任何产品未被引用才可删）。不 commit。
+
+    系统虚拟产品（CASH/IN_TRANSIT_*）不加额外保护也不给豁免，与普通产品同一
+    判据；有引用抛 `PRODUCT_HAS_DEPENDENT_DATA`（409，details.dependencies
+    表名→计数），消灭 MySQL 下未捕获 IntegrityError → 500。行锁与子表 INSERT
+    的 FK 共享锁互斥，消除「先计数后删除」竞态；MySQL FK RESTRICT 只作次防线
+    ——应用侧 SQLite 连接未开 `PRAGMA foreign_keys`，不能把兜底交给方言行为
+    （#820 同口径）。审计在 db.delete() 之前写（record_audit 先 flush 业务改动，
+    先删会让审计失败与业务删除的先后关系不可辨）；失败路径不落审计行。
+    """
+    product = (
+        db.query(Product)
+        .filter(Product.code == code, Product.market == market)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not product:
+        raise NotFoundError("NOT_FOUND", f"产品 {code}({market}) 不存在")
+
+    dependencies = _count_product_dependents(db, product)
+    if dependencies:
+        raise BusinessError(
+            "PRODUCT_HAS_DEPENDENT_DATA",
+            "产品仍存在关联数据，无法删除",
+            http_status=409,
+            details={"dependencies": dependencies},
+        )
+
+    record_audit(
+        db,
+        action=ACTION_DELETE,
+        resource_type=RESOURCE_PRODUCT,
+        resource_id=f"{code}({market})",
+        resource_name=product.name,
+        old_value={
+            "code": product.code,
+            "market": product.market,
+            "name": product.name,
+            "product_type": product.product_type,
+        },
+    )
+    # 校验后并发插入引用的竞态兜底：savepoint 内 delete+flush，FK RESTRICT 撞出
+    # IntegrityError 时只回滚 savepoint（外层事务不毒化），转同一业务码。
+    # 显式 begin_nested/commit/rollback 不用 `with`：flush 失败时 SQLAlchemy 已
+    # 自行回滚并关闭 nested 事务，`with` 期间 conftest 的 after_transaction_end
+    # 监听器再 begin_nested() 会撞「Can't operate on closed transaction inside
+    # context manager」掩盖根因（#419 同型定案，见 _auto_confirm_guarded 注释）。
+    sp = db.begin_nested()
+    try:
+        db.delete(product)
+        db.flush()
+        sp.commit()
+    except IntegrityError:
+        if db.get_nested_transaction() is sp:
+            sp.rollback()
+        raise BusinessError(
+            "PRODUCT_HAS_DEPENDENT_DATA",
+            "产品仍存在关联数据，无法删除",
+            http_status=409,
+        )
+    logger.info("删除产品: code=%s market=%s", code, market)
     return product

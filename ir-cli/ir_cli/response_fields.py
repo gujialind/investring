@@ -80,7 +80,7 @@ RESPONSE_FIELDS: dict = {
     "snapshot": {
         "status": {
             "shape": "object",
-            "fields": "portfolio_code:str,latest_snapshot_date:date?,total_snapshots:int,first_snapshot_date:date?,missing_dates:list,negative_cash_platforms:list,auto_snapshot_enabled:bool"
+            "fields": "portfolio_code:str,latest_snapshot_date:date?,total_snapshots:int,first_snapshot_date:date?,missing_dates:list,catchup_pending_dates:list,negative_cash_platforms:list,auto_snapshot_enabled:bool"
         }
     },
     "trade": {

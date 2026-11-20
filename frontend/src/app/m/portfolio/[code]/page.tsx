@@ -33,6 +33,7 @@ import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
 import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
+import SnapshotCatchupAlert from "@/components/shared/SnapshotCatchupAlert";
 import LedgerContent from "@/components/shared/LedgerContent";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
@@ -153,6 +154,9 @@ function MobilePortfolioDetailInner() {
           </AlertDescription>
         </Alert>
       )}
+
+      {/* 快照停更可见提示（#906 SPEC §4，与桌面同构）：trailing 缺口非空才渲染 */}
+      {!isLedger && <SnapshotCatchupAlert portfolioCode={code} />}
 
       {isLedger ? (
         /* 台账型独立视图（issue #905 PR3）：操作区（激活/删除）+ LedgerContent；无净值/份额/投资人 Tab */

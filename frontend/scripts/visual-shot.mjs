@@ -12,7 +12,9 @@
  *             snapshot-delete-confirm = 快照删除确认 AlertDialog；
  *             trade-date-range = 交易日期区间 Popover（移动端先展开折叠筛选面板）；
  *             investor-reset-password = 投资人管理页重置密码 Dialog（#893，只开不提交，
- *             填短密码截校验 Alert 态）
+ *             填短密码截校验 Alert 态）；
+ *             snapshot-catchup-alert = 快照停更提示态（#906，API 造隔离组合把最新快照
+ *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -41,7 +43,7 @@ const DEFAULT_PATHS = [
   '/portfolio/E2E_ACTIVE/subscriptions',
   '/portfolio/E2E_ACTIVE/share-change-events',
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert'];
 
 const opts = {
   base: 'http://localhost:3000',
@@ -119,6 +121,51 @@ function shotName(path, device, theme) {
 
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
+  if (scenario === 'snapshot-catchup-alert') {
+    // #906：API 造隔离组合（申购+确认+generate，纯 CASH 无需行情），最新快照停在
+    // today 前第 4 个开市日 → trailing 缺口确定性非空（与 E2E setupStalePortfolio 同形）。
+    // 目检库按运行独占新建，固定 code 不撞；同一运行内第二端/第二主题复用已造组合。
+    const token = await page.evaluate(() => localStorage.getItem('token'));
+    const headers = { Authorization: `Bearer ${token}` };
+    const code = 'VIS906STALE';
+    const create = await page.request.post('/api/portfolios', {
+      headers, data: { code, name: '目检停更夹具' },
+    });
+    if (create.ok()) {
+      const today = new Date();
+      const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const todayISO = iso(today);
+      const days = [];
+      for (const year of [today.getFullYear(), today.getFullYear() - 1]) {
+        const rows = await (await page.request.get(`/api/trading-calendar?year=${year}`, { headers })).json();
+        days.push(...rows.filter((r) => r.is_open && r.calendar_date < todayISO).map((r) => r.calendar_date));
+        if (days.length >= 5) break;
+      }
+      days.sort();
+      const prev5 = days.slice(-5);
+      const sub = await (await page.request.post('/api/subscriptions', {
+        headers,
+        data: {
+          portfolio_code: code, investor_code: 'ADMIN', platform_code: 'HBZQ',
+          sub_type: 'subscribe', amount: 100000, apply_date: prev5[0],
+        },
+      })).json();
+      const confirm = await page.request.post(`/api/subscriptions/${sub.id}/confirm`, { headers });
+      if (!confirm.ok()) throw new Error(`目检夹具首购确认失败: ${confirm.status()} ${await confirm.text()}`);
+      const gen = await page.request.post('/api/snapshots/generate', {
+        headers, data: { portfolio_code: code, target_date: prev5[1] },
+      });
+      if (!gen.ok()) throw new Error(`目检夹具快照生成失败: ${gen.status()} ${await gen.text()}`);
+    } else {
+      // 已存在（同运行前序端/主题所造）：核实可用，否则响亮失败
+      const existing = await page.request.get(`/api/portfolios/${code}`, { headers });
+      if (!existing.ok()) throw new Error(`目检夹具创建失败且不可复用: ${create.status()} ${await create.text()}`);
+    }
+    await page.goto(`/portfolio/${code}`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('snapshot-catchup-alert').waitFor({ state: 'visible', timeout: 15_000 });
+    return { close: async () => {} }; // 页面态而非浮层，无需收口
+  }
   if (scenario === 'investor-reset-password') {
     // 本人（ADMIN）行无此按钮，first() 命中的是首个他人行；只开不提交，取消收口。
     // 填短密码触发校验 Alert 取证（#893 L2 S1：inline Alert 形态；校验拦截不发请求）
