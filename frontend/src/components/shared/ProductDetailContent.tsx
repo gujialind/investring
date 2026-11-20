@@ -34,6 +34,7 @@ import { useNavHistory } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import ProductIdentity from "./ProductIdentity";
 import ProductNavCards from "./ProductNavCards";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
@@ -251,7 +252,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="product-trades-card">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">交易记录</h3>
+        <h3 className="text-base font-semibold leading-6">交易记录</h3>
         <Link href={tradesLink} className="text-sm text-primary hover:underline">
           查看全部
         </Link>
@@ -321,8 +322,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
           { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
         ]}
-        title={product.product_name || codeLabel}
-        truncateTitle
+        title="产品详情"
+      />
+
+      {/* #935 S2：全文身份区（非吸顶），代码/市场沿用既有显示码与格式化口径 */}
+      <ProductIdentity
+        name={product.product_name || codeLabel}
         meta={`${codeLabel} · ${formatMarketName(product.market)}`}
       />
 

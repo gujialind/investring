@@ -19,7 +19,7 @@ interface PageHeaderProps {
   badge?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
-  /** 长标题（基金名）truncate；组合名等短标题不压缩（#786） */
+  /** 长标题（平台名等）truncate；三类产品详情已改短标题+正文身份区（#935），组合名等短标题不压缩（#786） */
   truncateTitle?: boolean;
   variant?: "desktop" | "mobile";
   className?: string;
@@ -32,7 +32,9 @@ interface PageHeaderProps {
  *
  * sticky 折叠（#904 P1c）：viewport 吸顶（top-0，负 margin bleed 到 main  padding 边缘），
  * 滚动 >32px 折叠——面包屑隐去、首 crumb 收成标题行内图标返回（aria 不变）、
- * 标题 24→18px（§5 档内）、meta 隐去、出 border-b；即时切换不做尺寸动画（§14 动效词汇）。
+ * meta 隐去、出 border-b；标题恒 20px/28px（§5 页面标题档，#935），不随滚动改字号；
+ * 即时切换不做尺寸动画（§14 动效词汇）。三类产品详情只传短标题「产品详情」，
+ * 产品身份/管理动作在正文 ProductIdentity 区（#935 S2），折叠页眉因此只剩返回+短标题。
  */
 export default function PageHeader({
   crumbs,
@@ -57,6 +59,7 @@ export default function PageHeader({
 
   return (
     <div
+      data-testid="page-header"
       className={cn(
         "sticky top-0 z-30 -mx-4 bg-background px-4 pb-2 pt-2 lg:-mx-8 lg:px-8",
         collapsed && "border-b",
@@ -67,7 +70,7 @@ export default function PageHeader({
         {!collapsed && crumbs && crumbs.length > 0 && (
           <nav
             aria-label="面包屑"
-            className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+            className="flex flex-wrap items-center gap-1.5 text-sm leading-5.5 text-muted-foreground"
           >
             {crumbs.map((crumb, i) => (
               <span key={crumb.href} className="flex items-center gap-1.5">
@@ -102,8 +105,7 @@ export default function PageHeader({
               )}
               <h1
                 className={cn(
-                  "font-semibold",
-                  collapsed ? "text-lg" : "text-2xl",
+                  "text-xl font-semibold leading-7",
                   truncateTitle && "truncate",
                 )}
               >

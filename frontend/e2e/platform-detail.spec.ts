@@ -14,6 +14,10 @@ import {
   expectNavHistoryHScroll,
   measureNavDetailLayout,
   expectNavDetailColumns,
+  expectProductDetailIdentity,
+  expectFullNameReadable,
+  expectProductHeaderCollapsed,
+  scrollWindowTo,
 } from "./helpers";
 
 /**
@@ -91,9 +95,11 @@ function dialogDateTrigger(dlg: Locator): Locator {
 test.describe("平台详情页", () => {
   test("页头与概览卡：平台名、代码·类型、市值、指标行", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
-    await expect(
-      page.getByRole("heading", { name: "华宝证券" })
-    ).toBeVisible();
+    // #935 A4：平台详情保留实体名页标题（非三类产品详情），字号归 20/600/28 档
+    const platformH1 = page.getByRole("heading", { level: 1, name: "华宝证券" });
+    await expect(platformH1).toBeVisible();
+    await expect(platformH1).toHaveCSS("font-size", "20px");
+    await expect(platformH1).toHaveCSS("line-height", "28px");
     await expect(page.getByText("HBZQ")).toBeVisible();
 
     const overview = page.getByTestId("platform-overview-card");
@@ -159,12 +165,14 @@ test.describe("平台详情页", () => {
     await expect(holdings).toBeVisible();
     // 510300.SH 产品卡存在
     await expect(holdings.getByText("沪深300ETF")).toBeVisible();
-    // 点击产品卡 → 平台-产品详情页
+    // 点击产品卡 → 平台-产品详情页（#935 起平台上下文与产品名分别断言）
     await holdings.getByRole("link", { name: /沪深300ETF/ }).first().click();
     await page.waitForURL(/\/platforms\/HBZQ\/products\/510300\.SH/);
-    await expect(
-      page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
-    ).toBeVisible();
+    await expectProductDetailIdentity(page, {
+      name: "沪深300ETF",
+      meta: "510300 · A股场内",
+      platformContext: "华宝证券",
+    });
   });
 
   test("交易记录读取失败 → 透出后端消息与重试入口，而非空态（#663①）", async ({ page }) => {
@@ -392,13 +400,15 @@ test.describe("平台详情页", () => {
 });
 
 test.describe("平台-产品详情页", () => {
-  test("页头与概览卡：平台名·产品名、切片市值、份额、收益、占产品比", async ({ page }) => {
+  test("页头与概览卡：短页眉+平台上下文+全文身份、切片市值、份额、收益、占产品比", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
-    await expect(
-      page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
-    ).toBeVisible();
-    // #705：副行代码位显显示码（去交易所后缀）+ 市场名，机器码不再出现在屏上
-    await expect(page.getByText("510300 · A股场内")).toBeVisible();
+    // #935：短 h1「产品详情」；平台名独立上下文行，产品全名 h2（不再拼一行 heading）
+    await expectProductDetailIdentity(page, {
+      name: "沪深300ETF",
+      meta: "510300 · A股场内",
+      platformContext: "华宝证券",
+    });
+    // #705：身份说明代码位显显示码（去交易所后缀）+ 市场名，机器码不再出现在屏上
     await expect(page.getByText("510300.SH")).toHaveCount(0);
 
     const overview = page.getByTestId("platform-product-overview-card");
@@ -636,9 +646,11 @@ test.describe("平台-产品详情页", () => {
     const holdings = page.getByTestId("platform-holdings-section");
     await holdings.getByRole("link", { name: /沪深300ETF/ }).first().click();
     await page.waitForURL(/\/platforms\/HBZQ\/products\/510300\.SH/);
-    await expect(
-      page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
-    ).toBeVisible();
+    await expectProductDetailIdentity(page, {
+      name: "沪深300ETF",
+      meta: "510300 · A股场内",
+      platformContext: "华宝证券",
+    });
   });
 
   test("缺 market 参数的非现金产品 EmptyState", async ({ page }) => {
@@ -1183,5 +1195,101 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
       el.scrollLeft = el.scrollWidth;
     });
     await history.screenshot({ path: testInfo.outputPath(`nav-history-${width}-dark-end.png`) });
+  });
+});
+
+/**
+ * #935 全文身份与吸顶（平台-产品详情）。长名夹具只改 holdings/by-product 响应的
+ * product_name（route.fetch 回读真实种子再改名），不向 E2E 库注入、不改种子契约。
+ */
+const LONG_NAME_935 = "富国中证500指数增强型证券投资基金(LOF)C类份额长名称样例";
+
+async function mockLongProductName935(page: Page) {
+  await page.route(/\/holdings\/by-product(\?|$)/, async (route) => {
+    const res = await route.fetch();
+    const json = await res.json();
+    for (const p of json.products ?? []) {
+      if (p.product_code !== "CASH") p.product_name = LONG_NAME_935;
+    }
+    await route.fulfill({ response: res, json });
+  });
+}
+
+test.describe("平台-产品详情全文身份与吸顶（#935）", () => {
+  test("A1/A2/A7 长名多档宽度全文可读，平台上下文独立", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    await mockLongProductName935(page);
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await expect(page.getByTestId("product-full-name")).toHaveText(LONG_NAME_935, { timeout: 10_000 });
+    await expect(page.getByTestId("product-platform-context")).toHaveText("华宝证券");
+
+    const isMobile = testInfo.project.name === "mobile";
+    const height = page.viewportSize()?.height ?? 720;
+    const widths = isMobile ? [320, 375, 390, 430] : [1024, 1280];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height });
+      const m = await expectFullNameReadable(page, `视口${width}`);
+      if (isMobile && width === 320) {
+        expect(m.lines, "320px 下长名应自然换行（≥2 行）").toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
+  test("A1 现金产品身份区沿用既有格式（market 空不补市场段）", async ({ page }) => {
+    await page.goto(CASH_PRODUCT_PATH);
+    await expectProductDetailIdentity(page, {
+      name: "现金类资产",
+      meta: "CASH",
+      platformContext: "华宝证券",
+    });
+  });
+
+  test("A5 吸顶折叠只剩返回+短标题：阈值两侧、下滑、回顶、刷新后状态一致", async ({ page }) => {
+    await page.goto(PLATFORM_PRODUCT_PATH);
+    await expectProductDetailIdentity(page, {
+      name: "沪深300ETF",
+      meta: "510300 · A股场内",
+      platformContext: "华宝证券",
+    });
+    await expect(page.getByTestId("product-identity")).toHaveCSS("position", "static");
+
+    await scrollWindowTo(page, 32);
+    await expect(page.getByTestId("page-header").getByRole("navigation", { name: "面包屑" })).toBeVisible();
+    await scrollWindowTo(page, 33);
+    // 首 crumb 指向组合列表（实际导航契约，不是「返回上一层」的猜测）
+    await expectProductHeaderCollapsed(page, {
+      backAria: "返回组合列表",
+      absentTexts: ["沪深300ETF", "510300", "华宝证券"],
+    });
+
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(32);
+    const identityTop = await page.getByTestId("product-identity").evaluate((el) => el.getBoundingClientRect().top);
+    expect(identityTop, "身份区应随正文滚走（顶缘 < 0）").toBeLessThan(0);
+    await expectProductHeaderCollapsed(page, {
+      backAria: "返回组合列表",
+      absentTexts: ["沪深300ETF", "510300", "华宝证券"],
+    });
+
+    // 刷新后滚动位置恢复（浏览器 history scroll restoration）：页眉状态与 scrollY 一致
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "产品详情" })).toBeVisible({ timeout: 10_000 });
+    const restoredY = await page.evaluate(() => window.scrollY);
+    if (restoredY > 32) {
+      await expectProductHeaderCollapsed(page, {
+        backAria: "返回组合列表",
+        absentTexts: ["沪深300ETF", "510300", "华宝证券"],
+      });
+    } else {
+      await expect(page.getByTestId("page-header").getByRole("navigation", { name: "面包屑" })).toBeVisible();
+    }
+
+    await scrollWindowTo(page, 0);
+    await expectProductDetailIdentity(page, {
+      name: "沪深300ETF",
+      meta: "510300 · A股场内",
+      platformContext: "华宝证券",
+    });
+    await expectFullNameReadable(page, "回顶后");
   });
 });

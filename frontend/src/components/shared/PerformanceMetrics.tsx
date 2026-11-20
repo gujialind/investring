@@ -76,7 +76,7 @@ export default function PerformanceMetrics({ data, variant = "desktop" }: Perfor
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">绩效指标</CardTitle>
+        <CardTitle>绩效指标</CardTitle>
         <CardDescription>
           区间收益与风险指标，历史不足窗口期的区间收益不展示
           {data?.holding_days ? `；持有 ${data.holding_days} 天` : ""}

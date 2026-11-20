@@ -95,7 +95,7 @@ export default function ProductNavCards({
       // opacity 类名——定位器契约禁止按 Tailwind 工具类定位（手法同 #650 的 aria-current）
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
-      <h3 className="text-lg font-semibold">{navLabels.curveTitle}</h3>
+      <h3 className="text-base font-semibold leading-6">{navLabels.curveTitle}</h3>
       {navLabels.note && (
         <p className="mt-1 text-xs text-muted-foreground" data-testid="nav-basis-note">
           {navLabels.note}
@@ -142,7 +142,7 @@ export default function ProductNavCards({
       data-testid={`${testIdPrefix}-returns-card`}
       aria-busy={analysisRevalidating ? "true" : "false"}
     >
-      <h3 className="text-lg font-semibold">{navLabels.returnsTitle}</h3>
+      <h3 className="text-base font-semibold leading-6">{navLabels.returnsTitle}</h3>
       {navLabels.note && (
         <p className="mt-1 text-xs text-muted-foreground" data-testid="returns-basis-note">
           {navLabels.note}
@@ -175,7 +175,7 @@ export default function ProductNavCards({
 
   const historyCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid={`${testIdPrefix}-history-card`}>
-      <h3 className="text-lg font-semibold">历史净值</h3>
+      <h3 className="text-base font-semibold leading-6">历史净值</h3>
       {historyError ? (
         <QueryErrorState error={historyErr} onRetry={refetchHistory} className="mt-3" />
       ) : historyItems.length === 0 ? (

@@ -226,7 +226,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
 
   const holdingsSection = (
     <section data-testid="platform-holdings-section">
-      <h3 className="text-lg font-semibold">持仓明细</h3>
+      <h3 className="text-base font-semibold leading-6">持仓明细</h3>
       {platformProducts.length === 0 && !cashProduct ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无持仓</p>
       ) : (
@@ -337,7 +337,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-trades-card">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">交易记录</h3>
+        <h3 className="text-base font-semibold leading-6">交易记录</h3>
         <Link href={tradesLink} className="text-sm text-primary hover:underline">
           查看全部
         </Link>

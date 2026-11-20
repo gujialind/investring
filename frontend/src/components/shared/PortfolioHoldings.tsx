@@ -349,7 +349,7 @@ export default function PortfolioHoldings({
   return (
     <div className="space-y-1" data-testid="portfolio-holdings">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">持仓明细</h3>
+        <h3 className="text-base font-semibold leading-6">持仓明细</h3>
         {action}
       </div>
 

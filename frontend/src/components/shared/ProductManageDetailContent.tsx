@@ -22,6 +22,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
 import QueryErrorState from "./QueryErrorState";
+import ProductIdentity from "./ProductIdentity";
 import ProductNavCards from "./ProductNavCards";
 import {
   useProduct,
@@ -95,7 +96,7 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
   const updateProduct = useUpdateProduct();
   const deleteProduct = useDeleteProduct();
 
-  // 头部三动作（#856）：编辑开 ProductFormDialog；停用/启用与删除各经 ConfirmDialog 二次确认
+  // 三动作（#856，#935 移入正文身份区下方）：编辑开 ProductFormDialog；停用/启用与删除各经 ConfirmDialog 二次确认
   const [editOpen, setEditOpen] = useState(false);
   const [toggleOpen, setToggleOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -190,7 +191,7 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
   const basicInfoCard = (
     <Card data-testid="product-basic-info-card">
       <CardHeader>
-        <CardTitle className="text-lg">基本信息</CardTitle>
+        <CardTitle>基本信息</CardTitle>
       </CardHeader>
       <CardContent>
         <div className={`grid gap-3 ${isMobile ? "grid-cols-2" : "grid-cols-3"}`}>
@@ -221,7 +222,7 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
   const dimensionCard = (
     <Card data-testid="product-dimension-card">
       <CardHeader>
-        <CardTitle className="text-lg">分类维度</CardTitle>
+        <CardTitle>分类维度</CardTitle>
       </CardHeader>
       <CardContent>
         <div className={`grid gap-3 ${isMobile ? "grid-cols-2" : "grid-cols-3"}`}>
@@ -238,7 +239,7 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
   const syncCard = isNavType && (
     <Card data-testid="product-sync-card">
       <CardHeader>
-        <CardTitle className="text-lg">数据同步</CardTitle>
+        <CardTitle>数据同步</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
@@ -303,8 +304,14 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
       <PageHeader
         variant={variant}
         crumbs={[{ href: `${basePath}/products`, label: "产品", ariaLabel: "返回产品管理" }]}
-        title={product.name || codeLabel}
-        truncateTitle
+        title="产品详情"
+      />
+
+      {/* #935 S2：全文身份区（非吸顶）——短页眉 + 全名/代码市场/停用badge；
+          管理操作行随正文滚动，折叠页眉只剩返回+「产品详情」（S3 已确认取舍） */}
+      <ProductIdentity
+        name={product.name || codeLabel}
+        meta={`${codeLabel} · ${formatMarketName(product.market)}`}
         badge={
           !product.is_active ? (
             <Badge variant="neutral" className="shrink-0" data-testid="product-inactive-badge">
@@ -312,50 +319,48 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
             </Badge>
           ) : undefined
         }
-        meta={`${codeLabel} · ${formatMarketName(product.market)}`}
-        actions={
-        /* #856 头部三动作：移动端图标-only（aria-label 表意），桌面带文字 */
-        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setEditOpen(true)}
-            aria-label="编辑"
-            title="编辑"
-          >
-            <Pencil className="h-4 w-4 sm:mr-1.5" />
-            <span className="hidden sm:inline">编辑</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setToggleOpen(true)}
-            disabled={updateProduct.isPending}
-            aria-label={product.is_active ? "停用" : "启用"}
-            title={product.is_active ? "停用" : "启用"}
-          >
-            {product.is_active ? (
-              <Ban className="h-4 w-4 sm:mr-1.5" />
-            ) : (
-              <CheckCircle className="h-4 w-4 sm:mr-1.5" />
-            )}
-            <span className="hidden sm:inline">{product.is_active ? "停用" : "启用"}</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => setDeleteOpen(true)}
-            disabled={deleteProduct.isPending}
-            aria-label="删除"
-            title="删除"
-          >
-            <Trash2 className="h-4 w-4 sm:mr-1.5" />
-            <span className="hidden sm:inline">删除</span>
-          </Button>
-        </div>
-        }
       />
+
+      {/* #856 三动作（#935 移入正文）：编辑/启停图标+文字、删除独立图标（危险色）；
+          handler、pending/disabled、确认对话框与编辑表单按需挂载行为不变 */}
+      <div className="flex flex-wrap items-center gap-2" data-testid="product-manage-actions">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setEditOpen(true)}
+          aria-label="编辑"
+          title="编辑"
+        >
+          <Pencil className="mr-1.5 h-4 w-4" />
+          编辑
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setToggleOpen(true)}
+          disabled={updateProduct.isPending}
+          aria-label={product.is_active ? "停用" : "启用"}
+          title={product.is_active ? "停用" : "启用"}
+        >
+          {product.is_active ? (
+            <Ban className="mr-1.5 h-4 w-4" />
+          ) : (
+            <CheckCircle className="mr-1.5 h-4 w-4" />
+          )}
+          {product.is_active ? "停用" : "启用"}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          onClick={() => setDeleteOpen(true)}
+          disabled={deleteProduct.isPending}
+          aria-label="删除"
+          title="删除"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
 
       {isMobile ? (
         <>
