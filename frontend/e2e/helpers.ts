@@ -1383,6 +1383,12 @@ async function expectPageTitleTypography(h1: Locator): Promise<void> {
   await expect(h1).toHaveCSS('line-height', '28px');
 }
 
+/** #935 次要文字 14/22 单点（身份说明/平台上下文/面包屑共用；ocr r3） */
+async function expectSecondaryTypography(locator: Locator): Promise<void> {
+  await expect(locator).toHaveCSS('font-size', '14px');
+  await expect(locator).toHaveCSS('line-height', '22px');
+}
+
 /**
  * #935 A1/A4：三类产品详情的短页眉 + 正文全文身份区（单点断言，防三页漂移）。
  * 页标题 h1「产品详情」20/600/28；全名 h2 16/600/24；身份说明 14/22；
@@ -1413,13 +1419,11 @@ export async function expectProductDetailIdentity(
   await expect(h2).toHaveCSS('line-height', '24px');
   const meta = identity.getByTestId('product-identity-meta');
   await expect(meta).toHaveText(opts.meta);
-  await expect(meta).toHaveCSS('font-size', '14px');
-  await expect(meta).toHaveCSS('line-height', '22px');
+  await expectSecondaryTypography(meta);
   const platform = identity.getByTestId('product-platform-context');
   if (opts.platformContext) {
     await expect(platform).toHaveText(opts.platformContext);
-    await expect(platform).toHaveCSS('font-size', '14px');
-    await expect(platform).toHaveCSS('line-height', '22px');
+    await expectSecondaryTypography(platform);
   } else {
     await expect(platform).toHaveCount(0);
   }
@@ -1427,8 +1431,7 @@ export async function expectProductDetailIdentity(
   // 展开态面包屑/返回文字 14/22（#935 S1 关键导航档）
   const crumb = page.getByTestId('page-header').getByRole('navigation', { name: '面包屑' }).getByRole('link').first();
   await expect(crumb).toBeVisible();
-  await expect(crumb).toHaveCSS('font-size', '14px');
-  await expect(crumb).toHaveCSS('line-height', '22px');
+  await expectSecondaryTypography(crumb);
 }
 
 /** #935 A1/A7 全名可读性量测：非裁剪样式 + 文本几何（末尾行盒在容器内）+ 整页无横溢 */
@@ -1513,7 +1516,10 @@ export async function expectProductHeaderCollapsed(
   await expect(header.getByTestId('product-manage-actions')).toHaveCount(0);
 }
 
-/** #935 A5：滚动到指定 scrollY 并等待到位（阈值两侧/回顶断言用） */
+/** #935 A5：滚动到指定 scrollY 并等待到位（阈值两侧/回顶断言用）。
+ *  限制（ocr r3）：maxY 按展开态布局量测；滚动触发页眉折叠后 scrollHeight 会缩小，
+ *  贴近页底的目标可能被夹取而轮询超时——现有调用点（0/32/33）不受影响，
+ *  新增页底目标调用方须自行预留折叠收缩余量。 */
 export async function scrollWindowTo(page: Page, y: number): Promise<void> {
   // clientHeight 与 scrollHeight 同坐标空间（innerHeight 在移动仿真/根 zoom 下是视觉视口；ocr r2）
   const maxY = await page.evaluate(
@@ -1524,9 +1530,7 @@ export async function scrollWindowTo(page: Page, y: number): Promise<void> {
     `页面最大可滚 ${maxY}px，不足以滚到目标 ${y}px（请先加长内容或降低目标）`
   ).toBeGreaterThanOrEqual(y);
   await page.evaluate((top) => window.scrollTo(0, top), y);
-  // ±1px 容差：WebKit dsf=3 可能落定分数 scrollY；越界落定会被下游折叠/展开态断言响亮捕获，
-  // 不会空过（32/33 仍分居 >32 阈值两侧；ocr r2）
-  await expect
-    .poll(() => page.evaluate((top) => Math.abs(window.scrollY - top), y))
-    .toBeLessThanOrEqual(1);
+  // 精确相等：±1px 容差会在 32/33 边界目标跨越 >32 折叠阈值造成假失败（ocr r3），
+  // 且 instant scrollTo 整数落定在 Chromium/WebKit 多轮实测均稳定；分数落定如出现再按实证处理
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(y);
 }
