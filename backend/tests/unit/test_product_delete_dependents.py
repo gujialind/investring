@@ -77,6 +77,25 @@ class TestDependentTableSet:
                     assert fk.column.table.name == Product.__tablename__
                     assert fk.column.primary_key is True
 
+    def test_every_dependent_table_has_exactly_one_product_fk_constraint(self):
+        """派生实现按表取**首条**指向 product 的约束（break）；本断言把「每表
+        恰一条」钉成前提（L2 r2）：已列名单的表若新增第二条产品引用约束，
+        仅经第二约束引用的行会对删除判据失明——前提失效即翻红，要求改成
+        逐约束 OR 聚合，而不是让判据静默退化。
+        """
+        for table, _pairs in _product_dependent_tables():
+            product_constraints = [
+                c for c in table.foreign_key_constraints
+                if c.elements and all(
+                    fk.column.table.name == Product.__tablename__
+                    for fk in c.elements
+                )
+            ]
+            assert len(product_constraints) == 1, (
+                f"{table.name} 有 {len(product_constraints)} 条指向 product 的外键约束，"
+                "单约束前提失效，_product_dependent_tables 须改逐约束 OR 聚合"
+            )
+
 
 class TestNonForeignKeyReferences:
     """元数据派生只看外键；带 product_code 列而无 FK 的表逐表决定（计入/豁免）。"""

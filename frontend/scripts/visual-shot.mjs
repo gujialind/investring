@@ -44,6 +44,8 @@ const DEFAULT_PATHS = [
   '/portfolio/E2E_ACTIVE/share-change-events',
 ];
 const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert'];
+// 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
+const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 
 const opts = {
   base: 'http://localhost:3000',
@@ -85,10 +87,13 @@ if (opts.scenario && !SCENARIOS.includes(opts.scenario)) {
   process.exit(2);
 }
 if (opts.paths.length === 0) opts.paths = DEFAULT_PATHS;
-// 页面态 scenario 忽略调用方 path（自行导航到夹具组合）：未显式 --path 时收敛为
-// 单一路径，避免默认三路径产出三张同名异slug 的重复截图（L2 r1）
-if (opts.scenario === 'snapshot-catchup-alert' && !pathsExplicit) {
-  opts.paths = ['/portfolio/VIS906STALE'];
+// 页面态 scenario 自行导航到夹具组合、忽略调用方 path：无条件收敛为单一路径，
+// 避免多 path 产出同名异slug 的重复截图（L2 r1/r2）；显式 --path 给警告不静默
+if (opts.scenario === 'snapshot-catchup-alert') {
+  if (pathsExplicit) {
+    console.warn(`⚠ scenario snapshot-catchup-alert 忽略 --path，统一截 /portfolio/${CATCHUP_FIXTURE_CODE}`);
+  }
+  opts.paths = [`/portfolio/${CATCHUP_FIXTURE_CODE}`];
 }
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
@@ -134,8 +139,9 @@ async function runScenario(page, scenario, device) {
     // 复用与否都以 status 的 trailing 缺口非空为准（L2 r1：任何非 OK create 都当
     // 「已存在」会把真实后端错误掩成 15s 定位超时）。
     const token = await page.evaluate(() => localStorage.getItem('token'));
+    if (!token) throw new Error('页面 localStorage 中缺少登录 token，无法造目检夹具');
     const headers = { Authorization: `Bearer ${token}` };
-    const code = 'VIS906STALE';
+    const code = CATCHUP_FIXTURE_CODE;
     const okJson = async (resp, what) => {
       if (!resp.ok()) throw new Error(`目检夹具${what}失败: ${resp.status()} ${await resp.text()}`);
       return resp.json();
@@ -143,7 +149,14 @@ async function runScenario(page, scenario, device) {
     const create = await page.request.post('/api/portfolios', {
       headers, data: { code, name: '目检停更夹具' },
     });
-    if (create.ok()) {
+    if (!create.ok()) {
+      // 仅容忍「已存在」（同运行第二端/第二主题复用）；其余带响应体响亮失败，
+      // 不把真实后端错误掩成下游 status 404（L2 r2）
+      const body = await create.text();
+      if (!body.includes('ALREADY_EXISTS')) {
+        throw new Error(`目检夹具建组合失败: ${create.status()} ${body}`);
+      }
+    } else {
       const today = new Date();
       const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const todayISO = iso(today);

@@ -729,6 +729,8 @@ def _product_dependent_tables() -> list:
     约束**逐列等值过滤（与 portfolio 单列判据的差异点）；名单不手写，新增外键
     引用表自动进入删除判据，集合变化由
     `tests/unit/test_product_delete_dependents.py` 的快照断言翻红暴露。
+    每表取首条指向 product 的约束（break）——「每表恰一条」前提由同守门文件
+    的断言钉住（L2 r2），前提失效即翻红要求改逐约束 OR 聚合。
     """
     entries = []
     for table in Base.metadata.tables.values():
