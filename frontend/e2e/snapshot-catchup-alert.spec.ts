@@ -21,33 +21,14 @@ import {
   createPortfolioViaApi,
   gotoPortfolioDetail,
   isolatedPortfolioCode,
-  nearestTradingDay,
   openAppAndAuth,
+  prevOpenDays,
+  seedStaleBaseline,
   toISODate,
   E2E_PORT,
 } from './helpers';
 
 type Headers = { Authorization: string };
-
-/** today 之前（不含）最近 n 个 SSE 开市日，升序；跨年回看上一年（同 nearestTradingDay 口径） */
-async function prevOpenDays(page: Page, headers: Headers, n: number): Promise<string[]> {
-  const today = toISODate(new Date());
-  const days: string[] = [];
-  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    days.push(
-      ...rows
-        .filter((r) => r.is_open && r.calendar_date < today)
-        .map((r) => r.calendar_date),
-    );
-    if (days.length >= n) break;
-  }
-  days.sort();
-  expect(days.length, `交易日历不足 ${n} 个历史开市日`).toBeGreaterThanOrEqual(n);
-  return days.slice(-n);
-}
 
 /** 运行器本地「业务昨日」的最近开市日（≤ today-1） */
 async function lastOpenDayOnOrBeforeYesterday(page: Page, headers: Headers): Promise<string> {
@@ -71,6 +52,7 @@ async function lastOpenDayOnOrBeforeYesterday(page: Page, headers: Headers): Pro
  * 申购申请日 = 前第 5 个开市日 → 确认日 = 次一开市日（T+1）= 前第 4 个开市日，
  * 首购确认激活后 generate 该日快照（纯 CASH 持仓，无需行情）。
  * 其后至今至少有 2 个开市日缺口（周末形态亦成立），trailing 缺口确定性非空。
+ * 造数链与 visual-shot 共用 helpers 单点（prevOpenDays/seedStaleBaseline，ocr r3）。
  */
 async function setupStalePortfolio(
   page: Page,
@@ -79,30 +61,8 @@ async function setupStalePortfolio(
 ): Promise<{ latest: string }> {
   await createPortfolioViaApi(page, headers, code);
   const prev5 = await prevOpenDays(page, headers, 5);
-  const applyDate = prev5[0];
   const latest = prev5[1]; // 申请日的次一开市日 = T+1 确认日
-
-  const sub = (await (
-    await page.request.post('/api/subscriptions', {
-      headers,
-      data: {
-        portfolio_code: code,
-        investor_code: 'ADMIN',
-        platform_code: 'HBZQ',
-        sub_type: 'subscribe',
-        amount: 100000,
-        apply_date: applyDate,
-      },
-    })
-  ).json()) as { id: number };
-  const confirmResp = await page.request.post(`/api/subscriptions/${sub.id}/confirm`, { headers });
-  expect(confirmResp.ok(), `首购确认失败 ${confirmResp.status()} ${await confirmResp.text()}`).toBeTruthy();
-
-  const genResp = await page.request.post('/api/snapshots/generate', {
-    headers,
-    data: { portfolio_code: code, target_date: latest },
-  });
-  expect(genResp.ok(), `快照生成失败 ${genResp.status()} ${await genResp.text()}`).toBeTruthy();
+  await seedStaleBaseline(page, headers, code, prev5[0], latest);
   return { latest };
 }
 

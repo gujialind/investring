@@ -32,6 +32,8 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium, webkit, devices } from '@playwright/test';
+// 停更夹具造数与 E2E 共用 helpers 单点（Node 24 类型剥离加载 .ts，ocr r3 防漂移）
+import { prevOpenDays, seedStaleBaseline } from '../e2e/helpers.ts';
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
@@ -150,42 +152,17 @@ async function runScenario(page, scenario, device) {
       headers, data: { code, name: '目检停更夹具' },
     });
     if (!create.ok()) {
-      // 仅容忍「已存在」（同运行第二端/第二主题复用）；其余带响应体响亮失败，
-      // 不把真实后端错误掩成下游 status 404（L2 r2）
+      // 仅容忍结构化「已存在」（400 + detail.error=ALREADY_EXISTS，同运行第二端/
+      // 第二主题复用）；其余带响应体响亮失败，不掩真实后端错误（L2 r2/r3）
       const body = await create.text();
-      if (!body.includes('ALREADY_EXISTS')) {
+      let errCode = null;
+      try { errCode = JSON.parse(body)?.detail?.error ?? null; } catch { /* 非 JSON 一律响亮失败 */ }
+      if (!(create.status() === 400 && errCode === 'ALREADY_EXISTS')) {
         throw new Error(`目检夹具建组合失败: ${create.status()} ${body}`);
       }
     } else {
-      const today = new Date();
-      const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const todayISO = iso(today);
-      const days = [];
-      for (const year of [today.getFullYear(), today.getFullYear() - 1]) {
-        const rows = await okJson(
-          await page.request.get(`/api/trading-calendar?year=${year}`, { headers }),
-          '交易日历查询',
-        );
-        days.push(...rows.filter((r) => r.is_open && r.calendar_date < todayISO).map((r) => r.calendar_date));
-        if (days.length >= 5) break;
-      }
-      days.sort();
-      if (days.length < 5) throw new Error(`目检夹具交易日历不足 5 个历史开市日（实际 ${days.length}）`);
-      const prev5 = days.slice(-5);
-      const sub = await okJson(await page.request.post('/api/subscriptions', {
-        headers,
-        data: {
-          portfolio_code: code, investor_code: 'ADMIN', platform_code: 'HBZQ',
-          sub_type: 'subscribe', amount: 100000, apply_date: prev5[0],
-        },
-      }), '首购申购');
-      await okJson(
-        await page.request.post(`/api/subscriptions/${sub.id}/confirm`, { headers }),
-        '首购确认',
-      );
-      await okJson(await page.request.post('/api/snapshots/generate', {
-        headers, data: { portfolio_code: code, target_date: prev5[1] },
-      }), '快照生成');
+      const prev5 = await prevOpenDays(page, headers, 5);
+      await seedStaleBaseline(page, headers, code, prev5[0], prev5[1]);
     }
     const status = await okJson(
       await page.request.get(`/api/snapshots/portfolios/${code}/status`, { headers }),

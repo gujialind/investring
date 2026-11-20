@@ -818,6 +818,60 @@ export async function closePortfolioViaApi(
 }
 
 /**
+ * today 之前（不含）最近 n 个 SSE 开市日，升序；跨年回看上一年（同 nearestTradingDay 口径，#468）。
+ * #906 停更夹具与 E2E / visual-shot 共用单点，防造数漂移（ocr r3）。
+ */
+export async function prevOpenDays(
+  page: Page,
+  headers: { Authorization: string },
+  n: number,
+): Promise<string[]> {
+  const today = toISODate(new Date());
+  const days: string[] = [];
+  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
+    const rows = (await (
+      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
+    ).json()) as { calendar_date: string; is_open: boolean }[];
+    days.push(
+      ...rows
+        .filter((r) => r.is_open && r.calendar_date < today)
+        .map((r) => r.calendar_date),
+    );
+    if (days.length >= n) break;
+  }
+  days.sort();
+  expect(days.length, `交易日历不足 ${n} 个历史开市日`).toBeGreaterThanOrEqual(n);
+  return days.slice(-n);
+}
+
+/**
+ * 停更基线造数（#906）：申购（apply）+ 确认（T+1=latest）+ generate latest 日快照。
+ * 纯 CASH 持仓首窗净值 1.0000 无需行情；组合须已存在且 draft（调用方负责创建/复用）。
+ * E2E 与 visual-shot 共用单点（ocr r3）。
+ */
+export async function seedStaleBaseline(
+  page: Page,
+  headers: { Authorization: string },
+  code: string,
+  applyDate: string,
+  latest: string,
+): Promise<void> {
+  const sub = (await apiPost(page, headers, '/api/subscriptions', {
+    portfolio_code: code,
+    investor_code: 'ADMIN',
+    platform_code: 'HBZQ',
+    sub_type: 'subscribe',
+    amount: 100000,
+    apply_date: applyDate,
+  })) as { id: number };
+  await apiPost(page, headers, `/api/subscriptions/${sub.id}/confirm`);
+  await apiPost(page, headers, '/api/snapshots/generate', {
+    portfolio_code: code,
+    target_date: latest,
+  });
+}
+
+/**
  * 清除交易列表的默认「近1年」日期区间（trade_date_end = today）。
  *
  * 在途 / 分页类 spec 的被测腿在**未来**交易日下单（D 是 ≤ today 的最近交易日 ⇒ D+1 起
