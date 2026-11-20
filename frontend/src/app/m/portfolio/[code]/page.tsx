@@ -4,7 +4,7 @@ import PageHeader from "@/components/shared/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { getStatusBadgeVariant } from "@/lib/utils";
 
-import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,24 +39,14 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import { buildAllocation } from "@/lib/allocation";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { parseHoldingsView, type HoldingsView } from "@/types/holding";
+import { useViewQueryState } from "@/hooks/useViewQueryState";
 
 function MobilePortfolioDetailInner() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const pathname = usePathname();
   const code = params.code as string;
   const showInvestors = searchParams.get("tab") === "investors";
-  // 持仓明细视图（#595 D-7）：URL ?view=product|platform，默认 product（省略参数）
-  const view = parseHoldingsView(searchParams.get("view"));
-  const handleViewChange = (next: HoldingsView) => {
-    const sp = new URLSearchParams(searchParams.toString());
-    if (next === "product") sp.delete("view");
-    else sp.set("view", next);
-    const qs = sp.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  };
 
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(code);
   const { data: snapshot, isLoading: snapshotLoading } = useLatestSnapshot(code);
@@ -66,6 +56,14 @@ function MobilePortfolioDetailInner() {
   // asset_class 维度字典（issue #128）：驱动饼图颜色/顺序与持仓分区
   const { data: assetClassDict, isLoading: dictLoading } =
     useAssetClassifications("asset_class");
+
+  // 视图状态 URL 单点（?view= ＋ #915 B2 ?sub=，双端共用 hook；连点竞态口径见 hook 注释）
+  const {
+    view,
+    onViewChange: handleViewChange,
+    subDimOverrides,
+    onSubDimToggle: handleSubDimToggle,
+  } = useViewQueryState(assetClassDict?.dimension_rules);
   // 投资人列表仅 ?tab=investors 视图惰性查询（draft 也允许查看）
   const { data: investors, isLoading: investorsLoading } = usePortfolioInvestors(code, {
     enabled: showInvestors,
@@ -259,6 +257,8 @@ function MobilePortfolioDetailInner() {
                 dimensionRules={assetClassDict?.dimension_rules}
                 view={view}
                 onViewChange={handleViewChange}
+                subDimOverrides={subDimOverrides}
+                onSubDimToggle={handleSubDimToggle}
                 variant="mobile"
                 action={
                   isAdmin ? (

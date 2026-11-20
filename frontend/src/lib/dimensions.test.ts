@@ -3,6 +3,13 @@ import {
   resolveSubDims,
   parseDisplaySubset,
   filterRegisteredDims,
+  parseSubDimOverrides,
+  serializeSubDimOverrides,
+  toggleSubDimOverride,
+  resolveViewSubDims,
+  registeredDimsFor,
+  isOverrideRegistered,
+  ruleDimsFor,
   getDimensionOptions,
   clearInapplicableDims,
   DEFAULT_SUB_DIMS_BY_CLASS,
@@ -141,6 +148,239 @@ describe("filterRegisteredDims（弹窗回填/提交登记过滤，L2 r1）", ()
       "region",
     ]);
     expect(filterRegisteredDims(["style"], "ASSET_STOCK", null)).toEqual(["style"]);
+  });
+});
+
+describe("parseSubDimOverrides（#915 B2 URL ?sub= 形态解析）", () => {
+  it("null/空串 → 空覆盖；单条目与多条目解析", () => {
+    expect(parseSubDimOverrides(null)).toEqual({});
+    expect(parseSubDimOverrides("")).toEqual({});
+    expect(parseSubDimOverrides("ASSET_STOCK.style")).toEqual({ ASSET_STOCK: ["style"] });
+    expect(parseSubDimOverrides("ASSET_STOCK.style.size~ASSET_BOND.region")).toEqual({
+      ASSET_STOCK: ["style", "size"],
+      ASSET_BOND: ["region"],
+    });
+  });
+
+  it("维度去重 + 全序归一（顺序无语义，与配置串同契约）", () => {
+    expect(parseSubDimOverrides("ASSET_STOCK.segment.style.segment")).toEqual({
+      ASSET_STOCK: ["style", "segment"],
+    });
+  });
+
+  it("未知维度剔除（尽力保留合法部分）；无有效维度/空大类 code 的条目整条丢弃", () => {
+    expect(parseSubDimOverrides("ASSET_STOCK.style.bogus")).toEqual({ ASSET_STOCK: ["style"] });
+    expect(parseSubDimOverrides("ASSET_STOCK.bogus")).toEqual({});
+    expect(parseSubDimOverrides("ASSET_STOCK")).toEqual({});
+    expect(parseSubDimOverrides(".style~ASSET_BOND.region")).toEqual({ ASSET_BOND: ["region"] });
+    expect(parseSubDimOverrides("~")).toEqual({});
+  });
+
+  it("与 serialize 往返全等（解析→序列化→解析幂等）", () => {
+    const raw = "ASSET_BOND.region.segment~ASSET_STOCK.style";
+    expect(serializeSubDimOverrides(parseSubDimOverrides(raw))).toBe(raw);
+  });
+
+  it("原型敏感键整条丢弃（URL 信任边界，ocr r1）：不污染结果原型、合法条目保留", () => {
+    expect(parseSubDimOverrides("__proto__.region")).toEqual({});
+    expect(parseSubDimOverrides("constructor.style")).toEqual({});
+    expect(parseSubDimOverrides("prototype.segment")).toEqual({});
+    const mixed = parseSubDimOverrides("__proto__.region~ASSET_STOCK.style");
+    expect(mixed).toEqual({ ASSET_STOCK: ["style"] });
+    expect(Object.getPrototypeOf(mixed)).toBe(Object.prototype);
+    expect(serializeSubDimOverrides(mixed)).toBe("ASSET_STOCK.style");
+  });
+
+  it("code 含逻辑分隔符/百分号时转义往返全等（ocr r2：后端 code 仅约束全大写+前缀）", () => {
+    for (const code of ["ASSET_A.B", "ASSET_A~B", "ASSET_A%B", "ASSET_A%2EB"]) {
+      const map = { [code]: ["style" as const] };
+      const raw = serializeSubDimOverrides(map);
+      expect(raw).not.toBeNull();
+      expect(parseSubDimOverrides(raw)).toEqual(map);
+    }
+    expect(serializeSubDimOverrides({ "ASSET_A.B": ["style"] })).toBe("ASSET_A%2EB.style");
+    // 解码失败条目整条丢弃（不抛错）
+    expect(parseSubDimOverrides("ASSET_A%zz.style")).toEqual({});
+  });
+
+  it("serialize 跳过原型敏感键（与 parse 对称，ocr r2：JSON.parse 来源自有键）", () => {
+    const map = JSON.parse('{"__proto__":["style"],"ASSET_STOCK":["region"]}');
+    expect(serializeSubDimOverrides(map)).toBe("ASSET_STOCK.region");
+  });
+});
+
+describe("serializeSubDimOverrides（#915 B2 URL 写入）", () => {
+  it("空覆盖/全空子集 → null（调用方移除参数，回默认）", () => {
+    expect(serializeSubDimOverrides({})).toBeNull();
+    expect(serializeSubDimOverrides({ ASSET_STOCK: [] })).toBeNull();
+  });
+
+  it("大类 code 字典序 + 维度全序：同一覆盖集恒产出同一串", () => {
+    expect(
+      serializeSubDimOverrides({
+        ASSET_STOCK: ["segment", "region"],
+        ASSET_BOND: ["region"],
+      })
+    ).toBe("ASSET_BOND.region~ASSET_STOCK.region.segment");
+  });
+});
+
+describe("toggleSubDimOverride（#915 B2 快捷切换 + 直切子集同一交互）", () => {
+  it("默认态首击 = 快捷切换到该单维（不是在默认子集上追加）", () => {
+    expect(toggleSubDimOverride({}, "ASSET_STOCK", "style")).toEqual({ ASSET_STOCK: ["style"] });
+  });
+
+  it("覆盖态点击为勾选/取消，多选成子集、恒按全序归一", () => {
+    const one = toggleSubDimOverride({}, "ASSET_STOCK", "segment");
+    const two = toggleSubDimOverride(one, "ASSET_STOCK", "region");
+    expect(two).toEqual({ ASSET_STOCK: ["region", "segment"] });
+    expect(toggleSubDimOverride(two, "ASSET_STOCK", "region")).toEqual({
+      ASSET_STOCK: ["segment"],
+    });
+  });
+
+  it("取消最后一维 = 移除该大类覆盖、回默认（Q8 不支持强制平铺）", () => {
+    const one = toggleSubDimOverride({}, "ASSET_STOCK", "style");
+    expect(toggleSubDimOverride(one, "ASSET_STOCK", "style")).toEqual({});
+  });
+
+  it("其他大类覆盖保留；不改入参（纯函数）", () => {
+    const base = { ASSET_BOND: ["region" as const] };
+    const next = toggleSubDimOverride(base, "ASSET_STOCK", "size");
+    expect(next).toEqual({ ASSET_BOND: ["region"], ASSET_STOCK: ["size"] });
+    expect(base).toEqual({ ASSET_BOND: ["region"] });
+  });
+
+  it("原型敏感键不写入、继承成员不抛错（与 parse 同判据，ocr r1）", () => {
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      const next = toggleSubDimOverride({}, key, "style");
+      expect(next).toEqual({});
+      expect(Object.getPrototypeOf(next)).toBe(Object.prototype);
+    }
+  });
+
+  it("传登记维且覆盖含未登记维 → 首击重建子集（ocr r1 死胡同收口进 lib）", () => {
+    const stale = { ASSET_STOCK: ["style" as const, "segment" as const] };
+    const registered = ["region", "size", "segment"]; // style 被收紧
+    expect(toggleSubDimOverride(stale, "ASSET_STOCK", "region", registered)).toEqual({
+      ASSET_STOCK: ["region"],
+    });
+    // 覆盖全登记时正常追加/取消（不误伤）
+    expect(toggleSubDimOverride(stale, "ASSET_STOCK", "region", ["region", "style", "segment"])).toEqual({
+      ASSET_STOCK: ["region", "style", "segment"],
+    });
+    // 不传登记维时保持原语义（追加）
+    expect(toggleSubDimOverride(stale, "ASSET_STOCK", "region")).toEqual({
+      ASSET_STOCK: ["region", "style", "segment"],
+    });
+  });
+});
+
+describe("resolveViewSubDims（#915 B2 消费侧：临时覆盖优先于配置/默认）", () => {
+  it("不传/空覆盖时与 resolveSubDims 全等（B1 行为零变化）", () => {
+    for (const overrides of [undefined, null, {}]) {
+      expect(resolveViewSubDims(null, "ASSET_STOCK", RULES, overrides)).toEqual(
+        resolveSubDims(null, "ASSET_STOCK", RULES)
+      );
+      expect(
+        resolveViewSubDims({ ASSET_STOCK: "style" }, "ASSET_STOCK", RULES, overrides)
+      ).toEqual(["style"]);
+    }
+    expect(resolveViewSubDims(null, "ASSET_STOCK", RULES, { ASSET_STOCK: [] })).toEqual([
+      "region",
+      "segment",
+    ]);
+  });
+
+  it("覆盖优先于显式配置与默认子集表；仅作用于该大类", () => {
+    expect(
+      resolveViewSubDims({ ASSET_STOCK: "style" }, "ASSET_STOCK", RULES, {
+        ASSET_STOCK: ["size"],
+      })
+    ).toEqual(["size"]);
+    expect(resolveViewSubDims(null, "ASSET_BOND", RULES, { ASSET_STOCK: ["size"] })).toEqual([
+      "region",
+      "segment",
+    ]);
+  });
+
+  it("覆盖乱序归一为全序；单元素覆盖 = 单维分组口径", () => {
+    expect(
+      resolveViewSubDims(null, "ASSET_STOCK", RULES, { ASSET_STOCK: ["segment", "region"] })
+    ).toEqual(["region", "segment"]);
+    expect(
+      resolveViewSubDims(null, "ASSET_STOCK", RULES, { ASSET_STOCK: ["style"] })
+    ).toEqual(["style"]);
+  });
+
+  it("覆盖含规则未登记维 → 整条失效回退（与读侧脏配置整串回退同语义）", () => {
+    // 规则收紧后覆盖含失效维 → 回退到显式配置（合法时）
+    const tightened = { ASSET_STOCK: { region: "required", segment: "optional" } };
+    expect(
+      resolveViewSubDims({ ASSET_STOCK: "region" }, "ASSET_STOCK", tightened, {
+        ASSET_STOCK: ["region", "style"],
+      })
+    ).toEqual(["region"]);
+    expect(
+      resolveViewSubDims({ ASSET_BOND: "region" }, "ASSET_BOND", RULES, {
+        ASSET_BOND: ["region", "style"],
+      })
+    ).toEqual(["region"]);
+    // 无配置时回退默认子集表
+    expect(
+      resolveViewSubDims(null, "ASSET_BOND", RULES, { ASSET_BOND: ["style"] })
+    ).toEqual(["region", "segment"]);
+    // 现金无规则行：任何覆盖都失效，保持平铺
+    expect(resolveViewSubDims(null, "ASSET_CASH", RULES, { ASSET_CASH: ["segment"] })).toEqual([]);
+  });
+
+  it("不传规则矩阵时覆盖不做登记过滤（形态解析结果直接生效）", () => {
+    expect(resolveViewSubDims(null, "ASSET_STOCK", null, { ASSET_STOCK: ["style"] })).toEqual([
+      "style",
+    ]);
+  });
+
+  it("继承成员守卫（ocr r1）：classCode 撞 Object.prototype 成员不抛错、回退默认解析", () => {
+    // 无守卫时 override=Object/toString 函数，.every 抛 TypeError 白屏
+    expect(resolveViewSubDims(null, "constructor", null, {})).toEqual([]);
+    expect(resolveViewSubDims(null, "toString", RULES, {})).toEqual([]);
+    expect(
+      resolveViewSubDims(null, "constructor", RULES, JSON.parse('{"constructor":["style"]}'))
+    ).toEqual([]);
+  });
+});
+
+describe("registeredDimsFor / isOverrideRegistered（判据单点，ocr r3）", () => {
+  it("rules 缺失 = null（不校验）；有 rules = own 键；无规则行 = 空数组（全禁止）", () => {
+    expect(registeredDimsFor("ASSET_STOCK", null)).toBeNull();
+    expect(registeredDimsFor("ASSET_STOCK", undefined)).toBeNull();
+    expect(registeredDimsFor("ASSET_STOCK", RULES)).toEqual([
+      "region",
+      "style",
+      "size",
+      "segment",
+    ]);
+    expect(registeredDimsFor("ASSET_CASH", RULES)).toEqual([]);
+    // 原型名 classCode 不读继承函数；键缺失仍全禁止（ocr r5，现金语义不得误放）
+    expect(registeredDimsFor("constructor", RULES)).toEqual([]);
+    expect(registeredDimsFor("toString", RULES)).toEqual([]);
+  });
+
+  it("非数组/空/含未登记维 = false；null 判据不校验登记；空数组判据全拒", () => {
+    expect(isOverrideRegistered(undefined, null)).toBe(false);
+    expect(isOverrideRegistered([], null)).toBe(false);
+    expect(isOverrideRegistered(Object, ["region"])).toBe(false);
+    expect(isOverrideRegistered(["style"], null)).toBe(true);
+    expect(isOverrideRegistered(["style"], [])).toBe(false);
+    expect(isOverrideRegistered(["region", "style"], ["region"])).toBe(false);
+    expect(isOverrideRegistered(["region"], ["region", "style"])).toBe(true);
+    // 成员资格自校验（ocr r5）：非维度串即使 null 判据也拒
+    expect(isOverrideRegistered(["bogus"], null)).toBe(false);
+  });
+
+  it("ruleDimsFor：登记键 ∩ 可规则化四维、恒全序（门控与渲染同源）", () => {
+    expect(ruleDimsFor(["segment", "region", "bogus"])).toEqual(["region", "segment"]);
+    expect(ruleDimsFor([])).toEqual([]);
   });
 });
 

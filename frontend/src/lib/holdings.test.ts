@@ -8,6 +8,7 @@ import {
   UNCATEGORIZED_GROUP_NAME,
 } from "@/lib/holdings";
 import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
+import type { SubDimension } from "@/lib/dimensions";
 import type { HoldingProductAggregate } from "@/types/holding";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 
@@ -327,6 +328,90 @@ describe("buildProductSections", () => {
 
   it("空输入返回空数组", () => {
     expect(buildProductSections([], DICT)).toEqual([]);
+  });
+});
+
+describe("buildProductSections 页面级临时子集覆盖（#915 B2）", () => {
+  /** 种子规则矩阵形态（backend/app/constants/asset_dimensions.py::DIMENSION_RULES） */
+  const RULES = {
+    ASSET_STOCK: { region: "required", style: "required", size: "required", segment: "optional" },
+    ASSET_BOND: { region: "required", segment: "required" },
+    ASSET_COMMODITY: { segment: "optional" },
+  };
+
+  const products = [
+    makeStockProduct({ product_code: "A", market_value: 100 }),
+    makeStockProduct({ product_code: "B", style_code: "STYLE_VALUE", style_name: "价值", market_value: 300 }),
+    makeStockProduct({ product_code: "C", size_code: "SIZE_SMALL", size_name: "中小盘", market_value: 200 }),
+    makeProduct({ product_code: "B1", asset_class_code: "ASSET_BOND", asset_class_name: "债券", segment_code: "SEG_BOND_SHORT", segment_name: "短债", market_value: 50 }),
+  ];
+
+  it("单维覆盖 ≡ 现状单维分组（B2 快捷切换的承重等价，四维各测一次）", () => {
+    const stocks = products.filter((p) => p.asset_class_code === "ASSET_STOCK");
+    for (const dim of ["region", "style", "size", "segment"] as const) {
+      const [section] = buildProductSections(products, DICT, null, RULES, { ASSET_STOCK: [dim] });
+      expect(section.subDims).toEqual([dim]);
+      const legacy = legacySingleDimGroups(stocks, dim);
+      expect(section.groups.map((g) => g.name)).toEqual(legacy.map((g) => g.name));
+      expect(section.groups.map((g) => g.total)).toEqual(legacy.map((g) => g.total));
+      expect(section.groups.map((g) => g.products.map((p) => p.product_code))).toEqual(
+        legacy.map((g) => g.products.map((p) => p.product_code))
+      );
+    }
+  });
+
+  it("覆盖优先于显式配置与默认子集；仅作用于该大类（债券不受股票覆盖影响）", () => {
+    const [stock, bond] = buildProductSections(products, DICT, { ASSET_STOCK: "style" }, RULES, {
+      ASSET_STOCK: ["size"],
+    });
+    expect(stock.subDims).toEqual(["size"]);
+    expect(stock.groups.map((g) => g.name)).toEqual(["大盘", "中小盘"]);
+    expect(bond.subDims).toEqual(["region", "segment"]);
+    expect(bond.groups[0].name).toBe("中国·短债");
+  });
+
+  it("多维覆盖 = 直切子集组合键（风格·规模）", () => {
+    const [section] = buildProductSections(products, DICT, null, RULES, {
+      ASSET_STOCK: ["style", "size"],
+    });
+    expect(section.subDims).toEqual(["style", "size"]);
+    expect(section.groups.map((g) => g.name)).toEqual(["价值·大盘", "平衡·中小盘", "平衡·大盘"]);
+  });
+
+  it("覆盖不改合计口径：section.total 与一卡恰属一组守卫在有/无覆盖下全等", () => {
+    const base = buildProductSections(products, DICT, null, RULES);
+    const switched = buildProductSections(products, DICT, null, RULES, {
+      ASSET_STOCK: ["style", "size"],
+    });
+    expect(switched.map((s) => s.total)).toEqual(base.map((s) => s.total));
+    const all = switched[0].groups.flatMap((g) => g.products);
+    expect(all).toHaveLength(3);
+    expect(new Set(all.map(productCardKey)).size).toBe(3);
+  });
+
+  it("覆盖含规则未登记维 → 整条失效回退配置/默认（读侧防御同语义）；现金覆盖恒失效保持平铺", () => {
+    const [stock, bond] = buildProductSections(products, DICT, { ASSET_STOCK: "style" }, RULES, {
+      ASSET_STOCK: ["style", "bogus" as SubDimension],
+      ASSET_BOND: ["style"],
+    });
+    expect(stock.subDims).toEqual(["style"]); // 回退显式配置
+    expect(bond.subDims).toEqual(["region", "segment"]); // 回退默认
+    const cash = makeProduct({ product_code: "CASH", market: "", asset_class_code: "ASSET_CASH", asset_class_name: "现金", region_code: null, region_name: null, cash_amount: 1000, market_value: 1000 });
+    const [cashSection] = buildProductSections([cash], DICT, null, RULES, { ASSET_CASH: ["segment"] });
+    expect(cashSection.subDims).toEqual([]);
+    expect(cashSection.groups[0].name).toBe("现金");
+  });
+
+  it("其他桶不受覆盖影响（恒平铺垫底）", () => {
+    const withOther = [
+      ...products,
+      makeProduct({ product_code: "X1", asset_class_code: "ASSET_UNKNOWN", market_value: 50 }),
+    ];
+    const sections = buildProductSections(withOther, DICT, null, RULES, { ASSET_UNKNOWN: ["region"] });
+    const other = sections[sections.length - 1];
+    expect(other.name).toBe(OTHER_SECTION_NAME);
+    expect(other.subDims).toEqual([]);
+    expect(other.groups[0].name).toBe(OTHER_SECTION_NAME);
   });
 });
 

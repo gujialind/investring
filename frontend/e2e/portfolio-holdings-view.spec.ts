@@ -96,6 +96,20 @@ async function setupInTransitPortfolio(page: Page, testInfo: TestInfo): Promise<
   return code;
 }
 
+/**
+ * 视图 tab 点击放置（#915 B2 稳定性收口）：mobile webkit 从页顶滚动态首击 tab 时，
+ * Playwright 协议滚动与合成器 commit 竞态会让 hit-test 落在分区头上（拦截重试烧满
+ * actionTimeout；套件内间歇、单跑恒绿、trace-on 恒绿＝时序竞态签名）。先经 evaluate
+ * 滚到视口中央（一次瞬时跳变＋round-trip 帧边界），Playwright 再测盒时布局已 commit。
+ * 先例：display-config-dialog.spec.ts::openDisplayConfigDialog 的同款放置注释。
+ * 只改点击放置，不改任何断言。
+ */
+async function clickViewTab(page: Page, key: 'product' | 'platform'): Promise<void> {
+  const tab = page.getByTestId(`holdings-tab-${key}`);
+  await tab.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  await tab.click();
+}
+
 test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
   test('持仓明细读取失败 → 后端消息与重试入口，而非「暂无持仓记录」（#663③）', async ({ page }) => {
     // 只钉默认的按产品视图：按平台走同一个 activeQuery.isError 分支（同一段代码），
@@ -242,7 +256,7 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });
 
-    await page.getByTestId('holdings-tab-platform').click();
+    await clickViewTab(page, 'platform');
     await expect(page).toHaveURL(/[?&]view=platform/);
     await expect(page.getByTestId('holdings-tab-platform')).toHaveAttribute(
       'aria-pressed',
@@ -283,7 +297,7 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });
 
-    await page.getByTestId('holdings-tab-platform').click();
+    await clickViewTab(page, 'platform');
     await expect(page).toHaveURL(/[?&]view=platform/);
 
     await page.reload();
@@ -293,7 +307,7 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     );
     await expect(page.getByTestId('holding-platform-card').first()).toBeVisible();
 
-    await page.getByTestId('holdings-tab-product').click();
+    await clickViewTab(page, 'product');
     // router.replace 为异步：用轮询断言等 URL 收敛，不做即时 page.url() 快照
     await expect(page).toHaveURL((url) => !url.search.includes('view='));
     await expect(page.getByTestId('holding-product-card').first()).toBeVisible();
