@@ -11,6 +11,13 @@
  * 经 src/proxy.ts 按 UA 重定向到 /m 前缀（Next.js 16 middleware 更名 proxy，#332）
  * ——结构性消除 `href^="/portfolio/"` 类只在桌面成立的定位（regression.spec.ts
  * 旧 mobile bug：移动端锚点 href 为 /m/portfolio/...，`^=` 永不匹配 → 恒 skip）。
+ *
+ * **Node 直载契约（#906 ocr r6）**：本文件被 scripts/visual-shot.mjs 经 Node 原生
+ * 类型剥离直接 import（非 Playwright TS loader）。故仅可用**可擦除** TS 语法
+ * （no enum/namespace/参数属性），且相对导入必须带 `.ts` 扩展名（类型剥离不解析
+ * 无扩展名 `./foo`→`./foo.ts`）。违反会使 visual-shot 启动期 ERR_MODULE_NOT_FOUND /
+ * 语法报错，而 Playwright 运行仍绿（visual-shot 在 e2e CI job 之外）。当前仅
+ * import '@playwright/test'，满足契约；新增相对导入须带 .ts。
  */
 import { expect, test, type Page, type Locator, type TestInfo } from '@playwright/test';
 
@@ -677,6 +684,27 @@ export async function openAppAndAuth(page: Page): Promise<{ Authorization: strin
   return authHeaders(page);
 }
 
+/**
+ * 单年开市日取数单点（#906 ocr r6）：ok 守卫 + 行形状 cast + is_open/截止过滤
+ * 集中一处，nearestTradingDay 与 prevOpenDays 共用，防日历 API 契约改动两路漂移。
+ * inclusive=true 含截止日（<=），false 不含（<）。
+ */
+async function fetchYearOpenDays(
+  page: Page,
+  headers: { Authorization: string },
+  year: number,
+  cutoffISO: string,
+  inclusive: boolean,
+): Promise<string[]> {
+  const resp = await page.request.get(`/api/trading-calendar?year=${year}`, { headers });
+  expect(resp.ok(), `交易日历查询失败 ${resp.status()} ${await resp.text()}`).toBeTruthy();
+  const rows = (await resp.json()) as { calendar_date: string; is_open: boolean }[];
+  return rows
+    .filter((r) => r.is_open && (inclusive ? r.calendar_date <= cutoffISO : r.calendar_date < cutoffISO))
+    .map((r) => r.calendar_date)
+    .sort();
+}
+
 /** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
 export async function nearestTradingDay(
   page: Page,
@@ -684,13 +712,7 @@ export async function nearestTradingDay(
 ): Promise<string> {
   const today = toISODate(new Date());
   for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    const open = rows
-      .filter((r) => r.is_open && r.calendar_date <= today)
-      .map((r) => r.calendar_date)
-      .sort();
+    const open = await fetchYearOpenDays(page, headers, year, today, true);
     if (open.length > 0) return open[open.length - 1];
   }
   throw new Error(`交易日历中找不到 ${today} 起最近一个交易日`);
@@ -843,14 +865,7 @@ export async function prevOpenDays(
   const today = toISODate(new Date());
   const days: string[] = [];
   for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const resp = await page.request.get(`/api/trading-calendar?year=${year}`, { headers });
-    expect(resp.ok(), `交易日历查询失败 ${resp.status()} ${await resp.text()}`).toBeTruthy();
-    const rows = (await resp.json()) as { calendar_date: string; is_open: boolean }[];
-    days.push(
-      ...rows
-        .filter((r) => r.is_open && r.calendar_date < today)
-        .map((r) => r.calendar_date),
-    );
+    days.push(...await fetchYearOpenDays(page, headers, year, today, false));
     if (days.length >= n) break;
   }
   days.sort();
