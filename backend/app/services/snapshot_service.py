@@ -944,7 +944,6 @@ def compute_missing_snapshot_dates(
 
 def compute_catchup_pending_dates(
     db: Session,
-    portfolio_code: str,
     latest_snapshot_date: Optional[date],
 ) -> List[date]:
     """最新快照日之后至业务昨日应生成而未生成的 SSE 交易日（升序，#906）。
@@ -954,7 +953,9 @@ def compute_catchup_pending_dates(
     修复 A 挡住的正是最新快照日之后的推进，missing_dates 检测不到。
     区间 (latest_snapshot_date, business_yesterday()]，无快照基线
     （latest=None）返回空，与 missing_dates「无基线为空」同构；
-    台账型（kind='ledger'）排除由调用方（status 端点）负责。
+    台账型与非 active（closed 刻意停更）排除由调用方（status 端点）负责。
+    只读交易日历、不需要组合 scoped 数据，故不带 portfolio_code 参数
+    （L2 r1：死参数漂移）。
     """
     if latest_snapshot_date is None:
         return []

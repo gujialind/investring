@@ -393,12 +393,14 @@ def get_snapshot_status(
         ]
     
     # issue #906：最新快照日之后至业务昨日的 trailing 缺口（停更信号）。
-    # 台账型（kind='ledger'）无净值快照，恒空，避免误报停更（与 PR1 闸门对齐）。
+    # 台账型（kind='ledger'）无净值快照恒空（与 PR1 闸门对齐）；非 active 恒空——
+    # 自动快照只推进 active，closed 属刻意停更而非故障，报停更是永久误报
+    # （L2 r1 发现；draft 无基线自然空）。
     catchup_pending_dates: List[str] = []
-    if latest and portfolio.kind != "ledger":
+    if latest and portfolio.kind != "ledger" and portfolio.status == "active":
         catchup_pending_dates = [
             d.isoformat()
-            for d in compute_catchup_pending_dates(db, code, latest.snapshot_date)
+            for d in compute_catchup_pending_dates(db, latest.snapshot_date)
         ]
 
     return SnapshotStatusResponse(

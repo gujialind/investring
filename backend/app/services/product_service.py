@@ -772,7 +772,7 @@ def _count_product_dependents(db: Session, product: Product) -> dict:
     return counts
 
 
-def delete_product(db: Session, *, code: str, market: str) -> Product:
+def delete_product(db: Session, *, code: str, market: str) -> None:
     """删除产品（#906 统一规则：任何产品未被引用才可删）。不 commit。
 
     系统虚拟产品（CASH/IN_TRANSIT_*）不加额外保护也不给豁免，与普通产品同一
@@ -780,8 +780,11 @@ def delete_product(db: Session, *, code: str, market: str) -> Product:
     表名→计数），消灭 MySQL 下未捕获 IntegrityError → 500。行锁与子表 INSERT
     的 FK 共享锁互斥，消除「先计数后删除」竞态；MySQL FK RESTRICT 只作次防线
     ——应用侧 SQLite 连接未开 `PRAGMA foreign_keys`，不能把兜底交给方言行为
-    （#820 同口径）。审计在 db.delete() 之前写（record_audit 先 flush 业务改动，
-    先删会让审计失败与业务删除的先后关系不可辨）；失败路径不落审计行。
+    （#820 同口径）。审计在 delete 的 savepoint 提交**之后**写（L2 r1）：
+    IntegrityError 兜底路径回滚 savepoint 时审计尚未写入，「失败路径不落
+    审计行」不依赖调用方失败后不 commit；业务外层回滚仍会丢弃审计。
+    返回 None：被删 ORM 实例在调用方 commit 后读属性会 ObjectDeletedError，
+    不把已删实例交给调用方（同 delete_draft_portfolio）。
     """
     product = (
         db.query(Product)
@@ -802,6 +805,29 @@ def delete_product(db: Session, *, code: str, market: str) -> Product:
             details={"dependencies": dependencies},
         )
 
+    # 校验后并发插入引用的竞态兜底：savepoint 内 delete+flush，FK RESTRICT 撞出
+    # IntegrityError 时只回滚 savepoint（外层事务不毒化），转同一业务码。
+    # 显式 begin_nested/commit/rollback 不用 `with`：flush 失败时 SQLAlchemy 已
+    # 自行回滚并关闭 nested 事务，`with` 期间 conftest 的 after_transaction_end
+    # 监听器再 begin_nested() 会撞「Can't operate on closed transaction inside
+    # context manager」掩盖根因（#419 同型定案，见 _auto_confirm_guarded 注释）。
+    sp = db.begin_nested()
+    try:
+        db.delete(product)
+        db.flush()
+        sp.commit()
+    except IntegrityError as exc:
+        if db.get_nested_transaction() is sp:
+            sp.rollback()
+        logger.warning(
+            "删除产品撞 FK 竞态: code=%s market=%s", code, market, exc_info=exc
+        )
+        raise BusinessError(
+            "PRODUCT_HAS_DEPENDENT_DATA",
+            "产品仍存在关联数据，无法删除",
+            http_status=409,
+        ) from exc
+
     record_audit(
         db,
         action=ACTION_DELETE,
@@ -815,24 +841,4 @@ def delete_product(db: Session, *, code: str, market: str) -> Product:
             "product_type": product.product_type,
         },
     )
-    # 校验后并发插入引用的竞态兜底：savepoint 内 delete+flush，FK RESTRICT 撞出
-    # IntegrityError 时只回滚 savepoint（外层事务不毒化），转同一业务码。
-    # 显式 begin_nested/commit/rollback 不用 `with`：flush 失败时 SQLAlchemy 已
-    # 自行回滚并关闭 nested 事务，`with` 期间 conftest 的 after_transaction_end
-    # 监听器再 begin_nested() 会撞「Can't operate on closed transaction inside
-    # context manager」掩盖根因（#419 同型定案，见 _auto_confirm_guarded 注释）。
-    sp = db.begin_nested()
-    try:
-        db.delete(product)
-        db.flush()
-        sp.commit()
-    except IntegrityError:
-        if db.get_nested_transaction() is sp:
-            sp.rollback()
-        raise BusinessError(
-            "PRODUCT_HAS_DEPENDENT_DATA",
-            "产品仍存在关联数据，无法删除",
-            http_status=409,
-        )
     logger.info("删除产品: code=%s market=%s", code, market)
-    return product

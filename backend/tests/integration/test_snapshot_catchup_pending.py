@@ -41,23 +41,23 @@ class TestComputeCatchupPendingDates:
     def test_trailing_gap_lists_open_sse_days(self, test_db, frozen_yesterday):
         port = create_portfolio(test_db, code="CATCHUP_T1", status="active")
         _snap(test_db, port.code, D0)
-        assert compute_catchup_pending_dates(test_db, port.code, D0) == GAP_DAYS
+        assert compute_catchup_pending_dates(test_db, D0) == GAP_DAYS
 
     def test_no_baseline_returns_empty(self, test_db, frozen_yesterday):
         port = create_portfolio(test_db, code="CATCHUP_T2", status="active")
-        assert compute_catchup_pending_dates(test_db, port.code, None) == []
+        assert compute_catchup_pending_dates(test_db, None) == []
 
     def test_up_to_date_returns_empty(self, test_db, frozen_yesterday):
         port = create_portfolio(test_db, code="CATCHUP_T3", status="active")
         _snap(test_db, port.code, YESTERDAY)
-        assert compute_catchup_pending_dates(test_db, port.code, YESTERDAY) == []
+        assert compute_catchup_pending_dates(test_db, YESTERDAY) == []
 
     def test_latest_after_yesterday_returns_empty(self, test_db, frozen_yesterday):
         """最新快照日晚于业务昨日（时钟回拨等异常态）不产生负区间。"""
         port = create_portfolio(test_db, code="CATCHUP_T4", status="active")
         later = date(2025, 6, 13)
         _snap(test_db, port.code, later)
-        assert compute_catchup_pending_dates(test_db, port.code, later) == []
+        assert compute_catchup_pending_dates(test_db, later) == []
 
     def test_hkex_days_excluded(self, test_db, frozen_yesterday):
         """双日历口径（#777）：快照日序列是 SSE，HKEX 开市日不混入。"""
@@ -72,7 +72,7 @@ class TestComputeCatchupPendingDates:
             calendar_date=date(2025, 6, 10), is_open=True, exchange="HKEX"
         ))
         test_db.flush()
-        assert compute_catchup_pending_dates(test_db, port.code, D0) == [
+        assert compute_catchup_pending_dates(test_db, D0) == [
             date(2025, 6, 9), date(2025, 6, 11), date(2025, 6, 12),
         ]
 
@@ -84,7 +84,7 @@ class TestComputeCatchupPendingDates:
         ).one()
         row.is_open = False
         test_db.flush()
-        assert compute_catchup_pending_dates(test_db, port.code, D0) == [
+        assert compute_catchup_pending_dates(test_db, D0) == [
             date(2025, 6, 9), date(2025, 6, 10), date(2025, 6, 12),
         ]
 
@@ -146,3 +146,16 @@ class TestStatusEndpointCatchupField:
         body = resp.json()
         assert body["catchup_pending_dates"] == []
         assert body["missing_dates"] == []
+
+    def test_closed_portfolio_always_empty(
+        self, client, admin_headers, test_db, frozen_yesterday
+    ):
+        """closed 刻意停更恒空（L2 r1）：自动快照只推进 active，closed 组合的
+        trailing 缺口会永久增长，报停更即永久误报；重开（reactivate）后恢复。"""
+        port = create_portfolio(test_db, code="CATCHUP_S5", status="closed")
+        _snap(test_db, port.code, D0)
+        resp = client.get(
+            f"/api/snapshots/portfolios/{port.code}/status", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["catchup_pending_dates"] == []

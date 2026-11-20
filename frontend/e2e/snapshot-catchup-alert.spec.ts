@@ -185,10 +185,30 @@ test.describe('快照停更可见提示（#906）', () => {
   });
 
   test('draft 无快照基线：不渲染停更 Alert', async ({ page }) => {
-    const errors = collectPageErrors(page);
+    // 登录后立即导航：dashboard 在途请求被导航打断的 access control 噪音属登录竞态
+    // （helpers.collectPageErrors 的 tolerateLoginRaceNoise 先例同口径）
+    const errors = collectPageErrors(page, { tolerateLoginRaceNoise: true });
     await openAppAndAuth(page);
     // E2E_PORT 是零快照 draft 契约组合（只读导航，不改形态）
     await gotoPortfolioDetail(page, E2E_PORT);
+    await expect(page.getByTestId('snapshot-catchup-alert')).toHaveCount(0);
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  test('closed 刻意停更：不渲染停更 Alert（L2 r1）', async ({ page }, testInfo) => {
+    const errors = collectPageErrors(page);
+    const headers = await openAppAndAuth(page);
+    const code = isolatedPortfolioCode('E2E906', testInfo) + 'X';
+    await setupStalePortfolio(page, headers, code);
+    const close = await page.request.post(`/api/portfolios/${code}/close`, { headers });
+    expect(close.ok(), `关闭组合失败 ${close.status()} ${await close.text()}`).toBeTruthy();
+
+    // 自动快照只推进 active：closed 的 trailing 缺口永久增长，属刻意停更非故障
+    const status = await statusOf(page, headers, code);
+    expect(status.catchup_pending_dates ?? []).toHaveLength(0);
+
+    await page.goto(`/portfolio/${code}`);
+    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible', timeout: 15_000 });
     await expect(page.getByTestId('snapshot-catchup-alert')).toHaveCount(0);
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });

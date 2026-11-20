@@ -54,6 +54,7 @@ const opts = {
   scenario: null,
 };
 const argv = process.argv.slice(2);
+let pathsExplicit = false;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => {
@@ -66,7 +67,7 @@ for (let i = 0; i < argv.length; i++) {
   };
   if (a === '--base') opts.base = next();
   else if (a === '--out') opts.out = next();
-  else if (a === '--path') opts.paths.push(next());
+  else if (a === '--path') { opts.paths.push(next()); pathsExplicit = true; }
   else if (a === '--device') opts.devices.push(next());
   else if (a === '--theme') opts.theme = next();
   else if (a === '--scenario') opts.scenario = next();
@@ -84,6 +85,11 @@ if (opts.scenario && !SCENARIOS.includes(opts.scenario)) {
   process.exit(2);
 }
 if (opts.paths.length === 0) opts.paths = DEFAULT_PATHS;
+// 页面态 scenario 忽略调用方 path（自行导航到夹具组合）：未显式 --path 时收敛为
+// 单一路径，避免默认三路径产出三张同名异slug 的重复截图（L2 r1）
+if (opts.scenario === 'snapshot-catchup-alert' && !pathsExplicit) {
+  opts.paths = ['/portfolio/VIS906STALE'];
+}
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
   if (!(d in DEVICES)) {
@@ -124,10 +130,16 @@ async function runScenario(page, scenario, device) {
   if (scenario === 'snapshot-catchup-alert') {
     // #906：API 造隔离组合（申购+确认+generate，纯 CASH 无需行情），最新快照停在
     // today 前第 4 个开市日 → trailing 缺口确定性非空（与 E2E setupStalePortfolio 同形）。
-    // 目检库按运行独占新建，固定 code 不撞；同一运行内第二端/第二主题复用已造组合。
+    // 目检库按运行独占新建，固定 code 不撞；同一运行内第二端/第二主题复用已造组合，
+    // 复用与否都以 status 的 trailing 缺口非空为准（L2 r1：任何非 OK create 都当
+    // 「已存在」会把真实后端错误掩成 15s 定位超时）。
     const token = await page.evaluate(() => localStorage.getItem('token'));
     const headers = { Authorization: `Bearer ${token}` };
     const code = 'VIS906STALE';
+    const okJson = async (resp, what) => {
+      if (!resp.ok()) throw new Error(`目检夹具${what}失败: ${resp.status()} ${await resp.text()}`);
+      return resp.json();
+    };
     const create = await page.request.post('/api/portfolios', {
       headers, data: { code, name: '目检停更夹具' },
     });
@@ -137,29 +149,37 @@ async function runScenario(page, scenario, device) {
       const todayISO = iso(today);
       const days = [];
       for (const year of [today.getFullYear(), today.getFullYear() - 1]) {
-        const rows = await (await page.request.get(`/api/trading-calendar?year=${year}`, { headers })).json();
+        const rows = await okJson(
+          await page.request.get(`/api/trading-calendar?year=${year}`, { headers }),
+          '交易日历查询',
+        );
         days.push(...rows.filter((r) => r.is_open && r.calendar_date < todayISO).map((r) => r.calendar_date));
         if (days.length >= 5) break;
       }
       days.sort();
+      if (days.length < 5) throw new Error(`目检夹具交易日历不足 5 个历史开市日（实际 ${days.length}）`);
       const prev5 = days.slice(-5);
-      const sub = await (await page.request.post('/api/subscriptions', {
+      const sub = await okJson(await page.request.post('/api/subscriptions', {
         headers,
         data: {
           portfolio_code: code, investor_code: 'ADMIN', platform_code: 'HBZQ',
           sub_type: 'subscribe', amount: 100000, apply_date: prev5[0],
         },
-      })).json();
-      const confirm = await page.request.post(`/api/subscriptions/${sub.id}/confirm`, { headers });
-      if (!confirm.ok()) throw new Error(`目检夹具首购确认失败: ${confirm.status()} ${await confirm.text()}`);
-      const gen = await page.request.post('/api/snapshots/generate', {
+      }), '首购申购');
+      await okJson(
+        await page.request.post(`/api/subscriptions/${sub.id}/confirm`, { headers }),
+        '首购确认',
+      );
+      await okJson(await page.request.post('/api/snapshots/generate', {
         headers, data: { portfolio_code: code, target_date: prev5[1] },
-      });
-      if (!gen.ok()) throw new Error(`目检夹具快照生成失败: ${gen.status()} ${await gen.text()}`);
-    } else {
-      // 已存在（同运行前序端/主题所造）：核实可用，否则响亮失败
-      const existing = await page.request.get(`/api/portfolios/${code}`, { headers });
-      if (!existing.ok()) throw new Error(`目检夹具创建失败且不可复用: ${create.status()} ${await create.text()}`);
+      }), '快照生成');
+    }
+    const status = await okJson(
+      await page.request.get(`/api/snapshots/portfolios/${code}/status`, { headers }),
+      'status 查询',
+    );
+    if (!(status.catchup_pending_dates ?? []).length) {
+      throw new Error(`目检夹具 ${code} trailing 缺口为空（create=${create.status()}），不可取证停更态`);
     }
     await page.goto(`/portfolio/${code}`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible', timeout: 15_000 });
