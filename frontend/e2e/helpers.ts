@@ -784,6 +784,27 @@ export async function createPortfolioViaApi(
 }
 
 /**
+ * 申购 + 确认共用单点（#906 ocr r4）：种子契约值 ADMIN/HBZQ/100000 单点持有，
+ * 激活夹具与停更基线共用，防未来夹具改动在两路漂移。
+ */
+async function subscribeAndConfirmViaApi(
+  page: Page,
+  headers: { Authorization: string },
+  code: string,
+  applyDate: string,
+): Promise<void> {
+  const sub = (await apiPost(page, headers, '/api/subscriptions', {
+    portfolio_code: code,
+    investor_code: 'ADMIN',
+    platform_code: 'HBZQ',
+    sub_type: 'subscribe',
+    amount: 100000,
+    apply_date: applyDate,
+  })) as { id: number };
+  await apiPost(page, headers, `/api/subscriptions/${sub.id}/confirm`);
+}
+
+/**
  * 首购确认把 draft 激活为 active（零快照组合首窗净值 1.0000，无需行情，同
  * `trade-in-transit` 的现金注入形态）。
  *
@@ -797,15 +818,7 @@ export async function activatePortfolioViaApi(
   code: string,
 ): Promise<void> {
   const applyDate = await nearestTradingDay(page, headers);
-  const sub = (await apiPost(page, headers, '/api/subscriptions', {
-    portfolio_code: code,
-    investor_code: 'ADMIN',
-    platform_code: 'HBZQ',
-    sub_type: 'subscribe',
-    amount: 100000,
-    apply_date: applyDate,
-  })) as { id: number };
-  await apiPost(page, headers, `/api/subscriptions/${sub.id}/confirm`);
+  await subscribeAndConfirmViaApi(page, headers, code, applyDate);
 }
 
 /** 关闭组合（仅 active 可关，#820 收紧） */
@@ -829,9 +842,9 @@ export async function prevOpenDays(
   const today = toISODate(new Date());
   const days: string[] = [];
   for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
+    const resp = await page.request.get(`/api/trading-calendar?year=${year}`, { headers });
+    expect(resp.ok(), `交易日历查询失败 ${resp.status()} ${await resp.text()}`).toBeTruthy();
+    const rows = (await resp.json()) as { calendar_date: string; is_open: boolean }[];
     days.push(
       ...rows
         .filter((r) => r.is_open && r.calendar_date < today)
@@ -856,15 +869,7 @@ export async function seedStaleBaseline(
   applyDate: string,
   latest: string,
 ): Promise<void> {
-  const sub = (await apiPost(page, headers, '/api/subscriptions', {
-    portfolio_code: code,
-    investor_code: 'ADMIN',
-    platform_code: 'HBZQ',
-    sub_type: 'subscribe',
-    amount: 100000,
-    apply_date: applyDate,
-  })) as { id: number };
-  await apiPost(page, headers, `/api/subscriptions/${sub.id}/confirm`);
+  await subscribeAndConfirmViaApi(page, headers, code, applyDate);
   await apiPost(page, headers, '/api/snapshots/generate', {
     portfolio_code: code,
     target_date: latest,

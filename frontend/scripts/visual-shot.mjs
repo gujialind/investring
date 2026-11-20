@@ -26,14 +26,23 @@
  * 故同一个 --path 双端通用。认证状态仅保存在本次输出目录。
  *
  * 通常由 scripts/visual-verify.sh 调用（那个脚本负责起后端与 standalone 前端）。
+ * 直跑要求 Node ≥ 24（动态 import e2e/helpers.ts 依赖原生类型剥离，启动期有版本守卫）。
  * 造数与红线见 frontend/AGENTS.md §5「目检」。
  */
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium, webkit, devices } from '@playwright/test';
-// 停更夹具造数与 E2E 共用 helpers 单点（Node 24 类型剥离加载 .ts，ocr r3 防漂移）
-import { prevOpenDays, seedStaleBaseline } from '../e2e/helpers.ts';
+
+// helpers.ts 为 TypeScript：依赖 Node 原生类型剥离（22.18+/23.6+ 默认开启，本仓
+// .nvmrc=24）。守卫必须先于 helpers 加载生效，故用动态 import（静态 import 提升会
+// 让旧 Node 在守卫前就抛 ERR_UNKNOWN_FILE_EXTENSION）；提前给可操作诊断（ocr r4）。
+if (Number(process.versions.node.split('.')[0]) < 24) {
+  console.error('visual-shot 需 Node ≥ 24（原生类型剥离加载 e2e/helpers.ts）；请先 nvm use');
+  process.exit(2);
+}
+// 停更夹具造数与认证头与 E2E 共用 helpers 单点（ocr r3/r4 防漂移）
+const { authHeaders, prevOpenDays, seedStaleBaseline } = await import('../e2e/helpers.ts');
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
@@ -140,9 +149,7 @@ async function runScenario(page, scenario, device) {
     // 目检库按运行独占新建，固定 code 不撞；同一运行内第二端/第二主题复用已造组合，
     // 复用与否都以 status 的 trailing 缺口非空为准（L2 r1：任何非 OK create 都当
     // 「已存在」会把真实后端错误掩成 15s 定位超时）。
-    const token = await page.evaluate(() => localStorage.getItem('token'));
-    if (!token) throw new Error('页面 localStorage 中缺少登录 token，无法造目检夹具');
-    const headers = { Authorization: `Bearer ${token}` };
+    const headers = await authHeaders(page);
     const code = CATCHUP_FIXTURE_CODE;
     const okJson = async (resp, what) => {
       if (!resp.ok()) throw new Error(`目检夹具${what}失败: ${resp.status()} ${await resp.text()}`);
