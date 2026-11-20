@@ -1,6 +1,6 @@
 import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
 import { subMonths } from "date-fns";
-import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate } from "./helpers";
+import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns } from "./helpers";
 
 /**
  * #824 产品管理页列合并与净值型产品详情页。
@@ -605,5 +605,162 @@ test.describe("详情页头部动作与同步周期（#856 块2/块3）", () => 
     const today = new Date();
     expect(body1.end_date).toBe(toISODate(today));
     expect(body1.start_date).toBe(toISODate(subMonths(today, 1)));
+  });
+});
+
+test.describe("历史净值窄宽布局（#934）", () => {
+  test("A1/A3 列对齐与文字间距：桌面连续尺寸 / 移动多档", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    const errors = collectPageErrors(page);
+    await openAppAndAuth(page);
+    const { dates } = await mockNavHistoryStress(page);
+    await page.goto(DETAIL_PATH);
+    const history = page.getByTestId("product-history-card");
+    await expect(history.getByTestId("product-history-row")).toHaveCount(5, { timeout: 10_000 });
+
+    const isMobile = testInfo.project.name === "mobile";
+    const height = page.viewportSize()?.height ?? 720;
+    const widths = isMobile ? [390, 375, 320] : [600, 640, 700, 768, 900, 1024, 1152, 1280];
+    let lastGap = 0;
+    for (const width of widths) {
+      await page.setViewportSize({ width, height });
+      // 侧栏在 lg 边界有宽度过渡，等布局稳定再断言（#934 A2 口径）
+      await expect(async () => {
+        const g = await expectNavHistoryGeometry(history, "product", `视口${width}`);
+        lastGap = g.minTextGap;
+      }).toPass({ timeout: 5_000 });
+    }
+    expect(lastGap, "相邻文字间距应 ≥8px（容差 0.5px）").toBeGreaterThanOrEqual(7.5);
+    const dateTexts = await history
+      .getByTestId("product-history-row")
+      .evaluateAll((rows) => rows.map((r) => (r.children[0].textContent ?? "").trim()));
+    expect(dateTexts, "日期降序与 API 原值一致").toEqual(dates.slice(0, 5));
+    expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
+  });
+
+  test("A6 查看更多长值同列：卡片增高、无卡内纵滚、末页按钮消失", async ({ page }) => {
+    await openAppAndAuth(page);
+    const { dates } = await mockNavHistoryStress(page);
+    await page.goto(DETAIL_PATH);
+    const history = page.getByTestId("product-history-card");
+    const rows = history.getByTestId("product-history-row");
+    await expect(rows).toHaveCount(5, { timeout: 10_000 });
+    const before = await history.boundingBox();
+    await expectNavHistoryGeometry(history, "product", "首屏");
+
+    await history.getByTestId("history-load-more").click();
+    // #763：低核数机器双 worker 下 webkit 帧率饥饿会拖慢点击→取数→渲染链路，只放宽预算不改条件
+    await expect(rows).toHaveCount(7, { timeout: 15_000 });
+    const g = await expectNavHistoryGeometry(history, "product", "加载更多后");
+    expect(g.dateTexts, "加载后日期降序与 API 原值一致").toEqual(dates);
+    await expect(rows.nth(5)).toContainText("12,345.6789");
+    await expect(rows.nth(5)).toContainText("-100.00%");
+    const after = await history.boundingBox();
+    if (!before || !after) throw new Error("历史卡没有可见盒，无法比较高度");
+    expect(after.height, "新增行应撑高卡片（页面纵滚承接）").toBeGreaterThan(before.height);
+    await expect(history.getByTestId("history-load-more")).toHaveCount(0);
+  });
+
+  test("A2 桌面父布局：容器 799/800 降栏与侧栏联动", async ({ page }, testInfo) => {
+    test.skip(
+      testInfo.project.name === "mobile",
+      "移动 variant 无桌面双栏布局（功能确实缺，#934 S4 仅改 desktop 分支）"
+    );
+    test.setTimeout(60_000);
+    await page.goto(DETAIL_PATH);
+    const history = page.getByTestId("product-history-card");
+    await expect(history).toBeVisible({ timeout: 10_000 });
+
+    for (const width of [700, 1024, 1280]) {
+      await page.setViewportSize({ width, height: 720 });
+      await expect(async () => {
+        const m = await measureNavDetailLayout(history, `视口${width}`);
+        expectNavDetailColumns(m, `视口${width}`);
+      }).toPass({ timeout: 5_000 });
+    }
+
+    // 精确容器边界：按当前容器宽反推视口增量，量实际容器而非把 viewport 当容器
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const base = await measureNavDetailLayout(history, "1280 基线");
+    const viewportAt800 = 1280 + (800 - base.containerWidth);
+    await page.setViewportSize({ width: viewportAt800, height: 720 });
+    await expect(async () => {
+      const m = await measureNavDetailLayout(history, "容器800");
+      expect(m.containerWidth).toBe(800);
+      expectNavDetailColumns(m, "容器800");
+      expect(m.tracks.length).toBe(2);
+    }).toPass({ timeout: 5_000 });
+    await page.setViewportSize({ width: viewportAt800 - 1, height: 720 });
+    await expect(async () => {
+      const m = await measureNavDetailLayout(history, "容器799");
+      expect(m.containerWidth).toBe(799);
+      expectNavDetailColumns(m, "容器799");
+      expect(m.tracks.length).toBe(1);
+    }).toPass({ timeout: 5_000 });
+
+    // 1024 视口：展开侧栏单栏，收起后容器变宽应切双栏（等宽度过渡稳定）
+    await page.setViewportSize({ width: 1024, height: 720 });
+    await expect(async () => {
+      const m = await measureNavDetailLayout(history, "1024 展开侧栏");
+      expect(m.tracks.length).toBe(1);
+    }).toPass({ timeout: 5_000 });
+    await page.getByRole("button", { name: "收起侧栏" }).click();
+    await expect(async () => {
+      const m = await measureNavDetailLayout(history, "1024 收起侧栏");
+      expectNavDetailColumns(m, "1024 收起侧栏");
+      expect(m.tracks.length).toBe(2);
+    }).toPass({ timeout: 5_000 });
+    await page.getByRole("button", { name: "展开侧栏" }).click();
+    await expect(async () => {
+      const m = await measureNavDetailLayout(history, "1024 再展开");
+      expect(m.tracks.length).toBe(1);
+    }).toPass({ timeout: 5_000 });
+  });
+
+  test("A5 局部横滚：首末列可达、表头同步、键盘可滚、标题不动", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    const isMobile = testInfo.project.name === "mobile";
+    await openAppAndAuth(page);
+    await mockNavHistoryStress(page);
+    await page.goto(DETAIL_PATH);
+    const history = page.getByTestId("product-history-card");
+    await expect(history.getByTestId("product-history-row")).toHaveCount(5, { timeout: 10_000 });
+
+    // 标题与查看更多在滚动区外（结构保证不随数据横移）
+    const outside = await history.evaluate((card) => {
+      const scroll = card.querySelector('[data-testid="product-history-scroll"]');
+      const more = card.querySelector('[data-testid="history-load-more"]');
+      const h3 = card.querySelector("h3");
+      return !!scroll && !!more && !!h3 && !scroll.contains(more) && !scroll.contains(h3);
+    });
+    expect(outside, "标题与查看更多应位于横滚区域之外").toBe(true);
+
+    await history.getByTestId("history-load-more").click();
+    await expect(history.getByTestId("product-history-row")).toHaveCount(7, { timeout: 15_000 }); // #763 预算放宽
+    const width = isMobile ? 320 : 400;
+    await page.setViewportSize({ width, height: page.viewportSize()?.height ?? 720 });
+    await expect(async () => {
+      await expectNavHistoryHScroll(history, "product", `宽${width}`, { keyboard: !isMobile });
+    }).toPass({ timeout: 5_000 });
+
+    // 目检证据：窄宽 + 长值，浅/暗双主题（A8；next-themes 默认 system 档）。
+    // 按卡元素截图（fullPage 会把固定 BottomNav 叠进卡内）；显式归零再拍，
+    // 另拍滚到最右一张证明末列可达。
+    const scroll = history.getByTestId("product-history-scroll");
+    // 卡片滚到视口顶部附近，避免固定 BottomNav 遮住卡底行（元素截图按视口合成）
+    await history.evaluate((el) => {
+      window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 80);
+    });
+    await scroll.evaluate((el) => {
+      el.scrollLeft = 0;
+    });
+    await expect.poll(() => scroll.evaluate((el) => el.scrollLeft)).toBe(0);
+    await history.screenshot({ path: testInfo.outputPath(`nav-history-${width}-light.png`) });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await history.screenshot({ path: testInfo.outputPath(`nav-history-${width}-dark.png`) });
+    await scroll.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await history.screenshot({ path: testInfo.outputPath(`nav-history-${width}-dark-end.png`) });
   });
 });

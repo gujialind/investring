@@ -365,14 +365,24 @@ export default function ProductManageDetailContent({ basePath, variant }: Produc
           {isNavType && <ProductNavCards productCode={code} market={market} variant={variant} />}
         </>
       ) : (
-        <div className="grid grid-cols-[1fr_360px] gap-4">
-          <div className="space-y-4">
-            {isNavType && <ProductNavCards productCode={code} market={market} variant={variant} />}
-          </div>
-          <div className="space-y-4">
-            {basicInfoCard}
-            {dimensionCard}
-            {syncCard}
+        /* #934 S4：净值型产品按内容容器宽降栏（≥800px 双栏，否则左组上/右组下），
+           断点看容器不看 viewport；现金/虚拟产品保持原固定右栏布局不变。 */
+        <div className={isNavType ? "@container" : undefined}>
+          <div
+            className={
+              isNavType
+                ? "grid grid-cols-1 gap-4 @min-[800px]:grid-cols-[minmax(0,1fr)_360px]"
+                : "grid grid-cols-[1fr_360px] gap-4"
+            }
+          >
+            <div className="min-w-0 space-y-4">
+              {isNavType && <ProductNavCards productCode={code} market={market} variant={variant} />}
+            </div>
+            <div className="space-y-4">
+              {basicInfoCard}
+              {dimensionCard}
+              {syncCard}
+            </div>
           </div>
         </div>
       )}

@@ -1036,3 +1036,342 @@ export async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promi
   // 清完回列表再断言行集（modal sheet 开着时表格外 aria-hidden，#904 P1c-1）
   await closeFilterPanelIfMobile(page, testInfo);
 }
+
+// ===========================================================================
+// 历史净值卡共享列宽与桌面降栏契约（#934）
+//
+// 三个入口（产品管理详情 / 组合内产品详情 / 平台内产品详情）共用 ProductNavCards：
+// 表头与全部行经 subgrid 继承同一四列轨道，宽度不足时仅数据区横滚。
+// 本节供三个 spec 复用：合成两页压力数据 + 文字级几何断言 + 桌面父布局量测。
+// 量测口径（issue #934 验收断言）：相邻文字间距用文本节点 Range 矩形（不是单元格
+// 盒子），期望 ≥8px、浮点容差 0.5px；列边界用单元格盒子，容差 1px。
+// ===========================================================================
+
+/** 合成历史净值压力样本：7 个交易日降序（page1 前 5 + page2 后 2），日期经交易日历动态取得 */
+export type NavHistoryStressFixture = { dates: string[] };
+
+/**
+ * 仅拦截目标 nav-history GET 的 page-aware 合成响应（不直写数据库、不连生产）。
+ * page1 含 0.4700 / 1.2143 / 累计净值有值与 null / 正负零缺失涨跌（首行后即现场同形
+ * 样本「完整日期 + 0.4700 + --」）；page2 加入 12,345.6789 与 -100.00% 布局压力值。
+ * 调用前须已落到应用同源页面（authHeaders 契约），注册后再 goto 目标详情页。
+ */
+export async function mockNavHistoryStress(page: Page): Promise<NavHistoryStressFixture> {
+  const headers = await authHeaders(page);
+  const dates = (await prevOpenDays(page, headers, 7)).reverse();
+  const page1 = [
+    { price_date: dates[0], unit_price: 1.2143, accumulated_nav: 1.3143, pct_change: -0.74 },
+    { price_date: dates[1], unit_price: 0.47, accumulated_nav: null, pct_change: null },
+    { price_date: dates[2], unit_price: 1.0, accumulated_nav: 1.0, pct_change: 0 },
+    { price_date: dates[3], unit_price: 1.1, accumulated_nav: 1.21, pct_change: 1.25 },
+    { price_date: dates[4], unit_price: 0.98, accumulated_nav: null, pct_change: -2 },
+  ];
+  const page2 = [
+    { price_date: dates[5], unit_price: 12345.6789, accumulated_nav: 12345.6789, pct_change: -100 },
+    { price_date: dates[6], unit_price: 12345.6789, accumulated_nav: null, pct_change: 100 },
+  ];
+  await page.route(/\/nav-history(\?|$)/, (route) => {
+    const url = new URL(route.request().url());
+    const p = Number(url.searchParams.get('page') ?? '1');
+    return route.fulfill({
+      status: 200,
+      json: { items: p === 1 ? page1 : page2, total: dates.length, page: p, page_size: 5 },
+    });
+  });
+  return { dates };
+}
+
+/** 历史卡几何量测结果；调用方可追加各自判据（如窄档 scrollOverflowX > 0） */
+export type NavHistoryGeometry = {
+  rowCount: number;
+  minTextGap: number;
+  scrollOverflowX: number;
+  scrollOverflowY: number;
+  pageOverflowX: number;
+  dateTexts: string[];
+};
+
+/**
+ * 断言历史卡列对齐 / 文字间距 / 完整单行（#934 A1）。
+ * `history` 是历史卡 section 定位器，`prefix` 是 testid 前缀（product / platform-product）。
+ * 判据：
+ * - 表头与每行 4 格；同行相邻文字（Range 矩形）间距 ≥ 8px − 0.5px 容差；
+ * - 各行与表头同列左右边界一致（单元格盒子，容差 1px）——subgrid 共享轨道的承重点；
+ * - 每格单行（盒高 ≤ 1.5×行高）且不截断（scrollWidth ≤ clientWidth + 1）；
+ * - 日期完整 YYYY-MM-DD 十字符；表头非 sticky；
+ * - 数据区无卡内纵滚（scrollHeight ≤ clientHeight + 1）、整页无横向溢出（≤ 1px）。
+ */
+export async function expectNavHistoryGeometry(
+  history: Locator,
+  prefix: string,
+  label: string,
+): Promise<NavHistoryGeometry> {
+  await expect(history, `${label}: 历史卡应可见`).toBeVisible();
+  const m = await history.evaluate((card, p) => {
+    const scroll = card.querySelector(`[data-testid="${p}-history-scroll"]`) as HTMLElement | null;
+    const header = card.querySelector(`[data-testid="${p}-history-header"]`);
+    const rows = Array.from(card.querySelectorAll(`[data-testid="${p}-history-row"]`));
+    if (!scroll || !header || rows.length === 0) {
+      throw new Error(
+        `历史卡结构缺失（scroll=${!!scroll} header=${!!header} rows=${rows.length}），无法量测`,
+      );
+    }
+    const readLine = (row: Element) =>
+      Array.from(row.children).map((cell) => {
+        const box = cell.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        const text = range.getBoundingClientRect();
+        return {
+          left: box.left,
+          right: box.right,
+          height: box.height,
+          lineHeight: parseFloat(getComputedStyle(cell).lineHeight),
+          scrollWidth: cell.scrollWidth,
+          clientWidth: cell.clientWidth,
+          textLeft: text.left,
+          textRight: text.right,
+        };
+      });
+    const lines = [readLine(header), ...rows.map(readLine)];
+    let minTextGap = Infinity;
+    for (const line of lines) {
+      for (let i = 0; i + 1 < line.length; i++) {
+        minTextGap = Math.min(minTextGap, line[i + 1].textLeft - line[i].textRight);
+      }
+    }
+    return {
+      lines,
+      minTextGap,
+      headerPosition: getComputedStyle(header).position,
+      scrollOverflowX: scroll.scrollWidth - scroll.clientWidth,
+      scrollOverflowY: scroll.scrollHeight - scroll.clientHeight,
+      pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      dateTexts: rows.map((r) => (r.children[0]?.textContent ?? '').trim()),
+    };
+  }, prefix);
+
+  const headerLine = m.lines[0];
+  for (const [li, line] of m.lines.entries()) {
+    const where = li === 0 ? '表头' : `第${li}行`;
+    expect(line.length, `${label}: ${where}应为 4 格`).toBe(4);
+    for (const [ci, cell] of line.entries()) {
+      expect(
+        cell.height,
+        `${label}: ${where}第${ci + 1}格应单行（高 ${cell.height}px，行高 ${cell.lineHeight}px）`,
+      ).toBeLessThanOrEqual(cell.lineHeight * 1.5);
+      expect(
+        cell.scrollWidth,
+        `${label}: ${where}第${ci + 1}格文字不得截断（scrollWidth=${cell.scrollWidth} clientWidth=${cell.clientWidth}）`,
+      ).toBeLessThanOrEqual(cell.clientWidth + 1);
+      if (li > 0) {
+        expect(
+          Math.abs(cell.left - headerLine[ci].left),
+          `${label}: ${where}第${ci + 1}列左边界应与表头一致`,
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(cell.right - headerLine[ci].right),
+          `${label}: ${where}第${ci + 1}列右边界应与表头一致`,
+        ).toBeLessThanOrEqual(1);
+      }
+    }
+  }
+  expect(
+    m.minTextGap,
+    `${label}: 相邻文字最小间距 ${m.minTextGap}px 应 ≥8px（容差 0.5px，负值即叠印）`,
+  ).toBeGreaterThanOrEqual(7.5);
+  for (const d of m.dateTexts) {
+    expect(d, `${label}: 日期应完整 YYYY-MM-DD，实际「${d}」`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  }
+  expect(m.headerPosition, `${label}: 表头不得 sticky`).not.toBe('sticky');
+  expect(m.scrollOverflowY, `${label}: 数据区不得出现卡内纵滚`).toBeLessThanOrEqual(1);
+  expect(m.pageOverflowX, `${label}: 整页横向溢出 ${m.pageOverflowX}px 应 ≤1px`).toBeLessThanOrEqual(1);
+
+  return {
+    rowCount: m.dateTexts.length,
+    minTextGap: m.minTextGap,
+    scrollOverflowX: m.scrollOverflowX,
+    scrollOverflowY: m.scrollOverflowY,
+    pageOverflowX: m.pageOverflowX,
+    dateTexts: m.dateTexts,
+  };
+}
+
+/**
+ * 断言宽度不足时仅历史数据区横滚且首/末列完整可达（#934 A5）。
+ * 调用前须已构造出溢出形态（窄视口 + 长值行）。判据：
+ * - 数据区 scrollWidth > clientWidth，整页不横向溢出；
+ * - 滚到最右：表头与全部行的末列文字右缘 ≤ 滚动视口右缘；滚回 0：首列日期左缘 ≥ 左缘；
+ * - 横滚后列边界/文字间距契约不变（表头与行同步横移）；
+ * - 卡片标题不随数据横移；
+ * - keyboard=true 时聚焦数据区按方向键可横滚（移动端无物理键盘，属合法端专属不传）。
+ * 触屏横滑由 overflow-x:auto 原生行为承接，自动化以 scrollLeft 验证内容可达，
+ * 不合成原生 touch 手势（WebKit 无 CDP，合成 TouchEvent 不驱动原生滚动）。
+ */
+export async function expectNavHistoryHScroll(
+  history: Locator,
+  prefix: string,
+  label: string,
+  options: { keyboard?: boolean } = {},
+): Promise<void> {
+  const scroll = history.getByTestId(`${prefix}-history-scroll`);
+  await expect(scroll, `${label}: 数据区应可见`).toBeVisible();
+  const overflow = await scroll.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow, `${label}: 窄档长值应使数据区横滚（溢出 ${overflow}px）`).toBeGreaterThan(1);
+
+  const title = history.locator('h3');
+  const titleBox = await title.boundingBox();
+  if (!titleBox) throw new Error(`${label}: 标题没有可见盒`);
+
+  const end = await scroll.evaluate(
+    (el, arg) => {
+      el.scrollLeft = el.scrollWidth;
+      const rect = el.getBoundingClientRect();
+      const lines = [
+        el.querySelector(`[data-testid="${arg.p}-history-header"]`),
+        ...Array.from(el.querySelectorAll(`[data-testid="${arg.p}-history-row"]`)),
+      ].filter((row): row is Element => row !== null);
+      const texts = lines.map((row) => {
+        const cells = row.children;
+        const cell = cells[cells.length - 1];
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        return range.getBoundingClientRect().right;
+      });
+      return {
+        scrollLeft: el.scrollLeft,
+        maxScrollLeft: el.scrollWidth - el.clientWidth,
+        viewportRight: rect.right,
+        texts,
+      };
+    },
+    { p: prefix },
+  );
+  expect(end.scrollLeft, `${label}: 应可滚到最右`).toBeGreaterThanOrEqual(end.maxScrollLeft - 1);
+  for (const right of end.texts) {
+    expect(right, `${label}: 最右时末列文字应完整可读`).toBeLessThanOrEqual(end.viewportRight + 0.5);
+  }
+
+  const start = await scroll.evaluate(
+    (el, arg) => {
+      el.scrollLeft = 0;
+      const rect = el.getBoundingClientRect();
+      const lines = [
+        el.querySelector(`[data-testid="${arg.p}-history-header"]`),
+        ...Array.from(el.querySelectorAll(`[data-testid="${arg.p}-history-row"]`)),
+      ].filter((row): row is Element => row !== null);
+      const texts = lines.map((row) => {
+        const range = document.createRange();
+        range.selectNodeContents(row.children[0]);
+        return range.getBoundingClientRect().left;
+      });
+      return { viewportLeft: rect.left, texts };
+    },
+    { p: prefix },
+  );
+  for (const left of start.texts) {
+    expect(left, `${label}: 滚回最左时首列日期应完整可读`).toBeGreaterThanOrEqual(start.viewportLeft - 0.5);
+  }
+
+  // 横滚后共享轨道契约不变（表头与行同步横移，不各自漂移）
+  await expectNavHistoryGeometry(history, prefix, `${label} 横滚后`);
+
+  const titleBoxAfter = await title.boundingBox();
+  if (!titleBoxAfter) throw new Error(`${label}: 横滚后标题没有可见盒`);
+  expect(
+    Math.abs(titleBoxAfter.x - titleBox.x),
+    `${label}: 标题不得随数据横移`,
+  ).toBeLessThanOrEqual(1);
+
+  if (options.keyboard) {
+    // 聚焦滚动容器后方向键横滚（headless Chromium 对聚焦 div 的 End/PageDown 落在
+    // document 上、不滚容器，ArrowRight 才是容器级键盘滚动，探针实测 40px/次）。
+    // 键盘滚动是平滑动画：等 scrollLeft 两次采样一致（动画结束）再断言与归零，
+    // 否则立即读会读到动画中间值、归零也会被动画余量追滚。
+    await scroll.focus();
+    await scroll.page().keyboard.press('ArrowRight');
+    await expect
+      .poll(
+        async () => {
+          const first = await scroll.evaluate((el) => el.scrollLeft);
+          if (first <= 1) return false;
+          await scroll.page().waitForTimeout(200);
+          const second = await scroll.evaluate((el) => el.scrollLeft);
+          return first === second;
+        },
+        { message: `${label}: 键盘方向键应能横滚数据区并停稳`, timeout: 5_000 },
+      )
+      .toBe(true);
+    await scroll.evaluate((el) => {
+      el.scrollLeft = 0;
+    });
+  }
+}
+
+/** 桌面父布局量测结果（#934 S4/A2） */
+export type NavDetailLayout = {
+  containerWidth: number;
+  tracks: number[];
+  columnGap: number;
+};
+
+/**
+ * 量测历史卡所在桌面双栏栅格：历史卡 section → 左栏 div → 栅格 → @container 父层。
+ * 结构归属校验：栅格必须是 grid、恰两个组、左组在前且 min-w-0，父层必须是
+ * inline-size 容器（断点看内容容器不看 viewport）。不按 Tailwind 类名定位。
+ */
+export async function measureNavDetailLayout(history: Locator, label: string): Promise<NavDetailLayout> {
+  const m = await history.evaluate((card) => {
+    const left = card.parentElement;
+    const grid = left?.parentElement;
+    const wrapper = grid?.parentElement;
+    if (!left || !grid || !wrapper || !grid.contains(card)) {
+      throw new Error('历史卡不在预期的 左栏→栅格→容器 层级内');
+    }
+    const gs = getComputedStyle(grid);
+    if (gs.display !== 'grid') {
+      throw new Error(`父布局应为 grid，实际 display=${gs.display}`);
+    }
+    const leftRect = left.getBoundingClientRect();
+    const rightRect = grid.children[1]?.getBoundingClientRect();
+    return {
+      containerWidth: wrapper.clientWidth,
+      containerType: getComputedStyle(wrapper).containerType,
+      tracks: gs.gridTemplateColumns.split(' ').map((v) => parseFloat(v)),
+      columnGap: parseFloat(gs.columnGap),
+      groupCount: grid.children.length,
+      leftFirst: grid.children[0] === left,
+      leftMinWidth: getComputedStyle(left).minWidth,
+      leftBottom: leftRect.bottom,
+      rightTop: rightRect ? rightRect.top : null,
+      leftTop: leftRect.top,
+    };
+  });
+  expect(m.containerType, `${label}: 父层应为 inline-size 容器`).toBe('inline-size');
+  expect(m.groupCount, `${label}: 栅格应恰有左右两组`).toBe(2);
+  expect(m.leftFirst, `${label}: 左组（净值卡）应在 DOM 前位`).toBeTruthy();
+  expect(m.leftMinWidth, `${label}: 左栏应 min-w-0`).toBe('0px');
+  if (m.tracks.length === 1 && m.rightTop !== null) {
+    expect(m.rightTop, `${label}: 单栏时右组应排在左组下方`).toBeGreaterThanOrEqual(m.leftBottom - 1);
+  }
+  if (m.tracks.length === 2 && m.rightTop !== null) {
+    expect(Math.abs(m.rightTop - m.leftTop), `${label}: 双栏时左右组应同顶`).toBeLessThanOrEqual(1);
+  }
+  return { containerWidth: m.containerWidth, tracks: m.tracks, columnGap: m.columnGap };
+}
+
+/** 按容器宽断言栏数（#934 S4：≥800px 双栏 360px 右栏 + 16px 栏距，否则单栏） */
+export function expectNavDetailColumns(m: NavDetailLayout, label: string): void {
+  if (m.containerWidth >= 800) {
+    expect(m.tracks.length, `${label}: 容器 ${m.containerWidth}px ≥800 应双栏`).toBe(2);
+    expect(Math.abs(m.tracks[1] - 360), `${label}: 右栏应 360px，实际 ${m.tracks[1]}px`).toBeLessThanOrEqual(1);
+    expect(m.columnGap, `${label}: 栏间距应 16px`).toBe(16);
+    expect(
+      Math.abs(m.tracks[0] - (m.containerWidth - 360 - 16)),
+      `${label}: 左栏应占剩余宽`,
+    ).toBeLessThanOrEqual(1);
+  } else {
+    expect(m.tracks.length, `${label}: 容器 ${m.containerWidth}px <800 应单栏`).toBe(1);
+    expect(Math.abs(m.tracks[0] - m.containerWidth), `${label}: 单栏应铺满容器`).toBeLessThanOrEqual(1);
+  }
+}
