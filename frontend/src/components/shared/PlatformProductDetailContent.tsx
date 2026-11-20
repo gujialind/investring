@@ -354,20 +354,30 @@ export default function PlatformProductDetailContent({
           {allPlatformsCard}
         </>
       ) : (
-        <div className="grid grid-cols-[1fr_360px] gap-4">
-          <div className="space-y-4">
-            {!isCash && (
-              <ProductNavCards
-                productCode={productCode}
-                market={market}
-                variant={variant}
-                testIdPrefix="platform-product"
-              />
-            )}
-          </div>
-          <div className="space-y-4">
-            {tradesCard}
-            {allPlatformsCard}
+        /* #934 S4：非现金产品按内容容器宽降栏（≥800px 双栏，否则左组上/右组下）；
+           现金保持原固定右栏布局不变。 */
+        <div className={!isCash ? "@container" : undefined}>
+          <div
+            className={
+              !isCash
+                ? "grid grid-cols-1 gap-4 @min-[800px]:grid-cols-[minmax(0,1fr)_360px]"
+                : "grid grid-cols-[1fr_360px] gap-4"
+            }
+          >
+            <div className="min-w-0 space-y-4">
+              {!isCash && (
+                <ProductNavCards
+                  productCode={productCode}
+                  market={market}
+                  variant={variant}
+                  testIdPrefix="platform-product"
+                />
+              )}
+            </div>
+            <div className="space-y-4">
+              {tradesCard}
+              {allPlatformsCard}
+            </div>
           </div>
         </div>
       )}

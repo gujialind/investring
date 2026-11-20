@@ -182,31 +182,49 @@ export default function ProductNavCards({
         <p className="mt-3 text-sm text-muted-foreground">暂无净值数据</p>
       ) : (
         <>
-          <div className="mt-2 grid grid-cols-4 text-xs text-muted-foreground">
-            <span>日期</span>
-            <span className="text-right">单位净值</span>
-            <span className="text-right">累计净值</span>
-            <span className="text-right">日涨跌</span>
+          {/* #934：宽度不足时仅历史数据区横滚（表头与全部行同步横移），标题与查看更多
+              留在滚动区外。tabIndex/role/aria 提供键盘可聚焦的滚动入口。 */}
+          <div
+            className="mt-2 w-full min-w-0 overflow-x-auto"
+            data-testid={`${testIdPrefix}-history-scroll`}
+            tabIndex={0}
+            role="region"
+            aria-label="历史净值数据"
+          >
+            {/* 四列共享轨道：日期按完整内容占宽，数值列不小于内容宽（minmax(max-content,1fr)），
+                表头/ul/li 逐层 subgrid 继承同一祖先轨道与列间距，禁止每行独立分列（#934 根因）。
+                min-w-max 只加在内部数据 grid，卡片与页面不被撑宽。 */}
+            <div className="grid w-full min-w-max grid-cols-[max-content_repeat(3,minmax(max-content,1fr))] gap-x-2">
+              <div
+                className="col-span-full grid grid-cols-subgrid text-xs text-muted-foreground"
+                data-testid={`${testIdPrefix}-history-header`}
+              >
+                <span className="whitespace-nowrap">日期</span>
+                <span className="whitespace-nowrap text-right">单位净值</span>
+                <span className="whitespace-nowrap text-right">累计净值</span>
+                <span className="whitespace-nowrap text-right">日涨跌</span>
+              </div>
+              <ul className="col-span-full grid grid-cols-subgrid">
+                {historyItems.map((item) => {
+                  const pct = getSignedReturn(item.pct_change);
+                  return (
+                    <li
+                      key={item.price_date}
+                      data-testid={`${testIdPrefix}-history-row`}
+                      className="col-span-full grid grid-cols-subgrid border-t border-border py-1.5 text-sm tabular-nums"
+                    >
+                      <span className="whitespace-nowrap">{formatDate(item.price_date)}</span>
+                      <span className="whitespace-nowrap text-right">{formatNav(item.unit_price)}</span>
+                      <span className="whitespace-nowrap text-right">
+                        {item.accumulated_nav !== null ? formatNav(item.accumulated_nav) : "--"}
+                      </span>
+                      <span className={`whitespace-nowrap text-right ${pct.colorClass}`}>{pct.text}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           </div>
-          <ul>
-            {historyItems.map((item) => {
-              const pct = getSignedReturn(item.pct_change);
-              return (
-                <li
-                  key={item.price_date}
-                  data-testid={`${testIdPrefix}-history-row`}
-                  className="grid grid-cols-4 border-t border-border py-1.5 text-sm tabular-nums"
-                >
-                  <span className="whitespace-nowrap">{formatDate(item.price_date)}</span>
-                  <span className="text-right">{formatNav(item.unit_price)}</span>
-                  <span className="text-right">
-                    {item.accumulated_nav !== null ? formatNav(item.accumulated_nav) : "--"}
-                  </span>
-                  <span className={`text-right ${pct.colorClass}`}>{pct.text}</span>
-                </li>
-              );
-            })}
-          </ul>
           {historyItems.length < historyTotal && (
             <div className="mt-2 text-center">
               <Button
