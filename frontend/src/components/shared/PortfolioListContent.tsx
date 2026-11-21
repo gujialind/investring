@@ -260,7 +260,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
           <Card key={portfolio.code}>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg">{portfolio.name}</CardTitle>
+                <CardTitle>{portfolio.name}</CardTitle>
                 <Badge variant={getStatusBadgeVariant(portfolio.status)}>
                   {portfolio.status === "active" ? "活跃" : portfolio.status === "draft" ? "草稿" : "已关闭"}
                 </Badge>

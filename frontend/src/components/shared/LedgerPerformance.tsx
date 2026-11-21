@@ -69,7 +69,7 @@ export default function LedgerPerformance({ data, variant = "desktop" }: LedgerP
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">区间收益与年化</CardTitle>
+        <CardTitle>区间收益与年化</CardTitle>
         <CardDescription>
           台账型按市值与本金进出计算（Modified Dietz / XIRR），无净值序列、不展示 TWR/波动率/回撤
           {data?.holding_days ? `；持有 ${data.holding_days} 天` : ""}

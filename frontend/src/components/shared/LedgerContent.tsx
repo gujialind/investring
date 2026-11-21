@@ -106,7 +106,7 @@ export default function LedgerContent({ portfolio, variant = "desktop" }: Ledger
       {/* 收益汇总（读侧 draft/active/closed 均可读；draft 各值 None → "--"） */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">台账汇总</CardTitle>
+          <CardTitle>台账汇总</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {totals.isError ? (
@@ -140,7 +140,7 @@ export default function LedgerContent({ portfolio, variant = "desktop" }: Ledger
       {/* 平台市值台账（entry） */}
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-lg">平台市值</CardTitle>
+          <CardTitle>平台市值</CardTitle>
           {canWrite && (
             <Button size="sm" data-testid="ledger-entry-add" onClick={openAddEntry}>
               <Plus className="mr-2 h-4 w-4" />
@@ -198,7 +198,7 @@ export default function LedgerContent({ portfolio, variant = "desktop" }: Ledger
       {/* 本金进出（flow） */}
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-lg">本金进出</CardTitle>
+          <CardTitle>本金进出</CardTitle>
           {canWrite && (
             <Button size="sm" data-testid="ledger-flow-add" onClick={openAddFlow}>
               <Plus className="mr-2 h-4 w-4" />

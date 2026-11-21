@@ -588,8 +588,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>
                 <span className="text-xs text-muted-foreground">{s.label}</span>
                 {/* 移动端两列栅格下 text-2xl 的带符号大额会溢出压到邻卡、吞掉负号，故降一档；
-                    text-lg 是 §5 四档内的分区标题档（同 PortfolioStatsCards 移动分支），
-                    不属 §6 禁止的「端侧独有字号」——此前的 text-xl 是四档外中间档。
+                    text-lg 是 §5 登记的移动金额数值档（同 PortfolioStatsCards 移动分支，#935 起
+                    属数值专属角色、不再等同分区标题档），不属 §6 禁止的「端侧独有字号」。
                     text-lg 下 8 位带符号仍与邻卡相接，该量级改由 wideValue 降单列兜住（#730），
                     不再继续压字号（再降 text-sm 会让主数值与正文同档、失去层级） */}
                 {/* 统计卡主数值与标签/注记同侧左对齐（visual-spec §5）：helper 供数字形态，

@@ -405,7 +405,7 @@ export function MobileSettingsList() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">设置</h1>
+        <h1 className="text-xl font-semibold leading-7">设置</h1>
         <p className="text-muted-foreground">系统设置和配置</p>
       </div>
 

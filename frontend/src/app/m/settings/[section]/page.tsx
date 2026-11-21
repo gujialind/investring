@@ -50,7 +50,7 @@ export default function MobileSettingsSectionPage() {
           返回设置
         </Link>
       </Button>
-      <h1 className="text-2xl font-semibold">{meta.title}</h1>
+      <h1 className="text-xl font-semibold leading-7">{meta.title}</h1>
       {section === "appearance" && <AppearanceCard />}
       {section === "datasource" && <DataSourceCard />}
       {section === "system" && <SystemInfoCard />}

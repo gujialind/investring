@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
+import ProductIdentity from "./ProductIdentity";
 import ProductNavCards from "./ProductNavCards";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
@@ -242,7 +243,7 @@ export default function PlatformProductDetailContent({
   const tradesCard = (
     <section className="rounded-lg border border-border bg-card p-4" data-testid="platform-product-trades-card">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">交易记录</h3>
+        <h3 className="text-base font-semibold leading-6">交易记录</h3>
         <Link href={tradesLink} className="text-sm text-primary hover:underline">
           查看全部
         </Link>
@@ -331,9 +332,14 @@ export default function PlatformProductDetailContent({
             ariaLabel: "返回平台详情",
           },
         ]}
-        title={`${slice.platform_name || platformCode} · ${product.product_name || codeLabel}`}
-        truncateTitle
+        title="产品详情"
+      />
+
+      {/* #935 S2：平台上下文独立一行 + 全文身份区（非吸顶）；平台名回退平台码的口径不变 */}
+      <ProductIdentity
+        name={product.product_name || codeLabel}
         meta={`${codeLabel}${market ? ` · ${formatMarketName(market)}` : ""}`}
+        platformContext={slice.platform_name || platformCode}
       />
 
       {overview}

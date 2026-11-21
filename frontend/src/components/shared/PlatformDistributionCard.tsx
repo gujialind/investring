@@ -39,7 +39,7 @@ export default function PlatformDistributionCard({
 
   return (
     <section className="rounded-lg border border-border bg-card p-4" data-testid={testId}>
-      <h3 className="text-lg font-semibold">{title}</h3>
+      <h3 className="text-base font-semibold leading-6">{title}</h3>
       {slices.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">暂无平台持仓</p>
       ) : (

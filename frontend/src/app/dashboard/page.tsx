@@ -37,7 +37,7 @@ export default function DashboardPage() {
     <MainLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold">首页</h1>
+          <h1 className="text-xl font-semibold leading-7">首页</h1>
           <p className="text-muted-foreground">
             投资组合概览和净值曲线
           </p>
@@ -58,7 +58,7 @@ export default function DashboardPage() {
         {pendingSubscriptions.length > 0 && (
           <Card className="bg-warning-soft border-warning/30">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-warning-foreground flex items-center gap-2">
+              <CardTitle className="text-sm leading-none text-warning-foreground flex items-center gap-2">
                 <div className="h-2 w-2 rounded-full bg-warning"></div>
                 待确认交易提醒
               </CardTitle>
@@ -92,7 +92,7 @@ export default function DashboardPage() {
         {pendingTrades.length > 0 && (
           <Card className="bg-warning-soft border-warning/30">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-warning-foreground flex items-center gap-2">
+              <CardTitle className="text-sm leading-none text-warning-foreground flex items-center gap-2">
                 <ArrowRightLeft className="h-4 w-4 text-warning" />
                 待确认调仓交易
               </CardTitle>

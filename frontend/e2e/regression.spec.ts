@@ -882,3 +882,45 @@ test.describe('危险确认按钮 solid 载体护栏（#874）', () => {
     await expect(dlg).toHaveCount(0);
   });
 });
+
+/**
+ * #935 A4 全站普通标题字号归级守卫：共享默认值（CardTitle/DialogTitle）与
+ * 非 PageHeader 页标题（dashboard/设置）都不得退回 24/18 旧体系。
+ * 金额/品牌专属角色不在此列（24px 金额由 product-detail.spec 的 overview-market-value 钉住，
+ * 移动 18px 金额由 cash-flows.spec 既有断言钉住，登录品牌由 theme.spec 颜色断言覆盖）。
+ */
+test.describe('全站普通标题字号归级（#935 A4）', () => {
+  test('首页 h1 20/600/28，「活跃组合」分区标题 16/600/24', async ({ page }) => {
+    await page.goto('/dashboard');
+    const h1 = page.getByRole('heading', { level: 1, name: '首页' });
+    await expect(h1).toBeVisible({ timeout: 15_000 });
+    await expect(h1).toHaveCSS('font-size', '20px');
+    await expect(h1).toHaveCSS('font-weight', '600');
+    await expect(h1).toHaveCSS('line-height', '28px');
+    const section = page.getByRole('heading', { name: '活跃组合' });
+    await expect(section).toBeVisible();
+    await expect(section).toHaveCSS('font-size', '16px');
+    await expect(section).toHaveCSS('font-weight', '600');
+    await expect(section).toHaveCSS('line-height', '24px');
+  });
+
+  test('设置页 h1 20/600/28（桌面 SettingsContent / 移动分组列表同档）', async ({ page }) => {
+    await page.goto('/settings');
+    const h1 = page.getByRole('heading', { level: 1, name: '设置' });
+    await expect(h1).toBeVisible({ timeout: 15_000 });
+    await expect(h1).toHaveCSS('font-size', '20px');
+    await expect(h1).toHaveCSS('font-weight', '600');
+    await expect(h1).toHaveCSS('line-height', '28px');
+  });
+
+  test('DialogTitle 归 16/600/24（添加平台弹窗）', async ({ page }) => {
+    await page.goto('/platforms');
+    await page.getByRole('button', { name: '添加平台' }).click();
+    const dlg = page.getByRole('dialog').filter({ hasText: '添加平台' });
+    await expect(dlg).toBeVisible({ timeout: 10_000 });
+    const title = dlg.getByRole('heading', { name: '添加平台' });
+    await expect(title).toHaveCSS('font-size', '16px');
+    await expect(title).toHaveCSS('font-weight', '600');
+    await expect(title).toHaveCSS('line-height', '24px');
+  });
+});

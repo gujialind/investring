@@ -1,6 +1,6 @@
 import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
 import { subMonths } from "date-fns";
-import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns } from "./helpers";
+import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
 
 /**
  * #824 产品管理页列合并与净值型产品详情页。
@@ -204,9 +204,8 @@ test.describe("净值型产品详情页（#824 Part 3）", () => {
     const errors = collectPageErrors(page);
     await page.goto(DETAIL_PATH);
 
-    // 页头：产品名 + 显示码 · 中文市场名
-    await expect(page.getByRole("heading", { name: "沪深300ETF" }).first()).toBeVisible();
-    await expect(page.getByText("510300 · A股场内").first()).toBeVisible();
+    // #935：短 h1「产品详情」+ 正文 h2 全名 + 显示码 · 中文市场名（字号档由 helper 钉住）
+    await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
 
     // 基本信息卡：元信息字段（显示码去后缀、市场中文名、类型）
     const basic = page.getByTestId("product-basic-info-card");
@@ -340,9 +339,10 @@ test.describe("净值型产品详情页（#824 Part 3）", () => {
 });
 
 /**
- * #856 详情页头部动作夹具：只替换单产品读/写端点 GET·PUT·DELETE /products/{code}/{market}，
- * nav 系与维度字典照常 hit 真实种子（510300.SH 有净值夹具）。is_active 由测试内可变变量
- * 驱动，模拟后端 PUT 后 GET 回读翻转——不向 E2E 库直接注入（种子契约不可改）。
+ * #856 详情页管理动作夹具（#935 起动作行在正文身份区下方）：只替换单产品读/写端点
+ * GET·PUT·DELETE /products/{code}/{market}，nav 系与维度字典照常 hit 真实种子
+ * （510300.SH 有净值夹具）。is_active 由测试内可变变量驱动，模拟后端 PUT 后 GET
+ * 回读翻转——不向 E2E 库直接注入（种子契约不可改）。
  */
 const PRODUCT_DETAIL_RESPONSE = {
   code: "510300.SH",
@@ -469,8 +469,8 @@ test.describe("产品行「更多」菜单与停用徽章（#856 块1/块2）", 
   });
 });
 
-test.describe("详情页头部动作与同步周期（#856 块2/块3）", () => {
-  test("头部编辑打开产品表单对话框", async ({ page }) => {
+test.describe("详情页管理动作与同步周期（#856 块2/块3）", () => {
+  test("编辑动作打开产品表单对话框", async ({ page }) => {
     await page.route(DETAIL_ENDPOINT, (route) =>
       route.request().method() === "GET"
         ? route.fulfill({ status: 200, json: PRODUCT_DETAIL_RESPONSE })
@@ -483,12 +483,12 @@ test.describe("详情页头部动作与同步周期（#856 块2/块3）", () => 
     await expect(dlg).toBeVisible();
     // #910：详情编辑入口复用同一滚动契约（长表单仅内层滚动、保存可达），
     // 完整表单行为由 product-data-source.spec.ts 覆盖，此处不重复
-    await expectDialogSingleScroll(dlg, "详情头部编辑", {
+    await expectDialogSingleScroll(dlg, "详情编辑", {
       bottomAction: dlg.getByRole("button", { name: "保存修改" }),
     });
   });
 
-  test("停用/启用经确认对话框即时翻转：标题徽章与按钮文案随 is_active 切换", async ({ page }) => {
+  test("停用/启用经确认对话框即时翻转：身份区徽章与按钮文案随 is_active 切换", async ({ page }) => {
     let active = true;
     await page.route(DETAIL_ENDPOINT, (route) => {
       const method = route.request().method();
@@ -762,5 +762,145 @@ test.describe("历史净值窄宽布局（#934）", () => {
       el.scrollLeft = el.scrollWidth;
     });
     await history.screenshot({ path: testInfo.outputPath(`nav-history-${width}-dark-end.png`) });
+  });
+});
+
+/**
+ * #935 全文身份与吸顶（产品管理-产品详情）。长名/空名/停用夹具只替换单产品读端点
+ * GET /products/{code}/{market}（#856 同手法），nav 系与维度字典照常 hit 真实种子。
+ */
+const LONG_NAME_CN_935 = "嘉实沪深300ETF联接基金A类人民币份额长名称样例";
+const LONG_NAME_EN_935 = "BlackRock Global Allocation Fund Class C USD Hedged Accumulation";
+
+function mockDetailName935(page: Page, name: string, isActive = true) {
+  return page.route(DETAIL_ENDPOINT, (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({ status: 200, json: { ...PRODUCT_DETAIL_RESPONSE, name, is_active: isActive } })
+      : route.continue()
+  );
+}
+
+test.describe("全文身份与吸顶（#935）", () => {
+  test("A1/A2/A7 长中文名与连续英文多档宽度全文可读，末尾类别/币种不丢", async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const isMobile = testInfo.project.name === "mobile";
+    const height = page.viewportSize()?.height ?? 720;
+    const widths = isMobile ? [320, 375, 390, 430] : [1024, 1280];
+    for (const longName of [LONG_NAME_CN_935, LONG_NAME_EN_935]) {
+      await mockDetailName935(page, longName);
+      await page.goto(DETAIL_PATH);
+      await expect(page.getByTestId("product-full-name")).toHaveText(longName, { timeout: 10_000 });
+      for (const width of widths) {
+        await page.setViewportSize({ width, height });
+        const m = await expectFullNameReadable(page, `${longName.slice(0, 12)}… 视口${width}`);
+        if (isMobile && width === 320) {
+          expect(m.lines, "320px 下长名应自然换行（≥2 行），不限行不缩字号").toBeGreaterThanOrEqual(2);
+        }
+      }
+      // A8 目检证据：长名全文身份区，浅/暗双主题整页（合成夹具名，非真实产品数据）
+      if (longName === LONG_NAME_CN_935) {
+        await page.setViewportSize({ width: isMobile ? 390 : 1280, height });
+        await scrollWindowTo(page, 0);
+        await page.screenshot({ path: testInfo.outputPath("identity-long-name-light.png"), fullPage: true });
+        await page.emulateMedia({ colorScheme: "dark" });
+        await page.screenshot({ path: testInfo.outputPath("identity-long-name-dark.png"), fullPage: true });
+        await page.emulateMedia({ colorScheme: "light" });
+      }
+    }
+  });
+
+  test("A1 空名称回退显示码，身份区不空屏", async ({ page }) => {
+    await mockDetailName935(page, "");
+    await page.goto(DETAIL_PATH);
+    await expectProductDetailIdentity(page, { name: "510300", meta: "510300 · A股场内" });
+  });
+
+  test("A3 页面放大 200%：名称/身份说明/管理动作仍可读可达（chromium）", async ({ page }, testInfo) => {
+    // 方法：根元素 CSS zoom=2（Blink 页面缩放同机制），放大以渲染几何为证
+    // （computed font-size 报告值不随根 zoom 变化）；不是缩小视口冒充文字放大。
+    // mobile WebKit 无等价自动化入口（平台限制如实记录，
+    // 真机字体放大复核并入依赖现场条件的闭环项，不在此冒充已验证）。
+    test.skip(
+      testInfo.project.name !== "chromium",
+      "页面放大探针经 CSS zoom 实现，mobile WebKit 无等价自动化入口（功能确实缺，平台限制留痕）"
+    );
+    await mockDetailName935(page, LONG_NAME_CN_935);
+    await page.goto(DETAIL_PATH);
+    await expect(page.getByTestId("product-full-name")).toHaveText(LONG_NAME_CN_935, { timeout: 10_000 });
+    const h1 = page.getByRole("heading", { level: 1, name: "产品详情" });
+    const before = await h1.boundingBox();
+    if (!before) throw new Error("页标题没有可见盒");
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = "2";
+    });
+    // 放大以渲染几何为证：根元素 zoom 不改变 computed font-size 报告值，
+    // 单行标题盒高应约翻倍（不是缩小视口冒充文字放大）
+    await expect
+      .poll(async () => (await h1.boundingBox())?.height ?? 0)
+      .toBeGreaterThan(before.height * 1.9);
+    await expectFullNameReadable(page, "200% 放大");
+    // 管理动作可达：编辑打开表单对话框（放大不藏内容、不靠缩字）
+    await page.getByRole("button", { name: "编辑", exact: true }).click();
+    await expect(dialogByTitle(page, "编辑产品")).toBeVisible();
+  });
+
+  test("A4 分区标题归 16/600/24：基本信息/分类维度/数据同步卡", async ({ page }) => {
+    await page.goto(DETAIL_PATH);
+    for (const [testid, title] of [
+      ["product-basic-info-card", "基本信息"],
+      ["product-dimension-card", "分类维度"],
+      ["product-sync-card", "数据同步"],
+    ] as const) {
+      const heading = page.getByTestId(testid).getByRole("heading", { name: title });
+      await expect(heading).toBeVisible({ timeout: 10_000 });
+      await expect(heading).toHaveCSS("font-size", "16px");
+      await expect(heading).toHaveCSS("font-weight", "600");
+      await expect(heading).toHaveCSS("line-height", "24px");
+    }
+  });
+
+  test("A5 吸顶折叠只剩返回+短标题：停用badge与管理动作随正文滚走", async ({ page }, testInfo) => {
+    await mockDetailName935(page, PRODUCT_DETAIL_RESPONSE.name, false);
+    await page.goto(DETAIL_PATH);
+    await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
+
+    // 展开态：停用 badge 在身份区、管理动作行在身份区下方（正文，非页眉）
+    const identity = page.getByTestId("product-identity");
+    await expect(identity.getByTestId("product-inactive-badge")).toBeVisible();
+    const actions = page.getByTestId("product-manage-actions");
+    await expect(actions).toBeVisible();
+    await expect(page.getByTestId("page-header").getByTestId("product-manage-actions")).toHaveCount(0);
+    const identityBox = await identity.boundingBox();
+    const actionsBox = await actions.boundingBox();
+    if (!identityBox || !actionsBox) throw new Error("身份区/管理动作行没有可见盒");
+    expect(actionsBox.y, "管理动作行应在身份区下方").toBeGreaterThanOrEqual(identityBox.y + identityBox.height - 1);
+    await expect(identity).toHaveCSS("position", "static");
+
+    // 阈值两侧：32px 不折叠、33px 折叠
+    await scrollWindowTo(page, 32);
+    await expect(page.getByTestId("page-header").getByRole("navigation", { name: "面包屑" })).toBeVisible();
+    await scrollWindowTo(page, 33);
+    await expectProductHeaderCollapsed(page, {
+      backAria: "返回产品管理",
+      absentTexts: ["沪深300ETF", "510300", "已停用"],
+    });
+    // A5/A8 目检证据：折叠页眉只剩返回+短标题（视口截图，非整页）
+    await page.screenshot({ path: testInfo.outputPath("header-collapsed-light.png") });
+
+    // 持续下滑：身份区与管理动作行滚出视口，页眉仍只有返回+短标题
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(32);
+    const identityTop = await identity.evaluate((el) => el.getBoundingClientRect().top);
+    expect(identityTop, "身份区应随正文滚走（顶缘 < 0）").toBeLessThan(0);
+    await expectProductHeaderCollapsed(page, {
+      backAria: "返回产品管理",
+      absentTexts: ["沪深300ETF", "510300", "已停用"],
+    });
+
+    // 回顶：展开态恢复，身份区可再次完整阅读
+    await scrollWindowTo(page, 0);
+    await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
+    await expect(identity.getByTestId("product-inactive-badge")).toBeVisible();
+    await expectFullNameReadable(page, "回顶后");
   });
 });

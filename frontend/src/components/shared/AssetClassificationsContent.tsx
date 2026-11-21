@@ -479,7 +479,7 @@ export default function AssetClassificationsContent({
       {/* 大区：asset_class 管理（规则摘要 + 编辑） */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg font-semibold">大类</CardTitle>
+          <CardTitle>大类</CardTitle>
           <CardDescription>排序号即饼图/分区色板序位；规则决定该大类产品的必填/可填维度</CardDescription>
         </CardHeader>
         <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>
@@ -541,7 +541,7 @@ export default function AssetClassificationsContent({
         return (
           <Card key={dimension}>
             <CardHeader>
-              <CardTitle className="text-lg font-semibold">{DIMENSION_LABELS[dimension]}</CardTitle>
+              <CardTitle>{DIMENSION_LABELS[dimension]}</CardTitle>
               <CardDescription>{DIMENSION_DESCRIPTIONS[dimension]}</CardDescription>
             </CardHeader>
             <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>

@@ -53,7 +53,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <BrandLogo size={48} className="mx-auto mb-2" />
-          <CardTitle className="text-2xl font-bold text-foreground">
+          <CardTitle className="text-2xl font-bold leading-none text-foreground">
             InvestRing
           </CardTitle>
           <CardDescription>

@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns } from "./helpers";
+import { test, expect, type Page } from "@playwright/test";
+import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享 ProductDetailContent）。
@@ -19,13 +19,11 @@ import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger, openApp
 const PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/510300.SH?market=CN_EXCHANGE`;
 
 test.describe("产品详情页", () => {
-  test("页头与概览卡：产品名、代码·市场、市值、份额与收益", async ({ page }) => {
+  test("页头与概览卡：短页眉+全文身份区、代码·市场、市值、份额与收益", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
-    await expect(
-      page.getByRole("heading", { name: "沪深300ETF" })
-    ).toBeVisible();
-    // #705 页头副行出显示码（去 tushare 后缀），不再直吐机器码 510300.SH
-    await expect(page.getByText("510300 · A股场内")).toBeVisible();
+    // #935：短 h1「产品详情」+ 正文 h2 全名（20/16 字号档由 helper 单点钉住）
+    await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
+    // #705 身份说明出显示码（去 tushare 后缀），不再直吐机器码 510300.SH
     await expect(page.getByText("510300.SH")).toHaveCount(0);
 
     const overview = page.getByTestId("product-overview-card");
@@ -35,6 +33,8 @@ test.describe("产品详情页", () => {
     // #729 统计卡主数值与标签同侧左对齐（visual-spec §5）：修复前挂 number-cell utility
     // 自带 text-right，大字被推到卡片右侧；本断言钉住调用点的实际对齐，防退回模板串
     await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
+    // #935 A4：24px 重点金额属数值专属角色，标题迁移不得误改
+    await expect(page.getByTestId("overview-market-value")).toHaveCSS("font-size", "24px");
     // #724：持仓产品卡 row3 已双端移除「持有份额」列，本条目是份额信息未丢的正面证据
     await expect(overview).toContainText("持有份额");
     // 持有收益（含 %）、累计收益、最新收益三处收益（+¥3,000.00 至少出现一次）
@@ -187,12 +187,14 @@ test.describe("产品详情页", () => {
     await expect(rows.first()).toContainText("15,000.00");
     await expect(rows.first()).toContainText("63,000.00");
     await expect(rows.first()).toContainText("100.0%");
-    // S7：行点击 → 平台-产品详情页（步骤④接线）
+    // S7：行点击 → 平台-产品详情页（步骤④接线）；#935 起平台上下文与产品名分别断言
     await rows.first().getByRole("link").click();
     await page.waitForURL(/\/platforms\/HBZQ\/products\/510300\.SH/);
-    await expect(
-      page.getByRole("heading", { name: /华宝证券.*沪深300ETF/ })
-    ).toBeVisible();
+    await expectProductDetailIdentity(page, {
+      name: "沪深300ETF",
+      meta: "510300 · A股场内",
+      platformContext: "华宝证券",
+    });
   });
 
   test("交易记录卡：该产品跨平台记录与查看全部链接", async ({ page }) => {
@@ -661,5 +663,73 @@ test.describe("历史净值窄宽布局（#934）", () => {
       el.scrollLeft = el.scrollWidth;
     });
     await history.screenshot({ path: testInfo.outputPath(`nav-history-${width}-dark-end.png`) });
+  });
+});
+
+/**
+ * #935 全文身份与吸顶（组合内产品详情）。长名夹具只改 holdings/by-product 响应的
+ * product_name（route.fetch 回读真实种子再改名），不向 E2E 库注入、不改种子契约。
+ */
+const LONG_NAME_935 = "华泰柏瑞沪深300ETF联接基金A类人民币份额长名称样例";
+
+async function mockLongProductName935(page: Page) {
+  await page.route(/\/holdings\/by-product(\?|$)/, async (route) => {
+    const res = await route.fetch();
+    const json = await res.json();
+    for (const p of json.products ?? []) {
+      if (p.product_code !== "CASH") p.product_name = LONG_NAME_935;
+    }
+    await route.fulfill({ response: res, json });
+  });
+}
+
+test.describe("全文身份与吸顶（#935）", () => {
+  test("A1/A2/A7 长名多档宽度全文可读，末尾不裁剪", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    await mockLongProductName935(page);
+    await page.goto(PRODUCT_PATH);
+    await expect(page.getByTestId("product-full-name")).toHaveText(LONG_NAME_935, { timeout: 10_000 });
+
+    const isMobile = testInfo.project.name === "mobile";
+    const height = page.viewportSize()?.height ?? 720;
+    const widths = isMobile ? [320, 375, 390, 430] : [1024, 1280];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height });
+      const m = await expectFullNameReadable(page, `视口${width}`);
+      if (isMobile && width === 320) {
+        expect(m.lines, "320px 下长名应自然换行（≥2 行），不限行不缩字号").toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
+  test("A5 吸顶折叠只剩返回+短标题：阈值两侧、下滑、回顶", async ({ page }) => {
+    await page.goto(PRODUCT_PATH);
+    await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
+    // 身份区非吸顶：随正文滚走
+    await expect(page.getByTestId("product-identity")).toHaveCSS("position", "static");
+
+    // 阈值两侧：32px 不折叠、33px 折叠（window.scrollY > 32 契约不变）
+    await scrollWindowTo(page, 32);
+    await expect(page.getByTestId("page-header").getByRole("navigation", { name: "面包屑" })).toBeVisible();
+    await scrollWindowTo(page, 33);
+    await expectProductHeaderCollapsed(page, {
+      backAria: "返回组合列表",
+      absentTexts: ["沪深300ETF", "510300"],
+    });
+
+    // 持续下滑（滚到页底，避免写死 scrollY 超出短页可滚范围）：身份区滚出视口，页眉仍只有返回+短标题
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(32);
+    const identityTop = await page.getByTestId("product-identity").evaluate((el) => el.getBoundingClientRect().top);
+    expect(identityTop, "身份区应随正文滚走（顶缘 < 0）").toBeLessThan(0);
+    await expectProductHeaderCollapsed(page, {
+      backAria: "返回组合列表",
+      absentTexts: ["沪深300ETF", "510300"],
+    });
+
+    // 回顶：展开态恢复，身份区可再次完整阅读
+    await scrollWindowTo(page, 0);
+    await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
+    await expectFullNameReadable(page, "回顶后");
   });
 });
