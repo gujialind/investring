@@ -45,6 +45,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { cn } from "@/lib/utils";
 import { DIMENSION_LABELS, RULE_DIMENSIONS, RULE_LABELS } from "@/lib/dimensions";
 import LoadingState from "@/components/shared/LoadingState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import RowActionButton from "@/components/shared/RowActionButton";
 
 const DIMENSION_DESCRIPTIONS: Record<string, string> = {
@@ -101,7 +102,13 @@ export default function AssetClassificationsContent({
   const addToast = useUIStore((state) => state.addToast);
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useAssetClassifications();
+  const {
+    data,
+    isLoading,
+    isError: dictError,
+    error: dictErr,
+    refetch: refetchDict,
+  } = useAssetClassifications();
   const createItem = useCreateAssetClassification();
   const updateItem = useUpdateAssetClassification();
 
@@ -472,8 +479,13 @@ export default function AssetClassificationsContent({
         }
       />
 
+      {/* #902 判序承重：失败排在空形态之前且为外层臂——isRefetchError 保留旧 data 时，
+          塞进 classes.length === 0 前件的嵌套形不可达（#683A / #900 同机理）。本页是整卡区
+          替换（失败后五卡不在屏），与投资人页「行集无条件渲染 + 下方槽位」不同，断言不可互抄。 */}
       {isLoading ? (
         <LoadingState />
+      ) : dictError ? (
+        <QueryErrorState error={dictErr} onRetry={refetchDict} />
       ) : (
       <>
       {/* 大区：asset_class 管理（规则摘要 + 编辑） */}
@@ -485,7 +497,7 @@ export default function AssetClassificationsContent({
         <CardContent className={isMobile ? "p-3 space-y-3" : undefined}>
           {isMobile ? (
             classes.map((c) => (
-              <div key={c.code} className="rounded-lg border p-3 space-y-2">
+              <div key={c.code} data-testid="asset-class-card" className="rounded-lg border p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{c.name}</span>

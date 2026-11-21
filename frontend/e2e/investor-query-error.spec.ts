@@ -29,28 +29,22 @@ test('同键后台重取失败且保留旧 data 时失败块仍可达（#900 A2 
   await expect(container('ADMIN')).toBeVisible({ timeout: 10_000 });
 
   // 首取成功后再拦截 GET：后续同键重取失败时 react-query 保留旧 data（isRefetchError）。
-  // 500 延迟 600ms 落地，制造可断言的「重取在途」窗口（N1 前置态钉住）。
-  await page.route(LIST_RE, async (route) => {
-    await new Promise((r) => setTimeout(r, 600));
-    await route.fulfill({ status: 500, json: FAIL_JSON });
-  });
+  await page.route(LIST_RE, (route) => route.fulfill({ status: 500, json: FAIL_JSON }));
   await container('VIEWER').getByRole('button', { name: '编辑' }).click();
   const dlg = dialogByTitle(page, '编辑投资人');
   await expect(dlg).toBeVisible();
   await dlg.getByRole('button', { name: '保存修改' }).click();
   await expect(dlg).toBeHidden();
 
-  // N1 前置态钉住：重取在途窗口内旧行集仍在屏（保留旧 data 的可观测代理）。
-  // 若 react-query 改为重取一开始就清空 data，本断言红；评审示例「失败时刻 ADMIN 行仍可见」
-  // 与外层三元的替换式渲染矛盾（失败时行集让位失败块），故不采字面写法，采在途窗口钉法。
-  await expect(container('ADMIN')).toBeVisible();
-
   // PUT 成功 invalidate 同键列表 → 后台重取 500：外层三元失败块必须可见；
   // 嵌套形（失败臂塞进 length===0 前件）在该态既无失败块也无空态 → 本断言红，判别力成立。
-  // 已知局限（如实登记）：若 react-query 改为「错误落地时才清空 data」，替换式渲染下
-  // 保留/清空两态 UI 同形，本用例与嵌套反例均绿——该退化非 UI 可判别，需缓存内省（不引入）。
   await expect(page.getByText('加载失败：投资人目录服务暂不可用')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText('暂无投资人')).toHaveCount(0);
+
+  // 承重前提直接守卫（#903 L2 S3 处置）：本页行集按 isMobile 无条件渲染，外层三元只替换其
+  // 下方的失败/空态槽位，故失败落地后旧行集与失败块**同屏**（并非「行集让位」）。本断言直接
+  // 对应 isRefetchError 保留旧 data，不依赖在途时序窗口；若改为错误落地即清空 data，本断言红。
+  await expect(container('ADMIN')).toBeVisible();
 });
 
 test('点重试且接口恢复后正常渲染行集，失败态撤下（#900 A3）', async ({ page }) => {
