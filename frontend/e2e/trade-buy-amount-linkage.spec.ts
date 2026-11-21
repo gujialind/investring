@@ -13,9 +13,13 @@
  *   - 卖出方向金额为纯派生量（#190）：只读展示毛额/实际到账，未填价格不展示。
  *
  * 数据说明：组合经 helpers 按 code 直达种子 draft 组合 E2E_PORT（#354），缺组合
- * 即硬失败、不 skip；平台/产品数据缺失时仍优雅 skip。本 spec 结构性绑定 E2E_PORT
- * 而非 E2E_ACTIVE：落库用例（用例 7）依赖零快照组合的 1.0000 首购窗口经 API
- * 「申购+确认」注入现金，在已有快照的 E2E_ACTIVE 上会 NAV_NOT_AVAILABLE。
+ * 即硬失败、不 skip；表单交互用例（1-6、8）平台/产品数据缺失时仍优雅 skip。本 spec
+ * 结构性绑定 E2E_PORT 而非 E2E_ACTIVE：落库用例（用例 7）依赖零快照组合的 1.0000
+ * 首购窗口经 API「申购+确认」注入现金，在已有快照的 E2E_ACTIVE 上会 NAV_NOT_AVAILABLE。
+ * 落库用例产品固定为种子场外基金 000300.OF（CN_OTC，#899）：不再取弹窗首项——产品列表
+ * 按 created_at DESC（秒精度）排序，CI 负载跨秒时末位插入的 HK_MUTUAL 产品会排首项，
+ * 其交易日按 HKEX 日历校验而 E2E 种子无 HKEX 行 → NON_TRADING_DAY 间歇红；固定 CN_OTC
+ * 产品（走 SSE 日历、种子契约必含）消除排序非确定与日历缺口，硬失败不 skip（同 trade-in-transit）。
  * 种子零现金而买入创建按扣款平台校验可用现金，落库用例先经 API
  * 「申购+确认」向所选平台注入现金（申购确认日 T+1，申请日取交易日前一工作日，
  * 种子日历工作日即交易日；首购按净值 1.0 确认，残留申购不清理、重复注入无害）。
@@ -40,6 +44,9 @@ import {
   pickFirstPlatformOption,
   pickFirstProduct,
   platformPopover,
+  productOption,
+  productPopover,
+  settlePopovers,
   toISODate,
 } from './helpers';
 
@@ -49,6 +56,25 @@ import {
 async function pickFirstPlatform(page: Page, dlg: Locator): Promise<string> {
   await openPopover(page, dlg.locator('button#platform_code'), platformPopover(page));
   return pickFirstPlatformOption(platformPopover(page));
+}
+
+/** 落库用例（用例 7）固定使用的场外基金（种子产品，confirm_days=1，CN_OTC 走 SSE 日历）。
+ *  #899：不再用 pickFirstProduct 取弹窗首项——产品列表按 created_at DESC（秒精度）排序，
+ *  种子末位插入的 HK_MUTUAL 产品 1001767344 在 CI 负载跨秒时会排到首项，而 HK_MUTUAL 交易日
+ *  按 HKEX 日历校验（#777）、E2E 种子只铺 SSE 日历无 HKEX 行 → NON_TRADING_DAY 间歇红。
+ *  固定 CN_OTC 产品同时消除「弹窗排序非确定」与「HKEX 日历缺口」两个成因；本用例守护金额
+ *  联动落库口径，产品选择是 incidental，固定 CN 产品不损失覆盖（同 trade-in-transit 惯例）。 */
+const LEDGER_PRODUCT = { code: '000300.OF', market: 'CN_OTC' } as const;
+
+/** 在「提交交易」弹窗内显式选定 LEDGER_PRODUCT（搜索 code → 按 code+market 定位选项）。 */
+async function pickLedgerProduct(page: Page, dlg: Locator): Promise<void> {
+  await openPopover(page, dlg.locator('button#product_code'), productPopover(page));
+  const popover = productPopover(page);
+  await popover.getByPlaceholder('搜索产品代码/名称').fill(LEDGER_PRODUCT.code);
+  const row = productOption(popover, LEDGER_PRODUCT.code, LEDGER_PRODUCT.market);
+  await row.waitFor({ timeout: 10_000 });
+  await row.click({ timeout: 10_000 });
+  await settlePopovers(page);
 }
 
 /** 买入金额两输入框 */
@@ -250,7 +276,8 @@ test.describe('买入金额双字段联动（#193）', () => {
   test('创建买入后列表显示净额，编辑弹窗预填双维度', async ({ page }) => {
     const errors = collectPageErrors(page);
     const { dlg, portfolioCode } = await openSubmitTradeDialog(page, E2E_PORT);
-    const product = await pickFirstProduct(page, dlg);
+    await pickLedgerProduct(page, dlg);
+    const product = LEDGER_PRODUCT;
     const platformCode = await pickFirstPlatform(page, dlg);
     const headers = await authHeaders(page);
     // 锚定「today 起最近一个交易日」（#468）：周末/非交易日改选该日而非 skip
