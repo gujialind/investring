@@ -1170,7 +1170,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               </AlertDescription>
             </Alert>
           )}
-          {breakdown ? (
+          {breakdown && (
             <>
               {isMobile ? (
                 <div className="space-y-2">
@@ -1277,7 +1277,8 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                 </p>
               )}
             </>
-          ) : breakdownLoading || breakdownFetching ? (
+          )}
+          {!breakdown && (breakdownLoading || breakdownFetching) && (
             <div
               className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"
               role="status"
@@ -1287,7 +1288,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               <Loader2 className="h-4 w-4 animate-spin" />
               正在加载平台构成…
             </div>
-          ) : null}
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBreakdownOpen(false)}>
               关闭
