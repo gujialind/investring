@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -78,7 +79,7 @@ import {
   toAmount,
 } from "@/lib/cashFlows";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { useCashFlowDay, useCashFlowList } from "@/hooks/useCashFlow";
+import { useCashFlowBreakdown, useCashFlowDay, useCashFlowList } from "@/hooks/useCashFlow";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { useConfirmCashTransfer } from "@/hooks/useCashTransfer";
 import { useDeleteCashOverride } from "@/hooks/usePosition";
@@ -111,9 +112,10 @@ function rowKey(row: CashFlowRow): string {
 /**
  * 现金流水页内容（桌面/移动共用，issue #725）。
  *
- * 数据全部来自端点 `GET /portfolios/{code}/cash-flows`（列表 + overview 四卡 +
- * platform_breakdown 一次到位，读侧口径见业务规则 rule-cash）；方向标签一律消费后端
- * `flow_type_label`，前端不重算方向（mockup 的申赎方向是错的、不作基线）。余额列与「日期·平台」
+ * 数据来自端点 `GET /portfolios/{code}/cash-flows`：列表与 overview 四卡常驻，
+ * platform_breakdown 仅在构成弹窗打开时独立请求（读侧口径见业务规则 rule-cash）；
+ * 方向标签一律消费后端 `flow_type_label`，前端不重算方向（mockup 的申赎方向是错的、
+ * 不作基线）。余额列与「日期·平台」
  * 组列按 (平台, 现金日期) rowSpan 合并；「当日另有 N 笔」与详情对账块经 `useCashFlowDay`
  * 取同 (平台, 日) 全组行（解除类型筛选），故在类型筛选态下也能自证日终余额。
  */
@@ -160,6 +162,23 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   };
 
   const { data, isLoading, isFetching, isError, error, refetch } = useCashFlowList(code, listParams);
+  const {
+    data: breakdown,
+    isLoading: breakdownLoading,
+    isFetching: breakdownFetching,
+    isError: breakdownIsError,
+    error: breakdownError,
+    refetch: refetchBreakdown,
+  } = useCashFlowBreakdown(
+    code,
+    {
+      from_date: listParams.from_date,
+      to_date: listParams.to_date,
+      status: listParams.status,
+      flow_type: listParams.flow_type,
+    },
+    breakdownOpen
+  );
   const { data: platformsData } = usePlatformList({ page_size: 100 });
 
   // 详情 / 当日弹窗打开时取同 (平台, 现金日期) 全组行（不带类型/状态筛选）。
@@ -185,7 +204,6 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
   const overview = data?.overview;
-  const breakdown = data?.platform_breakdown;
   const platforms = useMemo(() => platformsData?.items ?? [], [platformsData]);
   const platformNameMap = useMemo(
     () => new Map(platforms.map((p) => [p.code, p.name])),
@@ -618,7 +636,14 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             )}
           </div>
           {isMobile ? (
-            <Button variant="outline" size="sm" className="h-9" onClick={() => setFilterOpen((v) => !v)}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              aria-expanded={filterOpen}
+              aria-controls="cash-flow-filters"
+              onClick={() => setFilterOpen((v) => !v)}
+            >
               <Filter className="mr-2 h-4 w-4" />
               筛选
               {activeFilterCount > 0 && (
@@ -635,7 +660,11 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           {isMobile && <div className="mb-3 flex gap-2">{entryButtons}</div>}
           {/* 筛选栏（§9）：桌面平铺，移动折叠面板 + 激活计数 Badge */}
           {isMobile ? (
-            filterOpen && <div className="mb-3 grid grid-cols-1 gap-2">{filterControls}</div>
+            filterOpen && (
+              <div id="cash-flow-filters" className="mb-3 grid grid-cols-1 gap-2">
+                {filterControls}
+              </div>
+            )
           ) : (
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
@@ -1124,7 +1153,24 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
               每行 = 页头四卡在「筛选该平台」下会显示的值；合计行 = 组合口径（无平台筛选时与四卡一致）。「看明细」应用该平台筛选并关闭弹窗；「更新」以该平台预选启动「更新现金市值」。
             </DialogDescription>
           </DialogHeader>
-          {breakdown && (
+          {breakdownIsError && (
+            <Alert variant="destructive" data-testid="breakdown-error">
+              <AlertTitle>平台构成加载失败</AlertTitle>
+              <AlertDescription className="flex items-center justify-between gap-3">
+                <span>{getErrorMessage(breakdownError, "请稍后重试")}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={breakdownFetching}
+                  onClick={() => void refetchBreakdown()}
+                >
+                  {breakdownFetching && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {breakdownFetching ? "重试中…" : "重试"}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {breakdown ? (
             <>
               {isMobile ? (
                 <div className="space-y-2">
@@ -1231,7 +1277,17 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                 </p>
               )}
             </>
-          )}
+          ) : breakdownLoading || breakdownFetching ? (
+            <div
+              className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"
+              role="status"
+              aria-busy="true"
+              data-testid="breakdown-loading"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              正在加载平台构成…
+            </div>
+          ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBreakdownOpen(false)}>
               关闭

@@ -18,6 +18,7 @@ export interface CashFlowListParams {
   flow_type?: CashFlowType;
   page?: number;
   page_size?: number;
+  include_breakdown?: boolean;
 }
 
 export const cashFlowApi = {

@@ -7982,7 +7982,7 @@
           "现金流水"
         ],
         "summary": "Get Cash Flows",
-        "description": "现金流水列表（含页头概览四卡与按平台构成）。\n\n- `from_date` / `to_date`：现金日期闭区间，均可空（上界缺省开放，否则预计到账日\n  在未来的在途行会被默认视图藏掉）。\n- `status`：`settled`（已生效）/ `in_transit`（在途）——映射派生的 settled 两值，\n  不透出 raw `trade.status`；cancelled 腿不出行。未烘焙进快照的重估行落\n  `in_transit` 档（尚未生效），但对 `overview.in_transit` 金额贡献为 0。\n  `platform_code` 空串等同未传（不做平台筛选）。\n- `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /\n  `transfer` / `revalue`。\n- 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。",
+        "description": "现金流水列表（含页头概览四卡与按平台构成）。\n\n- `from_date` / `to_date`：现金日期闭区间，均可空（上界缺省开放，否则预计到账日\n  在未来的在途行会被默认视图藏掉）。\n- `status`：`settled`（已生效）/ `in_transit`（在途）——映射派生的 settled 两值，\n  不透出 raw `trade.status`；cancelled 腿不出行。未烘焙进快照的重估行落\n  `in_transit` 档（尚未生效），但对 `overview.in_transit` 金额贡献为 0。\n  `platform_code` 空串等同未传（不做平台筛选）。\n- `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /\n  `transfer` / `revalue`。\n- `include_breakdown`：默认 `true`；传 `false` 时 `platform_breakdown` 字段存在但为\n  `null`，并跳过按平台构成计算。\n- 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。",
         "operationId": "get_cash_flows_api_portfolios__portfolio_code__cash_flows_get",
         "security": [
           {
@@ -8099,6 +8099,16 @@
               "type": "integer",
               "default": 20,
               "title": "Page Size"
+            }
+          },
+          {
+            "name": "include_breakdown",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Include Breakdown"
             }
           }
         ],
@@ -9921,7 +9931,7 @@
           "outflow"
         ],
         "title": "CashFlowOverview",
-        "description": "页头四卡。\n\n- `available`：`calculate_available_cash(as_of=today)` 单次调用结果（平台筛选\n  切换 scope，不随类型/状态/区间筛选变化）。\n- `in_transit`：Σ 未生效行的带符号金额，按到账/扣款平台归属；口径**不同于**\n  快照的 `IN_TRANSIT_*` 虚拟产品（后者还含「现金已扣、基金腿未生效」的买入在途，\n  其现金腿在本页是已生效行）。\n- `inflow` / `outflow`：对**筛选后全集**（非当页）聚合，仅已生效行；两级均排除\n  重估，组合级另排除平台间转移（内部搬运），平台级含转移。outflow 为负值。"
+        "description": "页头四卡。\n\n- `available`：`calculate_available_cash(as_of=today)` 的同口径批量结果（平台筛选\n  切换 scope，不随类型/状态/区间筛选变化）。\n- `in_transit`：Σ 未生效行的带符号金额，按到账/扣款平台归属；口径**不同于**\n  快照的 `IN_TRANSIT_*` 虚拟产品（后者还含「现金已扣、基金腿未生效」的买入在途，\n  其现金腿在本页是已生效行）。\n- `inflow` / `outflow`：对**筛选后全集**（非当页）聚合，仅已生效行；两级均排除\n  重估，组合级另排除平台间转移（内部搬运），平台级含转移。outflow 为负值。"
       },
       "CashFlowPairRef": {
         "properties": {
@@ -12170,7 +12180,14 @@
             "$ref": "#/components/schemas/CashFlowOverview"
           },
           "platform_breakdown": {
-            "$ref": "#/components/schemas/PlatformCashFlowBreakdown"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlatformCashFlowBreakdown"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

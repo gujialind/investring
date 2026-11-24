@@ -111,7 +111,7 @@ export interface PaginatedCashFlowResponse {
   page: number;
   page_size: number;
   overview: CashFlowOverview;
-  platform_breakdown: PlatformCashFlowBreakdown;
+  platform_breakdown: PlatformCashFlowBreakdown | null;
 }
 
 /** status 筛选两值（映射派生 settled，不透出 raw trade.status） */

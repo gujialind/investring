@@ -352,6 +352,23 @@ class TestFlowTypeFilter:
 class TestOverviewAndBreakdown:
     """断言 5/13/15：两级排除规则、构成弹窗口径、recon 命名差。"""
 
+    def test_breakdown_defaults_to_full_and_can_be_omitted(
+        self, client, admin_headers, api_portfolio
+    ):
+        default = _get(client, admin_headers, page_size=1).json()
+        explicit = _get(
+            client, admin_headers, page_size=1, include_breakdown="true"
+        ).json()
+        lightweight = _get(
+            client, admin_headers, page_size=1, include_breakdown="false"
+        ).json()
+        assert default == explicit
+        assert default["platform_breakdown"] is not None
+        assert "platform_breakdown" in lightweight
+        assert lightweight["platform_breakdown"] is None
+        assert lightweight["items"] == default["items"]
+        assert lightweight["overview"] == default["overview"]
+
     def test_portfolio_level_excludes_transfers_platform_level_includes(
         self, client, admin_headers, api_portfolio
     ):

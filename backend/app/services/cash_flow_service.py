@@ -12,8 +12,10 @@
 口径正文见 docs/reference/business-constraints.md#rule-cash 的「现金流水读侧口径」：
 锚点日（卖出锚 `trade_date`、买入锚 `confirm_date`，与
 `position_service.calculate_available_cash` 逐字同源）、已生效/在途判据、
-流入流出的两级排除规则。本服务只读、不量化、不落库、不 commit。
+流入流出的两级排除规则。余额按去重键批量计算，并以标量引擎作逐键 oracle；
+本服务只读、不量化、不落库、不 commit。
 """
+from bisect import bisect_left
 from collections import Counter
 from datetime import date
 from decimal import Decimal
@@ -30,16 +32,14 @@ from app.models.portfolio_position import PortfolioPosition
 from app.models.share_change_event import ShareChangeEvent
 from app.models.subscription import Subscription
 from app.models.trade import Trade
+from app.models.trading_calendar import TradingCalendar
 from app.services.exceptions import BusinessError, NotFoundError
 from app.services.position_service import (
     _classify_transfer_group,
-    calculate_available_cash,
+    calculate_available_cash_batch,
 )
 from app.services.product_service import build_product_label_maps
-from app.services.trading_utils import (
-    get_latest_snapshot_date,
-    try_get_prev_trading_day,
-)
+from app.services.trading_utils import SSE_EXCHANGE, get_latest_snapshot_date
 
 # 流水类型取值域（= 前端筛选下拉，与设计文档 §3 契约草图同源）。
 # label 为账本口径文案：申购的 CASH 腿是 buy（投资人注资入账 → 现金增加）、
@@ -155,7 +155,7 @@ def _trade_leg_rows(db: Session, portfolio_code: str, today: date) -> tuple[list
         confirmed = leg.status == "confirmed"
         kind = _classify_transfer_group(leg.transfer_group)
         # 锚点日：卖出锚 trade_date、买入锚 confirm_date（与 calculate_available_cash
-        # 的时点口径 #70/#78 逐字同源，保证「余额列 = 该函数单次调用」可对账闭合）
+        # 的时点口径 #70/#78 逐字同源，余额批量结果须逐键等于标量引擎）
         anchor = leg.trade_date if not is_buy else (leg.confirm_date or leg.trade_date)
         settled = confirmed and anchor <= today
 
@@ -407,29 +407,47 @@ def _platform_codes(db: Session, portfolio_code: str, rows: list) -> list:
     return sorted(codes)
 
 
-def _balance_maps(db: Session, portfolio_code: str, rows: list) -> tuple[dict, dict, dict]:
-    """按 (平台, 现金日期) **去重**后取余额（契约调整 C7）。
+def _previous_trading_days(db: Session, dates: set[date]) -> dict[date, Optional[date]]:
+    """一次查询解析多个现金日期的前一交易日；日历不足返回 None。"""
+    if not dates:
+        return {}
+    trading_dates = [
+        row[0]
+        for row in db.query(TradingCalendar.calendar_date)
+        .filter(
+            TradingCalendar.exchange == SSE_EXCHANGE,
+            TradingCalendar.is_open == True,
+            TradingCalendar.calendar_date < max(dates),
+        )
+        .order_by(TradingCalendar.calendar_date)
+        .all()
+    ]
+    previous = {}
+    for cash_date in dates:
+        index = bisect_left(trading_dates, cash_date) - 1
+        previous[cash_date] = trading_dates[index] if index >= 0 else None
+    return previous
 
-    返回 (日终余额表, 前一交易日表, 前日日终余额表)。前一交易日走
-    `try_get_prev_trading_day`：日历覆盖不足时返回 None 而不是抛
-    CALENDAR_NOT_SYNCED——只读列表不该因为区间贴近日历起点而整体 500。
-    """
+
+def _balance_maps(
+    db: Session,
+    portfolio_code: str,
+    rows: list,
+    extra_keys: Optional[set[tuple[Optional[str], date]]] = None,
+) -> tuple[dict, dict]:
+    """按 (平台, 现金日期) 去重，并一次批量计算行、概览与构成余额。"""
     keys = {(r["platform_code"], r["cash_date"]) for r in rows}
-    end_of_day = {
-        key: calculate_available_cash(db, portfolio_code, key[0], as_of_date=key[1])
-        for key in keys
-    }
-    prev_of = {key: try_get_prev_trading_day(db, key[1]) for key in keys}
+    previous_by_date = _previous_trading_days(db, {cash_date for _, cash_date in keys})
+    prev_of = {key: previous_by_date[key[1]] for key in keys}
     prev_keys = {
-        (platform, prev) for (platform, _), prev in prev_of.items() if prev is not None
+        (platform, previous)
+        for (platform, _), previous in prev_of.items()
+        if previous is not None
     }
-    prev_balance = {
-        key: end_of_day[key]
-        if key in end_of_day
-        else calculate_available_cash(db, portfolio_code, key[0], as_of_date=key[1])
-        for key in prev_keys
-    }
-    return end_of_day, prev_of, prev_balance
+    balances = calculate_available_cash_batch(
+        db, portfolio_code, keys | prev_keys | (extra_keys or set())
+    )
+    return balances, prev_of
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +638,7 @@ def _enrich_rows(
 
 
 def _row_payload(row: dict, group_counts: Counter, balances: tuple) -> dict:
-    end_of_day, prev_of, prev_balance = balances
+    balance_by_key, prev_of = balances
     key = (row["platform_code"], row["cash_date"])
     prev_date = prev_of.get(key)
     return {
@@ -646,9 +664,9 @@ def _row_payload(row: dict, group_counts: Counter, balances: tuple) -> dict:
         },
         "pair_ref": row["pair"],
         "group_total_count": group_counts.get(key, 1),
-        "platform_end_of_day_balance": end_of_day.get(key),
+        "platform_end_of_day_balance": balance_by_key.get(key),
         "prev_day_balance": (
-            prev_balance.get((row["platform_code"], prev_date))
+            balance_by_key.get((row["platform_code"], prev_date))
             if prev_date is not None else None
         ),
     }
@@ -670,6 +688,7 @@ def list_cash_flows(
     flow_type: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
+    include_breakdown: bool = True,
 ) -> dict:
     """现金流水聚合查询（只读）。
 
@@ -683,8 +702,9 @@ def list_cash_flows(
       「我只想看分红」不改变有多少钱）；`inflow` / `outflow`：流量卡，对筛选后**全集**
       聚合（不是当页）。组合级流量排除平台间转移（内部搬运，否则一笔被计两次），
       平台级含转移（对该平台是真进出）；两级均排除重估。
-    - `platform_breakdown`：恒为全部平台的构成（不随平台筛选），rows[i] 四值 == 筛该
-      平台时的 overview，total == 组合口径，recon = Σrows − total（= 本期已生效转移腿）。
+    - `platform_breakdown`：默认返回全部平台的构成（不随平台筛选），rows[i] 四值 ==
+      筛该平台时的 overview，total == 组合口径，recon = Σrows − total（= 本期已生效
+      转移腿）；`include_breakdown=False` 时字段存在但为 None，并跳过构成专用查询。
 
     Returns:
         dict（可直接喂 `PaginatedCashFlowResponse`）。
@@ -754,10 +774,16 @@ def list_cash_flows(
         (r["platform_code"], r["cash_date"]) for r in status_scoped
     )
 
-    # 概览：存量卡只随平台筛选；流量卡跟随全部筛选（对全集，不是当页）
-    available = calculate_available_cash(
-        db, portfolio_code, platform_code, as_of_date=today
+    codes = _platform_codes(db, portfolio_code, all_rows) if include_breakdown else []
+    balance_keys = {(platform_code, today)}
+    if include_breakdown:
+        balance_keys |= {(None, today)} | {(code, today) for code in codes}
+    balances, prev_of = _balance_maps(
+        db, portfolio_code, page_rows, extra_keys=balance_keys
     )
+
+    # 概览：存量卡只随平台筛选；流量卡跟随全部筛选（对全集，不是当页）
+    available = balances[(platform_code, today)]
     in_transit = _sum_in_transit(
         [
             r for r in all_rows
@@ -772,42 +798,46 @@ def list_cash_flows(
         "outflow": outflow,
     }
 
-    # 构成弹窗：不受平台筛选影响（rows = 各平台、total = 组合口径）
-    type_scoped = [
-        r for r in in_range
-        if status is None
-        or (r["settled"] if status == STATUS_SETTLED else not r["settled"])
-    ]
-    if flow_type is not None:
-        type_scoped = [r for r in type_scoped if r["flow_type"] == flow_type]
-
-    codes = _platform_codes(db, portfolio_code, all_rows)
+    platform_breakdown = None
     breakdown_rows = []
-    for code in codes:
-        mine = [r for r in all_rows if r["platform_code"] == code]
-        mine_flows = [r for r in type_scoped if r["platform_code"] == code]
-        b_inflow, b_outflow = _sum_flows(mine_flows, include_transfer=True)
-        breakdown_rows.append({
-            "platform_code": code,
-            "platform_name": None,  # 下方统一按平台名补齐
-            "available": calculate_available_cash(
-                db, portfolio_code, code, as_of_date=today
-            ),
-            "in_transit": _sum_in_transit(mine),
-            "inflow": b_inflow,
-            "outflow": b_outflow,
-        })
-    total_inflow, total_outflow = _sum_flows(type_scoped, include_transfer=False)
-    breakdown_total = {
-        "available": calculate_available_cash(db, portfolio_code, None, as_of_date=today),
-        "in_transit": _sum_in_transit(all_rows),
-        "inflow": total_inflow,
-        "outflow": total_outflow,
-    }
-    recon = {
-        "inflow": sum((r["inflow"] for r in breakdown_rows), _ZERO) - total_inflow,
-        "outflow": sum((r["outflow"] for r in breakdown_rows), _ZERO) - total_outflow,
-    }
+    if include_breakdown:
+        # 构成弹窗：不受平台筛选影响（rows = 各平台、total = 组合口径）
+        type_scoped = [
+            r for r in in_range
+            if status is None
+            or (r["settled"] if status == STATUS_SETTLED else not r["settled"])
+        ]
+        if flow_type is not None:
+            type_scoped = [r for r in type_scoped if r["flow_type"] == flow_type]
+
+        for code in codes:
+            mine = [r for r in all_rows if r["platform_code"] == code]
+            mine_flows = [r for r in type_scoped if r["platform_code"] == code]
+            b_inflow, b_outflow = _sum_flows(mine_flows, include_transfer=True)
+            breakdown_rows.append({
+                "platform_code": code,
+                "platform_name": None,  # 下方统一按平台名补齐
+                "available": balances[(code, today)],
+                "in_transit": _sum_in_transit(mine),
+                "inflow": b_inflow,
+                "outflow": b_outflow,
+            })
+        total_inflow, total_outflow = _sum_flows(type_scoped, include_transfer=False)
+        breakdown_total = {
+            "available": balances[(None, today)],
+            "in_transit": _sum_in_transit(all_rows),
+            "inflow": total_inflow,
+            "outflow": total_outflow,
+        }
+        recon = {
+            "inflow": sum((r["inflow"] for r in breakdown_rows), _ZERO) - total_inflow,
+            "outflow": sum((r["outflow"] for r in breakdown_rows), _ZERO) - total_outflow,
+        }
+        platform_breakdown = {
+            "rows": breakdown_rows,
+            "total": breakdown_total,
+            "recon": recon,
+        }
 
     # 平台名：当页行 + 转移对方平台 + 关联业务平台 + 构成弹窗行，一次查完
     name_codes = {r["platform_code"] for r in page_rows} | set(codes)
@@ -833,8 +863,7 @@ def list_cash_flows(
             if pair and pair.get("platform_code") in extra_names:
                 pair["platform_name"] = extra_names[pair["platform_code"]]
 
-    balances = _balance_maps(db, portfolio_code, page_rows)
-    items = [_row_payload(r, group_counts, balances) for r in page_rows]
+    items = [_row_payload(r, group_counts, (balances, prev_of)) for r in page_rows]
 
     return {
         "items": items,
@@ -842,9 +871,5 @@ def list_cash_flows(
         "page": page,
         "page_size": page_size,
         "overview": overview,
-        "platform_breakdown": {
-            "rows": breakdown_rows,
-            "total": breakdown_total,
-            "recon": recon,
-        },
+        "platform_breakdown": platform_breakdown,
     }

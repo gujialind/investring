@@ -1,9 +1,9 @@
 # ============================================================================
 # 集成测试：现金流水余额列与快照吸收 (test_cash_flows_balance.py)
 # ============================================================================
-# issue #725 PR-1，验收断言 1/2/3/9/11 的后端面。余额列不是本模块自算的数：
-# 它必须逐行等于 `calculate_available_cash(as_of=cash_date, platform)` 的**单次
-# 调用**结果，否则详情弹窗的对账块（前日日终 + 本笔 = 日终）不可能闭合。
+# issue #725 PR-1 / #948，验收断言 1/2/3/9/11 的后端面。余额列不是本模块自算的数：
+# 批量结果必须逐键等于标量 `calculate_available_cash(as_of=cash_date, platform)`，
+# 否则详情弹窗的对账块（前日日终 + 本笔 = 日终）不可能闭合。
 #
 # 覆盖：
 #   1. 每行 platform_end_of_day_balance / prev_day_balance 与直调引擎逐行相等；
@@ -19,7 +19,11 @@ from decimal import Decimal
 
 import pytest
 
-from app.services.position_service import calculate_available_cash, update_cash_position
+from app.services.position_service import (
+    calculate_available_cash,
+    calculate_available_cash_batch,
+    update_cash_position,
+)
 from app.services.snapshot_service import generate_daily_snapshots
 from app.services.trading_utils import try_get_prev_trading_day
 from tests.factories import (
@@ -118,10 +122,29 @@ def _overview(client, admin_headers, portfolio=PORTFOLIO, **params) -> dict:
 
 
 class TestBalanceEqualsEngine:
-    def test_every_row_balance_is_a_single_engine_call(
+    def test_batch_matches_scalar_across_snapshot_boundaries(
+        self, test_db, balanced_portfolio
+    ):
+        keys = {
+            ("MYCF", D0),
+            ("MYCF", D1),
+            ("HBZQ", D1),
+            ("HBZQ", D2),
+            (None, D0),
+            (None, D1),
+            (None, D2),
+            ("", D1),
+        }
+        balances = calculate_available_cash_batch(test_db, balanced_portfolio, keys)
+        for (platform_code, as_of_date), balance in balances.items():
+            assert balance == calculate_available_cash(
+                test_db, balanced_portfolio, platform_code, as_of_date=as_of_date
+            )
+
+    def test_every_row_balance_matches_scalar_engine(
         self, test_db, client, admin_headers, balanced_portfolio
     ):
-        """断言 1：余额列 = calculate_available_cash(as_of=cash_date, platform)。"""
+        """断言 1：余额列逐键等于标量 calculate_available_cash。"""
         rows = _rows(client, admin_headers)
         assert rows, "夹具未产生任何流水行"
         for row in rows:

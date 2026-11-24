@@ -4,19 +4,25 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { cashFlowApi, type CashFlowListParams } from "@/lib/api";
 import { queryKeys } from "@/lib/queryKeys";
 
+type CashFlowBreakdownParams = Pick<
+  CashFlowListParams,
+  "from_date" | "to_date" | "status" | "flow_type"
+>;
+
 /**
  * 现金流水列表 Hook（issue #725，纯读）。
  *
  * `keepPreviousData`：翻页/改筛选时保留上一页数据，避免整表闪空——与 useTradeList
- * 同口径。响应含 items + overview 四卡 + platform_breakdown，一次查询全部到位。
+ * 同口径。列表只取 items + overview；platform_breakdown 由弹窗独立查询。
  * 页头三入口的写操作（现金转移 / 更新市值）与行级 confirm/revoke 复用各自既有
  * mutation hook，这些 hook 的 onSuccess 统一失效 `queryKeys.cashFlows.root`
- * （含本列表与下方同日全组查询），写后本页自动刷新。
+ * （含本列表、构成与下方同日全组查询），写后本页自动刷新。
  */
 export function useCashFlowList(portfolioCode: string, params?: CashFlowListParams) {
+  const lightweightParams = { ...params, include_breakdown: false };
   return useQuery({
-    queryKey: queryKeys.cashFlows.list(portfolioCode, params),
-    queryFn: () => cashFlowApi.list(portfolioCode, params),
+    queryKey: queryKeys.cashFlows.list(portfolioCode, lightweightParams),
+    queryFn: () => cashFlowApi.list(portfolioCode, lightweightParams),
     enabled: !!portfolioCode,
     placeholderData: keepPreviousData,
     staleTime: 30 * 1000,
@@ -41,12 +47,44 @@ export function useCashFlowDay(
 ) {
   const params: CashFlowListParams | undefined =
     platformCode && cashDate
-      ? { platform_code: platformCode, from_date: cashDate, to_date: cashDate, page_size: 100 }
+      ? {
+          platform_code: platformCode,
+          from_date: cashDate,
+          to_date: cashDate,
+          page_size: 100,
+          include_breakdown: false,
+        }
       : undefined;
   return useQuery({
     queryKey: queryKeys.cashFlows.list(portfolioCode, { day: true, ...(params ?? {}) }),
     queryFn: () => cashFlowApi.list(portfolioCode, params),
     enabled: enabled && !!portfolioCode && !!params,
+    staleTime: 30 * 1000,
+  });
+}
+
+/** 构成弹窗按当前区间/状态/类型独立取数；平台、页码与页大小不进入缓存键。 */
+export function useCashFlowBreakdown(
+  portfolioCode: string,
+  params: CashFlowBreakdownParams,
+  enabled: boolean
+) {
+  const breakdownParams = {
+    from_date: params.from_date,
+    to_date: params.to_date,
+    status: params.status,
+    flow_type: params.flow_type,
+  };
+  return useQuery({
+    queryKey: queryKeys.cashFlows.breakdown(portfolioCode, breakdownParams),
+    queryFn: () =>
+      cashFlowApi.list(portfolioCode, {
+        ...breakdownParams,
+        include_breakdown: true,
+        page_size: 1,
+      }),
+    select: (response) => response.platform_breakdown,
+    enabled: enabled && !!portfolioCode,
     staleTime: 30 * 1000,
   });
 }
