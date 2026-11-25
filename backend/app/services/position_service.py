@@ -7,11 +7,12 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional, Sequence
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.manual_market_value import ManualMarketValue
 from app.models.portfolio_position import PortfolioPosition
+from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
 from app.models.share_change_event import ShareChangeEvent
 from app.models.subscription import Subscription
 from app.models.trade import Trade
@@ -627,6 +628,159 @@ def calculate_available_cash(
         cash += Decimal(str(e.cash_change))
 
     return cash
+
+
+def calculate_available_cash_batch(
+    db: Session,
+    portfolio_code: str,
+    keys: set[tuple[Optional[str], date]],
+) -> dict[tuple[Optional[str], date], Decimal]:
+    """批量计算显式时点的可用现金，SQL 数量不随平台数或时点键数增长。"""
+    if not keys:
+        return {}
+
+    zero = Decimal("0")
+    as_of_dates = sorted({as_of_date for _, as_of_date in keys})
+    max_as_of = as_of_dates[-1]
+    snapshot_dates = [
+        row[0]
+        for row in db.query(PortfolioValueSnapshot.snapshot_date)
+        .filter(
+            PortfolioValueSnapshot.portfolio_code == portfolio_code,
+            PortfolioValueSnapshot.snapshot_date <= max_as_of,
+        )
+        .distinct()
+        .order_by(PortfolioValueSnapshot.snapshot_date)
+        .all()
+    ]
+    latest_by_as_of: dict[date, Optional[date]] = {}
+    snapshot_index = -1
+    for as_of_date in as_of_dates:
+        while (
+            snapshot_index + 1 < len(snapshot_dates)
+            and snapshot_dates[snapshot_index + 1] <= as_of_date
+        ):
+            snapshot_index += 1
+        latest_by_as_of[as_of_date] = (
+            snapshot_dates[snapshot_index] if snapshot_index >= 0 else None
+        )
+
+    balances = {key: zero for key in keys}
+    latest_dates = {latest for latest in latest_by_as_of.values() if latest is not None}
+    if latest_dates:
+        baseline_by_platform_date: dict[tuple[Optional[str], date], Decimal] = {}
+        baseline_by_date: dict[date, Decimal] = {}
+        baseline_rows = db.query(
+            PortfolioPosition.platform_code,
+            PortfolioPosition.snapshot_date,
+            PortfolioPosition.cash_amount,
+        ).filter(
+            PortfolioPosition.portfolio_code == portfolio_code,
+            PortfolioPosition.product_code == "CASH",
+            PortfolioPosition.snapshot_date.in_(latest_dates),
+        ).all()
+        for platform_code, snapshot_date, cash_amount in baseline_rows:
+            amount = Decimal(str(cash_amount or 0))
+            baseline_by_platform_date[(platform_code, snapshot_date)] = (
+                baseline_by_platform_date.get((platform_code, snapshot_date), zero) + amount
+            )
+            baseline_by_date[snapshot_date] = baseline_by_date.get(snapshot_date, zero) + amount
+        for key in keys:
+            platform_code, as_of_date = key
+            latest_date = latest_by_as_of[as_of_date]
+            if latest_date is None:
+                continue
+            balances[key] = (
+                baseline_by_date.get(latest_date, zero)
+                if not platform_code
+                else baseline_by_platform_date.get((platform_code, latest_date), zero)
+            )
+
+    trade_rows = db.query(
+        Trade.platform_code,
+        Trade.trade_type,
+        Trade.status,
+        Trade.amount,
+        Trade.trade_date,
+        Trade.confirm_date,
+    ).filter(
+        Trade.portfolio_code == portfolio_code,
+        Trade.product_code == "CASH",
+        or_(
+            and_(
+                Trade.status == "confirmed",
+                Trade.trade_type == "buy",
+                Trade.confirm_date <= max_as_of,
+            ),
+            and_(
+                Trade.status == "confirmed",
+                Trade.trade_type == "sell",
+                Trade.trade_date <= max_as_of,
+            ),
+            and_(
+                Trade.status == "pending",
+                Trade.trade_type == "sell",
+                Trade.trade_date <= max_as_of,
+            ),
+        ),
+    ).all()
+    trades_by_platform: dict[Optional[str], list] = {}
+    for trade in trade_rows:
+        trades_by_platform.setdefault(trade.platform_code, []).append(trade)
+
+    event_rows = db.query(
+        ShareChangeEvent.platform_code,
+        ShareChangeEvent.cash_effective_date,
+        ShareChangeEvent.cash_change,
+    ).filter(
+        ShareChangeEvent.portfolio_code == portfolio_code,
+        ShareChangeEvent.status == "confirmed",
+        ShareChangeEvent.platform_code.isnot(None),
+        ShareChangeEvent.cash_effective_date <= max_as_of,
+        ShareChangeEvent.cash_change.isnot(None),
+        ShareChangeEvent.cash_change != 0,
+    ).all()
+    events_by_platform: dict[str, list] = {}
+    for event in event_rows:
+        events_by_platform.setdefault(event.platform_code, []).append(event)
+
+    for key in keys:
+        platform_code, as_of_date = key
+        latest_date = latest_by_as_of[as_of_date]
+        lower_bound = latest_date or date(1970, 1, 1)
+        trades = (
+            trade_rows
+            if not platform_code
+            else trades_by_platform.get(platform_code, [])
+        )
+        for trade in trades:
+            amount = Decimal(str(trade.amount or 0))
+            if trade.status == "pending":
+                if trade.trade_date <= as_of_date:
+                    balances[key] -= amount
+            elif trade.trade_type == "buy":
+                if (
+                    trade.confirm_date is not None
+                    and lower_bound < trade.confirm_date <= as_of_date
+                ):
+                    balances[key] += amount
+            elif (
+                trade.confirm_date is not None
+                and trade.confirm_date > lower_bound
+                and trade.trade_date <= as_of_date
+            ):
+                balances[key] -= amount
+
+        events = (
+            event_rows
+            if not platform_code
+            else events_by_platform.get(platform_code, [])
+        )
+        for event in events:
+            if lower_bound < event.cash_effective_date <= as_of_date:
+                balances[key] += Decimal(str(event.cash_change))
+
+    return balances
 
 
 def calculate_available_shares(

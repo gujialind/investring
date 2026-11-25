@@ -34,6 +34,7 @@ def get_cash_flows(
     flow_type: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
+    include_breakdown: bool = True,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -47,6 +48,8 @@ def get_cash_flows(
       `platform_code` 空串等同未传（不做平台筛选）。
     - `flow_type`：`rebal_buy` / `rebal_sell` / `sub_buy` / `redeem` / `dividend` /
       `transfer` / `revalue`。
+    - `include_breakdown`：默认 `true`；传 `false` 时 `platform_breakdown` 字段存在但为
+      `null`，并跳过按平台构成计算。
     - 金额一律 4 位原值直出（Decimal → JSON 字符串），展示量化由前端承担。
     """
     result = list_cash_flows_service(
@@ -59,5 +62,6 @@ def get_cash_flows(
         flow_type=flow_type,
         page=page,
         page_size=page_size,
+        include_breakdown=include_breakdown,
     )
     return PaginatedCashFlowResponse(**result)

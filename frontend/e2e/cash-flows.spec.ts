@@ -10,6 +10,8 @@
  * 投影金额断言、写入口（现金转移）提交成功后读侧免刷新自动更新、对账块不被状态筛选污染。
  * #727 第二轮 L2 补充：存量档金额的负向断言（子串匹配区分不了 `¥x` 与 `+¥x`）、「当日
  * 另有 N 笔」N=0 不渲染、当日弹窗「当前筛选命中」标注、同日查询失败态优先于在屏行。
+ * #948：主列表与同日查询显式跳过平台构成，构成弹窗打开后才独立取数；构成请求失败可
+ * 重试，区间/状态/类型筛选进入缓存键，写操作仍经 cashFlows.root 一并失效。
  * #788：现金转移撤销——当天完成转移经流水详情危险操作区撤销（行消失 + 平台构成回退）、
  * 跨天在途经转移记录弹窗「确认到账 → 已完成 → 撤销 → 已取消」完整生命周期（同时钉
  * #787 修复后确认按钮按 buy_confirm_date 启用）、重复撤销 422 TRANSFER_ALREADY_CANCELLED、
@@ -31,7 +33,6 @@ import {
   clickPortfolioManageLink,
   nearestTradingDay,
   openAppAndAuth,
-  openFilterPanelIfMobile,
   openPopover,
   pickCalendarDay,
   pickPlatformOption,
@@ -50,6 +51,10 @@ const PRODUCT = { code: '000300.OF', market: 'CN_OTC' };
 const SUB_AMOUNT = 40000;
 const BUY_AMOUNT = 10000;
 const TRANSFER_AMOUNT = 5000;
+
+function isCashFlowApi(url: URL): boolean {
+  return /^\/api\/portfolios\/[^/]+\/cash-flows$/.test(url.pathname);
+}
 
 async function post<T>(
   page: Page,
@@ -134,9 +139,16 @@ async function generateSnapshot(
   expect(r.success, `${target} 快照生成失败`).toBe(true);
 }
 
+async function ensureCashFlowFiltersOpen(page: Page, testInfo: TestInfo): Promise<void> {
+  if (testInfo.project.name !== 'mobile') return;
+  const trigger = page.getByRole('button', { name: /^筛选/ });
+  if ((await trigger.getAttribute('aria-expanded')) === 'true') return;
+  await trigger.click();
+}
+
 /** 流水类型 Select（shadcn combobox，placeholder 即当前回显）；移动端先展开折叠面板 */
 async function pickFlowType(page: Page, testInfo: TestInfo, label: string): Promise<void> {
-  await openFilterPanelIfMobile(page, testInfo);
+  await ensureCashFlowFiltersOpen(page, testInfo);
   const trigger = page.getByRole('combobox').filter({ hasText: '全部流水类型' });
   const option = page.getByRole('option', { name: label });
   await openPopover(page, trigger, option);
@@ -146,7 +158,7 @@ async function pickFlowType(page: Page, testInfo: TestInfo, label: string): Prom
 
 /** 状态 Select（在途 / 已生效） */
 async function pickStatus(page: Page, testInfo: TestInfo, label: string): Promise<void> {
-  await openFilterPanelIfMobile(page, testInfo);
+  await ensureCashFlowFiltersOpen(page, testInfo);
   const trigger = page.getByRole('combobox').filter({ hasText: '全部状态' });
   const option = page.getByRole('option', { name: label });
   await openPopover(page, trigger, option);
@@ -240,7 +252,20 @@ test.describe('现金流水页（#725，双端）', () => {
     });
     await generateSnapshot(page, headers, code, d);
 
+    const cashFlowRequests: URL[] = [];
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (isCashFlowApi(url)) cashFlowRequests.push(url);
+    });
     await gotoPortfolioSubpage(page, code as PortfolioCode, 'cash-flows');
+
+    // #948：首屏只取列表与 overview，不在构成弹窗关闭时 eager 计算平台构成。
+    await expect(page.getByTestId('stat-available')).toContainText('¥30,000.00');
+    expect(cashFlowRequests.length, '首屏应请求现金流水').toBeGreaterThan(0);
+    expect(cashFlowRequests.every((url) => url.searchParams.get('include_breakdown') === 'false'))
+      .toBe(true);
+    expect(cashFlowRequests.some((url) => url.searchParams.get('include_breakdown') === 'true'))
+      .toBe(false);
 
     // 概览四卡（#725 断言组：存量/流量四指标；金额断言 = #727 S5）
     // 首购 +40,000 已生效、调仓买入 -10,000 已生效：可用 30,000 / 在途 0 / 流入 +40,000 / 流出 -10,000
@@ -306,6 +331,12 @@ test.describe('现金流水页（#725，双端）', () => {
     ).toBeVisible({ timeout: 10_000 });
     await expect(sameDay.getByTestId('recon-block')).toBeVisible();
     await expect(sameDay.getByText('申购 · 注资入账').first()).toBeVisible();
+    const dayRequests = cashFlowRequests.filter(
+      (url) => url.searchParams.get('page_size') === '100',
+    );
+    expect(dayRequests.length, '同日钻穿应独立请求全组流水').toBeGreaterThan(0);
+    expect(dayRequests.every((url) => url.searchParams.get('include_breakdown') === 'false'))
+      .toBe(true);
     // #8 的「标注命中行」半边：弹窗内只标注被点中的那一行（组件侧 `rowKey` 比对），
     // 此前 e2e 全文无「命中」断言，删掉标注不会变红（#728 L2 S3）
     await expect(sameDay.getByText('当前筛选命中')).toHaveCount(1);
@@ -325,8 +356,17 @@ test.describe('现金流水页（#725，双端）', () => {
     await detail.getByRole('button', { name: '关闭' }).click();
     await expect(detail).toBeHidden({ timeout: 15_000 });
 
-    // #13/#14：按平台构成弹窗
+    // #13/#14 + #948：按平台构成弹窗打开后才请求完整构成，page_size 固定为 1。
+    const breakdownRequestPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return isCashFlowApi(url) && url.searchParams.get('include_breakdown') === 'true';
+    });
     await page.getByTestId('open-breakdown').click();
+    const breakdownRequest = new URL((await breakdownRequestPromise).url());
+    expect(breakdownRequest.searchParams.get('page_size')).toBe('1');
+    expect(breakdownRequest.searchParams.get('from_date')).not.toBeNull();
+    expect(breakdownRequest.searchParams.get('platform_code')).toBeNull();
+    expect(breakdownRequest.searchParams.get('flow_type')).toBe('rebal_buy');
     const breakdown = dialogByTitle(page, '按平台现金构成');
     await breakdown.waitFor({ timeout: 10_000 });
     await expect(breakdown.getByTestId('breakdown-row').first()).toBeVisible();
@@ -581,6 +621,137 @@ test.describe('现金流水页（#725，双端）', () => {
     await expect(detail.getByTestId('day-query-error')).toHaveCount(0);
     await detail.getByRole('button', { name: '关闭' }).click();
     await expect(detail).toBeHidden({ timeout: 15_000 });
+
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  // #948：构成弹窗独立按需取数；失败态可重试，类型/状态筛选切换必须产生新的构成请求。
+  test('平台构成按需加载 · 失败重试 · 筛选缓存分键（#948）', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    await openAppAndAuth(page);
+    const cashFlowRequests: URL[] = [];
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (isCashFlowApi(url)) cashFlowRequests.push(url);
+    });
+
+    await gotoPortfolioSubpage(page, E2E_ACTIVE, 'cash-flows');
+    await expect(page.getByTestId('stat-available')).toBeVisible();
+    expect(cashFlowRequests.some((url) => url.searchParams.get('include_breakdown') === 'false'))
+      .toBe(true);
+    expect(cashFlowRequests.some((url) => url.searchParams.get('include_breakdown') === 'true'))
+      .toBe(false);
+
+    let failBreakdown = true;
+    let holdSuccess = false;
+    let successGate: Promise<void> | undefined;
+    let releaseSuccess: () => void = () => {};
+    const isBreakdownQuery = (url: URL) =>
+      isCashFlowApi(url) && url.searchParams.get('include_breakdown') === 'true';
+    await page.route(isBreakdownQuery, async (route) => {
+      if (failBreakdown) {
+        await route.fulfill({
+          status: 500,
+          json: { detail: { error: 'INTERNAL', message: '平台构成取数暂不可用' } },
+        });
+        return;
+      }
+      if (holdSuccess) {
+        successGate ??= new Promise<void>((resolve) => {
+          releaseSuccess = resolve;
+        });
+        await successGate;
+      }
+      await route.continue();
+    });
+
+    const firstBreakdownPromise = page.waitForRequest((request) =>
+      isBreakdownQuery(new URL(request.url())),
+    );
+    await page.getByTestId('open-breakdown').click();
+    const firstBreakdown = new URL((await firstBreakdownPromise).url());
+    expect(firstBreakdown.searchParams.get('page_size')).toBe('1');
+    expect(firstBreakdown.searchParams.get('from_date')).not.toBeNull();
+    const breakdown = dialogByTitle(page, '按平台现金构成');
+    await breakdown.waitFor({ timeout: 10_000 });
+    await expect(breakdown.getByTestId('breakdown-error')).toContainText('平台构成取数暂不可用', {
+      timeout: 15_000,
+    });
+    await expect(breakdown.getByTestId('breakdown-row')).toHaveCount(0);
+
+    failBreakdown = false;
+    successGate = undefined;
+    releaseSuccess = () => {};
+    holdSuccess = true;
+    const retryPromise = page.waitForRequest((request) =>
+      isBreakdownQuery(new URL(request.url())),
+    );
+    await breakdown.getByRole('button', { name: '重试' }).click();
+    await retryPromise;
+    await expect(breakdown.getByTestId('breakdown-loading')).toBeVisible();
+    releaseSuccess();
+    successGate = undefined;
+    holdSuccess = false;
+    await expect(breakdown.getByTestId('breakdown-row').first()).toBeVisible({ timeout: 15_000 });
+    await expect(breakdown.getByTestId('breakdown-error')).toHaveCount(0);
+    await breakdown.getByRole('button', { name: '关闭' }).click();
+    await expect(breakdown).toBeHidden({ timeout: 15_000 });
+
+    await pickFlowType(page, testInfo, '调仓 · 买入扣款');
+    const typedBreakdownPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return isBreakdownQuery(url) && url.searchParams.get('flow_type') === 'rebal_buy';
+    });
+    await page.getByTestId('open-breakdown').click();
+    const typedBreakdown = new URL((await typedBreakdownPromise).url());
+    expect(typedBreakdown.searchParams.get('page_size')).toBe('1');
+    await expect(breakdown.getByTestId('breakdown-row').first()).toBeVisible({ timeout: 15_000 });
+    await breakdown.getByRole('button', { name: '关闭' }).click();
+    await expect(breakdown).toBeHidden({ timeout: 15_000 });
+
+    failBreakdown = true;
+    await page.clock.setSystemTime(Date.now() + 31_000);
+    const cachedRefetchPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return isBreakdownQuery(url) && url.searchParams.get('flow_type') === 'rebal_buy';
+    });
+    await page.getByTestId('open-breakdown').click();
+    await cachedRefetchPromise;
+    await expect(breakdown.getByTestId('breakdown-error')).toBeVisible({ timeout: 15_000 });
+    await expect(breakdown.getByTestId('breakdown-row').first()).toBeVisible();
+
+    failBreakdown = false;
+    successGate = undefined;
+    releaseSuccess = () => {};
+    holdSuccess = true;
+    const cachedRetryPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return isBreakdownQuery(url) && url.searchParams.get('flow_type') === 'rebal_buy';
+    });
+    await breakdown.getByRole('button', { name: '重试', exact: true }).click();
+    await cachedRetryPromise;
+    const retryBusy = breakdown.getByRole('button', { name: '重试中…', exact: true });
+    await expect(retryBusy).toBeVisible();
+    await expect(retryBusy).toBeDisabled();
+    await expect(breakdown.getByTestId('breakdown-row').first()).toBeVisible();
+    releaseSuccess();
+    successGate = undefined;
+    holdSuccess = false;
+    await expect(breakdown.getByTestId('breakdown-error')).toHaveCount(0);
+    await breakdown.getByRole('button', { name: '关闭' }).click();
+    await expect(breakdown).toBeHidden({ timeout: 15_000 });
+
+    await pickStatus(page, testInfo, '在途');
+    const statusBreakdownPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return isBreakdownQuery(url) && url.searchParams.get('status') === 'in_transit';
+    });
+    await page.getByTestId('open-breakdown').click();
+    const statusBreakdown = new URL((await statusBreakdownPromise).url());
+    expect(statusBreakdown.searchParams.get('flow_type')).toBe('rebal_buy');
+    expect(statusBreakdown.searchParams.get('page_size')).toBe('1');
+    await expect(breakdown.getByTestId('breakdown-row').first()).toBeVisible({ timeout: 15_000 });
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });

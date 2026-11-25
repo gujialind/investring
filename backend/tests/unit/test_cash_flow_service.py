@@ -14,12 +14,18 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import event
 
+from app.models.platform import Platform
+from app.models.portfolio_position import PortfolioPosition
+from app.models.portfolio_value_snapshot import PortfolioValueSnapshot
+from app.models.trade import Trade
 from app.schemas.cash_flow import CashFlowRow, PaginatedCashFlowResponse
 from app.services import cash_flow_service
 from app.services.cash_flow_service import FLOW_TYPES, list_cash_flows
 from app.services.exceptions import BusinessError
-from app.services.trading_utils import get_next_trading_day
+from app.services.position_service import calculate_available_cash, calculate_available_cash_batch
+from app.services.trading_utils import get_next_trading_day, try_get_prev_trading_day
 from tests.factories import (
     create_manual_market_value,
     create_portfolio,
@@ -427,33 +433,73 @@ class TestOverviewScope:
 
 
 class TestBalancePricing:
-    """C7 / 断言 1：余额按 (平台, 现金日期) 去重、恒为平台级单次调用。"""
+    """C7 / 断言 1：余额按 (平台, 现金日期) 去重、恒为平台级批量键。"""
 
     def test_balance_lookup_deduped_and_always_platform_scoped(
         self, test_db, flows_portfolio, monkeypatch
     ):
-        calls: list = []
-        real = cash_flow_service.calculate_available_cash
+        calls: list[set] = []
+        real = cash_flow_service.calculate_available_cash_batch
 
-        def spy(db, portfolio_code, platform_code=None, as_of_date=None):
-            calls.append((platform_code, as_of_date))
-            return real(db, portfolio_code, platform_code, as_of_date)
+        def spy(db, portfolio_code, keys):
+            calls.append(set(keys))
+            return real(db, portfolio_code, keys)
 
-        monkeypatch.setattr(cash_flow_service, "calculate_available_cash", spy)
+        monkeypatch.setattr(cash_flow_service, "calculate_available_cash_batch", spy)
         result = list_cash_flows(
             test_db, flows_portfolio, platform_code="MYCF",
             from_date=PAST, to_date=PAST, page_size=100,
         )
-        # MYCF/PAST 组内 5 行共用一格余额：日终与前一交易日各只查一次
-        assert calls.count(("MYCF", PAST)) == 1
+        assert len(calls) == 1
+        keys = calls[0]
+        assert ("MYCF", PAST) in keys
+        assert ("MYCF", TODAY) in keys
+        assert (None, TODAY) in keys
+        assert ("HBZQ", TODAY) in keys
         assert len(result["items"]) == 5
         assert len({row["platform_end_of_day_balance"] for row in result["items"]}) == 1
         assert len({row["prev_day_balance"] for row in result["items"]}) == 1
-        # 余额列永远是平台级：没有一次以 platform_code=None 取行余额
-        row_dates = {row["cash_date"] for row in result["items"]}
+        # 行余额键只能是平台级；组合级键仅用于概览与构成合计。
+        assert ("MYCF", PAST) in keys
         assert all(
-            plat is not None for plat, as_of in calls if as_of in row_dates
+            platform is not None
+            for platform, as_of in keys
+            if as_of == PAST
         )
+
+    def test_batch_matches_scalar_without_snapshot(self, test_db, flows_portfolio):
+        keys = {
+            ("MYCF", PAST),
+            ("MYCF", PAST_NEXT),
+            ("HBZQ", PAST),
+            ("HBZQ", FUTURE),
+            (None, PAST),
+            (None, FUTURE),
+            ("", PAST),
+        }
+        balances = calculate_available_cash_batch(test_db, flows_portfolio, keys)
+        assert set(balances) == keys
+        for (platform_code, as_of_date), balance in balances.items():
+            assert balance == calculate_available_cash(
+                test_db, flows_portfolio, platform_code, as_of_date=as_of_date
+            )
+
+    def test_previous_trading_days_match_scalar_in_one_query(self, test_db):
+        dates = {PAST, PAST_NEXT, FUTURE, date(2024, 12, 31)}
+        expected = {day: try_get_prev_trading_day(test_db, day) for day in dates}
+        statements = []
+
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        connection = test_db.connection()
+        event.listen(connection, "before_cursor_execute", capture)
+        try:
+            actual = cash_flow_service._previous_trading_days(test_db, dates)
+        finally:
+            event.remove(connection, "before_cursor_execute", capture)
+        assert actual == expected
+        assert len(statements) == 1
 
     def test_same_group_rows_share_both_balances(self, test_db, flows_portfolio):
         result = list_cash_flows(
@@ -489,6 +535,105 @@ class TestBalancePricing:
                 assert group not in seen, f"分组 {group} 被切断：{keys}"
                 seen.add(group)
             previous_group = group
+
+
+class TestBatchPerformance:
+    def test_sql_budget_is_flat_for_20_and_100_rows(self, test_db, monkeypatch):
+        portfolio = "CF_SQL948"
+        create_portfolio(test_db, code=portfolio, name="现金流水 SQL 预算", status="active")
+        platform_codes = [f"SQLP{i:02d}" for i in range(16)]
+        test_db.add_all([
+            Platform(code=code, name=f"平台 {code}", platform_type="第三方平台")
+            for code in platform_codes
+        ])
+        test_db.flush()
+
+        snapshot_date = date(2025, 1, 2)
+        test_db.add(PortfolioValueSnapshot(
+            portfolio_code=portfolio,
+            snapshot_date=snapshot_date,
+            total_value=Decimal("16000"),
+            total_shares=Decimal("16000"),
+            unit_price=Decimal("1"),
+        ))
+        test_db.add_all([
+            PortfolioPosition(
+                portfolio_code=portfolio,
+                platform_code=code,
+                product_code="CASH",
+                market="",
+                cash_amount=Decimal("1000"),
+                snapshot_date=snapshot_date,
+            )
+            for code in platform_codes
+        ])
+        test_db.add_all([
+            Trade(
+                portfolio_code=portfolio,
+                platform_code=platform_codes[i % len(platform_codes)],
+                product_code="CASH",
+                market="",
+                trade_type="buy",
+                amount=Decimal("10"),
+                trade_date=snapshot_date + timedelta(days=i + 1),
+                confirm_date=snapshot_date + timedelta(days=i + 1),
+                status="confirmed",
+                transfer_group=f"rebal_sql948_{i:03d}",
+            )
+            for i in range(100)
+        ])
+        test_db.flush()
+
+        platform_lookups = []
+        real_platform_codes = cash_flow_service._platform_codes
+
+        def spy_platform_codes(db, portfolio_code, rows):
+            platform_lookups.append(portfolio_code)
+            return real_platform_codes(db, portfolio_code, rows)
+
+        monkeypatch.setattr(cash_flow_service, "_platform_codes", spy_platform_codes)
+        connection = test_db.connection()
+        for page_size, include_breakdown, limit in (
+            (20, False, 20),
+            (100, False, 20),
+            (20, True, 22),
+            (100, True, 22),
+        ):
+            statements = []
+
+            def capture(conn, cursor, statement, parameters, context, executemany):
+                statements.append(statement)
+
+            event.listen(connection, "before_cursor_execute", capture)
+            try:
+                result = list_cash_flows(
+                    test_db,
+                    portfolio,
+                    page_size=page_size,
+                    include_breakdown=include_breakdown,
+                )
+            finally:
+                event.remove(connection, "before_cursor_execute", capture)
+            assert len(result["items"]) == page_size
+            assert len(statements) <= limit, (page_size, include_breakdown, len(statements))
+            assert sum("from trading_calendar" in sql.lower() for sql in statements) == 1
+        assert len(platform_lookups) == 2
+
+        keys = {
+            (platform_codes[i % len(platform_codes)], snapshot_date + timedelta(days=i + 1))
+            for i in range(100)
+        }
+        statements = []
+
+        def capture_balances(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(connection, "before_cursor_execute", capture_balances)
+        try:
+            calculate_available_cash_batch(test_db, portfolio, keys)
+        finally:
+            event.remove(connection, "before_cursor_execute", capture_balances)
+        assert len(statements) <= 6
 
 
 class TestResponseContract:

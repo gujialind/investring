@@ -97,7 +97,7 @@ class CashFlowRow(BaseModel):
 class CashFlowOverview(BaseModel):
     """页头四卡。
 
-    - `available`：`calculate_available_cash(as_of=today)` 单次调用结果（平台筛选
+    - `available`：`calculate_available_cash(as_of=today)` 的同口径批量结果（平台筛选
       切换 scope，不随类型/状态/区间筛选变化）。
     - `in_transit`：Σ 未生效行的带符号金额，按到账/扣款平台归属；口径**不同于**
       快照的 `IN_TRANSIT_*` 虚拟产品（后者还含「现金已扣、基金腿未生效」的买入在途，
@@ -146,4 +146,4 @@ class PaginatedCashFlowResponse(BaseModel):
     page: int
     page_size: int
     overview: CashFlowOverview
-    platform_breakdown: PlatformCashFlowBreakdown
+    platform_breakdown: Optional[PlatformCashFlowBreakdown]

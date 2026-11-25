@@ -84,6 +84,7 @@ describe("queryKeys 全域工厂", () => {
     expect(queryKeys.snapshots.root).toEqual(["snapshots"]);
     expect(queryKeys.shareChangeEvents.root).toEqual(["share-change-events"]);
     expect(queryKeys.cashTransfers.root).toEqual(["cash-transfers"]);
+    expect(queryKeys.cashFlows.root).toEqual(["cash-flows"]);
     expect(queryKeys.tasks.root).toEqual(["tasks"]);
     expect(queryKeys.logs.root).toEqual(["logs"]);
     expect(queryKeys.tradingCalendar.root).toEqual(["trading-calendar"]);
@@ -171,6 +172,13 @@ describe("queryKeys 全域工厂", () => {
         keys: [queryKeys.cashTransfers.list("P1"), queryKeys.cashTransfers.list("P1", { page: 1 })],
       },
       {
+        root: queryKeys.cashFlows.root,
+        keys: [
+          queryKeys.cashFlows.list("P1", { page: 1 }),
+          queryKeys.cashFlows.breakdown("P1", { flow_type: "rebal_buy" }),
+        ],
+      },
+      {
         root: queryKeys.tasks.root,
         keys: [
           queryKeys.tasks.executions(),
@@ -207,6 +215,27 @@ describe("queryKeys 全域工厂", () => {
         expect(key.length).toBeGreaterThan(root.length);
       }
     }
+  });
+});
+
+describe("queryKeys.cashFlows.breakdown（#948）", () => {
+  it("构成查询按组合与筛选参数分键，并保留整域失效前缀", () => {
+    const params = {
+      from_date: "2026-11-01",
+      to_date: "2026-11-25",
+      status: "in_transit",
+      flow_type: "rebal_buy",
+    };
+    const key = queryKeys.cashFlows.breakdown("P1", params);
+    expect(key).toEqual(["cash-flows", "breakdown", "P1", params]);
+    expect(key.slice(0, queryKeys.cashFlows.root.length)).toEqual(
+      queryKeys.cashFlows.root,
+    );
+    expect(key).not.toEqual(queryKeys.cashFlows.breakdown("P2", params));
+    expect(key).not.toEqual(
+      queryKeys.cashFlows.breakdown("P1", { ...params, status: "settled" }),
+    );
+    expect(key).not.toEqual(queryKeys.cashFlows.list("P1", params));
   });
 });
 
