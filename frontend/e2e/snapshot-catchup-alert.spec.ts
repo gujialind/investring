@@ -10,42 +10,26 @@
  * - 停更/追平用例自建隔离组合（isolatedPortfolioCode），现金注入走「申购+确认」
  *   （首窗净值 1.0000 无需行情），快照经 API generate/catch-up 真实生成——
  *   trailing 缺口由后端真算，不用 page.route  mock 读侧响应。
- * - 日期锚定 /api/trading-calendar（#468：不写死年份、不假设周末）；「业务昨日」
- *   取运行器本地 today-1 的最近开市日（与 nearestTradingDay 同一时钟约定）。
+ * - 业务昨日按 helpers.businessDateISO(-1) 独立锚定，再经 /api/trading-calendar 取
+ *   最近开市日；不使用运行器本地日期，避免 CI 的 UTC/上海错日窗口。
  * - 台账型/draft 用例断言恒不渲染（SPEC §4 断言 3 与无基线口径）。
  * - E2E_ACTIVE 禁 catch-up/generate-next（#354 红线），本 spec 不触碰种子组合形态。
  */
 import { test, expect, type Page } from '@playwright/test';
 import {
+  businessDateISO,
   collectPageErrors,
   createPortfolioViaApi,
   gotoPortfolioDetail,
   isolatedPortfolioCode,
+  latestTradingDayOnOrBefore,
   openAppAndAuth,
   staleBaselineDates,
   seedStaleBaseline,
-  toISODate,
   E2E_PORT,
 } from './helpers';
 
 type Headers = { Authorization: string };
-
-/** 运行器本地「业务昨日」的最近开市日（≤ today-1） */
-async function lastOpenDayOnOrBeforeYesterday(page: Page, headers: Headers): Promise<string> {
-  const yesterday = toISODate(new Date(Date.now() - 86_400_000));
-  const today = toISODate(new Date());
-  for (const year of [Number(today.slice(0, 4)), Number(today.slice(0, 4)) - 1]) {
-    const rows = (await (
-      await page.request.get(`/api/trading-calendar?year=${year}`, { headers })
-    ).json()) as { calendar_date: string; is_open: boolean }[];
-    const open = rows
-      .filter((r) => r.is_open && r.calendar_date <= yesterday)
-      .map((r) => r.calendar_date)
-      .sort();
-    if (open.length > 0) return open[open.length - 1];
-  }
-  throw new Error(`交易日历中找不到 ${yesterday} 及之前的开市日`);
-}
 
 /**
  * 建隔离组合并把最新快照停在「today 前第 4 个开市日」（日期约定单点
@@ -101,15 +85,26 @@ test.describe('快照停更可见提示（#906）', () => {
     const code = isolatedPortfolioCode('E2E906', testInfo) + 'C';
     await setupStalePortfolio(page, headers, code);
 
-    const target = await lastOpenDayOnOrBeforeYesterday(page, headers);
+    const target = await latestTradingDayOnOrBefore(page, headers, businessDateISO(-1));
+    const before = await statusOf(page, headers, code);
+    const pending = before.catchup_pending_dates ?? [];
+    expect(pending.length, '追平前应存在 trailing 缺口').toBeGreaterThan(0);
+    expect(pending[pending.length - 1], 'trailing 缺口末日应为业务昨日或之前最近开市日').toBe(target);
     const catchUp = await page.request.post('/api/snapshots/catch-up', {
       headers,
       data: { portfolio_code: code, to_date: target },
     });
     expect(catchUp.ok(), `追平失败 ${catchUp.status()} ${await catchUp.text()}`).toBeTruthy();
+    const catchUpResult = (await catchUp.json()) as {
+      latest_snapshot_date?: string | null;
+      failed_date?: string | null;
+    };
+    expect(catchUpResult.failed_date, `追平中断于 ${catchUpResult.failed_date}`).toBeNull();
+    expect(catchUpResult.latest_snapshot_date).toBe(target);
 
     // SPEC §4 断言 2：最新快照日到达业务昨日 → trailing 缺口空
     const status = await statusOf(page, headers, code);
+    expect(status.latest_snapshot_date).toBe(target);
     expect(status.catchup_pending_dates ?? []).toHaveLength(0);
 
     await page.goto(`/portfolio/${code}`);
