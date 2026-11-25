@@ -256,6 +256,14 @@ export function toISODate(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+/** 默认业务时区 Asia/Shanghai（settings.timezone）；改配置须同步此锚点。 */
+export function businessDateISO(dayOffset = 0): string {
+  const shifted = new Date(Date.now() + (8 + dayOffset * 24) * 60 * 60 * 1000);
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${shifted.getUTCFullYear()}-${m}-${d}`;
+}
+
 /**
  * 在日历弹层点选 `targetISO`（yyyy-MM-dd），断言 trigger 回显后收干净弹层。
  *
@@ -703,6 +711,20 @@ async function fetchYearOpenDays(
     .filter((r) => r.is_open && (inclusive ? r.calendar_date <= cutoffISO : r.calendar_date < cutoffISO))
     .map((r) => r.calendar_date)
     .sort();
+}
+
+/** 取 cutoffISO 及之前最近一个开市日；跨年时回看上一年。 */
+export async function latestTradingDayOnOrBefore(
+  page: Page,
+  headers: { Authorization: string },
+  cutoffISO: string,
+): Promise<string> {
+  const year = Number(cutoffISO.slice(0, 4));
+  for (const candidateYear of [year, year - 1]) {
+    const open = await fetchYearOpenDays(page, headers, candidateYear, cutoffISO, true);
+    if (open.length > 0) return open[open.length - 1];
+  }
+  throw new Error(`交易日历中找不到 ${cutoffISO} 及之前的开市日`);
 }
 
 /** 取「today 起最近一个交易日」（含 today）；当年尚无开市日则回看上一年末（#468 口径） */
