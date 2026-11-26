@@ -28,6 +28,21 @@ async function openCreateDialog(page: Page) {
   return dialogByTitle(page, "新建维度值");
 }
 
+test.describe("资产分类状态徽章（#944 D3）", () => {
+  test("桌面启用徽章走 neutral 单点映射，移动卡片不渲染启用徽章", async ({ page }, testInfo) => {
+    await page.goto("/asset-classifications");
+    await expect(page.getByRole("button", { name: "新建维度值" })).toBeVisible({ timeout: 15_000 });
+
+    if (testInfo.project.name === "chromium") {
+      const row = page.getByRole("row").filter({ hasText: "ASSET_STOCK" });
+      await expect(row.getByText("启用", { exact: true })).toHaveClass(/\bbg-muted\b/);
+    } else {
+      const card = page.getByTestId("asset-class-card").filter({ hasText: "ASSET_STOCK" });
+      await expect(card.getByText("启用", { exact: true })).toHaveCount(0);
+    }
+  });
+});
+
 test.describe("资产分类弹窗滚动契约（#910）", () => {
   test("新建：默认与大类长表单仅内层滚动，原生控件与适用关联可用（四档视口）", async ({ page }, testInfo) => {
     const errors = collectPageErrors(page);
