@@ -32,7 +32,7 @@ export default function ErrorFallback({
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center bg-background p-6">
-      <div className="w-full max-w-md space-y-3 rounded-lg border bg-card p-6 text-center shadow-sm">
+      <div className="w-full max-w-md space-y-3 rounded-lg border bg-card p-6 text-center">
         <h1 className="text-base font-semibold text-foreground">
           {scope}出错了
         </h1>

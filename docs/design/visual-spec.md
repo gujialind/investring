@@ -183,7 +183,7 @@
 | 正文 | 14px / 400 / 22px | `text-sm leading-5.5`（新改位置） | 返回/面包屑导航、产品身份说明（代码/市场）、一般正文；既有表格/图表/控件/紧凑正文的布局行高保持不变，不做全站重刷 |
 | 辅助 | 12px / 400 / 18px | `text-xs leading-4.5`（新改位置） | 非关键提示和辅助信息，不承载唯一产品识别信息；既有辅助行高不变 |
 
-**数值/品牌专属角色（#935 登记，不在文字四档内、不按普通分区机械升降档）**：`amount-large` 24px 重点金额（globals.css utility）；移动金额 18px（`text-lg font-bold …`，统计卡移动主数值/持仓卡市值/快照状态数值等）；桌面重点金额 24px（`text-2xl`，统计卡主数值/概览持仓市值/持仓合计/日历统计）；存量 `text-xl` 数值中间档（`PerformanceMetrics`/`LedgerContent`/`LedgerPerformance` 主数值）；登录品牌标题（`text-2xl font-bold leading-none`）；图表标注 12px；14px 紧凑提示卡标题（`text-sm leading-none`，首页待确认提醒卡等）。数值字体/格式/对齐与既有串长/容器宽保护（下文统计卡各条）全部不变。
+**数值/品牌专属角色（#935 登记，不在文字四档内、不按普通分区机械升降档）**：`amount-large` 24px 重点金额（globals.css utility）；移动金额 18px（`text-lg font-bold …`，统计卡移动主数值/持仓卡市值/快照状态数值等）；桌面重点金额 24px（`text-2xl`，统计卡主数值/概览持仓市值/持仓合计/日历统计）；**首页总资产 hero** 使用 `amount-hero`（移动 36px / `text-4xl`，桌面消费端叠加 `lg:text-5xl` = 48px，`font-semibold tabular-nums`），其他主数值仍保持 24/18px；存量 `text-xl` 数值中间档（`PerformanceMetrics`/`LedgerContent`/`LedgerPerformance` 主数值）；登录品牌标题（`text-2xl font-bold leading-none`）；图表标注 12px；14px 紧凑提示卡标题（`text-sm leading-none`，首页待确认提醒卡等）。数值字体/格式/对齐与既有串长/容器宽保护（下文统计卡各条）全部不变。
 
 配套规则：表格与右置明细的数值一律叠加 `number-cell`（统计卡主数值不套 `number-cell`，对齐见下条）；**文字四档为 20/16/14/12**——`text-3xl` 与 `text-[Npx]` 任意值属违规（任意值由 ESLint 拦截，见 §1.5；存量 1 处豁免登记在 §1.5，改动页面时顺手收敛，不强制一次性清零）；`text-lg`/`text-2xl` 仅允许出现在上段登记的数值/品牌专属角色，普通标题不得继续使用。**ESLint 只拦任意值类，不能完整判定命名字号的语义角色**（§1.5），角色归级靠 §19 自检与评审核对。22/18px 行高用 Tailwind spacing 行高工具（`leading-5.5`/`leading-4.5`，v4 动态 spacing 档），不用 `leading-[22px]` 任意值。
 
@@ -191,7 +191,7 @@
 
 **统计卡栅格按容器宽降档（#774 登记，2026-10-23，同机 Linux + Chromium；⚠️ 本段实测值与 804 阈值为 mono 化前历史记录）**：自 #904 P0b 起 Portfolio/Dashboard 改 mono 墨迹 216.05px、阈值重标定 848（见上段）；1152 档容器 832px 四列轨道 196px、间隙 ≈ −4.05px，故**该档转两列是 mono 化的预期代价，不是「白降」**（本段原「1152 保四列」结论随之失效）；`aside` 256 等旧实测数为 #878 前历史值（现侧栏 `w-56`=224），本 PR 不重测、触及时按本段重测。#772 的容器查询降档当时只落在现金流水页概览四卡，与之同构的 `PortfolioStatsCards`（组合详情）与 `DashboardStatsCards`（首页）仍是 `md:grid-cols-2 lg:grid-cols-4`——`main` 加 `min-w-0` 后这两页 1024 档的栅格容器由 750px 收到 704px、四列轨道由 175.5px 压到 164px，注入 8 位带符号金额后**组合详情页同排邻卡墨迹间隙由 +0.5px 转 −11px**（即 #772 在这两页引入了叠印）；首页修复前后两形态逐位相同（`aside` 256 / `main` 768 / 容器 704 / 轨道 164px，间隙 −15px）——该页无明细表钉住 `main`、宽度不随 #772 变化，属既存缺陷，与组合详情同批按同口径修。处置：两处桌面分支各套一层 `@container` **父**元素（容器查询按最近祖先容器求值，挂在栅格自身不生效），栅格改 `md:grid-cols-2 @min-[804px]:grid-cols-4`（历史阈值，现 848）；移动分支（`grid-cols-2`、`text-lg`）不动。**804 与现金流水页的 848 是同一条公式**「容器 ≥ 4×(墨迹 − gap) + 3×gap」：同排墨迹间隙 = 轨道 + gap − 墨迹（每卡自带的 1px 边框与 `p-6` 在相邻两侧相消，不进该式），两值只差墨迹宽——15 字符 `¥-12,345,678.90` 在组合详情 205px（`font-bold tabular-nums`）、首页 196px（无 `tabular-nums`），现金流水页同串走 `font-mono` 为 216.05px。**判据只看容器宽、不看串长**（与 #745「不引入视口判据」同源）。修复后各档实测（每档两值依次为**合成最坏**＝四卡全注成同一 15 字符串、**真实注入**＝只把金额卡注成 8 位带符号）：1024 档容器 704 → 两列轨道 344px、间隙 +155/+169；1152 档 832 → 四列 196px、+7/+21；1250 档 930 → 四列 220.5px、+31.5/+45.5；1280 档 960 → 四列 228px、+39/+53——**8 位带符号（≤15 字符）在 `lg` 全区间无叠印**，且 1152/1250 两档保住四列（历史结论：mono 化前墨迹 205/196px 下阈值若沿用 848，容器 832px 的 1152 档会白降两列；mono 化后该结论失效，见段首注）。**已知边界（10 位、18 字符，未修）**：容器查询看不到串长，18 字符（墨迹 229–243px）在 1152 档四列仍叠印 −17（真实注入）/−31（合成最坏），1250 档 +7.5/−6.5、1280 档 +15/+1，1024 档两列则充裕（+117…+136）；移动 390 档两列轨道 157px，8 位带符号 +26.49、10 位 −1.61。本轮不扩口径：抬阈值到 956（= 4×(243−16)+48）能盖住 10 位，代价是 1152/1250 两档**所有**数值都退两列；改引现金流水页那条串长判据（`value.length >= 16` 直接两列）则要在这两个组件里再加一条与容器宽正交的判据。个人/家庭组合总资产达 1e9 元不在本系统现实量级，故只登记不修，触及时按本条重测。**自动化覆盖**：`e2e/regression.spec.ts` 的「统计卡栅格宽视口与移动端（#774）」与「统计卡栅格窄桌面档（#774，1024 视口）」两组用例钉住 1280 档四列单行、1024 档两列、移动 390 档两列，三者都另断同排墨迹间隙 > 0（量法同 `cash-flows.spec.ts::statValueInks`，锚点是组件上的 `data-testid="dashboard-stat-*"` / `portfolio-stat-*`）；现金流水页的四列分支同时在 `e2e/cash-flows.spec.ts` 的「#730 不过度降档」用例内补了 1280 档四列单行断言（此前只有「同排、第二卡在右」的弱断言，两列下同样为真）。两处四列断言都做过**变异验证**：把 `@min-[804px]:grid-cols-4` / `@min-[848px]:grid-cols-4` 改成笔误类名后分别变红。1152/1250 两档仍无自动化覆盖，取数靠一次性隔离栈探针、未入库。
 
-**字体栈（现状登记，2026-08-29）**：未自定义，走 Tailwind 默认栈——正文 `font-sans`（system-ui 系）、数值 `number-cell` 内 `font-mono`（ui-monospace/SFMono 系）。`tabular-nums` 依赖字体自带等宽数字特性，系统栈下各平台字形有差异（Windows 回退 Segoe UI / Consolas）；中文环境数字渲染一致性**未实测**。如需跨平台严格对齐的金融报表观感，后续可评估引入统一数字字体，届时在此更新决策。
+**字体栈（现状登记，2026-11-27）**：`app/layout.tsx` 通过 `next/font/google` 的 `Inter({ subsets: ["latin"] })` 生成类并挂在 `<body>`；拉丁字符走 Inter，中文由该字体栈回退到系统字体。数值列仍由 `number-cell` 使用 `font-mono`（ui-monospace/SFMono 系），`tabular-nums` 依赖字体自带的等宽数字特性；跨平台中文与数字渲染一致性尚未实测。如需严格统一金融报表字形，再评估引入统一数字字体并在此更新决策。
 
 ## 6. 双端差异约定
 
@@ -202,7 +202,7 @@
 ## 7. 间距 / 圆角 / 阴影体系
 
 - **圆角**：统一走 `--radius` 派生档位——卡片/对话框 `rounded-lg`、输入与按钮 `rounded-md`、badge/chip/状态点 `rounded-full`、checkbox `rounded-sm`（基件规格登记见 §13）；禁用 `rounded-[Npx]` 任意值。
-- **阴影**：扁平金融风，**卡片一律无投影**，靠「页面底 → 白卡 → 边框」三级明度差分层；投影仅用于浮层例外——Toast / 下拉 / Popover 用 `shadow-lg`，模态遮罩不动卡片本体。
+- **阴影**：扁平金融风，**卡片一律无投影**，靠「页面底 → 白卡 → 边框」三级明度差分层；`Card` 基件已移除 `shadow-sm`，不再由消费页逐处覆盖。投影仅用于浮层例外——Toast / 下拉 / Popover 用 `shadow-lg`，模态遮罩不动卡片本体。
 - **内边距**：卡片内容桌面 `p-6`（CardContent 默认）、移动 `p-3`；区块间距桌面 `space-y-6`/移动 `space-y-4` 为既有惯例，新页面沿用，禁用 `p-[Npx]`/`gap-[Npx]` 任意值。
 - **z-index（现状登记，2026-08-29）**：浮层统一 `z-50`（shadcn 基件默认：Dialog/AlertDialog 遮罩与内容、Select/Dropdown/Popover/Tooltip、移动端底部导航）；Toast 容器 `z-[100]`——**唯一例外**，须盖过模态层。不自定义其他层级；新增浮层一律复用基件，不手写 z 值。
 - **focus 态（现状登记，2026-08-29）**：走基件默认 `focus-visible:ring`（`ring-ring` = primary 靛蓝，§1.4；button/checkbox/input/switch/tabs 已带），不自定义 ring 宽度/offset；自绘可交互元素必须保留等价 focus 可见反馈。
@@ -340,7 +340,6 @@
 - **登录页渐变端点色已 token 化（#872 PR2）**：`from-blue-50 to-indigo-100` → `from-success-soft to-secondary`（light 浅靛→浅灰蓝，dark 自动随 token），消除暗色整页浅底残留（C1）。渐变端点色 from-/to- 的 ESLint 拦截不在 D6 已批范围，未加（扩面须维护者另行批准）。
 - **危险载体/前景配对缺陷家族已归零（#874）**：PR1 迁移 9 处 `bg-destructive text-white` 载体后，#874 再迁移 4 处 `bg-destructive text-destructive-foreground`（PortfolioListContent/TradesContent/SubscriptionsContent/DeletePortfolioDialog；light 1.59:1、dark 预案 1.51:1——前景 token 本为 soft 底定义，压 solid 底属配对错误）至同一分工，白字 light 5.64:1 / dark 5.50:1。`--destructive-foreground` 仅用于 soft 底（badge/Alert/错误块）；全仓剩余 `bg-destructive` 仅 NotificationBell 状态圆点（非文字载体）。
 - 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
-- **无定义的类名不照抄**（#650 登记，#658 核对）：`BottomNav` 的 `safe-area-pb` 是全仓无定义的空类名（Tailwind 无该 utility、`globals.css` 无该定义），既存而非 #658 引入；它已从「取较新一套样式」的理由里撤下。改动该组件或照它的写法复制时**不得**把它当既有约定扩散到别处——空类名不报错、lint/tsc/build 都抓不到，只会静默失效。
 
 ---
 
