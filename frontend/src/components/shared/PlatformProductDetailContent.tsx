@@ -13,6 +13,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
 import ProductIdentity from "./ProductIdentity";
 import ProductNavCards from "./ProductNavCards";
+import InfoTip from "./InfoTip";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
@@ -197,7 +198,13 @@ export default function PlatformProductDetailContent({
             </div>
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">累计收益*</div>
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              累计收益
+              <InfoTip
+                label="查看累计收益说明"
+                content="累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同"
+              />
+            </div>
             <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}>
               {formatSignedCurrency(slice.cumulative_profit)}
             </div>
@@ -211,9 +218,6 @@ export default function PlatformProductDetailContent({
             </div>
           </div>
         </div>
-        <p className="mt-2 text-xs text-warning">
-          *累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同
-        </p>
       </CardContent>
     </Card>
   );

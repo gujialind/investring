@@ -421,9 +421,13 @@ test.describe("平台-产品详情页", () => {
     await expect(overview).toContainText("100.0%");
     // #729 统计卡主数值左对齐（visual-spec §5），同产品详情/平台详情两处断言
     await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
-    // S6：累计收益带 * 口径注记
-    await expect(overview).toContainText("累计收益*");
-    await expect(overview).toContainText("*累计收益含已卖出实现盈亏");
+    // 累计收益说明默认收起，真实按钮承载可访问语义
+    await expect(overview).toContainText("累计收益");
+    await expect(overview).not.toContainText("*累计收益含已卖出实现盈亏");
+    await expect(overview.getByRole("button", { name: "查看累计收益说明" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 
   test("操作行买入：trades 页平台+产品预填且过滤生效", async ({ page }, testInfo) => {

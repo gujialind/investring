@@ -16,7 +16,8 @@
  *             snapshot-catchup-alert = 快照停更提示态（#906，API 造隔离组合把最新快照
  *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）；
  *             portfolio-breadcrumb-long-name = 组合子页长名称包屑（#943 S1，仅在本次
- *             隔离库更新 E2E_ACTIVE 名称，不生成/重算快照）
+ *             隔离库更新 E2E_ACTIVE 名称，不生成/重算快照）；
+ *             info-tip = 说明浮层取证（#943 S2，按 path 打开产品/平台产品/快照/绩效说明）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -56,7 +57,7 @@ const DEFAULT_PATHS = [
   '/portfolio/E2E_ACTIVE/subscriptions',
   '/portfolio/E2E_ACTIVE/share-change-events',
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 const BREADCRUMB_LONG_NAME = '这是一个用于验证组合子页面包屑长名称换行与完整可访问语义的家庭投资组合';
@@ -152,6 +153,24 @@ function shotName(path, device, theme) {
 
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
+  if (scenario === 'info-tip') {
+    const path = new URL(page.url()).pathname;
+    let label;
+    if (path.endsWith('/snapshots')) label = '查看自动生成快照说明';
+    else if (path.includes('/platforms/') && path.includes('/products/')) label = '查看累计收益说明';
+    else if (path.includes('/product/')) label = '查看累计收益说明';
+    else if (/\/portfolio\/E2E_ACTIVE$/.test(path)) label = '查看MWR 年化说明';
+    else throw new Error(`info-tip 场景不支持路径: ${path}`);
+    const trigger = page.getByRole('button', { name: label });
+    if (device === 'desktop') await trigger.hover();
+    else await trigger.tap();
+    const content = page.getByTestId('info-tip-content');
+    await content.waitFor({ state: 'visible', timeout: 15_000 });
+    return { close: async () => {
+      await page.keyboard.press('Escape');
+      await content.waitFor({ state: 'hidden', timeout: 15_000 });
+    } };
+  }
   if (scenario === 'portfolio-breadcrumb-long-name') {
     const headers = await authHeaders(page);
     const response = await page.request.put('/api/portfolios/E2E_ACTIVE', {
