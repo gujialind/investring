@@ -40,6 +40,7 @@ import {
   largestRemainderPercents,
 } from "@/lib/utils";
 import { useHoldingsByProduct, useHoldingsByPlatform } from "@/hooks/usePosition";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
 import type { Trade } from "@/types/trade";
@@ -63,6 +64,13 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
   const params = useParams();
   const portfolioCode = params.code as string;
   const platformCode = params.platformCode as string;
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(portfolioCode);
   const isMobile = variant === "mobile";
 
   // #887：CN_OTC 持仓行分红方式配置入口（A14/R10：仅 CN_OTC 出现，HK/场内无入口）
@@ -127,6 +135,13 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
     () => new Map((platformsData?.items ?? []).map((p) => [p.code, p.name])),
     [platformsData?.items]
   );
+
+  if (portfolioError) {
+    return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  }
+  if (portfolioLoading || !portfolio) {
+    return <LoadingState />;
+  }
 
   const isLoading = productLoading || platformLoading;
   const isError = productError || platformError;
@@ -384,7 +399,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${portfolioCode}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title={platform.platform_name || platform.platform_code || "--"}
         truncateTitle

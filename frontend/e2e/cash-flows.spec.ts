@@ -226,6 +226,12 @@ test.describe('现金流水页（#725，双端）', () => {
     await expect(page.getByRole('heading', { level: 1, name: '现金流水' })).toBeVisible({
       timeout: 15_000,
     });
+    const portfolioCrumb = page.getByRole('link', { name: '返回组合详情' });
+    await expect(portfolioCrumb).toHaveText('E2E 活跃组合');
+    await expect(portfolioCrumb).toHaveAttribute(
+      'href',
+      `${testInfo.project.name === 'mobile' ? '/m' : ''}/portfolio/${E2E_ACTIVE}`,
+    );
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 

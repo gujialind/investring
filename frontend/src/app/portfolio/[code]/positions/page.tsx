@@ -31,7 +31,10 @@ import { Plus, Loader2, RefreshCw } from "lucide-react";
 import { ApiException } from "@/lib/api";
 import { useUIStore } from "@/stores/uiStore";
 import { usePositionList } from "@/hooks/usePosition";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useCreateTrade } from "@/hooks/useTrade";
+import LoadingState from "@/components/shared/LoadingState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
@@ -53,7 +56,20 @@ export default function PositionsPage() {
   const code = params.code as string;
   const addToast = useUIStore((state) => state.addToast);
 
-  const { data: positionsData, isLoading } = usePositionList(code);
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
+  const {
+    data: positionsData,
+    isLoading,
+    isError: positionsError,
+    error: positionsErr,
+    refetch: refetchPositions,
+  } = usePositionList(code);
   const positions: Position[] = positionsData?.items || [];
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -142,13 +158,35 @@ export default function PositionsPage() {
     });
   };
 
+  if (portfolioError || positionsError) {
+    return (
+      <MainLayout>
+        <QueryErrorState
+          error={portfolioErr ?? positionsErr}
+          onRetry={() => {
+            refetchPortfolio();
+            refetchPositions();
+          }}
+        />
+      </MainLayout>
+    );
+  }
+
+  if (portfolioLoading || isLoading || !portfolio) {
+    return (
+      <MainLayout>
+        <LoadingState />
+      </MainLayout>
+    );
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
         <PageHeader
           crumbs={[
             { href: "/portfolio", label: "组合", ariaLabel: "返回组合列表" },
-            { href: `/portfolio/${code}`, label: code, ariaLabel: "返回组合详情" },
+            { href: `/portfolio/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
           ]}
           title="持仓管理"
           meta={`组合代码: ${code}`}

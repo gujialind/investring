@@ -72,6 +72,7 @@ import { useInvestorAvailableShares } from "@/hooks/usePosition";
 import { useUIStore } from "@/stores/uiStore";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import PaginationBar from "@/components/shared/PaginationBar";
 import NameCodeCell from "@/components/shared/NameCodeCell";
 import DatePairCell from "@/components/shared/DatePairCell";
@@ -154,7 +155,13 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
   const unconfirmSubscription = useUnconfirmSubscription();
   const { data: investorsData } = useInvestorList({ page_size: 100 });
   const { data: platformsData } = usePlatformList({ page_size: 100 });
-  const { data: portfolio } = usePortfolio(code);
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
 
   const subscriptions = data?.items || [];
   const total = data?.total ?? 0;
@@ -513,6 +520,9 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
     );
   };
 
+  if (portfolioLoading) return <LoadingState />;
+  if (portfolioError) return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  if (!portfolio) return <LoadingState />;
   if (isLoading) return <LoadingState />;
 
   return (
@@ -526,7 +536,7 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title="申购赎回"
         meta={`组合代码: ${code}`}

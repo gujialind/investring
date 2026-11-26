@@ -53,7 +53,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import RowActionButton from "@/components/shared/RowActionButton";
+import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
 import {
   formatCurrency,
@@ -77,7 +79,7 @@ import {
   useValidateSnapshot,
   useDeleteSnapshot,
 } from "@/hooks/useSnapshot";
-import { useUpdatePortfolio } from "@/hooks/usePortfolio";
+import { usePortfolio, useUpdatePortfolio } from "@/hooks/usePortfolio";
 import { useSyncJob } from "@/hooks/useSyncJob";
 import type { SnapshotValidationCheck, BulkDeleteDryRunResult } from "@/types/snapshot";
 
@@ -115,6 +117,13 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
   const hasNonDefaultRange = snapshotRange !== undefined && !isDefaultSnapshotRange(snapshotRange);
 
   // 数据：区间转查询参数（闭区间）；undefined 字段 axios 不传参
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
   const { data: statusData } = useSnapshotStatus(code);
   const { data: listData, isLoading: listLoading } = useSnapshotList(code, {
     startDate: snapshotRange?.from ? format(snapshotRange.from, "yyyy-MM-dd") : undefined,
@@ -318,12 +327,19 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
     );
   };
 
+  if (portfolioLoading) return <LoadingState />;
+  if (portfolioError) return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  if (!portfolio) return <LoadingState />;
+
   return (
     <div className={variant === "mobile" ? "space-y-4 p-4" : "space-y-6"}>
       {/* 1. Header（#904 PageHeader：面包屑返回组合详情，缩进收敛） */}
       <PageHeader
         variant={variant}
-        crumbs={[{ href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" }]}
+        crumbs={[
+          { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
+          { href: `${basePath}/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
+        ]}
         title="快照管理"
         meta="管理组合历史快照数据，支持手动生成、追平与区间重算"
       />

@@ -21,6 +21,9 @@ const PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/510300.SH?market=CN_EXCHA
 test.describe("产品详情页", () => {
   test("页头与概览卡：短页眉+全文身份区、代码·市场、市值、份额与收益", async ({ page }) => {
     await page.goto(PRODUCT_PATH);
+    const portfolioCrumb = page.getByRole("link", { name: "返回组合详情" });
+    await expect(portfolioCrumb).toHaveText("E2E 活跃组合");
+    await expect(portfolioCrumb).toHaveAttribute("href", /\/portfolio\/E2E_ACTIVE$/);
     // #935：短 h1「产品详情」+ 正文 h2 全名（20/16 字号档由 helper 单点钉住）
     await expectProductDetailIdentity(page, { name: "沪深300ETF", meta: "510300 · A股场内" });
     // #705 身份说明出显示码（去 tushare 后缀），不再直吐机器码 510300.SH

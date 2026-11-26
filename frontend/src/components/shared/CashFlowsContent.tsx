@@ -80,6 +80,7 @@ import {
 } from "@/lib/cashFlows";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { useCashFlowBreakdown, useCashFlowDay, useCashFlowList } from "@/hooks/useCashFlow";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { useConfirmCashTransfer } from "@/hooks/useCashTransfer";
 import { useDeleteCashOverride } from "@/hooks/usePosition";
@@ -162,6 +163,13 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   };
 
   const { data, isLoading, isFetching, isError, error, refetch } = useCashFlowList(code, listParams);
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
   const {
     data: breakdown,
     isLoading: breakdownLoading,
@@ -573,6 +581,9 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     </>
   );
 
+  if (portfolioLoading) return <LoadingState />;
+  if (portfolioError) return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  if (!portfolio) return <LoadingState />;
   if (isLoading) return <LoadingState />;
 
   return (
@@ -582,7 +593,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
         variant={variant}
         crumbs={[
           { href: `${basePath}/portfolio`, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/portfolio/${code}`, label: code, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/portfolio/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title="现金流水"
         meta={`组合代码: ${code} ｜ 现金按平台分账，本页聚合全部现金来源`}
