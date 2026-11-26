@@ -2,6 +2,7 @@
 
 READ_PATHS = frozenset({
     "/api/auth/status",
+    "/api/dashboard/summary",
     "/api/investors", "/api/investors/{code}",
     "/api/portfolios", "/api/portfolios/{code}",
     "/api/portfolios/{code}/nav-history", "/api/portfolios/{code}/snapshots/latest",

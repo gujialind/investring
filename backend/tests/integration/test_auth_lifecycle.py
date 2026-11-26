@@ -130,6 +130,19 @@ def test_read_scope_and_owner_role_remain_restrictive(client, admin_headers, vie
     assert client.post("/api/trades", headers=headers(viewer_key["token"]), json={}).status_code == 403
 
 
+@pytest.mark.parametrize("scope", ["ledger:read", "ledger:write"])
+def test_dashboard_summary_is_readable_with_existing_ledger_scopes(
+    client, admin_headers, scope
+):
+    key = issue_key(client, admin_headers, scopes=[scope])
+    response = client.get("/api/dashboard/summary", headers=headers(key["token"]))
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == {
+        "total_value", "total_profit", "aggregate_xirr",
+        "pending_subscription_count", "pending_trade_count", "portfolios",
+    }
+
+
 def test_read_preview_has_no_business_writes(client, test_db, admin_headers):
     key = issue_key(client, admin_headers)
     before = test_db.query(AuditLog).count()
