@@ -1202,31 +1202,29 @@ export async function expectNavCurveGeometry(
     };
     const axes = Array.from(svg.querySelectorAll('.recharts-cartesian-axis')).map((group) => {
       const line = group.querySelector('.recharts-cartesian-axis-line');
-      return {
-        group,
-        line: line ? rect(line) : null,
-      };
+      return line ? rect(line) : null;
     });
-    const xAxis = axes.find((a) => a.line && a.line.width > a.line.height);
-    const yAxis = axes.find((a) => a.line && a.line.height > a.line.width);
+    const xAxis = axes.find((line) => line && line.width > line.height);
+    const yAxis = axes.find((line) => line && line.height > line.width);
     const allTicks = Array.from(svg.querySelectorAll('.recharts-cartesian-axis-tick-value')).map((tick) => ({
       text: (tick.textContent ?? '').trim(),
       box: rect(tick),
     }));
-    const xLine = xAxis?.line;
-    const yLine = yAxis?.line;
+    const xLine = xAxis ?? null;
+    const yLine = yAxis ?? null;
     // Recharts 3 把自定义 XAxisTickContent 放入独立 z-index 层，不再挂在 axis g 下。
-    // X 按公开 MM-DD 文本识别；Y 按轴线左侧邻域与垂直范围识别，避免误收图内其他四位小数标签。
+    // X 按公开 MM-DD 文本识别；Y 按轴线左侧邻域与刻度中心识别，避免误收图内其他四位小数标签。
     const xTicks = allTicks.filter((tick) => /^\d{2}-\d{2}$/.test(tick.text)).sort((a, b) => a.box.left - b.box.left);
     if (!xLine || !yLine) {
-      throw new Error(`未找到可量测的 X/Y 轴线：${JSON.stringify(axes.map((a) => a.line))}`);
+      throw new Error(`未找到可量测的 X/Y 轴线：${JSON.stringify(axes)}`);
     }
-    // 0.5/1px 容差只吸收亚像素与字体 descent 舍入，不扩大刻度可接受区域。
+    // Y 刻度垂直居中，首尾文字会各伸出轴线半字高；按中心定位，1px 只吸收轴线亚像素误差。
     const yTicks = allTicks.filter((tick) =>
+      /^-?\d{1,3}(?:,\d{3})*\.\d{4}$/.test(tick.text) &&
       tick.box.left < yLine.left &&
       tick.box.right <= yLine.left + 0.5 &&
-      tick.box.top >= yLine.top - 1 &&
-      tick.box.bottom <= yLine.bottom + 1,
+      tick.box.top + tick.box.height / 2 >= yLine.top - 1 &&
+      tick.box.top + tick.box.height / 2 <= yLine.bottom + 1,
     );
     const svgBox = rect(svg);
     const ref = Array.from(svg.querySelectorAll('.recharts-label')).find((label) =>
@@ -1262,6 +1260,8 @@ export async function expectNavCurveGeometry(
       expect(tick.text, `${label}: ${axis} 轴刻度不得为空`).not.toBe('');
       expect(tick.box.left, `${label}: ${axis} 刻度「${tick.text}」左缘不得裁切`).toBeGreaterThanOrEqual(m.svgBox.left - 0.5);
       expect(tick.box.right, `${label}: ${axis} 刻度「${tick.text}」右缘不得裁切`).toBeLessThanOrEqual(m.svgBox.right + 0.5);
+      expect(tick.box.top, `${label}: ${axis} 刻度「${tick.text}」上缘不得裁切`).toBeGreaterThanOrEqual(m.svgBox.top - 0.5);
+      expect(tick.box.bottom, `${label}: ${axis} 刻度「${tick.text}」下缘不得裁切`).toBeLessThanOrEqual(m.svgBox.bottom + 0.5);
       if (axis === 'Y') {
         expect(tick.text, `${label}: Y 刻度必须保持 formatNav 四位小数`).toMatch(/^-?\d{1,3}(?:,\d{3})*\.\d{4}$/);
         expect(tick.box.right, `${label}: Y 刻度不得压到轴线`).toBeLessThanOrEqual(m.yLine.left + 0.5);
@@ -1562,6 +1562,7 @@ export async function captureNavCardThemes(
   );
   try {
     await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.locator('html')).not.toHaveClass(/dark/);
     await settleChart();
     await card.screenshot({ path: `${pathStem}-light.png` });
     await page.emulateMedia({ colorScheme: 'dark' });
