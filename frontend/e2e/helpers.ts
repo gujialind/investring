@@ -111,16 +111,23 @@ export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): 
 }
 
 /**
- * 打开组合详情「更多」菜单（#943）：已打开时直接复用；桌面先移开指针清理旧 hover 再 hover 打开，
- * 打开后勿移开指针；移动 Sheet 不是 popper，若残留则显式 Escape 并等待卸载后再点击。
+ * 打开组合详情「更多」菜单（#943）：已打开时直接复用，桌面先移开再 hover 以触发 pointerenter、取消延时关闭；
+ * 未打开时同样清理旧 hover；移动 Sheet 不是 popper，残留则 Escape、等卸载并清理浮层后点击。
  */
 export async function openPortfolioMoreMenu(page: Page, testInfo: TestInfo): Promise<void> {
   const trigger = page.getByTestId('portfolio-more-trigger');
   const menu = page.getByTestId('portfolio-more-menu');
-  if (await menu.isVisible()) return;
+  if (await menu.isVisible()) {
+    if (testInfo.project.name === 'desktop') {
+      await page.mouse.move(0, 0);
+      await trigger.hover();
+    }
+    return;
+  }
   if (testInfo.project.name === 'mobile') {
     if ((await menu.count()) > 0) await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
+    await settlePopovers(page);
     await trigger.click();
   } else {
     await page.mouse.move(0, 0);

@@ -84,6 +84,7 @@ export default function PortfolioActionButtons({
   const closeHoverMenu = () => {
     hoverOpenedRef.current = false;
     cancelClose();
+    skipCloseFocusRef.current = true;
     triggerRef.current?.focus({ preventScroll: true });
   };
 
@@ -123,7 +124,6 @@ export default function PortfolioActionButtons({
         return;
       }
       closeHoverMenu();
-      skipCloseFocusRef.current = true;
       pendingFocusRestoreRef.current = hoverFocusRef.current;
       setOpen(false);
     }, 120);
@@ -448,7 +448,6 @@ export default function PortfolioActionButtons({
                   // 交还常驻触发器，删除弹窗才能在菜单卸载后正常接管焦点
                   event.preventDefault();
                   closeHoverMenu();
-                  skipCloseFocusRef.current = true;
                   setOpen(false);
                   onDeleteClick(triggerRef.current);
                 }}
