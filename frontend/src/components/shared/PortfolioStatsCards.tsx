@@ -112,7 +112,7 @@ export default function PortfolioStatsCards({
                 <item.icon className="h-4 w-4 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">{item.key}</span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-col items-start gap-1">
                 <div
                   className={`text-lg font-bold tabular-nums ${item.valueCls}`}
                   data-testid={`portfolio-stat-${item.id}`}
@@ -147,7 +147,7 @@ export default function PortfolioStatsCards({
                 <span className="text-xs text-muted-foreground">{item.key}</span>
                 <item.icon className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-col items-start gap-1">
                 <div
                   className={cn(getNumberCellClass(), "text-left whitespace-nowrap text-2xl font-semibold", item.valueCls)}
                   data-testid={`portfolio-stat-${item.id}`}

@@ -74,6 +74,18 @@ async function expectHeaderDate(page: Page, date: string) {
   await expect(page.getByText(/最新快照日期：/)).toHaveCount(0);
 }
 
+async function expectChipBelowValue(page: Page, valueTestId: string, chipTestId: string) {
+  const value = page.getByTestId(valueTestId);
+  const chip = page.getByTestId(chipTestId);
+  await expect(value).toBeVisible();
+  await expect(chip).toBeVisible();
+  const valueBox = await value.boundingBox();
+  const chipBox = await chip.boundingBox();
+  if (!valueBox || !chipBox) throw new Error('统计卡数值或百分比标签没有可测量边界');
+  expect(chipBox.y).toBeGreaterThanOrEqual(valueBox.y + valueBox.height);
+  expect(Math.abs(chipBox.x - valueBox.x)).toBeLessThanOrEqual(1);
+}
+
 test.describe('组合详情页头快照日期与百分比标签（#943 S3）', () => {
   for (const scenario of [
     { name: '正收益', previous: 1, latest: 1.0123, nav: '1.0123', change: '+1.23%' },
@@ -97,6 +109,17 @@ test.describe('组合详情页头快照日期与百分比标签（#943 S3）', (
       expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
     });
   }
+
+  test('两项百分比固定在主数值第二行且左对齐', async ({ page }) => {
+    await mockSnapshotReads(page, [
+      snapshot(LATEST, 1.0123),
+      snapshot(PREVIOUS, 1),
+    ]);
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+
+    await expectChipBelowValue(page, 'portfolio-stat-total_value', 'portfolio-stat-return-chip');
+    await expectChipBelowValue(page, 'portfolio-stat-nav', 'portfolio-stat-daily-return-chip');
+  });
 
   test('无快照：日期占位且不伪造 0.00%', async ({ page }) => {
     await mockSnapshotReads(page, []);
