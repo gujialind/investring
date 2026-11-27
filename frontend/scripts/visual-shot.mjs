@@ -44,24 +44,23 @@ if (Number(process.versions.node.split('.')[0]) < 24) {
   process.exit(2);
 }
 // 停更夹具造数与认证头与 E2E 共用 helpers 单点（ocr r3/r4 防漂移）
-const { authHeaders, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
+const { authHeaders, BREADCRUMB_LONG_NAME, E2E_ACTIVE, portfolioPath, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
   mobile: { descriptor: devices['iPhone 13'], launch: () => webkit.launch() },
 };
 // 种子契约组合（见 frontend/e2e/AGENTS.md §1）：E2E_ACTIVE 有已确认交易/申赎，表格里有行
+const BREADCRUMB_SCENARIO_PATH = portfolioPath(E2E_ACTIVE, 'trades');
+const BREADCRUMB_FIXTURE_CODE = E2E_ACTIVE;
 const DEFAULT_PATHS = [
-  '/portfolio/E2E_ACTIVE/trades',
-  '/portfolio/E2E_ACTIVE/subscriptions',
-  '/portfolio/E2E_ACTIVE/share-change-events',
+  portfolioPath(E2E_ACTIVE, 'trades'),
+  portfolioPath(E2E_ACTIVE, 'subscriptions'),
+  portfolioPath(E2E_ACTIVE, 'share-change-events'),
 ];
 const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
-const BREADCRUMB_SCENARIO_PATH = '/portfolio/E2E_ACTIVE/trades';
-const BREADCRUMB_FIXTURE_CODE = BREADCRUMB_SCENARIO_PATH.split('/')[2];
-const BREADCRUMB_LONG_NAME = '这是一个用于验证组合子页面包屑长名称换行与完整可访问语义的家庭投资组合';
 
 const opts = {
   base: 'http://localhost:3000',
@@ -283,7 +282,6 @@ for (const device of opts.devices) {
       if (loginOnly) await ctx.addInitScript((t) => localStorage.setItem('theme', t), theme);
       const page = await ctx.newPage();
       await page.goto(path, { waitUntil: 'domcontentloaded' });
-      const suffix = theme === 'dark' ? '-dark' : '';
       if (opts.scenario && !loginOnly) {
         const handle = await runScenario(page, opts.scenario, device);
         await page.waitForTimeout(300); // 浮层入场收尾
