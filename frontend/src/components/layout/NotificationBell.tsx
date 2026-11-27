@@ -33,6 +33,7 @@ export default function NotificationBell() {
 
   const notifications = data?.items || [];
   const unreadCount = notifications.filter((n) => n.status !== "read").length;
+  const unreadBadgeText = unreadCount > 9 ? "9+" : unreadCount;
   const unreadDescriptionId = useId();
 
   return (
@@ -52,10 +53,10 @@ export default function NotificationBell() {
                 aria-hidden="true"
                 className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive-solid px-1 text-[10px] font-medium text-white"
               >
-                {unreadCount > 9 ? "9+" : unreadCount}
+                {unreadBadgeText}
               </span>
               <span id={unreadDescriptionId} className="sr-only">
-                {unreadCount > 9 ? "9+" : unreadCount} 条未读通知
+                {unreadBadgeText} 条未读通知
               </span>
             </>
           )}

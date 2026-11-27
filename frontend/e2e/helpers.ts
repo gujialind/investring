@@ -1416,7 +1416,8 @@ export async function expectTopNavDetailLayout(
   await expect(page.locator("aside")).toHaveCount(0);
 
   await expect(async () => {
-    const mainBox = (await page.locator("main").boundingBox())!;
+    const mainBox = await page.locator("main").boundingBox();
+    if (!mainBox) throw new Error(`${label}: main 没有可见盒`);
     const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const m = await measureNavDetailLayout(history, label);
     expect(Math.abs(mainBox.x), `${label}: main 左侧不应有侧栏占宽`).toBeLessThanOrEqual(1);
