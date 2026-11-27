@@ -20,7 +20,7 @@
  *             info-tip = 说明浮层取证（#943 S2，未传 --path 时默认组合详情，也可指定
  *             产品/平台产品/快照/绩效说明所在页面）；
  *             portfolio-back-to-top = 移动组合详情页内操作区与三屏回顶（#937，
- *             先截页首，再仅移动端注入长页前置空白并滚到阈值截回顶态）
+ *             先截页首，再仅移动端在正文后注入长页空白并滚到阈值截回顶态）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -389,12 +389,14 @@ for (const device of opts.devices) {
         await page.getByTestId('page-header').waitFor({ state: 'visible', timeout: 15_000 });
         const allocationHeading = page.getByRole('heading', { name: '资产分布', exact: true });
         if (await allocationHeading.count()) {
+          const sectors = page.locator('path.recharts-sector').first();
           // ResponsiveContainer 挂载晚于页头；空持仓与有数据都视为就绪，避免截到空图容器。
-          await page.locator('path.recharts-sector').first()
-            .or(page.getByText('暂无持仓数据', { exact: true }))
+          await sectors.or(page.getByText('暂无持仓数据', { exact: true }))
             .waitFor({ state: 'visible', timeout: 15_000 });
-          // Recharts 默认饼图入场约 1.5s，sector 出现不代表动画完成。
-          await page.waitForTimeout(1600);
+          if (await sectors.count()) {
+            // Recharts 默认饼图入场约 1.5s，sector 出现不代表动画完成。
+            await page.waitForTimeout(1600);
+          }
         }
         const top = resolve(opts.out, `portfolio-back-to-top-top-${shotName(path, device, theme)}`);
         await page.screenshot({ path: top, fullPage: false });
