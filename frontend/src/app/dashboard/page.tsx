@@ -20,21 +20,25 @@ export default function DashboardPage() {
     refetchActivity,
   } = useDashboardStats();
 
-  if (isLoading) {
+  const renderContent = () => {
+    if (isLoading) return <LoadingState />;
+    if (isInitialError || !summary) {
+      return <QueryErrorState error={summaryError} onRetry={() => void refetchSummary()} />;
+    }
     return (
-      <MainLayout>
-        <LoadingState />
-      </MainLayout>
+      <DashboardSummary
+        summary={summary}
+        subscriptions={subscriptions}
+        trades={trades}
+        variant="desktop"
+        isFetching={isFetching}
+        summaryError={summaryError}
+        onRetrySummary={() => void refetchSummary()}
+        activityError={activityError}
+        onRetryActivity={() => void refetchActivity()}
+      />
     );
-  }
-
-  if (isInitialError || !summary) {
-    return (
-      <MainLayout>
-        <QueryErrorState error={summaryError} onRetry={() => void refetchSummary()} />
-      </MainLayout>
-    );
-  }
+  };
 
   return (
     <MainLayout>
@@ -43,17 +47,7 @@ export default function DashboardPage() {
           <h1 className="text-xl font-semibold leading-7">首页</h1>
           <p className="text-muted-foreground">家庭财务档案，总账</p>
         </div>
-        <DashboardSummary
-          summary={summary}
-          subscriptions={subscriptions}
-          trades={trades}
-          variant="desktop"
-          isFetching={isFetching}
-          summaryError={summaryError}
-          onRetrySummary={() => void refetchSummary()}
-          activityError={activityError}
-          onRetryActivity={() => void refetchActivity()}
-        />
+        {renderContent()}
       </div>
     </MainLayout>
   );
