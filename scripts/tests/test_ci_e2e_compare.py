@@ -3,11 +3,13 @@
 # 与 flaky 汇总的 outcome 接线（issue #570）
 # ============================================================================
 # compare 系 job 是「纯测试重构 PR 假绿灯」的唯一防线（#410）：两侧各跑一遍全量 E2E，
-# 归一化成 TSV 后期望空 diff。而**判定本身写在 shell 里**——删掉收尾的 `exit 1`、把
-# EXEMPT 写死成 true、或从 ci-ok.needs 摘掉 e2e-compare，都不会让任何用例变红，只会
-# 让这道门禁永久失效而 CI 依旧全绿。第二同类缺口是 artifact 命名：前缀字面量散在两个
-# workflow 的 7 行里（caller 声明 1 行 + 由它派生的 6 个比对位点），改一处就采不到数据
-# （多数会响亮但难懂地红，「同步改错」则是静默）。
+# 归一化成 TSV 后比对。判定拆两类（#957）：形态列差异阻断、结果列只披露——判定本体在
+# scripts/e2e_morph_compare.py，ci.yml 只剩调用、退出码分档与标签豁免。而**豁免分支与
+# 退出码契约写在 shell 里**——删掉收尾的 `exit 1`、把 EXEMPT 写死成 true、让豁免吞掉
+# rc=2、或从 ci-ok.needs 摘掉 e2e-compare，都不会让任何用例变红，只会让这道门禁永久
+# 失效而 CI 依旧全绿。第二同类缺口是 artifact 命名：前缀字面量散在两个 workflow 的 7 行里
+# （caller 声明 1 行 + 由它派生的 6 个比对位点），改一处就采不到数据（多数会响亮但难懂地
+# 红，「同步改错」则是静默）。
 #
 # 为什么放 scripts/tests 而不是等一次真实 run：`changes.detect` 对 `.github/workflows/**`
 # 有强制位（四栈全 true，见 ci.yml 该步注释），所以**只改 workflow 的 PR 必然执行
@@ -21,6 +23,7 @@
 # import 期读，job 改名会塌成一条 collection error（一个红格子、丢掉逐用例粒度）。
 # ============================================================================
 
+import os
 import shutil
 import subprocess
 import sys
@@ -91,9 +94,11 @@ def _lines_with(text_lines: list[str], directive: str) -> bool:
 def judge_body_problems(run_text: str) -> list[str]:
     """compare 判定体的约束 → 问题清单（空 = 合规）。
 
-    钉的是**语义与顺序**：显式捕获 diff 退出码 → 空 diff 早退 → 豁免分支（且必须在
-    报错之前 return）→ ::error:: → 以 exit 1 收尾。顺序反了或少了收尾的 exit 1，
-    门禁就从「拦合入」变成「打印一条红字后继续绿」。
+    #957 起判定本体在 `scripts/e2e_morph_compare.py`（形态列阻断、结果列只披露），本步
+    只剩脚本调用、退出码分档与标签豁免。钉的是**语义与顺序**：脚本与三处入参齐全 →
+    显式捕获退出码（且不得吞码）→ 通过早退 → 豁免分支（必须限定 rc=1，且在 ::error::
+    之前 return）→ rc≠1 的致命分支 → ::error:: → 以 exit 1 收尾。少了任何一环，门禁
+    要么重新被结果列抖动打红，要么从「拦合入」变成「打印红字后继续绿」。
     """
     lines = code_lines(run_text)
     problems: list[str] = []
@@ -105,8 +110,19 @@ def judge_body_problems(run_text: str) -> list[str]:
         problems.append(f"缺少{what}")
         return None
 
-    i_diff = first("|| rc=$?", "显式捕获 diff 退出码（`… || rc=$?`）")
-    i_rc0 = first('[ "$rc" -eq 0 ]', "空 diff 的早退分支")
+    first("scripts/e2e_morph_compare.py", "形态对比脚本调用（判定本体必须是这个脚本）")
+    for needle, what in (
+        ("--base /tmp/base.tsv", "baseline TSV 入参"),
+        ("--candidate /tmp/cand.tsv", "candidate TSV 入参"),
+        ('--summary "$GITHUB_STEP_SUMMARY"', "Step Summary 入参（结果列披露通道）"),
+    ):
+        if not any(needle in line for line in lines):
+            problems.append(f"判定体缺少{what}（`{needle}`）")
+    for swallow in ("|| true", "|| :", "|| rc=0"):
+        if any(swallow in line for line in lines):
+            problems.append(f"判定体用 `{swallow}` 吞掉脚本退出码——门禁会恒绿")
+    i_diff = first("|| rc=$?", "显式捕获脚本退出码（`… || rc=$?`）")
+    i_rc0 = first('[ "$rc" -eq 0 ]', "通过路径的早退分支")
     i_exempt = first('[ "$EXEMPT" = "true" ]', "豁免分支的条件判断")
     i_error = first("::error::", "非豁免路径的 ::error:: 注解")
     exit_ones = [i for i, line in enumerate(lines) if line == "exit 1"]
@@ -121,7 +137,14 @@ def judge_body_problems(run_text: str) -> list[str]:
         problems.append(f"`exit 1` 有 {len(exit_ones)} 行，期望恰好 1 行")
     if not any(line == "exit 0" for line in lines[i_exempt:i_error]):
         problems.append("豁免分支里没有独立的 `exit 0`——豁免形同虚设")
-    order = {"diff 捕获": i_diff, "空 diff 早退": i_rc0, "豁免分支": i_exempt, "::error::": i_error}
+    if not any('[ "$rc" -eq 1 ]' in line and '[ "$EXEMPT" = "true" ]' in line
+               for line in lines):
+        problems.append(
+            "豁免分支没有限定 `[ \"$rc\" -eq 1 ]`——输入无效（rc=2）会被 e2e-morph-expected 一并放行"
+        )
+    if not any('[ "$rc" -ne 1 ]' in line for line in lines):
+        problems.append("缺少 rc≠1 的致命分支——TSV 缺失/列序不符会被误当成形态差异处置")
+    order = {"diff 捕获": i_diff, "通过早退": i_rc0, "豁免分支": i_exempt, "::error::": i_error}
     labels = list(order)
     for a, b in zip(labels, labels[1:]):
         if not order[a] < order[b]:
@@ -325,14 +348,17 @@ def flaky_wiring_problems(stack_text: str, *, source: str) -> list[str]:
 
 COMPLIANT_JUDGE_BODY = """
 rc=0
-diff /tmp/base.tsv /tmp/cand.tsv > /tmp/morph.diff || rc=$?
-cat /tmp/morph.diff
-if [ "$rc" -eq 0 ]; then echo "✅ 形态一致（空 diff）"; exit 0; fi
-if [ "$EXEMPT" = "true" ]; then
-  echo "::warning::形态有差异，经标签放行"
+python3 scripts/e2e_morph_compare.py --base /tmp/base.tsv --candidate /tmp/cand.tsv --summary "$GITHUB_STEP_SUMMARY" || rc=$?
+if [ "$rc" -eq 0 ]; then echo "✅ 形态一致（无形态列差异）"; exit 0; fi
+if [ "$rc" -eq 1 ] && [ "$EXEMPT" = "true" ]; then
+  echo "::warning::形态列有差异，经标签放行"
   exit 0
 fi
-echo "::error::E2E 形态非预期变化"
+if [ "$rc" -ne 1 ]; then
+  echo "::error::形态对比脚本异常退出"
+else
+  echo "::error::E2E 形态非预期变化"
+fi
 exit 1
 """
 
@@ -568,17 +594,71 @@ class TestGuardIsDiscriminating:
     def test_exit_one_before_the_error_annotation_is_caught(self):
         """"先红着退出、再打注解"看似等价，实际是让 ::error:: 永远进不了日志。"""
         mutated = COMPLIANT_JUDGE_BODY.replace(
-            'echo "::error::E2E 形态非预期变化"\nexit 1\n',
-            'exit 1\necho "::error::E2E 形态非预期变化"\n',
+            "fi\nexit 1\n",
+            "exit 1\nfi\n",
         )
         assert mutated != COMPLIANT_JUDGE_BODY
         assert judge_body_problems(mutated)
 
     def test_exempt_without_exit_is_caught(self):
-        mutated = COMPLIANT_JUDGE_BODY.replace('  echo "::warning::形态有差异，经标签放行"\n  exit 0\n',
-                                               '  echo "::warning::形态有差异，经标签放行"\n')
+        mutated = COMPLIANT_JUDGE_BODY.replace('  echo "::warning::形态列有差异，经标签放行"\n  exit 0\n',
+                                               '  echo "::warning::形态列有差异，经标签放行"\n')
         assert mutated != COMPLIANT_JUDGE_BODY
         assert judge_body_problems(mutated)
+
+    def test_bare_diff_instead_of_the_script_is_caught(self):
+        """判定本体必须是对比脚本：退回整份 TSV 的 diff 就是 #957 要消灭的形态。"""
+        mutated = COMPLIANT_JUDGE_BODY.replace(
+            "python3 scripts/e2e_morph_compare.py --base /tmp/base.tsv"
+            ' --candidate /tmp/cand.tsv --summary "$GITHUB_STEP_SUMMARY" || rc=$?',
+            "diff /tmp/base.tsv /tmp/cand.tsv > /tmp/morph.diff || rc=$?",
+        )
+        assert mutated != COMPLIANT_JUDGE_BODY
+        problems = judge_body_problems(mutated)
+        assert any("对比脚本" in p for p in problems), problems
+
+    def test_missing_summary_input_is_caught(self):
+        """结果列差异只披露——Summary 是它的唯一可见通道，丢了就等于静默。"""
+        mutated = COMPLIANT_JUDGE_BODY.replace(' --summary "$GITHUB_STEP_SUMMARY"', "")
+        assert mutated != COMPLIANT_JUDGE_BODY
+        problems = judge_body_problems(mutated)
+        assert any("Step Summary" in p for p in problems), problems
+
+    def test_swallowed_rc_is_caught(self):
+        mutated = COMPLIANT_JUDGE_BODY.replace("|| rc=$?", "|| true")
+        assert mutated != COMPLIANT_JUDGE_BODY
+        problems = judge_body_problems(mutated)
+        assert any("吞掉" in p for p in problems), problems
+
+    def test_exempt_not_limited_to_rc_one_is_caught(self):
+        """豁免只该放行形态差异（rc=1）；输入无效（rc=2）被一起放行就是静默假绿。"""
+        mutated = COMPLIANT_JUDGE_BODY.replace(
+            'if [ "$rc" -eq 1 ] && [ "$EXEMPT" = "true" ]; then',
+            'if [ "$EXEMPT" = "true" ]; then',
+        )
+        assert mutated != COMPLIANT_JUDGE_BODY
+        problems = judge_body_problems(mutated)
+        assert any("豁免分支没有限定" in p for p in problems), problems
+
+    def test_missing_rc_fatal_branch_is_caught(self):
+        mutated = COMPLIANT_JUDGE_BODY.replace(
+            'if [ "$rc" -ne 1 ]; then\n'
+            '  echo "::error::形态对比脚本异常退出"\n'
+            "else\n"
+            '  echo "::error::E2E 形态非预期变化"\n'
+            "fi\n",
+            'echo "::error::E2E 形态非预期变化"\n',
+        )
+        assert mutated != COMPLIANT_JUDGE_BODY
+        problems = judge_body_problems(mutated)
+        assert any("rc≠1" in p for p in problems), problems
+
+    def test_diff_step_cannot_be_continue_on_error(self, ci_text):
+        """step 级 continue-on-error 会让判定体的 exit 1 完全失效。"""
+        body = code_lines(step_body(ci_text, step=DIFF_STEP, source="ci.yml:e2e-compare"))
+        assert not any("continue-on-error: true" in line for line in body), (
+            f"{DIFF_STEP} 不允许 continue-on-error——判定体的 exit 1 会被 job 结果吞掉"
+        )
 
     def test_hardcoded_exempt_is_caught(self):
         assert exempt_problems(["EXEMPT: true"])
@@ -738,6 +818,98 @@ class TestGuardIsDiscriminating:
         assert mutated != compliant_flaky_stack()
         problems = flaky_wiring_problems(mutated, source="合成 flaky")
         assert any("$ARGS" in p for p in problems), problems
+
+
+class TestJudgeBodyRuntime:
+    """判定体实跑（#957）：把 ci.yml 的 run 块当脚本执行，钉住 rc 分档与豁免语义。
+
+    文本守门只证明「结构在」，证明不了「rc=2 会不会被标签一并放行」这类语义。
+    路径按 tmp_path 替换（`/tmp/` 只是真身的落点，语义与路径无关），仍用 `bash -e`
+    复刻 Actions 的默认 shell。
+    """
+
+    ROWS = {
+        "same": [("demo", "chromium", "用例A", "expected", "passed", "")],
+        "result": [("demo", "chromium", "用例A", "unexpected", "failed", "")],
+        "shape": [("demo", "chromium", "用例A", "expected", "passed", ""),
+                  ("demo", "chromium", "新增用例", "expected", "passed", "")],
+    }
+
+    def script(self, tmp_path, judge_body) -> Path:
+        text = judge_body.replace("/tmp/", str(tmp_path) + "/")
+        path = tmp_path / "judge.sh"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def tsv(self, tmp_path, name, rows) -> None:
+        (tmp_path / name).write_text(
+            "".join("\t".join(row) + "\n" for row in rows), encoding="utf-8"
+        )
+
+    def run_judge(self, tmp_path, judge_body, base="same", cand="same", exempt="false"):
+        self.tsv(tmp_path, "base.tsv", self.ROWS[base])
+        self.tsv(tmp_path, "cand.tsv", self.ROWS[cand])
+        summary = tmp_path / "summary.md"
+        result = subprocess.run(
+            ["bash", "-e", str(self.script(tmp_path, judge_body))],
+            cwd=REPO_ROOT,
+            env={**os.environ, "EXEMPT": exempt, "GITHUB_STEP_SUMMARY": str(summary)},
+            capture_output=True,
+            text=True,
+        )
+        return result, summary.read_text(encoding="utf-8") if summary.exists() else ""
+
+    def test_green_path_passes(self, judge_body, tmp_path):
+        result, summary = self.run_judge(tmp_path, judge_body)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "形态列差异：0 处" in summary
+
+    def test_result_only_fluctuation_passes(self, judge_body, tmp_path):
+        result, summary = self.run_judge(tmp_path, judge_body, cand="result")
+        assert result.returncode == 0, "结果列差异不得阻断（#957）"
+        assert "结果列差异：1 处" in summary
+
+    def test_shape_change_fails(self, judge_body, tmp_path):
+        result, _ = self.run_judge(tmp_path, judge_body, cand="shape")
+        assert result.returncode == 1
+        assert "::error::" in result.stdout + result.stderr
+
+    def test_shape_change_passes_with_label(self, judge_body, tmp_path):
+        result, _ = self.run_judge(tmp_path, judge_body, cand="shape", exempt="true")
+        assert result.returncode == 0
+        assert "::warning::" in result.stdout + result.stderr, "豁免应降级为 warning 而不是静默"
+
+    def test_broken_input_is_not_exemptable(self, judge_body, tmp_path):
+        """rc=2 是输入/脚本错误：标签豁免只该放行形态差异，不能连它一起放过。"""
+        self.tsv(tmp_path, "base.tsv", self.ROWS["same"])
+        (tmp_path / "cand.tsv").write_text("", encoding="utf-8")
+        result = subprocess.run(
+            ["bash", "-e", str(self.script(tmp_path, judge_body))],
+            cwd=REPO_ROOT,
+            env={**os.environ, "EXEMPT": "true",
+                 "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md")},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "rc=2" in result.stdout + result.stderr
+
+    def test_corrupt_encoding_is_not_exemptable(self, judge_body, tmp_path):
+        """坏编码不是形态差异：UnicodeDecodeError 若不归到 rc=2，会被标签当成形态差异放行。"""
+        self.tsv(tmp_path, "base.tsv", self.ROWS["same"])
+        (tmp_path / "cand.tsv").write_bytes(
+            b"demo\tchromium\t\xff\xfe\tunexpected\tfailed\t\n"
+        )
+        result = subprocess.run(
+            ["bash", "-e", str(self.script(tmp_path, judge_body))],
+            cwd=REPO_ROOT,
+            env={**os.environ, "EXEMPT": "true",
+                 "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md")},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "rc=2" in result.stdout + result.stderr
 
 
 class TestBaselineForkPointReplay:

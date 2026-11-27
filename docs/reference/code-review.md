@@ -125,7 +125,7 @@
 ### 4.5 测试设施、CI 与工具链
 
 - 门禁变更要审扫描范围、空集合、路径映射、退出码、`continue-on-error`、结果聚合及例外回收，并补能让错误规则失败的反例；不能同时放宽规则与测试后用绿灯自证（#490 / #509 / #590）。`CI OK` 是 job 结果核验，不证明内部每一步都执行，也不是抵御同时篡改策略与测试的安全边界。
-- 纯测试重构应保持 E2E pass/skip 形态；[形态对比](../../frontend/e2e/AGENTS.md#3-归一化对比纯测试重构验证)两侧应用均为 PR head，只替换 E2E 目录，不能据此证明应用无回归。预期形态变化经核实并授权后才用 `e2e-morph-expected`，写明原因并回收；标签巡检只报警变红，不自动摘标，也不是 required check（#410 / #483）。
+- 纯测试重构应保持 E2E **形态列**（用例集合、标题、skip 文案）不变；[形态对比](../../frontend/e2e/AGENTS.md#3-归一化对比纯测试重构验证)两侧应用均为 PR head，只替换 E2E 目录，不能据此证明应用无回归。结果列（pass/fail）的运行波动自 #957 起只披露不阻断——它既不是形态信号，也不是稳定性证据；两侧各自的 unexpected 计数见 compare 的 Step Summary。预期形态变化经核实并授权后才用 `e2e-morph-expected`，写明原因并回收；标签巡检只报警变红，不自动摘标，也不是 required check（#410 / #483 / #957）。
 - 脚本参数错误、失败、中断及产物缺失不能假成功，恢复现场时只处理归属明确的对象；测试库不能凭名字含 test 就清理，遵循[测试库隔离约定](../../backend/AGENTS.md#2-跑测试)。新增脚本纳入 `scripts/tests/`，验证失败出口与产物而非只看命令启动。
 - 后端镜像安装来源是 `backend/requirements.txt`，仅改 `pyproject.toml` 不改变安装结果，未钉传递依赖不能声称可复现（#314）。工具链升级后先跑适配单测：Playwright 升级须跑 `scripts/tests/test_e2e_normalize.py` 验证 reporter 形态假设（#402），Vitest 联动升级遵循[前端指南](../../frontend/AGENTS.md#3-单元测试vitestissue-253)。
 
