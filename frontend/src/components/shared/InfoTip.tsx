@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type PointerEvent } from "react";
 import { Info } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -33,6 +33,12 @@ export default function InfoTip({ label, content }: InfoTipProps) {
 
   const canHover = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
   const hoverCloseSuppressed = () => focusPinned.current || focusWithinContent.current;
+
+  const handleHoverEnd = (event: PointerEvent) => {
+    if (event.pointerType === "mouse" && canHover() && !hoverCloseSuppressed()) {
+      closeSoon();
+    }
+  };
 
   useEffect(
     () => () => {
@@ -72,11 +78,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
                 setOpen(true);
               }
             }}
-            onPointerLeave={(event) => {
-              if (event.pointerType === "mouse" && canHover() && !hoverCloseSuppressed()) {
-                closeSoon();
-              }
-            }}
+            onPointerLeave={handleHoverEnd}
             onFocus={(event) => {
               if (suppressFocusOpen.current) {
                 suppressFocusOpen.current = false;
@@ -140,11 +142,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
         onPointerEnter={(event) => {
           if (event.pointerType === "mouse" && canHover()) cancelClose();
         }}
-        onPointerLeave={(event) => {
-          if (event.pointerType === "mouse" && canHover() && !hoverCloseSuppressed()) {
-            closeSoon();
-          }
-        }}
+        onPointerLeave={handleHoverEnd}
         onBlur={(event) => {
           const next = event.relatedTarget as Node | null;
           if (next && contentRef.current?.contains(next)) return;
