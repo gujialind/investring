@@ -118,7 +118,7 @@ export async function openPortfolioMoreMenu(page: Page, testInfo: TestInfo): Pro
   const trigger = page.getByTestId('portfolio-more-trigger');
   const menu = page.getByTestId('portfolio-more-menu');
   if (await menu.isVisible()) {
-    if (testInfo.project.name === 'desktop') {
+    if (testInfo.project.name !== 'mobile') {
       await page.mouse.move(0, 0);
       await trigger.hover();
     }
