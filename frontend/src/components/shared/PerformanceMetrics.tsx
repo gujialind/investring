@@ -2,13 +2,8 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { AlertTriangle, Info } from "lucide-react";
+import InfoTip from "@/components/shared/InfoTip";
 import { formatReturnRate, formatNav, getReturnColorClass } from "@/lib/utils";
 import type { PortfolioPerformance } from "@/types/portfolio";
 
@@ -23,37 +18,26 @@ function Metric({
   value,
   hint,
   colored = true,
-  suffix,
 }: {
   label: string;
   value: number | null | undefined;
   hint?: string;
   /** 是否按涨跌着色（回撤/波动率等非收益指标不着色） */
   colored?: boolean;
-  suffix?: string;
 }) {
   const hasValue = value !== null && value !== undefined;
   return (
     <div className="p-3 border rounded-lg">
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
         {label}
-        {hint && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Info className="h-3 w-3 cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent className="max-w-[260px]">{hint}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
+        {hint && <InfoTip label={`查看${label}说明`} content={hint} />}
       </div>
       <div
         className={`mt-1 text-xl font-bold ${
           hasValue && colored ? getReturnColorClass(value) : ""
         }`}
       >
-        {hasValue ? `${formatReturnRate(value, 2, colored)}${suffix || ""}` : "--"}
+        {hasValue ? formatReturnRate(value, 2, colored) : "--"}
       </div>
     </div>
   );
@@ -76,11 +60,16 @@ export default function PerformanceMetrics({ data, variant = "desktop" }: Perfor
   return (
     <Card>
       <CardHeader>
-        <CardTitle>绩效指标</CardTitle>
-        <CardDescription>
-          区间收益与风险指标，历史不足窗口期的区间收益不展示
-          {data?.holding_days ? `；持有 ${data.holding_days} 天` : ""}
-        </CardDescription>
+        <div className="flex items-center gap-1">
+          <CardTitle>绩效指标</CardTitle>
+          <InfoTip
+            label="查看绩效指标说明"
+            content="区间收益与风险指标，历史不足窗口期的区间收益不展示"
+          />
+        </div>
+        {data?.holding_days !== null && data?.holding_days !== undefined && (
+          <CardDescription>持有 {data.holding_days} 天</CardDescription>
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
         {/* 净值序列自检失败：说明快照有断层或净值异常，指标可能不可信 */}

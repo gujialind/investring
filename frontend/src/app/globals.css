@@ -159,8 +159,14 @@
 @utility amount-large {
   @apply text-2xl font-semibold tabular-nums;
 }
+@utility amount-hero {
+  @apply text-4xl font-semibold tabular-nums;
+}
 @utility amount-small {
   @apply text-sm text-muted-foreground tabular-nums;
+}
+@utility safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 @keyframes slideIn {

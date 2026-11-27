@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { getStatusBadgeVariant } from "@/lib/utils";
 
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,7 +13,6 @@ import { ArrowLeft, Settings2 } from "lucide-react";
 import Link from "next/link";
 import {
   usePortfolio,
-  useLatestSnapshot,
   usePositionList,
   usePortfolioInvestors,
   useActivatePortfolio,
@@ -24,6 +23,7 @@ import {
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
+import { usePortfolioSnapshotSummary } from "@/hooks/useSnapshot";
 import DeletePortfolioDialog from "@/components/shared/dialogs/DeletePortfolioDialog";
 import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
@@ -31,13 +31,13 @@ import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
-import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
 import SnapshotCatchupAlert from "@/components/shared/SnapshotCatchupAlert";
 import LedgerContent from "@/components/shared/LedgerContent";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import { buildAllocation } from "@/lib/allocation";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { useViewQueryState } from "@/hooks/useViewQueryState";
@@ -50,7 +50,17 @@ function MobilePortfolioDetailInner() {
   const showInvestors = searchParams.get("tab") === "investors";
 
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(code);
-  const { data: snapshot, isLoading: snapshotLoading } = useLatestSnapshot(code);
+  const isDraftStatus = portfolio?.status === "draft";
+  const isLedger = portfolio?.kind === "ledger";
+  const snapshotReadsEnabled = !!portfolio && !isDraftStatus && !isLedger;
+  const {
+    snapshot,
+    dailyReturn,
+    isLoading: snapshotLoading,
+    isError: snapshotError,
+    error: snapshotErr,
+    refetch: refetchSnapshots,
+  } = usePortfolioSnapshotSummary(code, snapshotReadsEnabled);
   const { data: positionsData, isLoading: positionsLoading } = usePositionList(code, {
     page_size: 100,
   });
@@ -77,7 +87,6 @@ function MobilePortfolioDetailInner() {
   const theme = useChartTheme();
 
   // 绩效指标：draft 组合无快照，不请求
-  const isDraftStatus = portfolio?.status === "draft";
   const { data: performance } = usePortfolioPerformance(code, !isDraftStatus);
   // 累计收益率 chip 数据源（#904 P0b）：returns 端点后端单点计算
   const { data: returns } = usePortfolioReturns(code, !isDraftStatus);
@@ -86,6 +95,7 @@ function MobilePortfolioDetailInner() {
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
   // 删除空壳确认弹窗（#820 扩围，与桌面端共用 Dialog）
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const deleteReturnFocusRef = useRef<HTMLButtonElement | null>(null);
 
   const positions = positionsData?.items || [];
   const assetClasses = assetClassDict?.items || [];
@@ -117,13 +127,41 @@ function MobilePortfolioDetailInner() {
   }
 
   const isDraft = portfolio.status === "draft";
-  const isLedger = portfolio.kind === "ledger";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses, theme);
+  // 组合操作组（#943 S4）：台账与非台账共用同一组入参，仅放置位置不同
+  const actionButtons = (
+    <PortfolioActionButtons
+      portfolioCode={code}
+      status={portfolio.status as "draft" | "active" | "closed"}
+      kind={portfolio.kind}
+      basePath="/m/portfolio"
+      variant="mobile"
+      isAdmin={isAdmin}
+      onActivateClick={() => (isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code))}
+      isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
+      onDeleteClick={
+        isAdmin && isDeletable
+          ? (target) => {
+              deleteReturnFocusRef.current = target;
+              setIsDeleteOpen(true);
+            }
+          : undefined
+      }
+      isDeletePending={deletePortfolio.isPending}
+    />
+  );
 
   return (
     <div className="space-y-4 p-4 pb-24">
+      {snapshotError && (
+        <QueryErrorState
+          error={snapshotErr}
+          onRetry={() => void refetchSnapshots()}
+          className="rounded-md border border-destructive/30 bg-destructive-soft p-4 text-center"
+        />
+      )}
       {/* Header */}
       <PageHeader
         variant="mobile"
@@ -139,8 +177,8 @@ function MobilePortfolioDetailInner() {
         meta={
           <>
             {portfolio.code}
-            {portfolio.started_at && (
-              <span> · 成立于 {portfolio.started_at.split("T")[0]}</span>
+            {!isLedger && (
+              <span> · 最新快照日期 {snapshot?.snapshot_date || "--"}</span>
             )}
           </>
         }
@@ -156,29 +194,18 @@ function MobilePortfolioDetailInner() {
       )}
 
       {/* 快照停更可见提示（#906 SPEC §4，与桌面同构）：trailing 缺口非空才渲染 */}
-      {!isLedger && <SnapshotCatchupAlert portfolioCode={code} />}
+      {!isLedger && !isDraft && <SnapshotCatchupAlert portfolioCode={code} />}
 
       {isLedger ? (
         /* 台账型独立视图（issue #905 PR3）：操作区（激活/删除）+ LedgerContent；无净值/份额/投资人 Tab */
         <>
-          {isAdmin && (
-            <PortfolioActionButtons
-              portfolioCode={code}
-              status={portfolio.status as "draft" | "active" | "closed"}
-              kind={portfolio.kind}
-              basePath="/m/portfolio"
-              variant="mobile"
-              onActivateClick={() => (isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code))}
-              isActivatePending={isDraft ? activateLedger.isPending : activatePortfolio.isPending}
-              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
-              isDeletePending={deletePortfolio.isPending}
-            />
-          )}
+          {isAdmin && actionButtons}
           <DeletePortfolioDialog
             open={isDeleteOpen}
             onOpenChange={setIsDeleteOpen}
             portfolioCode={portfolio.code}
             portfolioName={portfolio.name}
+            returnFocusRef={deleteReturnFocusRef}
             isPending={deletePortfolio.isPending}
             onConfirm={() =>
               deletePortfolio.mutate(code, {
@@ -196,41 +223,26 @@ function MobilePortfolioDetailInner() {
         <>
           {/* Stats Cards */}
           {!isDraft && (
-            <div>
-              <PortfolioStatsCards
-                totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
-                unitPrice={snapshot?.unit_price ?? null}
-                totalProfit={portfolio.total_profit ?? null}
-                cumulativeReturn={returns?.cumulative_return ?? null}
-                holdingDays={performance?.holding_days ?? null}
-                variant="mobile"
-              />
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                最新快照日期：{snapshot?.snapshot_date || "--"}
-              </p>
-            </div>
-          )}
-
-          {/* 高频操作 + #786 上移入口：单层 2 列网格由组件内部控制（draft/closed 整行），
-              外层不再嵌套 grid（#786 收敛既有双层 grid 挤压） */}
-          {isAdmin && (
-            <PortfolioActionButtons
-              portfolioCode={code}
-              status={portfolio.status as "draft" | "active" | "closed"}
-              basePath="/m/portfolio"
+            <PortfolioStatsCards
+              totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
+              unitPrice={snapshot?.unit_price ?? null}
+              totalProfit={portfolio.total_profit ?? null}
+              cumulativeReturn={returns?.cumulative_return ?? null}
+              dailyReturn={dailyReturn}
+              holdingDays={performance?.holding_days ?? null}
               variant="mobile"
-              onActivateClick={() => activatePortfolio.mutate(code)}
-              isActivatePending={activatePortfolio.isPending}
-              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
-              isDeletePending={deletePortfolio.isPending}
             />
           )}
+
+          {/* 吸底操作 bar（#943 S4）：主动作 +「更多」Sheet，单层网格由组件内部控制 */}
+          {actionButtons}
           {/* 删除空壳确认（#820 扩围，与桌面端共用弹窗） */}
           <DeletePortfolioDialog
             open={isDeleteOpen}
             onOpenChange={setIsDeleteOpen}
             portfolioCode={portfolio.code}
             portfolioName={portfolio.name}
+            returnFocusRef={deleteReturnFocusRef}
             isPending={deletePortfolio.isPending}
             onConfirm={() =>
               deletePortfolio.mutate(code, {
@@ -292,13 +304,6 @@ function MobilePortfolioDetailInner() {
               <PerformanceMetrics data={performance} variant="mobile" />
             </>
           )}
-
-          {/* 页尾「管理」列表（#595 抽取共享卡，桌面端同卡；#786 按场景去重） */}
-          <ManageLinksCard
-            basePath="/m/portfolio"
-            code={code}
-            status={portfolio.status as "draft" | "active" | "closed"}
-          />
         </>
       )}
     </div>
@@ -306,7 +311,7 @@ function MobilePortfolioDetailInner() {
 }
 
 /**
- * 移动端组合详情页（issue #99 单列同构；#595 持仓双视图 + ?view= 持久化 + 管理卡共享）。
+ * 移动端组合详情页（issue #99 单列同构；#595 持仓双视图 + ?view= 持久化 + #943 统一操作菜单）。
  * useSearchParams 需包 Suspense 边界（Next 15 静态预渲染要求）。
  */
 export default function MobilePortfolioDetailPage() {

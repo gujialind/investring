@@ -3,7 +3,6 @@ import {
   Portfolio,
   PortfolioCreate,
   PortfolioUpdate,
-  PortfolioValueSnapshot,
   PortfolioInvestorItem,
   NavHistoryRecord,
   PortfolioReturns,
@@ -71,9 +70,6 @@ export const portfolioApi = {
   // 仅「draft 且无任何关联记录」的空壳组合可删（#820）；其余形态由 close/reactivate 管理
   delete: (code: string) =>
     request<{ message: string }>({ method: "DELETE", url: `/portfolios/${code}` }),
-
-  getLatestSnapshot: (code: string) =>
-    request<PortfolioValueSnapshot>({ method: "GET", url: `/portfolios/${code}/snapshots/latest` }),
 
   getNavHistory: (code: string, params?: { start_date?: string; end_date?: string }) =>
     request<NavHistoryRecord[]>({ method: "GET", url: `/portfolios/${code}/nav-history`, params }),

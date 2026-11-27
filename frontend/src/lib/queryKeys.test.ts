@@ -69,6 +69,21 @@ describe("queryKeys.shareChangeEvents.previewWith（#775 完整候选）", () =>
   });
 });
 
+describe("queryKeys.snapshots", () => {
+  it("list 保留日期区间与 limit 键形", () => {
+    expect(
+      queryKeys.snapshots.list("P1", { startDate: "2026-11-01", endDate: "2026-11-26", limit: 2 }),
+    ).toEqual(["snapshots", "list", "P1", "2026-11-01", "2026-11-26", 2]);
+  });
+
+  it("组合详情失效前缀覆盖快照汇总", () => {
+    const prefix = queryKeys.portfolios.detail("P1");
+    const summary = queryKeys.portfolios.snapshotSummary("P1");
+    expect(summary).toEqual(["portfolios", "P1", "snapshots", "summary"]);
+    expect(summary.slice(0, prefix.length)).toEqual(prefix);
+  });
+});
+
 // #484：全域工厂。key 是 queryClient 路由缓存与失效的唯一坐标系——域段改名会让
 // invalidateQueries 的值相等匹配静默失配（#344 的同类事故），root 不是真前缀则
 // 「失效整域」刷不掉子键。两处都用字面量断言钉死，让改动必须先过测试。
@@ -109,6 +124,7 @@ describe("queryKeys 全域工厂", () => {
         keys: [
           queryKeys.portfolios.list(),
           queryKeys.portfolios.detail("P1"),
+          queryKeys.portfolios.snapshotSummary("P1"),
           queryKeys.portfolios.investorsByPortfolio("P1"),
         ],
       },
@@ -158,7 +174,7 @@ describe("queryKeys 全域工厂", () => {
         root: queryKeys.platforms.root,
         keys: [queryKeys.platforms.list(), queryKeys.platforms.detail("X1")],
       },
-      { root: queryKeys.snapshots.root, keys: [queryKeys.snapshots.status("P1")] },
+      { root: queryKeys.snapshots.root, keys: [queryKeys.snapshots.status("P1"), queryKeys.snapshots.list("P1")] },
       {
         root: queryKeys.shareChangeEvents.root,
         keys: [

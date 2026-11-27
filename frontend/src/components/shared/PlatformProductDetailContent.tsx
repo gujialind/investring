@@ -13,6 +13,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import PlatformDistributionCard from "./PlatformDistributionCard";
 import ProductIdentity from "./ProductIdentity";
 import ProductNavCards from "./ProductNavCards";
+import InfoTip from "./InfoTip";
 import QueryErrorState from "./QueryErrorState";
 import CashMarketValueUpdateDialog from "./dialogs/CashMarketValueUpdateDialog";
 import CashTransferDialog from "./dialogs/CashTransferDialog";
@@ -35,6 +36,7 @@ import {
   getTradeStatusLabel,
 } from "@/lib/utils";
 import { useHoldingsByProduct } from "@/hooks/usePosition";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useNavHistory } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
@@ -68,6 +70,13 @@ export default function PlatformProductDetailContent({
   const portfolioCode = params.code as string;
   const platformCode = params.platformCode as string;
   const productCode = params.productCode as string;
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(portfolioCode);
   const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
   const isCash = productCode === CASH_PRODUCT_CODE;
@@ -114,6 +123,12 @@ export default function PlatformProductDetailContent({
     [platformsData?.items]
   );
 
+  if (portfolioError) {
+    return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  }
+  if (portfolioLoading || !portfolio) {
+    return <LoadingState />;
+  }
   if (holdingsLoading) return <LoadingState />;
   if (holdingsError) {
     return <QueryErrorState error={holdingsErr} onRetry={refetchHoldings} />;
@@ -183,8 +198,17 @@ export default function PlatformProductDetailContent({
             </div>
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">累计收益*</div>
-            <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}>
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              累计收益
+              <InfoTip
+                label="查看累计收益说明"
+                content="累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同"
+              />
+            </div>
+            <div
+              data-testid="platform-product-cumulative-profit"
+              className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}
+            >
               {formatSignedCurrency(slice.cumulative_profit)}
             </div>
           </div>
@@ -197,9 +221,6 @@ export default function PlatformProductDetailContent({
             </div>
           </div>
         </div>
-        <p className="mt-2 text-xs text-warning">
-          *累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同
-        </p>
       </CardContent>
     </Card>
   );
@@ -325,7 +346,7 @@ export default function PlatformProductDetailContent({
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${portfolioCode}`, label: portfolio.name, ariaLabel: "返回组合详情" },
           {
             href: `${basePath}/${portfolioCode}/platforms/${platformCode}`,
             label: platformCode,

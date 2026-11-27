@@ -18,7 +18,7 @@ import {
   nearestTradingDay,
   openAppAndAuth,
   openFilterPanelIfMobile,
-  openMobilePageActionsIfMobile,
+  openPortfolioMoreMenu,
   openPopover,
   openSettingsSection,
   portfolioPath,
@@ -61,9 +61,8 @@ test.describe('页面渲染回归（防 P0 复发）', () => {
     const draftCode = isolatedPortfolioCode('E820R', testInfo, 'D');
     await createPortfolioViaApi(page, headers, draftCode);
     await page.goto(`/portfolio/${draftCode}`);
-    // 移动删除入口收 ⋯ 抽屉（#904 P1c-3），开抽屉再断言入口有无
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(1);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(page.getByTestId(`portfolio-delete-${draftCode}`)).toHaveCount(1);
 
     // closed 夹具必须「先激活再关闭」：#820 收紧后 draft 直接 close 会 422。
     // 激活必落 subscription 行，故这是「closed 且有账」形态——入口仍出现（不本地预判），
@@ -73,13 +72,13 @@ test.describe('页面渲染回归（防 P0 复发）', () => {
     await activatePortfolioViaApi(page, headers, closedCode);
     await closePortfolioViaApi(page, headers, closedCode);
     await page.goto(`/portfolio/${closedCode}`);
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(1);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(page.getByTestId(`portfolio-delete-${closedCode}`)).toHaveCount(1);
 
     // active 用种子契约组合（形态由 backend/tests/integration/test_seed_contract.py 锁定）
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(0);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(page.getByTestId(`portfolio-delete-${E2E_ACTIVE}`)).toHaveCount(0);
   });
 });
 
@@ -469,7 +468,9 @@ test.describe('图标返回按钮的可访问名（#894 B）', () => {
   // 这 7 处曾是纯图标、既无可见文本也无 aria-label：读屏听不出是返回，E2E 也无法按
   // role+name 定位。对照页 products/[code] 一直带 aria-label="返回"，故此前没暴露。
   // toBeVisible 的 strict mode 同时钉住「唯一命中」——同名多命中会直接红。
-  test('组合详情与四个子页的返回按钮均可按 role+name 唯一命中', async ({ page }, testInfo) => {
+  test('组合详情与六个子页的返回按钮均可按 role+name 唯一命中', async ({ page }, testInfo) => {
+    const portfolioHref = `${testInfo.project.name === 'mobile' ? '/m' : ''}/portfolio/${E2E_ACTIVE}`;
+    const portfolioListHref = `${testInfo.project.name === 'mobile' ? '/m' : ''}/portfolio`;
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByRole('link', { name: '返回组合列表' })).toBeVisible();
 
@@ -480,14 +481,23 @@ test.describe('图标返回按钮的可访问名（#894 B）', () => {
     } else {
       await gotoPortfolioSubpage(page, E2E_ACTIVE, 'positions');
     }
-    await expect(page.getByRole('link', { name: '返回组合详情' })).toBeVisible();
+    const positionsCrumb = page.getByRole('link', { name: '返回组合详情' });
+    await expect(positionsCrumb).toBeVisible();
+    await expect(positionsCrumb).toHaveText('E2E 活跃组合');
+    await expect(positionsCrumb).toHaveAttribute('href', portfolioHref);
 
-    for (const sub of ['trades', 'subscriptions', 'share-change-events'] as const) {
+    for (const sub of ['trades', 'subscriptions', 'share-change-events', 'snapshots', 'cash-flows'] as const) {
       await gotoPortfolioSubpage(page, E2E_ACTIVE, sub);
-      await expect(
-        page.getByRole('link', { name: '返回组合详情' }),
-        `${sub} 的返回按钮应有可访问名`,
-      ).toBeVisible();
+      const crumb = page.getByRole('link', { name: '返回组合详情' });
+      await expect(crumb, `${sub} 的返回按钮应有可访问名`).toBeVisible();
+      await expect(crumb).toHaveText('E2E 活跃组合');
+      await expect(crumb).toHaveAttribute('href', portfolioHref);
+      if (sub === 'snapshots') {
+        await expect(page.getByRole('link', { name: '返回组合列表' })).toHaveAttribute(
+          'href',
+          portfolioListHref,
+        );
+      }
     }
   });
 });

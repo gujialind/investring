@@ -17,7 +17,7 @@ from app.request_context import (
     SCOPE_REQUEST_ID_KEY,
     RequestContextMiddleware,
 )
-from app.routers import auth, investors, portfolios, products, platforms, trading_calendar, data_sources, market_data, subscriptions, trades, share_change_events, positions, logs, tasks, notifications, snapshots, cash_transfers, cash_flows, sync_jobs, asset_classifications, dividend_configs, ledgers
+from app.routers import auth, investors, portfolios, products, platforms, trading_calendar, data_sources, market_data, subscriptions, trades, share_change_events, positions, logs, tasks, notifications, snapshots, cash_transfers, cash_flows, sync_jobs, asset_classifications, dividend_configs, ledgers, dashboard
 from app.services.audit_service import record_system_error
 from app.services.exceptions import BusinessError
 from app.init_tasks import init_scheduled_tasks
@@ -158,6 +158,7 @@ app.include_router(cash_flows.router, prefix="/api/portfolios", tags=["现金流
 app.include_router(sync_jobs.router, prefix="/api/sync-jobs", tags=["价格同步任务"])
 app.include_router(dividend_configs.router, prefix="/api/dividend-configs", tags=["分红方式配置"])
 app.include_router(ledgers.router, prefix="/api/portfolios", tags=["台账型组合"])
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["仪表盘"])
 
 @app.get("/")
 def read_root():

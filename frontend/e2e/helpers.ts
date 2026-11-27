@@ -25,6 +25,9 @@ import { expect, test, type Page, type Locator, type TestInfo } from '@playwrigh
 export const E2E_PORT = 'E2E_PORT'; // draft、零交易/申赎/快照
 export const E2E_ACTIVE = 'E2E_ACTIVE'; // active、首购 + 已确认场内交易 + 2 日快照 + 1 pending 交易
 
+/** 面包屑长名夹具：同时覆盖 CJK 换行与无空格 Latin token，防止撑破窄栏。 */
+export const BREADCRUMB_LONG_NAME = `这是一个用于验证组合子页面包屑长名称换行与完整可访问语义的家庭投资组合-${'A'.repeat(55)}`;
+
 /** 组合 code 限定为两个种子契约值：typo 即编译期报错，不再退化为运行期 15s 超时（#354 消除静默失败） */
 export type PortfolioCode = typeof E2E_PORT | typeof E2E_ACTIVE;
 
@@ -108,42 +111,40 @@ export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): 
 }
 
 /**
- * 打开移动端页头/吸底 bar 的 ⋯「页面更多操作」抽屉（#904 P1c-3）：
- * 次动作与删除入口收进 sheet，断言/点击前须先开；桌面无 sheet，no-op。
+ * 打开组合详情「更多」菜单（#943）：已打开时直接复用，桌面先移开再 hover 以触发 pointerenter、取消延时关闭；
+ * 未打开时同样清理旧 hover；移动 Sheet 不是 popper，残留则 Escape、等卸载并清理浮层后点击。
  */
-export async function openMobilePageActionsIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
-  if (testInfo.project.name !== 'mobile') return;
-  await page.getByRole('button', { name: '页面更多操作' }).click();
-}
-
-/**
- * 点击组合详情页尾「管理」卡链接（#904 P1c-3）：移动 fixed 吸底 bar 占视口底部，
- * 管理卡在页尾、pb-24 预留空间须滚到页底才露出链接；Playwright 最小滚动会把链接
- * 落在 bar 下被拦截，故移动先滚页底再点。桌面无 bar，no-op 直点。
- */
-export async function clickPortfolioManageLink(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+export async function openPortfolioMoreMenu(page: Page, testInfo: TestInfo): Promise<void> {
+  const trigger = page.getByTestId('portfolio-more-trigger');
+  const menu = page.getByTestId('portfolio-more-menu');
+  if (await menu.isVisible()) {
+    if (testInfo.project.name !== 'mobile') {
+      await page.mouse.move(0, 0);
+      await trigger.hover();
+    }
+    return;
+  }
   if (testInfo.project.name === 'mobile') {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(300);
+    if ((await menu.count()) > 0) await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await settlePopovers(page);
+    await trigger.click();
+  } else {
+    await page.mouse.move(0, 0);
+    await settlePopovers(page);
+    await trigger.hover();
   }
-  await page.getByRole('link', { name }).click();
+  await expect(menu).toBeVisible();
 }
 
-/**
- * 组合详情页「份额变动事件」入口（#904 P1c-3，状态感知）：draft 管理卡含该链接；
- * active 管理卡不含（#786 移页头操作区，c-3 移动收 ⋯ 抽屉）。E2E_PORT 的 draft 契约
- * 会被并行 trade-buy-amount-linkage 激活（#636），故按 API 现状分流，不假设状态。
- */
-export async function clickEventsEntryFromDetail(page: Page, testInfo: TestInfo, code: string): Promise<void> {
-  const headers = await authHeaders(page);
-  const resp = await page.request.get(`/api/portfolios/${code}`, { headers });
-  const status = ((await resp.json()) as { status: string }).status;
-  if (testInfo.project.name === 'mobile' && status !== 'draft') {
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await page.getByRole('link', { name: '份额变动事件' }).click();
-  } else {
-    await clickPortfolioManageLink(page, testInfo, '份额变动事件');
-  }
+/** 从组合详情「更多」菜单（双端同一入口）进入历史导航页。 */
+export async function clickPortfolioMoreMenuItem(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+  await openPortfolioMoreMenu(page, testInfo);
+  const menu = page.getByTestId('portfolio-more-menu');
+  await menu
+    .getByRole('menuitem', { name, exact: true })
+    .or(menu.getByRole('link', { name, exact: true }))
+    .click();
 }
 
 /**

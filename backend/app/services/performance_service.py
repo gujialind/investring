@@ -182,17 +182,11 @@ def _period_return(
     return round((float(latest.unit_price) / base_nav - 1) * 100, 4)
 
 
-def compute_mwr(
-    subscriptions: Sequence[Subscription],
-    end_date: date,
-    end_value: float,
-) -> dict:
-    """计算 MWR（资金加权收益率 / XIRR，百分数）。
+def subscription_flows(subscriptions: Sequence[Subscription]) -> List[Tuple[date, float]]:
+    """提取已确认申赎的外部现金流（纯函数，不读库）。
 
-    现金流口径：
-    - 申购按 confirm_date 记为负流（投入），赎回记为正流（取回）；
-    - 期末市值记为一笔正流（视为全部赎回）；
-    - 仅取 confirmed 且 amount 有效的记录。
+    申购为负流、赎回为正流；日期优先取 confirm_date，缺失时回退 apply_date。
+    未确认、金额缺失/非正、日期缺失或类型未知的记录均不计入。
     """
     flows: List[Tuple[date, float]] = []
     for sub in subscriptions:
@@ -208,7 +202,22 @@ def compute_mwr(
             flows.append((when, -amount))
         elif sub.sub_type == "redeem":
             flows.append((when, amount))
+    return flows
 
+
+def compute_mwr(
+    subscriptions: Sequence[Subscription],
+    end_date: date,
+    end_value: float,
+) -> dict:
+    """计算 MWR（资金加权收益率 / XIRR，百分数）。
+
+    现金流口径：
+    - 申购按 confirm_date 记为负流（投入），赎回记为正流（取回）；
+    - 期末市值记为一笔正流（视为全部赎回）；
+    - 仅取 confirmed 且 amount 有效的记录。
+    """
+    flows = subscription_flows(subscriptions)
     if not flows or end_value <= 0:
         return {"mwr": None, "cash_flow_count": len(flows)}
 
