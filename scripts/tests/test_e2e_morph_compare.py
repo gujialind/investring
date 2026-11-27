@@ -192,6 +192,24 @@ def test_unexpected_crash_maps_to_rc_2(monkeypatch):
     assert e2e_morph_compare.main(["--base", "x", "--candidate", "y"]) == 2
 
 
+def test_crash_handler_survives_broken_stderr(monkeypatch):
+    """诊断输出自身失败（管道关闭/编码）也不能让异常逃逸成默认 rc=1。"""
+
+    class BrokenStderr:
+        def write(self, *args):
+            raise OSError("stderr 已关闭")
+
+        def flush(self):
+            raise OSError("stderr 已关闭")
+
+    def boom(argv):
+        raise RuntimeError("模拟崩溃")
+
+    monkeypatch.setattr(e2e_morph_compare, "_run", boom)
+    monkeypatch.setattr(e2e_morph_compare.sys, "stderr", BrokenStderr())
+    assert e2e_morph_compare.main([]) == 2
+
+
 def test_status_sentinel_is_rejected_but_result_sentinel_tolerated(tmp_path):
     """第 4 列 "?"（reporter 形态漂移）语义不明 -> 拒止；第 5 列 "?" 只影响披露 -> 容忍。"""
     base = write_tsv(tmp_path / "base.tsv", [row(status="?", result="passed")])

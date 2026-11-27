@@ -30,6 +30,7 @@
 # 把一切非 SystemExit 异常归到 rc=2（#957 L2 评审）。
 import argparse
 import sys
+import traceback
 from typing import NoReturn
 
 #: TSV 列序由 scripts/e2e_normalize.py 固定：spec, project, 用例标题, status, 结果, skip 文案。
@@ -176,9 +177,13 @@ def main(argv: list[str]) -> int:
     except SystemExit:
         raise  # die() 的 rc=2 与 argparse 的参数错误照常上抛
     except Exception as exc:  # noqa: BLE001——未捕获异常默认 rc=1，会落进标签豁免分支
-        print(f"❌ 形态对比脚本异常：{exc!r}", file=sys.stderr)
-        print(f"::error::形态对比脚本异常（{type(exc).__name__}: {exc}），"
-              "不适用标签豁免", file=sys.stderr)
+        try:
+            traceback.print_exc()
+            print(f"❌ 形态对比脚本异常：{exc!r}", file=sys.stderr)
+            print(f"::error::形态对比脚本异常（{type(exc).__name__}: {exc}），"
+                  "不适用标签豁免", file=sys.stderr)
+        except Exception:  # noqa: BLE001——诊断输出自身失败（管道关闭/编码）也不能逃逸成 rc=1
+            pass
         return 2
 
 
