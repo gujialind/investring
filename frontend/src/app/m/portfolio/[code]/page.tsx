@@ -155,7 +155,7 @@ function MobilePortfolioDetailInner() {
   );
 
   const detailContent = (
-    <div className="space-y-4 p-4 safe-area-pb-16">
+    <div className="space-y-4 px-4 pt-4 safe-area-pb-16">
       {snapshotError && (
         <QueryErrorState
           error={snapshotErr}

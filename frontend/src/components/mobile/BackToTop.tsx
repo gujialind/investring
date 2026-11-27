@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-const VISIBILITY_MULTIPLIER = 3;
+import { BACK_TO_TOP_VISIBILITY_MULTIPLIER } from "./backToTopConfig";
 
 interface BackToTopProps {
   /** 按钮因滚动隐藏时，把焦点交还到仍可达的页头出口。 */
@@ -19,7 +18,7 @@ export default function BackToTop({ returnFocusSelector }: BackToTopProps) {
 
   useEffect(() => {
     const updateVisibility = () => {
-      const shouldShow = window.scrollY >= VISIBILITY_MULTIPLIER * window.innerHeight;
+      const shouldShow = window.scrollY >= BACK_TO_TOP_VISIBILITY_MULTIPLIER * window.innerHeight;
       if (!shouldShow && document.activeElement === buttonRef.current) {
         returnFocusRequestedRef.current = true;
       }

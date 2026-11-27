@@ -10,6 +10,7 @@ import {
   portfolioPath,
   scrollWindowTo,
 } from './helpers';
+import { BACK_TO_TOP_VISIBILITY_MULTIPLIER } from '../src/components/mobile/backToTopConfig';
 
 // #937 A1/A10：两个项目都覆用移动 UA 与触控语义，分别以 Chromium/WebKit 验证真实 /m 路由。
 const MOBILE_DEVICE = {
@@ -44,7 +45,10 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
   }
 
   async function scrollToThreshold(page: Page, offset = 0): Promise<number> {
-    const threshold = await page.evaluate(() => 3 * window.innerHeight);
+    const threshold = await page.evaluate(
+      (multiplier) => multiplier * window.innerHeight,
+      BACK_TO_TOP_VISIBILITY_MULTIPLIER,
+    );
     await scrollWindowTo(page, threshold + offset);
     return threshold;
   }
@@ -171,7 +175,7 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
 
     await gotoMobileDetail(page, E2E_PORT);
     const maxY = await page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight);
-    expect(maxY, '草稿短页应不足三屏').toBeLessThan(3 * 844);
+    expect(maxY, '草稿短页应不足三屏').toBeLessThan(BACK_TO_TOP_VISIBILITY_MULTIPLIER * 844);
     await scrollWindowTo(page, maxY);
     await expect(page.getByTestId('back-to-top')).toHaveCount(0);
   });
@@ -189,11 +193,14 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     await page.goto(portfolioPath(E2E_ACTIVE));
     await portfolioRequest;
     await makeLongPage(page);
-    await page.evaluate(() => window.scrollTo(0, 3 * window.innerHeight));
+    await page.evaluate(
+      (multiplier) => window.scrollTo(0, multiplier * window.innerHeight),
+      BACK_TO_TOP_VISIBILITY_MULTIPLIER,
+    );
     releaseRequest();
     await expect(page.getByTestId('page-header')).toBeVisible();
     await expect(page.getByTestId('back-to-top')).toBeVisible();
-    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThanOrEqual(3 * 844);
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThanOrEqual(BACK_TO_TOP_VISIBILITY_MULTIPLIER * 844);
   });
 
   test('A5：点击与键盘瞬时回顶，保留 view/sub/tab 与数据、不发业务请求且焦点交还页头', async ({ page }, testInfo) => {
@@ -283,6 +290,33 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
         return { right: style.right, bottom: style.bottom };
       });
       expect(insetGeometry).toEqual({ right: '40px', bottom: '50px' });
+
+      await gotoMobileDetail(page);
+      await page.getByTestId('portfolio-action-buttons').evaluate((action) => {
+        const content = action.parentElement!;
+        const spacer = document.createElement('div');
+        spacer.style.height = '2200px';
+        content.insertBefore(spacer, content.lastElementChild);
+      });
+      const maxY = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+      await scrollWindowTo(page, maxY);
+      await expect(button).toBeVisible();
+      const tailGeometry = await page.evaluate(() => {
+        const action = document.querySelector('[data-testid="portfolio-action-buttons"]')!;
+        const content = action.parentElement!;
+        const last = content.lastElementChild!.getBoundingClientRect();
+        const back = document.querySelector('[data-testid="back-to-top"]')!.getBoundingClientRect();
+        return {
+          paddingBottom: getComputedStyle(content).paddingBottom,
+          lastBottom: last.bottom,
+          backTop: back.top,
+          backBottom: back.bottom,
+          viewportBottom: window.innerHeight,
+        };
+      });
+      expect(tailGeometry.paddingBottom).toBe('98px');
+      expect(tailGeometry.lastBottom, '页尾正文不得被回顶按钮覆盖').toBeLessThanOrEqual(tailGeometry.backTop - 4);
+      expect(tailGeometry.backBottom).toBeLessThanOrEqual(tailGeometry.viewportBottom);
       await session.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 0 } });
     }
   });
@@ -470,18 +504,19 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
         y: modalBox.y - 8,
       };
       expect(overlayPoint.y, '遮挡点击点应位于模态内容上方的真实遮罩').toBeGreaterThan(0);
-      const scrollBefore = await page.evaluate(() => window.scrollY);
-      await page.mouse.click(overlayPoint.x, overlayPoint.y);
-      expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+      return overlayPoint;
     };
 
     const sheetGeometry = await captureBackGeometry();
     const trigger = page.getByTestId('portfolio-more-trigger');
     await trigger.dispatchEvent('click');
     const sheet = page.getByTestId('portfolio-more-menu');
-    await assertCovered(sheet, sheetGeometry);
-    await page.keyboard.press('Escape');
+    const overlayPoint = await assertCovered(sheet, sheetGeometry);
+    const urlBefore = page.url();
+    await page.mouse.click(overlayPoint.x, overlayPoint.y);
     await expect(sheet).toBeHidden();
+    await expect(trigger).toBeFocused();
+    expect(page.url()).toBe(urlBefore);
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).overflowY)).toBe('visible');
 
     const dialogGeometry = await captureBackGeometry();

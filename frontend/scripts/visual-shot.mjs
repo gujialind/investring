@@ -50,6 +50,7 @@ if (Number(process.versions.node.split('.')[0]) < 24) {
 }
 // 停更夹具造数与认证头与 E2E 共用 helpers 单点（ocr r3/r4 防漂移）
 const { authHeaders, BREADCRUMB_LONG_NAME, E2E_ACTIVE, portfolioPath, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
+const { BACK_TO_TOP_VISIBILITY_MULTIPLIER } = await import('../src/components/mobile/backToTopConfig.ts');
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
@@ -343,19 +344,29 @@ async function runScenario(page, scenario, device) {
 
 /** 回顶场景仅移动端：在正文后注入视口相关空白并滚到三屏阈值，交给调用方截图（桌面只截页首） */
 async function scrollToBackToTopThreshold(page) {
-  // 阈值与 BackToTop 的 VISIBILITY_MULTIPLIER=3 同步；空白放在正文后，保持页头真实吸顶状态。
-  const spacerHeight = await page.evaluate(() => 4 * window.innerHeight);
+  // 空白放在正文后，保持页头真实吸顶状态；阈值与组件共用同一契约。
+  const spacerHeight = await page.evaluate(
+    (multiplier) => (multiplier + 1) * window.innerHeight,
+    BACK_TO_TOP_VISIBILITY_MULTIPLIER,
+  );
   await page.addStyleTag({ content: `main::after { content: ""; display: block; height: ${spacerHeight}px; }` });
-  const targetScroll = await page.evaluate(() => 3 * window.innerHeight + 1);
+  const targetScroll = await page.evaluate(
+    (multiplier) => multiplier * window.innerHeight + 1,
+    BACK_TO_TOP_VISIBILITY_MULTIPLIER,
+  );
   await page.evaluate((target) => window.scrollTo(0, target), targetScroll);
   await page.getByTestId('page-header').getByRole('navigation', { name: '面包屑' }).waitFor({ state: 'hidden' });
   // 页头折叠改变文档高度；等提交后重新定位，抵消浏览器滚动锚点补偿。
   await page.evaluate((target) => window.scrollTo(0, target), targetScroll);
   const button = page.getByRole('button', { name: '回到顶部', exact: true });
   await button.waitFor({ state: 'visible', timeout: 15_000 });
-  const nearThreshold = await page.evaluate((target) => Math.abs(window.scrollY - target) <= 1, targetScroll);
-  if (!nearThreshold) {
-    throw new Error('回顶目检未落在三屏阈值');
+  const thresholdGeometry = await page.evaluate((target) => ({
+    actual: window.scrollY,
+    target,
+    max: document.documentElement.scrollHeight - window.innerHeight,
+  }), targetScroll);
+  if (Math.abs(thresholdGeometry.actual - thresholdGeometry.target) > 1) {
+    throw new Error(`回顶目检未落在三屏阈值：实际 ${thresholdGeometry.actual}px，目标 ${thresholdGeometry.target}px，最大滚动 ${thresholdGeometry.max}px`);
   }
 }
 
