@@ -63,7 +63,7 @@ const DEFAULT_PATHS = [
 const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
-const INFO_TIP_DEFAULT_PATH = '/portfolio/E2E_ACTIVE';
+const INFO_TIP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
 
 function infoTipLabelForPath(path) {
   const pathname = new URL(path, 'http://localhost').pathname;
