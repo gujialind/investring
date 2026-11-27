@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { E2E_ACTIVE, collectPageErrors, openPopover, settlePopovers } from "./helpers";
 
 const PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/510300.SH?market=CN_EXCHANGE`;
-const CUMULATIVE_HINT = "累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同";
+const CUMULATIVE_HINT = "累计收益含已卖出实现盈亏";
 const AUTO_SNAPSHOT_HINT = "开启后每个交易日由定时任务自动补齐快照；关闭不影响手动生成";
 const PERFORMANCE_HINT = "区间收益与风险指标，历史不足窗口期的区间收益不展示";
 
@@ -53,6 +53,7 @@ test.describe("共享说明触发器（#943 S2）", () => {
       expect(contentId).not.toBeNull();
       await expect(content).toHaveAttribute("id", contentId!);
       await expect(content).toHaveAttribute("aria-label", "查看累计收益说明");
+      await expect(content).toHaveText(CUMULATIVE_HINT);
       await content.hover();
       await expect(content).toBeVisible();
 
@@ -67,6 +68,7 @@ test.describe("共享说明触发器（#943 S2）", () => {
       await expect(content).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(content).toHaveCount(0);
+      await settlePopovers(page);
 
       await focusProbe.focus();
       await expect(focusProbe).toBeFocused();
@@ -106,6 +108,7 @@ test.describe("共享说明触发器（#943 S2）", () => {
       await expect(content).toHaveCount(0);
     } else {
       await openPopover(page, trigger, content);
+      await expect(content).toHaveText(CUMULATIVE_HINT);
       await content.click();
       await expect(content).toBeVisible();
       await trigger.click();
@@ -235,6 +238,9 @@ test.describe("共享说明触发器（#943 S2）", () => {
 
     const overviewTrigger = page.getByRole("button", { name: "查看绩效指标说明" });
     const content = page.getByTestId("info-tip-content");
+    // 持仓卡新增 44px 说明触点后，320px 视口的滚动落点可能正卡在吸顶页头/底栏边缘；
+    // 先显式居中，再测真实悬停/点按，不绕过命中检测。
+    await overviewTrigger.evaluate((element) => element.scrollIntoView({ block: "center" }));
     if (testInfo.project.name === "chromium") {
       await overviewTrigger.hover();
     } else {
@@ -251,6 +257,7 @@ test.describe("共享说明触发器（#943 S2）", () => {
 
     for (const [label, hint] of metricHints) {
       const trigger = page.getByRole("button", { name: `查看${label}说明` });
+      await trigger.evaluate((element) => element.scrollIntoView({ block: "center" }));
       if (testInfo.project.name === "chromium") {
         await trigger.hover();
       } else {

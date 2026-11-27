@@ -206,7 +206,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
               累计收益
               <InfoTip
                 label="查看累计收益说明"
-                content="累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同"
+                content="累计收益含已卖出实现盈亏"
               />
             </div>
             <div

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
+import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, openPopover, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享 ProductDetailContent）。
@@ -45,13 +45,18 @@ test.describe("产品详情页", () => {
     await expect(overview).toContainText("(+5.00%)");
     // 单位净值行（最新一条净值，日期随种子滚动只断言数值与标签）
     await expect(overview).toContainText("单位净值 4.2000");
-    // 累计收益说明默认收起，真实按钮承载可访问语义
+    // 累计收益说明默认收起，真实按钮承载可访问语义；展开只解释含已卖出实现盈亏，
+    // 不再声称与持仓卡口径不同（#944 V2-16 起两者同 basis）。
     await expect(overview).toContainText("累计收益");
-    await expect(overview).not.toContainText("*累计收益含已卖出实现盈亏");
-    await expect(overview.getByRole("button", { name: "查看累计收益说明" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    const tipTrigger = overview.getByRole("button", { name: "查看累计收益说明" });
+    const tipContent = page.getByTestId("info-tip-content");
+    await expect(tipTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText("累计收益含已卖出实现盈亏", { exact: true })).toHaveCount(0);
+    await openPopover(page, tipTrigger, tipContent);
+    await expect(tipContent).toHaveText("累计收益含已卖出实现盈亏");
+    await expect(tipContent).not.toContainText("与持仓卡");
+    await page.keyboard.press("Escape");
+    await expect(tipContent).toHaveCount(0);
   });
 
   test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }) => {

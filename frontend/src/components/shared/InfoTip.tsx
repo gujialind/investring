@@ -68,7 +68,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
         setOpen(next);
       }}
     >
-      <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center">
+      <span className="pointer-events-auto relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center">
         <PopoverTrigger asChild>
           <button
             type="button"

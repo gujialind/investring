@@ -269,23 +269,16 @@ function ProductSections({
                       )}
                     >
                       {g.products.map((p) => {
-                        const card = (
-                          <HoldingProductCard
-                            product={p}
-                            percent={percentOf(p)}
-                            snapshotDate={snapshotDate}
-                          />
-                        );
                         // #595 步骤③/⑤：产品卡点击 → 产品详情页；
                         // market 走 ?market=（步骤⑤起），现金 market="" 与平台-产品页现金形态一致
                         return (
-                          <Link
+                          <HoldingProductCard
                             key={productCardKey(p)}
+                            product={p}
+                            percent={percentOf(p)}
+                            snapshotDate={snapshotDate}
                             href={`${productLinkPrefix}/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
-                            className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            {card}
-                          </Link>
+                          />
                         );
                       })}
                     </div>
@@ -429,7 +422,7 @@ export default function PortfolioHoldings({
               <Link
                 key={p.platform_code}
                 href={`${basePath}/${portfolioCode}/platforms/${p.platform_code}`}
-                className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="isolate relative block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {card}
               </Link>
