@@ -15,6 +15,8 @@ interface PortfolioStatsCardsProps {
   holdingDays: number | null;
   /** 累计收益率（%）：总资产卡涨跌 soft chip（#904 P0b，双端同增 §6）；无快照传 null */
   cumulativeReturn?: number | null;
+  /** 最新快照相对前序快照的日涨跌率（%）；无有效连续基准传 null */
+  dailyReturn?: number | null;
   /** desktop: 标题左/图标右的大卡片；mobile: 2×2 紧凑卡片 */
   variant?: "desktop" | "mobile";
 }
@@ -36,6 +38,7 @@ export default function PortfolioStatsCards({
   totalProfit,
   holdingDays,
   cumulativeReturn = null,
+  dailyReturn = null,
   variant = "desktop",
 }: PortfolioStatsCardsProps) {
   const items = [
@@ -46,6 +49,8 @@ export default function PortfolioStatsCards({
       value: totalValue === null ? "--" : formatNumber(totalValue),
       valueCls: "",
       chip: cumulativeReturn,
+      chipTestId: "portfolio-stat-return-chip",
+      chipLabel: "累计收益率",
     },
     {
       key: "净值",
@@ -53,7 +58,9 @@ export default function PortfolioStatsCards({
       icon: TrendingUp,
       value: unitPrice === null ? "--" : formatNav(unitPrice),
       valueCls: "",
-      chip: null as number | null,
+      chip: dailyReturn,
+      chipTestId: "portfolio-stat-daily-return-chip",
+      chipLabel: "快照日涨跌率",
     },
     {
       key: "累计收益",
@@ -62,6 +69,8 @@ export default function PortfolioStatsCards({
       value: formatProfitAmount(totalProfit),
       valueCls: totalProfit === null ? "" : getReturnColorClass(totalProfit),
       chip: null as number | null,
+      chipTestId: null,
+      chipLabel: null,
     },
     {
       key: "运行天数",
@@ -70,13 +79,17 @@ export default function PortfolioStatsCards({
       value: holdingDays === null ? "--" : `${formatNumber(holdingDays, 0)} 天`,
       valueCls: "",
       chip: null as number | null,
+      chipTestId: null,
+      chipLabel: null,
     },
   ];
 
-  const chipOf = (chip: number | null) =>
+  const chipOf = (chip: number | null, testId?: string | null, label?: string | null) =>
     chip === null || chip === undefined ? null : (
       <span
-        data-testid="portfolio-stat-return-chip"
+        data-testid={testId ?? undefined}
+        role="img"
+        aria-label={label ? `${label} ${formatReturnRate(chip)}` : formatReturnRate(chip)}
         className={cn(
           "inline-flex items-center rounded-full px-2 text-xs font-medium",
           getReturnBgClass(chip),
@@ -99,14 +112,14 @@ export default function PortfolioStatsCards({
                 <item.icon className="h-4 w-4 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">{item.key}</span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-col items-start gap-1">
                 <div
                   className={`text-lg font-bold tabular-nums ${item.valueCls}`}
                   data-testid={`portfolio-stat-${item.id}`}
                 >
                   {item.value}
                 </div>
-                {chipOf(item.chip)}
+                {chipOf(item.chip, item.chipTestId, item.chipLabel)}
               </div>
             </CardContent>
           </Card>
@@ -134,14 +147,14 @@ export default function PortfolioStatsCards({
                 <span className="text-xs text-muted-foreground">{item.key}</span>
                 <item.icon className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-col items-start gap-1">
                 <div
                   className={cn(getNumberCellClass(), "text-left whitespace-nowrap text-2xl font-semibold", item.valueCls)}
                   data-testid={`portfolio-stat-${item.id}`}
                 >
                   {item.value}
                 </div>
-                {chipOf(item.chip)}
+                {chipOf(item.chip, item.chipTestId, item.chipLabel)}
               </div>
             </CardContent>
           </Card>

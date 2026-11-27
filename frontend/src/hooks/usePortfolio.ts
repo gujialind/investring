@@ -8,7 +8,6 @@ import { useUIStore } from "@/stores/uiStore";
 
 const PORTFOLIO_QUERY_KEY = "portfolios";
 const POSITION_QUERY_KEY = "positions";
-const SNAPSHOT_QUERY_KEY = "snapshots";
 
 // 组合列表 Hook
 export function usePortfolioList(params?: { page?: number; page_size?: number; status?: string }) {
@@ -187,16 +186,6 @@ export function useDeletePortfolio() {
         message: getErrorMessage(error, "请确认组合为空壳（草稿或已关闭）且无关联记录"),
       });
     },
-  });
-}
-
-// 最新净值快照 Hook
-export function useLatestSnapshot(code: string) {
-  return useQuery({
-    queryKey: [PORTFOLIO_QUERY_KEY, code, SNAPSHOT_QUERY_KEY, "latest"],
-    queryFn: () => portfolioApi.getLatestSnapshot(code),
-    enabled: !!code,
-    staleTime: 30 * 1000,
   });
 }
 
