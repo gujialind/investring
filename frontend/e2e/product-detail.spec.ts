@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
+import { E2E_ACTIVE, collectPageErrors, dialogByTitle, gotoPortfolioDetail, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo, captureNavCardThemes, expectNavCurveGeometry, expectNavRangeLayout, mockProductNavAnalysisCurve, navCurveInCard, setNavTextScale, NAV_CURVE_LONG } from "./helpers";
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享 ProductDetailContent）。
@@ -67,6 +67,7 @@ test.describe("产品详情页", () => {
     // 默认近6月选中
     await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
     await expect(curve).not.toContainText("暂无净值数据");
+    await expectNavCurveGeometry(curve, "场内市价口径曲线");
 
     const returns = page.getByTestId("product-returns-card");
     await expect(
@@ -109,7 +110,7 @@ test.describe("产品详情页", () => {
     }
   });
 
-  test("累计净值口径不加注记，标题与注记由 nav_basis 驱动（#703）", async ({ page }) => {
+  test("累计净值口径不加注记，标题与注记由 nav_basis 驱动（#703）", async ({ page }, testInfo) => {
     await page.route(/\/nav-analysis(\?|$)/, (route) =>
       route.fulfill({
         status: 200,
@@ -130,18 +131,37 @@ test.describe("产品详情页", () => {
       curve.getByRole("heading", { name: "累计净值走势" })
     ).toBeVisible();
     await expect(curve.getByTestId("nav-basis-note")).toHaveCount(0);
+    await expectNavCurveGeometry(curve, "累计净值口径曲线", { requireReferenceLabel: true });
     await expect(
       page
         .getByTestId("product-returns-card")
         .getByRole("heading", { name: "区间收益率", exact: true })
     ).toBeVisible();
+    await captureNavCardThemes(page, curve, testInfo.outputPath("nav941-product-accumulated-nav"));
   });
 
   test("区间 Tab 切换", async ({ page }) => {
+    const navRequest = (range: string) => page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith('/nav-analysis') && url.searchParams.get('range') === range;
+    });
+    const initial = navRequest('6m');
     await page.goto(PRODUCT_PATH);
-    await page.getByTestId("nav-range-1m").click();
-    await expect(page.getByTestId("nav-range-1m")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "false");
+    const initialUrl = new URL((await initial).url());
+    expect(initialUrl.pathname).toContain('/510300.SH/CN_EXCHANGE/');
+    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
+
+    for (const key of ["1m", "3m", "1y", "6m"]) {
+      const requested = navRequest(key);
+      await page.getByTestId(`nav-range-${key}`).click();
+      const url = new URL((await requested).url());
+      expect(url.pathname).toContain('/510300.SH/CN_EXCHANGE/');
+      expect(url.searchParams.get('range')).toBe(key);
+      await expect(page.getByTestId(`nav-range-${key}`)).toHaveAttribute("aria-pressed", "true");
+      for (const other of ["1m", "3m", "6m", "1y"].filter((item) => item !== key)) {
+        await expect(page.getByTestId(`nav-range-${other}`)).toHaveAttribute("aria-pressed", "false");
+      }
+    }
   });
 
   test("历史净值：日期降序两行、累计净值/日涨跌占位、无查看更多", async ({ page }) => {
@@ -522,6 +542,85 @@ test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析�
     // 反证③的落点：删掉组件里 isRefetching 门控，这两句红
     await expect(curve).toHaveAttribute("aria-busy", "true");
     await expect(returns).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+test.describe("净值曲线与区间布局（#941）", () => {
+  test("A4 产品区间：320/360/390 与 125% 下文字不拆行，常规宽度四颗同排", async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    await mockProductNavAnalysisCurve(page);
+    await page.goto(PRODUCT_PATH);
+    const card = page.getByTestId("product-curve-card");
+    const group = card.getByRole("group", { name: "净值区间" });
+    const height = page.viewportSize()?.height ?? 720;
+    const isMobile = testInfo.project.name === "mobile";
+    const normalWidth = isMobile ? 390 : 1280;
+    const widths = isMobile ? [320, 360, 390] : [768, 1024, 1280];
+
+    await page.setViewportSize({ width: normalWidth, height });
+    await expectNavRangeLayout(group, `产品区间 ${normalWidth} 常规字号`, { fontSize: 14, singleRow: true });
+    for (const scale of [100, 125] as const) {
+      await setNavTextScale(page, scale);
+      for (const width of widths) {
+        await page.setViewportSize({ width, height });
+        await expect(async () => {
+          await expectNavCurveGeometry(card, `产品图表 ${width}px/${scale}%`, { minSvgWidth: 0 });
+          await expectNavRangeLayout(group, `产品区间 ${width}px/${scale}%`, {
+            fontSize: scale === 125 ? 17.5 : 14,
+          });
+        }).toPass({ timeout: 5_000 });
+      }
+    }
+    await page.setViewportSize({ width: isMobile ? 320 : 768, height });
+    await expectNavCurveGeometry(card, `产品图表 ${isMobile ? 320 : 768}px/125% 最终态`, { minSvgWidth: 0 });
+    await expectNavRangeLayout(group, `产品区间 ${isMobile ? 320 : 768}px/125% 最终态`, { fontSize: 17.5 });
+    await captureNavCardThemes(page, card, testInfo.outputPath(`nav941-product-ranges-${isMobile ? 320 : 768}-125`));
+  });
+
+  test("A6/A9 长序列保持日期/刻度/Tooltip，单点与恒值不新增报错", async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors = collectPageErrors(page);
+    await mockProductNavAnalysisCurve(page, "accumulated", NAV_CURVE_LONG);
+    await page.goto(PRODUCT_PATH);
+    const card = page.getByTestId("product-curve-card");
+    const curve = navCurveInCard(card);
+    await expectNavCurveGeometry(card, "180 点长序列", { requireReferenceLabel: true });
+    await curve.scrollIntoViewIfNeeded();
+    const box = await curve.boundingBox();
+    if (!box) throw new Error("长序列曲线没有可见盒");
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.45);
+    await expect(card.locator(".recharts-tooltip-wrapper")).toBeVisible();
+    await expect(curve.locator(".recharts-active-dot")).toBeVisible();
+    await captureNavCardThemes(page, card, testInfo.outputPath("nav941-product-long-series"));
+
+    const boundaries = [
+      { name: "单点", points: [{ date: "2024-01-02", nav: 1 }], longTicks: false },
+      { name: "恒值", points: [
+        { date: "2024-01-02", nav: 1 },
+        { date: "2024-02-01", nav: 1 },
+        { date: "2024-03-01", nav: 1 },
+      ], longTicks: false },
+      { name: "长刻度", points: [
+        { date: "2024-01-02", nav: 12345.6789 },
+        { date: "2024-02-01", nav: 12000 },
+        { date: "2024-03-01", nav: 13000 },
+      ], longTicks: true },
+    ];
+    for (const fixture of boundaries) {
+      await mockProductNavAnalysisCurve(page, "accumulated", fixture.points);
+      await page.goto(PRODUCT_PATH);
+      await expect(card.getByRole("heading", { name: "累计净值走势" })).toBeVisible();
+      const geometry = await expectNavCurveGeometry(card, fixture.name, {
+        maxLeftReserve: fixture.longTicks ? 160 : 60,
+        requireReferenceLabel: !fixture.longTicks,
+      });
+      if (fixture.longTicks) {
+        expect(geometry.leftReserve, "长格式化刻度必须自动扩宽 Y 轴").toBeGreaterThan(60);
+        expect(geometry.yTickTexts.some((text) => text.includes(","))).toBe(true);
+        await captureNavCardThemes(page, card, testInfo.outputPath("nav941-product-long-ticks"));
+      }
+    }
+    expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 });
 

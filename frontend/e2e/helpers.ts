@@ -1061,6 +1061,510 @@ export async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promi
 }
 
 // ===========================================================================
+// 净值折线图焦点、绘图区与区间换行（#941）
+//
+// 两个消费组件共用 NavCurve，但区间按钮有两套视觉/文案。此处只复用本单的
+// 夹具与量测，不新建图表测试平台；几何断言不依赖 Recharts 自动生成的 ID。
+// ===========================================================================
+
+/** 普通六字符刻度夹具（0.9000–1.0200），覆盖参考值 1.0000 与首末日期。 */
+export const NAV_CURVE_STANDARD: NavCurvePoint[] = [
+  { date: '2024-01-02', nav: 0.9 },
+  { date: '2024-02-01', nav: 0.92 },
+  { date: '2024-03-01', nav: 0.89 },
+  { date: '2024-04-01', nav: 0.95 },
+  { date: '2024-05-01', nav: 1.0 },
+  { date: '2024-06-03', nav: 0.98 },
+  { date: '2024-07-01', nav: 1.01 },
+  { date: '2024-08-01', nav: 1.02 },
+];
+
+/** 180 点长序列仅用于 page.route 读取夹具，不推进/重算共享 E2E_ACTIVE。 */
+export const NAV_CURVE_LONG: NavCurvePoint[] = Array.from({ length: 180 }, (_, i) => {
+  const d = new Date(Date.UTC(2024, 0, 2 + i));
+  const wave = Math.sin(i / 7) * 0.015;
+  return {
+    date: d.toISOString().slice(0, 10),
+    nav: i === 179 ? 1.02 : 0.9 + (i / 179) * 0.12 + wave,
+  };
+});
+
+export interface NavCurvePoint {
+  date: string;
+  nav: number;
+}
+
+export type NavAnalysisBasis = 'accumulated' | 'unit';
+
+/** 组合 nav-history 响应映射保持原字段；仅替换目标 GET，不写数据库。 */
+export async function mockPortfolioNavCurve(
+  page: Page,
+  points: NavCurvePoint[] = NAV_CURVE_STANDARD,
+): Promise<void> {
+  await page.route(/\/api\/portfolios\/[^/]+\/nav-history(?:\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      json: points.map((p) => ({ snapshot_date: p.date, unit_price: p.nav })),
+    }),
+  );
+}
+
+/** 产品 nav-analysis 读取夹具；basis 只决定页面标题/注记，不改曲线字段契约。 */
+export async function mockProductNavAnalysisCurve(
+  page: Page,
+  basis: NavAnalysisBasis = 'accumulated',
+  points: NavCurvePoint[] = NAV_CURVE_STANDARD,
+): Promise<void> {
+  await page.route(/\/nav-analysis(?:\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      json: {
+        curve: points.map((p) => ({ date: p.date, accumulated_nav: p.nav })),
+        interval_returns: { m1: null, m3: null, m6: null, y1: null, ytd: null, all: null },
+        nav_basis: basis,
+      },
+    }),
+  );
+}
+
+export function navCurveInCard(card: Locator): Locator {
+  // Recharts 3 的 className 落在外层 wrapper，Surface 根 SVG 保留 recharts-surface。
+  return card.locator('.nav-curve svg.recharts-surface');
+}
+
+/** 受控 125% 文字放大：只改测试页根字号，不冒充系统字体/原设备缩放。 */
+export async function setNavTextScale(page: Page, percent: 100 | 125): Promise<void> {
+  await page.evaluate((value) => {
+    document.documentElement.style.fontSize = value === 125 ? '20px' : '16px';
+  }, percent);
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).fontSize))
+    .toBe(percent === 125 ? '20px' : '16px');
+}
+
+export interface NavCurveGeometry {
+  svgWidth: number;
+  svgHeight: number;
+  plotWidth: number;
+  leftReserve: number;
+  rightReserve: number;
+  yTickTexts: string[];
+  xTickTexts: string[];
+  referenceLabel: string | null;
+  pageOverflowX: number;
+}
+
+/**
+ * A2/A6：真实 SVG 轴线量测，不拿 margin prop 当结果。
+ * 普通刻度默认要求左预留 ≤60、右预留 ≤12；长刻度由调用方放宽左限并断言扩宽。
+ */
+export async function expectNavCurveGeometry(
+  card: Locator,
+  label: string,
+  options: {
+    minSvgWidth?: number;
+    maxLeftReserve?: number;
+    maxRightReserve?: number;
+    requireReferenceLabel?: boolean;
+  } = {},
+): Promise<NavCurveGeometry> {
+  const curve = navCurveInCard(card);
+  await expect(curve, `${label}: 净值 SVG 应可见`).toBeVisible();
+  await expect(curve).toHaveAttribute('role', 'application');
+  await expect(curve).toHaveAttribute('tabindex', '0');
+  // Recharts 3 将参考线与标签分到不同 z-index portal，标签不再是参考线的 DOM 子节点。
+  if (options.requireReferenceLabel) {
+    await expect(curve.locator('.recharts-label').filter({ hasText: /^初始净值$/ }), `${label}: 参考线标签应提交`).toHaveText('初始净值');
+    await expect(curve.locator('.recharts-reference-line line').first(), `${label}: 参考线不得填充绘图区`).toHaveAttribute('fill', 'none');
+  }
+  // viewport 切换后先等 Recharts ResizeObserver 把旧像素宽收回内容盒，避免把过渡态当布局回归。
+  // Recharts 3 的 wrapper 父层是用于收缩检测的 0×0 overflow-visible div，真实内容盒在其祖父层。
+  const wrapper = card.locator('.recharts-wrapper.nav-curve');
+  await expect
+    .poll(() => wrapper.evaluate((el) => {
+      const container = el.parentElement?.parentElement;
+      return container?.classList.contains('recharts-responsive-container')
+        ? el.getBoundingClientRect().width - container.getBoundingClientRect().width
+        : Number.POSITIVE_INFINITY;
+    }), { message: `${label}: 图表 wrapper 应收到实际内容宽` })
+    .toBeLessThanOrEqual(1);
+  const minWidth = options.minSvgWidth ?? 230;
+  await expect
+    .poll(() => curve.evaluate((el) => el.getBoundingClientRect().width), {
+      message: `${label}: 图表宽应 ≥${minWidth}px`,
+    })
+    .toBeGreaterThanOrEqual(minWidth);
+
+  const m = await curve.evaluate((svg) => {
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+    };
+    const axes = Array.from(svg.querySelectorAll('.recharts-cartesian-axis')).map((group) => {
+      const line = group.querySelector('.recharts-cartesian-axis-line');
+      return {
+        group,
+        line: line ? rect(line) : null,
+        ticks: Array.from(group.querySelectorAll('.recharts-cartesian-axis-tick-value')).map((tick) => ({
+          text: (tick.textContent ?? '').trim(),
+          box: rect(tick),
+        })),
+      };
+    });
+    const xAxis = axes.find((a) => a.line && a.line.width > a.line.height);
+    const yAxis = axes.find((a) => a.line && a.line.height > a.line.width);
+    const allTicks = Array.from(svg.querySelectorAll('.recharts-cartesian-axis-tick-value')).map((tick) => ({
+      text: (tick.textContent ?? '').trim(),
+      box: rect(tick),
+    }));
+    // Recharts 3 把自定义 XAxisTickContent 放入独立 z-index 层，不再挂在 axis g 下。
+    // 按公开刻度文本形态识别 MM-DD，Y 轴仍从真实 axis g 取，避免依赖生成 ID。
+    const xTicks = allTicks.filter((tick) => /^\d{2}-\d{2}$/.test(tick.text)).sort((a, b) => a.box.left - b.box.left);
+    const yTicks = allTicks.filter((tick) => /^-?\d{1,3}(?:,\d{3})*\.\d{4}$/.test(tick.text));
+    if (!xAxis?.line || !yAxis?.line) {
+      throw new Error(`未找到可量测的 X/Y 轴线：${JSON.stringify(axes.map((a) => a.line))}`);
+    }
+    const svgBox = rect(svg);
+    const ref = Array.from(svg.querySelectorAll('.recharts-label')).find((label) =>
+      (label.textContent ?? '').trim() === '初始净值',
+    ) ?? null;
+    const overlaps = (a: { left: number; right: number; top: number; bottom: number }, b: typeof a) =>
+      Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 &&
+      Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+    return {
+      svgBox,
+      xLine: xAxis.line,
+      yLine: yAxis.line,
+      xTicks,
+      yTicks,
+      reference: ref ? { text: (ref.textContent ?? '').trim(), box: rect(ref) } : null,
+      referenceOverlapsEndTicks: ref
+        ? [xTicks[0], xTicks[xTicks.length - 1]].some(
+            (tick) => tick && overlaps(rect(ref), tick.box),
+          )
+        : false,
+      pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  });
+
+  const leftReserve = m.yLine.left - m.svgBox.left;
+  const rightReserve = m.svgBox.right - m.xLine.right;
+  expect(m.xTicks.length, `${label}: X 轴应有刻度`).toBeGreaterThan(0);
+  expect(m.yTicks.length, `${label}: Y 轴应有刻度`).toBeGreaterThan(0);
+  expect(leftReserve, `${label}: 左预留 ${leftReserve.toFixed(2)}px 应 ≤${options.maxLeftReserve ?? 60}px`).toBeLessThanOrEqual(options.maxLeftReserve ?? 60);
+  expect(rightReserve, `${label}: 右预留 ${rightReserve.toFixed(2)}px 应 ≤${options.maxRightReserve ?? 12}px`).toBeLessThanOrEqual(options.maxRightReserve ?? 12);
+  for (const [axis, ticks] of [['X', m.xTicks], ['Y', m.yTicks]] as const) {
+    for (const tick of ticks) {
+      expect(tick.text, `${label}: ${axis} 轴刻度不得为空`).not.toBe('');
+      expect(tick.box.left, `${label}: ${axis} 刻度「${tick.text}」左缘不得裁切`).toBeGreaterThanOrEqual(m.svgBox.left - 0.5);
+      expect(tick.box.right, `${label}: ${axis} 刻度「${tick.text}」右缘不得裁切`).toBeLessThanOrEqual(m.svgBox.right + 0.5);
+      if (axis === 'Y') {
+        expect(tick.text, `${label}: Y 刻度必须保持 formatNav 四位小数`).toMatch(/^-?\d{1,3}(?:,\d{3})*\.\d{4}$/);
+        expect(tick.box.right, `${label}: Y 刻度不得压到轴线`).toBeLessThanOrEqual(m.yLine.left + 0.5);
+      }
+    }
+  }
+  if (options.requireReferenceLabel) {
+    expect(m.reference?.text, `${label}: 参考值在域内时应显示「初始净值」`).toBe('初始净值');
+    expect(m.reference!.box.left, `${label}: 参考标注应在绘图区内`).toBeGreaterThanOrEqual(m.yLine.left - 0.5);
+    expect(m.reference!.box.right, `${label}: 参考标注应完整位于图内靠右`).toBeLessThanOrEqual(m.xLine.right + 0.5);
+    expect(m.referenceOverlapsEndTicks, `${label}: 参考标注不得压住首末日期刻度`).toBe(false);
+  }
+  expect(m.pageOverflowX, `${label}: 图表不得引入整页横向滚动`).toBeLessThanOrEqual(1);
+
+  return {
+    svgWidth: m.svgBox.width,
+    svgHeight: m.svgBox.height,
+    plotWidth: m.xLine.right - m.yLine.left,
+    leftReserve,
+    rightReserve,
+    yTickTexts: m.yTicks.map((t) => t.text),
+    xTickTexts: m.xTicks.map((t) => t.text),
+    referenceLabel: m.reference?.text ?? null,
+    pageOverflowX: m.pageOverflowX,
+  };
+}
+
+export interface NavRangeLayout {
+  rows: number;
+  contentWidth: number;
+  buttonWidths: number[];
+  fontSizes: number[];
+  pageOverflowX: number;
+}
+
+/** A4：四颗按钮均在卡片内容区、文字单行不省略、整颗换行且不重叠。 */
+export async function expectNavRangeLayout(
+  group: Locator,
+  label: string,
+  options: { fontSize: number; singleRow?: boolean },
+): Promise<NavRangeLayout> {
+  await expect(group, `${label}: 区间组应可见`).toBeVisible();
+  const buttons = group.getByRole('button');
+  await expect(buttons, `${label}: 应有四颗区间按钮`).toHaveCount(4);
+  const m = await group.evaluate((el) => {
+    const card = el.closest<HTMLElement>('[data-testid$="-card"]');
+    if (!card) throw new Error('区间组不在净值卡片内，无法确定内容边界');
+    let content: HTMLElement | null = el.parentElement;
+    while (content && content !== card) {
+      const s = getComputedStyle(content);
+      if (parseFloat(s.paddingLeft) > 0 || parseFloat(s.paddingRight) > 0) break;
+      content = content.parentElement;
+    }
+    if (!content) throw new Error('未找到卡片内容容器');
+    const cs = getComputedStyle(content);
+    const cr = content.getBoundingClientRect();
+    const contentLeft = cr.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+    const contentRight = cr.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
+    const rects = Array.from(el.querySelectorAll('button')).map((button) => {
+      const b = button.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      const textRects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      const s = getComputedStyle(button);
+      return {
+        left: b.left,
+        right: b.right,
+        top: b.top,
+        bottom: b.bottom,
+        width: b.width,
+        fontSize: parseFloat(s.fontSize),
+        whiteSpace: s.whiteSpace,
+        textOverflow: s.textOverflow,
+        scrollWidth: button.scrollWidth,
+        clientWidth: button.clientWidth,
+        textLines: textRects.length,
+      };
+    });
+    const clippedAncestors: string[] = [];
+    let node: HTMLElement | null = el.parentElement;
+    while (node && node !== card.parentElement) {
+      const s = getComputedStyle(node);
+      if (s.overflowX !== 'visible') clippedAncestors.push(`${node.tagName}.${node.className}`);
+      if (node === card) break;
+      node = node.parentElement;
+    }
+    const layoutChain: { tag: string; testid: string | null; left: number; right: number; width: number; minWidth: string; padding: string; display: string }[] = [];
+    let chainNode: Element | null = el;
+    while (chainNode && chainNode !== document.body) {
+      const r = chainNode.getBoundingClientRect();
+      const s = getComputedStyle(chainNode);
+      layoutChain.push({
+        tag: chainNode.tagName,
+        testid: chainNode.getAttribute('data-testid'),
+        left: Math.round(r.left * 10) / 10,
+        right: Math.round(r.right * 10) / 10,
+        width: Math.round(r.width * 10) / 10,
+        minWidth: s.minWidth,
+        padding: s.padding,
+        display: s.display,
+      });
+      chainNode = chainNode.parentElement;
+    }
+    return {
+      rects,
+      contentLeft,
+      contentRight,
+      contentWidth: contentRight - contentLeft,
+      clippedAncestors,
+      layoutChain,
+      pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      overflowNodes: Array.from(document.querySelectorAll('body *'))
+        .map((node) => {
+          const r = node.getBoundingClientRect();
+          return {
+            node,
+            left: r.left,
+            right: r.right,
+            width: r.width,
+          };
+        })
+        .filter((r) => r.width > 0 && (r.right > document.documentElement.clientWidth + 1 || r.left < -1))
+        .sort((a, b) => Math.max(b.right - document.documentElement.clientWidth, -b.left) - Math.max(a.right - document.documentElement.clientWidth, -a.left))
+        .slice(0, 12)
+        .map(({ node, left, right }) => ({
+          tag: node.tagName,
+          testid: node.getAttribute('data-testid'),
+          class: node.getAttribute('class')?.slice(0, 120),
+          left: Math.round(left * 10) / 10,
+          right: Math.round(right * 10) / 10,
+        })),
+    };
+  });
+  expect(m.contentWidth, `${label}: 卡片内容宽必须为正`).toBeGreaterThan(0);
+  expect(m.clippedAncestors, `${label}: 焦点环/换行不得被 hidden/scroll 容器裁切`).toHaveLength(0);
+  for (const [i, b] of m.rects.entries()) {
+    expect(b.fontSize, `${label}: 第${i + 1}颗字号不得缩小`).toBe(options.fontSize);
+    expect(b.whiteSpace, `${label}: 第${i + 1}颗文字必须 nowrap`).toBe('nowrap');
+    expect(b.textOverflow, `${label}: 第${i + 1}颗不得省略`).toBe('clip');
+    expect(b.textLines, `${label}: 第${i + 1}颗文字应单行`).toBe(1);
+    expect(b.scrollWidth, `${label}: 第${i + 1}颗文字不得截断`).toBeLessThanOrEqual(b.clientWidth + 1);
+    expect(b.left, `${label}: 第${i + 1}颗不得越过卡片内容左缘`).toBeGreaterThanOrEqual(m.contentLeft - 0.5);
+    expect(b.right, `${label}: 第${i + 1}颗不得越过卡片内容右缘`).toBeLessThanOrEqual(m.contentRight + 0.5);
+    for (const other of m.rects.slice(i + 1)) {
+      const overlapX = Math.min(b.right, other.right) - Math.max(b.left, other.left);
+      const overlapY = Math.min(b.bottom, other.bottom) - Math.max(b.top, other.top);
+      expect(overlapX <= 0.5 || overlapY <= 0.5, `${label}: 按钮不得互相重叠`).toBe(true);
+    }
+  }
+  const rows = new Set(m.rects.map((b) => Math.round(b.top))).size;
+  if (options.singleRow) expect(rows, `${label}: 常规宽度四颗应同排`).toBe(1);
+  expect(
+    m.pageOverflowX,
+    `${label}: 区间组不得引入整页横向滚动；overflow=${m.pageOverflowX}px, chain=${JSON.stringify(m.layoutChain)}, nodes=${JSON.stringify(m.overflowNodes)}`,
+  ).toBeLessThanOrEqual(1);
+  return {
+    rows,
+    contentWidth: m.contentWidth,
+    buttonWidths: m.rects.map((b) => b.width),
+    fontSizes: m.rects.map((b) => b.fontSize),
+    pageOverflowX: m.pageOverflowX,
+  };
+}
+
+/** A3：从真实 pointer/touch 坐标点击空白、网格、曲线与根 SVG 边缘。 */
+export async function expectNavCurvePointerInteraction(
+  page: Page,
+  card: Locator,
+  input: 'mouse' | 'touch',
+  label: string,
+): Promise<string[]> {
+  const curve = navCurveInCard(card);
+  await curve.scrollIntoViewIfNeeded();
+  const points = await curve.evaluate((svg) => {
+    const box = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+    };
+    const root = box(svg);
+    const axes = Array.from(svg.querySelectorAll('.recharts-cartesian-axis')).map((group) =>
+      group.querySelector('.recharts-cartesian-axis-line')?.getBoundingClientRect(),
+    );
+    const xLine = axes.find((r) => r && r.width > r.height);
+    const yLine = axes.find((r) => r && r.height > r.width);
+    const grid = svg.querySelector('.recharts-cartesian-grid-horizontal line');
+    const path = svg.querySelector<SVGPathElement>('.recharts-line-curve');
+    if (!xLine || !yLine || !grid || !path) throw new Error('图表缺少轴线/网格/曲线，无法执行指针夹具');
+    const gridBox = box(grid);
+    const mid = path.getPointAtLength(path.getTotalLength() / 2);
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error('曲线缺少屏幕变换矩阵');
+    const curvePoint = new DOMPoint(mid.x, mid.y).matrixTransform(matrix);
+    return [
+      { name: 'blank', x: yLine.left + (xLine.right - yLine.left) * 0.15, y: yLine.top + 8 },
+      { name: 'grid', x: (gridBox.left + gridBox.right) / 2, y: (gridBox.top + gridBox.bottom) / 2 },
+      { name: 'curve', x: curvePoint.x, y: curvePoint.y },
+      { name: 'root', x: root.left + 1, y: root.top + 1 },
+    ];
+  });
+  const focusedTags: string[] = [];
+  for (const point of points) {
+    if (input === 'mouse') await page.mouse.click(point.x, point.y);
+    else await page.touchscreen.tap(point.x, point.y);
+    if (input === 'mouse') {
+      await expect
+        .poll(() => page.evaluate(() => {
+          const active = document.activeElement;
+          const svg = document.querySelector('.nav-curve svg.recharts-surface');
+          return !!active && !!svg && svg.contains(active);
+        }), { message: `${label}: ${point.name} 鼠标点击后焦点应留在净值图内`, timeout: 3_000 })
+        .toBe(true);
+    }
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | SVGElement | null;
+      if (!active) return null;
+      const s = getComputedStyle(active);
+      return {
+        tag: active.tagName,
+        inside: !!active.closest('.nav-curve svg.recharts-surface'),
+        outlineStyle: s.outlineStyle,
+      };
+    });
+    if (focus?.inside) {
+      expect(focus.outlineStyle, `${label}: ${point.name} pointer/touch 不得显示默认粗框`).toBe('none');
+      focusedTags.push(focus.tag);
+    }
+    const tooltip = card.locator('.recharts-tooltip-wrapper');
+    if (point.name !== 'root') await expect(tooltip, `${label}: ${point.name} 应仍可打开 Tooltip`).toBeVisible();
+    if (point.name === 'curve') await expect(curve.locator('.recharts-active-dot'), `${label}: 曲线附近应显示选中点`).toBeVisible();
+  }
+  return focusedTags;
+}
+
+/** A3：真实 Tab 进入/离开 + 方向键换点 + Tooltip/activeDot；可断浅暗 ring 色。 */
+export async function expectNavCurveKeyboardNavigation(
+  page: Page,
+  card: Locator,
+  points: NavCurvePoint[],
+  label: string,
+  options: { ringColor?: string } = {},
+): Promise<void> {
+  const curve = navCurveInCard(card);
+  await curve.scrollIntoViewIfNeeded();
+  const previous = card.getByRole('group', { name: '净值区间' }).getByRole('button').last();
+  await previous.focus();
+  await page.keyboard.press('Tab');
+  await expect(curve, `${label}: Tab 应进入根 SVG`).toBeFocused();
+  await expect(curve).toHaveCSS('outline-style', 'solid');
+  await expect(curve).toHaveCSS('outline-width', '2px');
+  if (options.ringColor) await expect(curve).toHaveCSS('outline-color', options.ringColor);
+
+  const tooltip = card.locator('.recharts-tooltip-wrapper');
+  await page.keyboard.press('ArrowRight');
+  await expect(tooltip, `${label}: 右方向键应打开 Tooltip`).toBeVisible();
+  const first = await tooltip.innerText();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => tooltip.innerText(), { message: `${label}: 右方向键应切换到下一点` }).not.toBe(first);
+  await expect(curve.locator('.recharts-active-dot'), `${label}: 方向键应显示选中点`).toBeVisible();
+  expect(first, `${label}: Tooltip 应含完整日期与四位净值`).toMatch(/\d{4}-\d{2}-\d{2}/);
+  expect(first, `${label}: Tooltip 净值应来自夹具`).toMatch(/\d\.\d{4}/);
+  expect(
+    points.some((p) => first.includes(p.date) && first.includes(p.nav.toLocaleString('zh-CN', {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    }))),
+    `${label}: Tooltip 日期/净值必须对应当前夹具点`,
+  ).toBe(true);
+
+  await page.keyboard.press('Tab');
+  await expect
+    .poll(() => page.evaluate(() => {
+      const active = document.activeElement;
+      const svg = document.querySelector('.nav-curve svg.recharts-surface');
+      return !!active && !!svg && svg.contains(active);
+    }), { message: `${label}: Tab 应离开图表（内部 g 不得变成额外 Tab 停靠点）` })
+    .toBe(false);
+}
+
+/** A9：在既有 E2E 内留浅/暗卡片目检证据；调用方负责先打开需要的 Tooltip/焦点。 */
+export async function captureNavCardThemes(
+  page: Page,
+  card: Locator,
+  pathStem: string,
+): Promise<void> {
+  // 768px 会走移动布局；居中滚动避免固定底栏遮住贴底的 X 轴日期刻度。
+  await card.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  const settleChart = async () => {
+    const curve = navCurveInCard(card);
+    await expect(curve).toBeVisible();
+    // 主题切换会触发 Recharts z-index portal 重提交；等真实日期刻度出现，避免截到空轴过渡帧。
+    await expect(curve.locator('.recharts-cartesian-axis-tick-value').filter({ hasText: /^\d{2}-\d{2}$/ }).first()).toBeVisible();
+    const line = curve.locator('.recharts-line-curve');
+    await expect(line).toBeVisible();
+    // Recharts 入场期间用 stroke-dasharray 控制可见长度；属性消失即主线已完整绘制。
+    await expect.poll(() => line.getAttribute('stroke-dasharray')).toBeNull();
+  };
+  await page.emulateMedia({ colorScheme: 'light' });
+  await settleChart();
+  await card.screenshot({ path: `${pathStem}-light.png` });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await settleChart();
+  await card.screenshot({ path: `${pathStem}-dark.png` });
+  await page.emulateMedia({ colorScheme: 'light' });
+}
+
+// ===========================================================================
 // 历史净值卡共享列宽与桌面降栏契约（#934）
 //
 // 三个入口（产品管理详情 / 组合内产品详情 / 平台内产品详情）共用 ProductNavCards：

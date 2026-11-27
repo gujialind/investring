@@ -69,13 +69,12 @@ export default function PortfolioNavTrendCard({
   return (
     <Card data-testid="portfolio-nav-trend-card">
       <CardContent className={isMobile ? "p-4" : "pt-6"}>
-        {/* 窄栏（桌面右栏 360px / 移动整宽）放不下标题 + chips 时**整组换行**，
-            组内 chips 不换行（shrink-0 + whitespace-nowrap）。不给容器加 overflow-x-auto：
-            容器宽度随内容，横向永不溢出，加了只会让 overflow-y 算成 auto 而裁掉焦点环 */}
+        {/* 标题与区间组可分行；区间组受 CardContent 内容宽约束，组内按整颗按钮换行。
+            按钮文字不拆行、不省略，也不用横向滚动掩盖溢出（overflow 会裁掉焦点环）。 */}
         <div className="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
           <h3 className="shrink-0 text-sm font-medium">净值走势</h3>
           <div
-            className="flex shrink-0 gap-2"
+            className="flex min-w-0 max-w-full flex-wrap gap-x-1.5 gap-y-1.5"
             role="group"
             aria-label="净值区间"
           >
@@ -86,7 +85,7 @@ export default function PortfolioNavTrendCard({
                 aria-pressed={navRange === r.key}
                 data-testid={`nav-range-${r.key}`}
                 onClick={() => setNavRange(r.key)}
-                className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs transition-colors ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                   navRange === r.key
                     ? "bg-primary font-semibold text-primary-foreground"
                     : "bg-muted text-muted-foreground hover:bg-accent"
