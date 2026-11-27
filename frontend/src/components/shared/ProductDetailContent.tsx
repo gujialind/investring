@@ -13,6 +13,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
+import { CUMULATIVE_PROFIT_INFO_TIP } from "@/lib/holdings";
 import { cashRowLabel, isCashLeg, tradeCardDetailLine } from "@/lib/tradePairs";
 import {
   cn,
@@ -204,10 +205,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
           <div>
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
               累计收益
-              <InfoTip
-                label="查看累计收益说明"
-                content="累计收益含已卖出实现盈亏"
-              />
+              <InfoTip {...CUMULATIVE_PROFIT_INFO_TIP} />
             </div>
             <div
               data-testid="product-cumulative-profit"

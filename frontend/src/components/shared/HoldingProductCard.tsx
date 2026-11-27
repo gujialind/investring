@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { HoldingProductAggregate } from "@/types/holding";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
+import { CUMULATIVE_PROFIT_INFO_TIP } from "@/lib/holdings";
 import {
   formatCurrency,
   formatMarketName,
@@ -93,12 +94,12 @@ export default function HoldingProductCard({
         {!isCash && (
           <div className="mt-2.5 flex border-t border-border pt-2.5">
             <div className="flex-1 min-w-0">
-              {/* 说明触点必须恢复命中：整卡内容层是 pointer-events-none，否则点按会落到链接上 */}
-              <div className="pointer-events-none flex h-11 items-center gap-1 text-xs text-muted-foreground">
+              {/* 覆盖链接下方的内容不接收指针；InfoTip 触点显式恢复命中与层级。 */}
+              <div className="flex h-11 items-center gap-1 text-xs text-muted-foreground">
                 <span>累计收益</span>
                 <InfoTip
-                  label="查看累计收益说明"
-                  content="累计收益含已卖出实现盈亏"
+                  {...CUMULATIVE_PROFIT_INFO_TIP}
+                  triggerClassName="pointer-events-auto relative z-10"
                 />
               </div>
               <div

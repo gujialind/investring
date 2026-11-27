@@ -280,7 +280,7 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
             {cashProduct && (
               <Link
                 href={`${basePath}/${portfolioCode}/platforms/${platformCode}/products/${CASH_PRODUCT_CODE}?market=`}
-                className="isolate relative block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div
                   data-testid="platform-cash-card"

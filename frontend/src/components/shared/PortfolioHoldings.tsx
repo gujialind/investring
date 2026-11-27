@@ -422,7 +422,7 @@ export default function PortfolioHoldings({
               <Link
                 key={p.platform_code}
                 href={`${basePath}/${portfolioCode}/platforms/${p.platform_code}`}
-                className="isolate relative block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {card}
               </Link>
