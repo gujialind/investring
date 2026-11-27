@@ -134,6 +134,12 @@ test.describe('组合删除闭环（#820）', () => {
     await expect(page.getByTestId('portfolio-more-menu')).toBeHidden();
     await expect(dialog.getByText(code, { exact: false })).toBeVisible();
     await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId('portfolio-more-trigger')).toBeFocused();
+    await openPortfolioMoreMenu(page, testInfo);
+    await cardDeleteButton(page, code).click();
+    await expect(dialog.getByRole('button', { name: '确认删除', exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '确认删除' }).click();
 
     // 成功后回组合列表（mobile project 由 proxy 重定向到 /m/portfolio）

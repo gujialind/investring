@@ -38,13 +38,19 @@ interface PortfolioActionButtonsProps {
   kind?: string;
   basePath: string;
   variant?: "desktop" | "mobile";
+  /** 控制主动作、激活/删除与快照管理入口；调用方必须按真实角色传入。 */
   isAdmin: boolean;
   onActivateClick: () => void;
   isActivatePending?: boolean;
-  onDeleteClick?: () => void;
+  /** 仅 draft/closed 可见；调用方须以 isAdmin && isDeletable 门控，空壳由后端 409 判定。 */
+  onDeleteClick?: (returnFocusTarget: HTMLButtonElement | null) => void;
   isDeletePending?: boolean;
 }
 
+/**
+ * 组合详情操作组：普通净值型按角色/状态派生主动作与历史导航；台账不接收净值管理菜单，
+ * 仅保留 admin 激活/删除。桌面 Dropdown 与移动 Sheet 共享同一菜单数据，不各自复制权限规则。
+ */
 export default function PortfolioActionButtons({
   portfolioCode,
   status,
@@ -74,6 +80,22 @@ export default function PortfolioActionButtons({
     closeTimer.current = null;
   };
 
+  // 悬停展开的菜单收口：取消待关定时器、归还焦点到常驻触发器，再交给调用方关闭
+  const closeHoverMenu = () => {
+    hoverOpenedRef.current = false;
+    cancelClose();
+    triggerRef.current?.focus({ preventScroll: true });
+  };
+
+  const focusFirstMenuItem = () => {
+    keyboardNavigatingRef.current = true;
+    queueMicrotask(() => {
+      menuContentRef.current
+        ?.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled])')
+        ?.focus();
+    });
+  };
+
   // 点击触发器的共同意图：未开则打开；悬停打开的这次点击转为固定；已固定的再点则关闭
   const toggleFromClick = () => {
     if (!open) {
@@ -82,21 +104,25 @@ export default function PortfolioActionButtons({
       setOpen(true);
     } else if (hoverOpenedRef.current) {
       hoverOpenedRef.current = false;
+      cancelClose();
+      focusFirstMenuItem();
     } else {
       setOpen(false);
     }
   };
 
-  // 悬停打开的菜单离开后才延时关闭；点击/键盘打开的菜单不随鼠标离开关闭
+  // 悬停打开的菜单离开后才延时关闭；点击/键盘打开的菜单不随鼠标离开关闭。
+  // 延时期间悬停回菜单或转为固定都会 cancelClose 并清掉悬停标记，故定时器只需再查一次
   const closeSoon = () => {
-    if (!hoverOpenedRef.current) return;
     cancelClose();
+    if (!hoverOpenedRef.current) return;
     closeTimer.current = setTimeout(() => {
       closeTimer.current = null;
+      if (!hoverOpenedRef.current) return;
       if (keyboardNavigatingRef.current && menuContentRef.current?.contains(document.activeElement)) {
         return;
       }
-      hoverOpenedRef.current = false;
+      closeHoverMenu();
       skipCloseFocusRef.current = true;
       pendingFocusRestoreRef.current = hoverFocusRef.current;
       setOpen(false);
@@ -202,7 +228,7 @@ export default function PortfolioActionButtons({
         {onDeleteClick && (
           <Button
             variant="outline"
-            onClick={onDeleteClick}
+            onClick={(event) => onDeleteClick(event.currentTarget)}
             disabled={isDeletePending}
             data-testid={`portfolio-delete-${portfolioCode}`}
           >
@@ -240,6 +266,7 @@ export default function PortfolioActionButtons({
           <Sheet>
             <SheetTrigger asChild>
               <Button
+                ref={triggerRef}
                 variant="outline"
                 size={isAdmin ? "icon" : "default"}
                 className={isAdmin ? "h-11 w-11" : "h-11 w-full"}
@@ -277,7 +304,7 @@ export default function PortfolioActionButtons({
                     <SheetClose asChild>
                       <button
                         type="button"
-                        onClick={onDeleteClick}
+                        onClick={() => onDeleteClick(triggerRef.current)}
                         disabled={isDeletePending}
                         data-testid={`portfolio-delete-${portfolioCode}`}
                         className="flex h-11 w-full items-center gap-2 text-sm text-destructive disabled:opacity-50"
@@ -344,8 +371,9 @@ export default function PortfolioActionButtons({
               toggleFromClick();
             }}
             onPointerEnter={(event) => {
-              if (event.pointerType !== "mouse") return;
+              // 触屏/笔不触发 hover 展开，但同样不该被上一次离开的延时关闭误伤
               cancelClose();
+              if (event.pointerType !== "mouse") return;
               if (!open) {
                 hoverOpenedRef.current = true;
                 pendingFocusRestoreRef.current = null;
@@ -359,13 +387,7 @@ export default function PortfolioActionButtons({
               // Enter/Space 交由 Radix 合成 click = detail 0
               if (event.key !== "ArrowDown" || !open) return;
               event.preventDefault();
-              keyboardNavigatingRef.current = true;
-              queueMicrotask(() => {
-                const firstItem = menuContentRef.current?.querySelector<HTMLElement>(
-                  '[role="menuitem"]:not([data-disabled])',
-                );
-                firstItem?.focus();
-              });
+              focusFirstMenuItem();
             }}
             onClick={(event) => {
               if (event.detail !== 0) return;
@@ -422,12 +444,13 @@ export default function PortfolioActionButtons({
                 className="h-11 text-destructive"
                 disabled={isDeletePending}
                 onSelect={(event) => {
-                  // 拦掉 Radix 的返回焦点，让 AlertDialog 自己接管
+                  // 拦掉 Radix 的返回焦点，让 AlertDialog 自己接管；先收口悬停态并把焦点
+                  // 交还常驻触发器，删除弹窗才能在菜单卸载后正常接管焦点
                   event.preventDefault();
-                  hoverOpenedRef.current = false;
+                  closeHoverMenu();
                   skipCloseFocusRef.current = true;
                   setOpen(false);
-                  onDeleteClick();
+                  onDeleteClick(triggerRef.current);
                 }}
                 data-testid={`portfolio-delete-${portfolioCode}`}
               >

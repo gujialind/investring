@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
 import PageHeader from "@/components/shared/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
@@ -95,6 +95,7 @@ function PortfolioDetailInner() {
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
   // 删除空壳确认弹窗（#820 扩围）
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const deleteReturnFocusRef = useRef<HTMLButtonElement | null>(null);
 
   const positions = positionsData?.items || [];
   const assetClasses = assetClassDict?.items || [];
@@ -178,7 +179,14 @@ function PortfolioDetailInner() {
                   isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code)
                 }
                 isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
-                onDeleteClick={isAdmin && isDeletable ? () => setIsDeleteOpen(true) : undefined}
+                onDeleteClick={
+                  isAdmin && isDeletable
+                    ? (target) => {
+                        deleteReturnFocusRef.current = target;
+                        setIsDeleteOpen(true);
+                      }
+                    : undefined
+                }
                 isDeletePending={deletePortfolio.isPending}
               />
             )
@@ -190,6 +198,7 @@ function PortfolioDetailInner() {
             onOpenChange={setIsDeleteOpen}
             portfolioCode={portfolio.code}
             portfolioName={portfolio.name}
+            returnFocusRef={deleteReturnFocusRef}
             isPending={deletePortfolio.isPending}
             onConfirm={() =>
               deletePortfolio.mutate(code, {

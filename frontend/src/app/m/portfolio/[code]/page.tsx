@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { getStatusBadgeVariant } from "@/lib/utils";
 
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -95,6 +95,7 @@ function MobilePortfolioDetailInner() {
   const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
   // 删除空壳确认弹窗（#820 扩围，与桌面端共用 Dialog）
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const deleteReturnFocusRef = useRef<HTMLButtonElement | null>(null);
 
   const positions = positionsData?.items || [];
   const assetClasses = assetClassDict?.items || [];
@@ -140,7 +141,14 @@ function MobilePortfolioDetailInner() {
       isAdmin={isAdmin}
       onActivateClick={() => (isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code))}
       isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
-      onDeleteClick={isAdmin && isDeletable ? () => setIsDeleteOpen(true) : undefined}
+      onDeleteClick={
+        isAdmin && isDeletable
+          ? (target) => {
+              deleteReturnFocusRef.current = target;
+              setIsDeleteOpen(true);
+            }
+          : undefined
+      }
       isDeletePending={deletePortfolio.isPending}
     />
   );
@@ -197,6 +205,7 @@ function MobilePortfolioDetailInner() {
             onOpenChange={setIsDeleteOpen}
             portfolioCode={portfolio.code}
             portfolioName={portfolio.name}
+            returnFocusRef={deleteReturnFocusRef}
             isPending={deletePortfolio.isPending}
             onConfirm={() =>
               deletePortfolio.mutate(code, {
@@ -233,6 +242,7 @@ function MobilePortfolioDetailInner() {
             onOpenChange={setIsDeleteOpen}
             portfolioCode={portfolio.code}
             portfolioName={portfolio.name}
+            returnFocusRef={deleteReturnFocusRef}
             isPending={deletePortfolio.isPending}
             onConfirm={() =>
               deletePortfolio.mutate(code, {

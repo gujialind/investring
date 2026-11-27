@@ -111,19 +111,23 @@ export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): 
 }
 
 /**
- * 打开组合详情「更多」菜单（#943）：桌面先移开指针再 hover 触发 enter，打开后勿移开指针，
- * 否则悬停菜单会自动关闭；移动端从关闭态点击打开 Sheet。
+ * 打开组合详情「更多」菜单（#943）：已打开时直接复用；桌面先移开指针清理旧 hover 再 hover 打开，
+ * 打开后勿移开指针；移动 Sheet 不是 popper，若残留则显式 Escape 并等待卸载后再点击。
  */
 export async function openPortfolioMoreMenu(page: Page, testInfo: TestInfo): Promise<void> {
-  await settlePopovers(page);
   const trigger = page.getByTestId('portfolio-more-trigger');
+  const menu = page.getByTestId('portfolio-more-menu');
+  if (await menu.isVisible()) return;
   if (testInfo.project.name === 'mobile') {
+    if ((await menu.count()) > 0) await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
     await trigger.click();
   } else {
     await page.mouse.move(0, 0);
+    await settlePopovers(page);
     await trigger.hover();
   }
-  await expect(page.getByTestId('portfolio-more-menu')).toBeVisible();
+  await expect(menu).toBeVisible();
 }
 
 /** 从组合详情「更多」菜单（双端同一入口）进入历史导航页。 */

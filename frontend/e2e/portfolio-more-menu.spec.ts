@@ -41,8 +41,11 @@ test.describe('组合详情统一更多菜单（#943 S4）', () => {
     await expect(tradeLink).toBeFocused();
     await expect(menu.locator('a')).toHaveText(['份额变动事件', '快照管理', '现金流水']);
     await expect(page.getByRole('link', { name: '持仓管理' })).toHaveCount(0);
-    await trigger.click();
+    await trigger.dispatchEvent('pointerleave');
+    await trigger.dispatchEvent('click', { detail: 0 });
+    await page.waitForTimeout(180);
     await expect(menu).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: '份额变动事件', exact: true })).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath('portfolio-more-desktop-light.png') });
     await page.emulateMedia({ colorScheme: 'dark' });
     await expect(page.locator('html')).toHaveClass(/dark/);
@@ -94,6 +97,7 @@ test.describe('组合详情统一更多菜单（#943 S4）', () => {
   test('移动 Sheet 行满足 44px 触控高度并可从菜单导航', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '仅移动项目验证 Sheet');
     await gotoPortfolioDetail(page, E2E_ACTIVE);
+    await openPortfolioMoreMenu(page, testInfo);
     await openPortfolioMoreMenu(page, testInfo);
     const menu = page.getByTestId('portfolio-more-menu');
     const heights = await menu.locator('a').evaluateAll((links) =>
