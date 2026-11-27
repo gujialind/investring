@@ -123,8 +123,8 @@ export default defineConfig({
       // 单点配置；spec 内显式 test.setTimeout(90_000/120_000) 与显式 `{ timeout: N }`
       // 仍覆盖本处取值，保持不动。chromium 帧调度不依赖页面视觉变化，三层都保持全局
       // 值，桌面慢回归照样红。
-      // 「少产生抖动」的另一条（capture 侧 mobile 降并发）见 frontend/e2e/AGENTS.md §1
-      // 与 .github/workflows/e2e-stack.yml 的 capture 步；trace 取证已同批落地。
+      // 「少产生抖动」的另一条（capture 侧 mobile 降并发/串行，#958 方向 3）**尚未落地**：
+      // 须先读到 trace 结论再定，见 frontend/e2e/AGENTS.md §1；trace 取证已同批落地。
       timeout: 90_000,
       expect: { timeout: 15_000 },
       use: {
