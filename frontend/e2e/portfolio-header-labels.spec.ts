@@ -273,8 +273,7 @@ test.describe('组合详情页头快照日期与百分比标签（#943 S3）', (
       await page.clock.fastForward(31_000);
       await page.getByRole('link', { name: '返回组合列表', exact: true }).click();
       await page.waitForURL(/\/(m\/)?portfolio$/);
-      const basePath = new URL(page.url()).pathname.startsWith('/m/') ? '/m' : '';
-      await page.locator(`a[href="${basePath}/portfolio/${E2E_ACTIVE}"]`).first().click();
+      await page.goBack();
       await page.waitForURL(/\/(m\/)?portfolio\/E2E_ACTIVE$/);
 
       await expect(page.getByText('加载失败：快照读取失败')).toBeVisible();
