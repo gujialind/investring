@@ -220,8 +220,8 @@ export function useBulkDeleteSnapshots() {
       if (variables.mode === "confirm") {
         queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
         queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       }
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
     },
   });
 }

@@ -14,9 +14,10 @@ export default function DashboardPage() {
     isLoading,
     isFetching,
     isInitialError,
-    isRefetchError,
-    error,
-    refetch,
+    summaryError,
+    activityError,
+    refetchSummary,
+    refetchActivity,
   } = useDashboardStats();
 
   if (isLoading) {
@@ -30,7 +31,7 @@ export default function DashboardPage() {
   if (isInitialError || !summary) {
     return (
       <MainLayout>
-        <QueryErrorState error={error} onRetry={() => void refetch()} />
+        <QueryErrorState error={summaryError} onRetry={() => void refetchSummary()} />
       </MainLayout>
     );
   }
@@ -48,8 +49,10 @@ export default function DashboardPage() {
           trades={trades}
           variant="desktop"
           isFetching={isFetching}
-          activityError={isRefetchError ? error : undefined}
-          onRetryActivity={() => void refetch()}
+          summaryError={summaryError}
+          onRetrySummary={() => void refetchSummary()}
+          activityError={activityError}
+          onRetryActivity={() => void refetchActivity()}
         />
       </div>
     </MainLayout>

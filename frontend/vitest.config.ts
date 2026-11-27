@@ -44,8 +44,8 @@ import { defineConfig } from "vitest/config";
 // 在 node 下永远测不到。要收它先得有浏览器环境，即回到「不引 jsdom/RTL」的取舍。
 // 职责边界不变：hooks 与组件交互归 Playwright E2E（见 frontend/e2e/AGENTS.md）。重新评估的触发条件（可判定，
 // 不是「以后再看」）：① 出现任一「根因在 hooks 内的纯计算逻辑、且 E2E 定位不到具体
-// 分支」的线上缺陷——首页 totalValue/avgReturn 的本地聚合已移入后端 summary 端点，
-// 当前 useDashboardStats 只组合查询与过滤活动列表；② 决定引入 jsdom/RTL（届时 §3「不引 jsdom/RTL」的取舍与本段
+// 分支」的线上缺陷——首页核心指标已由后端 summary 端点统一计算，
+// 当前 useDashboardStats 只编排三类查询并区分汇总与活动错误；② 决定引入 jsdom/RTL（届时 §3「不引 jsdom/RTL」的取舍与本段
 // 阈值口径须同批修订）。
 // 与 #509 的联动：include 是全局阈值与增量门禁**共用**的分母开关，改它必须同批改
 // ci.yml 的 LCOV_SF_MIN（见下方 include 上方注释与 scripts/tests/test_ci_frontend_coverage.py）。

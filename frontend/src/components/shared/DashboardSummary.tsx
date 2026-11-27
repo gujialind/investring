@@ -43,6 +43,8 @@ interface DashboardSummaryProps {
   variant?: "desktop" | "mobile";
   basePath?: "" | "/m";
   isFetching?: boolean;
+  summaryError?: unknown;
+  onRetrySummary?: () => void;
   activityError?: unknown;
   onRetryActivity?: () => void;
 }
@@ -54,12 +56,7 @@ type PendingItem =
 type RecentItem = PendingItem & { date: string };
 
 function xirrReasonText(xirr: DashboardAggregateXirr): string {
-  if (
-    xirr.reason === "short_history" ||
-    (xirr.cash_flow_count > 0 && xirr.holding_days !== null && xirr.holding_days < 90)
-  ) {
-    return "持有期不足 90 天";
-  }
+  if (xirr.reason === "short_history") return "持有期不足 90 天";
   if (xirr.reason === "insufficient_flows") return "本金进出现金流不足，无法计算";
   if (xirr.reason === "no_solution") return "当前现金流无法求得有效解";
   return "当前数据不足以可靠计算";
@@ -84,24 +81,29 @@ function tradeAmount(trade: Trade): string {
 }
 
 function PendingAgendaRow({ entry, basePath }: { entry: PendingItem; basePath: "" | "/m" }) {
-  const isSubscription = entry.kind === "subscription";
-  const item = entry.item;
-  const portfolioCode = item.portfolio_code;
-  const title = isSubscription
-    ? `${(item as Subscription).sub_type === "subscribe" ? "申购" : "赎回"} · ${portfolioCode}`
-    : `${(item as Trade).trade_type === "buy" ? "买入" : "卖出"} · ${formatProductCodeLabel(
-        (item as Trade).display_code,
-        (item as Trade).product_code,
-        (item as Trade).market,
-      )}`;
-  const meta = isSubscription
-    ? `组合 ${portfolioCode} · 投资人 ${(item as Subscription).investor_code}`
-    : `组合 ${portfolioCode}`;
-  const date = isSubscription ? (item as Subscription).apply_date : (item as Trade).trade_date;
-  const amount = isSubscription
-    ? subscriptionAmount(item as Subscription)
-    : tradeAmount(item as Trade);
-  const href = `${basePath}/portfolio/${portfolioCode}/${isSubscription ? "subscriptions" : "trades"}`;
+  const portfolioCode = entry.item.portfolio_code;
+  let title: string;
+  let meta: string;
+  let date: string;
+  let amount: string;
+  if (entry.kind === "subscription") {
+    const item = entry.item;
+    title = `${item.sub_type === "subscribe" ? "申购" : "赎回"} · ${portfolioCode}`;
+    meta = `组合 ${portfolioCode} · 投资人 ${item.investor_code}`;
+    date = item.apply_date;
+    amount = subscriptionAmount(item);
+  } else {
+    const item = entry.item;
+    title = `${item.trade_type === "buy" ? "买入" : "卖出"} · ${formatProductCodeLabel(
+      item.display_code,
+      item.product_code,
+      item.market,
+    )}`;
+    meta = `组合 ${portfolioCode}`;
+    date = item.trade_date;
+    amount = tradeAmount(item);
+  }
+  const href = `${basePath}/portfolio/${portfolioCode}/${entry.kind === "subscription" ? "subscriptions" : "trades"}`;
 
   return (
     <div
@@ -128,21 +130,24 @@ function PendingAgendaRow({ entry, basePath }: { entry: PendingItem; basePath: "
 }
 
 function RecentActivityRow({ entry }: { entry: RecentItem }) {
-  const isSubscription = entry.kind === "subscription";
-  const item = entry.item;
-  const title = isSubscription
-    ? (item as Subscription).sub_type === "subscribe" ? "申购" : "赎回"
-    : (item as Trade).trade_type === "buy" ? "买入" : "卖出";
-  const identity = isSubscription
-    ? `${item.portfolio_code} · ${(item as Subscription).investor_code}`
-    : `${formatProductCodeLabel(
-        (item as Trade).display_code,
-        (item as Trade).product_code,
-        (item as Trade).market,
-      )} · ${item.portfolio_code}`;
-  const amount = isSubscription
-    ? subscriptionAmount(item as Subscription)
-    : tradeAmount(item as Trade);
+  let title: string;
+  let identity: string;
+  let amount: string;
+  if (entry.kind === "subscription") {
+    const item = entry.item;
+    title = item.sub_type === "subscribe" ? "申购" : "赎回";
+    identity = `${item.portfolio_code} · ${item.investor_code}`;
+    amount = subscriptionAmount(item);
+  } else {
+    const item = entry.item;
+    title = item.trade_type === "buy" ? "买入" : "卖出";
+    identity = `${formatProductCodeLabel(
+      item.display_code,
+      item.product_code,
+      item.market,
+    )} · ${item.portfolio_code}`;
+    amount = tradeAmount(item);
+  }
 
   return (
     <div
@@ -153,8 +158,8 @@ function RecentActivityRow({ entry }: { entry: RecentItem }) {
       <div className="min-w-0">
         <p className="text-sm font-medium">
           {title}
-          <Badge className="ml-2" variant={getStatusBadgeVariant(item.status)}>
-            {getTradeStatusLabel(item.status)}
+          <Badge className="ml-2" variant={getStatusBadgeVariant(entry.item.status)}>
+            {getTradeStatusLabel(entry.item.status)}
           </Badge>
         </p>
         <p className="mt-1 break-words text-xs text-muted-foreground">{identity}</p>
@@ -174,6 +179,8 @@ export default function DashboardSummary({
   variant = "desktop",
   basePath = "",
   isFetching = false,
+  summaryError,
+  onRetrySummary,
   activityError,
   onRetryActivity,
 }: DashboardSummaryProps) {
@@ -198,7 +205,9 @@ export default function DashboardSummary({
         item,
         date: item.apply_date,
       })),
-      ...trades.map((item) => ({
+      ...trades
+        .filter((item) => !(item.product_code === "CASH" && item.transfer_group?.startsWith("sub_")))
+        .map((item) => ({
         kind: "trade" as const,
         id: item.id,
         item,
@@ -217,6 +226,20 @@ export default function DashboardSummary({
             aria-label="正在更新首页汇总"
             className="absolute right-0 top-0 h-4 w-4 animate-spin text-muted-foreground"
           />
+        )}
+        {Boolean(summaryError) && (
+          <div
+            data-testid="dashboard-summary-error"
+            role="alert"
+            className="mt-3 border border-destructive/30 bg-destructive-soft p-3 text-sm"
+          >
+            <p className="font-medium text-destructive-foreground">汇总更新失败，当前显示上次数据</p>
+            <QueryErrorState
+              error={summaryError}
+              onRetry={onRetrySummary}
+              className="mt-1 text-left"
+            />
+          </div>
         )}
         <div
           className={cn(
@@ -311,13 +334,20 @@ export default function DashboardSummary({
                     : "当前列表未显示待确认明细，请前往组合页查看"}
                 </p>
               ) : (
-                pendingItems.slice(0, 6).map((entry) => (
-                  <PendingAgendaRow
-                    key={`${entry.kind}-${entry.id}`}
-                    entry={entry}
-                    basePath={basePath}
-                  />
-                ))
+                <>
+                  {pendingItems.slice(0, 6).map((entry) => (
+                    <PendingAgendaRow
+                      key={`${entry.kind}-${entry.id}`}
+                      entry={entry}
+                      basePath={basePath}
+                    />
+                  ))}
+                  {pendingCount > Math.min(pendingItems.length, 6) && (
+                    <p className="mt-2 text-xs text-warning-foreground">
+                      还有 {pendingCount - Math.min(pendingItems.length, 6)} 笔，请前往组合页查看
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </CardContent>
@@ -331,9 +361,10 @@ export default function DashboardSummary({
           </h2>
           <p className="text-sm text-muted-foreground">当前活跃的投资组合</p>
         </div>
-        {summary.portfolios.length === 0 ? (
+        {summary.portfolios.length === 0 && (
           <EmptyState message="暂无活跃组合，请先创建组合" />
-        ) : isMobile ? (
+        )}
+        {summary.portfolios.length > 0 && isMobile && (
           <div className="space-y-2">
             {summary.portfolios.map((portfolio) => {
               const rowXirr = portfolio.annualization_reliable ? portfolio.mwr : null;
@@ -384,6 +415,11 @@ export default function DashboardSummary({
                           >
                             {formatReturnRate(rowXirr)}
                           </p>
+                          {rowXirr === null && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {rowXirrTitle(portfolio)}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </CardContent>
@@ -392,7 +428,8 @@ export default function DashboardSummary({
               );
             })}
           </div>
-        ) : (
+        )}
+        {summary.portfolios.length > 0 && !isMobile && (
           <Table>
             <TableHeader>
               <TableRow>

@@ -55,6 +55,19 @@ const trades: Trade[] = [
     trade_date: '2026-11-20',
     status: 'confirmed',
   },
+  {
+    id: 9203,
+    portfolio_code: 'ESP_SHORT',
+    product_code: 'CASH',
+    market: '',
+    platform_code: 'HBZQ',
+    trade_type: 'sell',
+    amount: 2000,
+    fee: 0,
+    trade_date: '2026-11-24',
+    status: 'confirmed',
+    transfer_group: 'sub_9101',
+  },
 ];
 
 const reliableSummary: DashboardSummary = {
@@ -159,19 +172,21 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(agenda.getByTestId('dashboard-pending-item')).toHaveCount(2);
     await expect(page.getByTestId('dashboard-recent-activity')).toContainText('510300.SH');
     await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
+    await expect(page.getByTestId('dashboard-recent-item')).toHaveCount(4);
+    await expect(page.getByTestId('dashboard-recent-activity')).not.toContainText('CASH');
     if (testInfo.project.name === 'mobile') {
       await expect(page.getByRole('heading', { name: '账户', exact: true })).toBeVisible();
     }
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  test('一天历史即使无解也显示 -- 与持有期不足原因', async ({ page }) => {
+  test('短历史 XIRR 显示 -- 与后端给出的持有期不足原因', async ({ page }, testInfo) => {
     await mockDashboard(page, {
       ...reliableSummary,
       aggregate_xirr: {
         value: null,
         reliable: false,
-        reason: 'no_solution',
+        reason: 'short_history',
         cash_flow_count: 2,
         holding_days: 1,
       },
@@ -190,7 +205,27 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(rows).toHaveCount(2);
     for (const row of await rows.all()) {
       await expect(row.getByTestId('dashboard-portfolio-xirr')).toHaveText('--');
+      if (testInfo.project.name === 'mobile') {
+        await expect(row.getByText('持有期不足 90 天', { exact: true })).toBeVisible();
+      }
     }
+  });
+
+  test('无有效解的 XIRR 显示 -- 与后端无解原因，不被短历史启发式覆盖', async ({ page }) => {
+    await mockDashboard(page, {
+      ...reliableSummary,
+      aggregate_xirr: {
+        value: null,
+        reliable: false,
+        reason: 'no_solution',
+        cash_flow_count: 2,
+        holding_days: 1,
+      },
+    });
+    await page.goto('/dashboard');
+
+    await expect(page.getByTestId('dashboard-summary-aggregate_xirr')).toHaveText('--');
+    await expect(page.getByTestId('dashboard-summary-xirr-reason')).toHaveText('当前现金流无法求得有效解');
   });
 
   test('首载等待 summary，不提前显示伪 0 或活跃组合空态', async ({ page }) => {
@@ -221,7 +256,7 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
   });
 
-  test('summary HTTP 500 渲染 QueryErrorState，重试后恢复且不落空态', async ({ page }) => {
+  test('summary HTTP 500 渲染 QueryErrorState，重试后恢复且不落空态', async ({ page }, testInfo) => {
     let attempts = 0;
     await mockDashboardLists(page);
     await page.route(
@@ -240,6 +275,10 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
 
     await expect(page.getByText('加载失败：仪表盘汇总暂不可用')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('暂无活跃组合，请先创建组合')).toHaveCount(0);
+    if (testInfo.project.name === 'mobile') {
+      await expect(page.getByRole('heading', { name: '账户', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '用户菜单', exact: true })).toBeVisible();
+    }
     await page.getByRole('button', { name: '重试', exact: true }).click();
     await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
     expect(attempts).toBeGreaterThanOrEqual(3);
@@ -270,6 +309,82 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await page.getByRole('button', { name: '重试', exact: true }).click();
     await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
     expect(attempts).toBeGreaterThanOrEqual(3);
+  });
+
+  test('汇总后台刷新失败保留上次数据并独立重试，不污染活动列表', async ({ page }) => {
+    let summaryAttempts = 0;
+    await mockDashboardLists(page);
+    await page.route(
+      (url) => url.pathname === '/api/dashboard/summary',
+      (route) => {
+        summaryAttempts += 1;
+        if (summaryAttempts === 1) return route.fulfill({ json: reliableSummary });
+        if (summaryAttempts <= 3) {
+          return route.fulfill({
+            status: 500,
+            json: { detail: { error: 'DASHBOARD_UNAVAILABLE', message: '仪表盘汇总暂不可用' } },
+          });
+        }
+        return route.fulfill({ json: reliableSummary });
+      },
+    );
+    await page.goto('/dashboard');
+
+    await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
+    await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
+    await page.clock.setFixedTime(Date.now() + 31_000);
+    await page.locator('a[href$="/portfolio"]:visible').first().click();
+    await expect(page).toHaveURL(/\/portfolio$/);
+    await page.locator('a[href$="/dashboard"]:visible').first().click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect.poll(() => summaryAttempts).toBeGreaterThanOrEqual(3);
+
+    const summaryError = page.getByTestId('dashboard-summary-error');
+    await expect(summaryError).toContainText('汇总更新失败，当前显示上次数据');
+    await expect(summaryError).toContainText('加载失败：仪表盘汇总暂不可用');
+    await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
+    await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
+    await expect(page.getByText('暂无活跃组合，请先创建组合')).toHaveCount(0);
+    await summaryError.getByRole('button', { name: '重试', exact: true }).click();
+    await expect(summaryError).toHaveCount(0);
+    await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
+    expect(summaryAttempts).toBeGreaterThanOrEqual(4);
+  });
+
+  test('待确认计数超过六笔时展示截断提示', async ({ page }) => {
+    const manySubscriptions: Subscription[] = Array.from({ length: 7 }, (_, index) => ({
+      id: 9300 + index,
+      portfolio_code: 'ESP_SHORT',
+      investor_code: 'ADMIN',
+      platform_code: 'HBZQ',
+      sub_type: 'subscribe',
+      amount: 2000,
+      apply_date: '2026-11-24',
+      status: 'pending',
+    }));
+    await mockDashboard(page, {
+      ...reliableSummary,
+      pending_subscription_count: 7,
+      pending_trade_count: 1,
+    });
+    await page.route(
+      (url) => url.pathname === '/api/subscriptions' && url.searchParams.get('page_size') === '100',
+      (route) => route.fulfill({
+        json: {
+          items: manySubscriptions,
+          total: manySubscriptions.length,
+          page: 1,
+          page_size: 100,
+          total_pages: 1,
+        },
+      }),
+    );
+    await page.goto('/dashboard');
+
+    const agenda = page.getByTestId('dashboard-pending-agenda');
+    await expect(agenda).toContainText('8 笔待确认');
+    await expect(agenda.getByTestId('dashboard-pending-item')).toHaveCount(6);
+    await expect(agenda).toContainText('还有 2 笔，请前往组合页查看');
   });
 
   test('待确认计数大于零但前百条无明细时显示明确兜底', async ({ page }) => {

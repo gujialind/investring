@@ -148,7 +148,10 @@ test.describe('台账型组合视图（#905 PR3）', () => {
     await expect(row.getByTestId('dashboard-portfolio-value')).toHaveText('¥100.00');
     await expect(row.getByTestId('dashboard-portfolio-profit')).toHaveText('¥0.00');
     await expect(row.getByTestId('dashboard-portfolio-xirr')).toHaveText('--');
-    await page.screenshot({ path: testInfo.outputPath('dashboard-r8.png'), fullPage: true });
+    await page.locator('section[aria-label="家庭财务汇总"]').screenshot({
+      path: testInfo.outputPath('dashboard-r8-summary.png'),
+    });
+    await row.screenshot({ path: testInfo.outputPath('dashboard-r8.png') });
   });
 
   test('S2：真实点击激活后汇总从 -- 变 0 且登记入口出现（totals 失效回归）', async ({ page }, testInfo) => {
