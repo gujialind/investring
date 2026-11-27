@@ -30,7 +30,6 @@ import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
-import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
@@ -147,7 +146,7 @@ function PortfolioDetailInner() {
             className="rounded-md border border-destructive/30 bg-destructive-soft p-4 text-center"
           />
         )}
-        {/* 页头（#904 PageHeader）：面包屑返回 / 名称+状态 badge / code·最新快照日期 / 操作区（#786 可换行、标题不压缩） */}
+        {/* 页头（#904 PageHeader）：面包屑返回 / 名称+状态 badge / code·最新快照日期 / 操作区（#943 统一「更多」菜单） */}
         <PageHeader
           crumbs={[{ href: "/portfolio", label: "组合", ariaLabel: "返回组合列表" }]}
           title={portfolio.name}
@@ -166,21 +165,24 @@ function PortfolioDetailInner() {
               )}
             </>
           }
-          actions={isAdmin && (
-            <PortfolioActionButtons
-              portfolioCode={code}
-              status={portfolio.status as "draft" | "active" | "closed"}
-              kind={portfolio.kind}
-              basePath="/portfolio"
-              variant="desktop"
-              onActivateClick={() =>
-                isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code)
-              }
-              isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
-              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
-              isDeletePending={deletePortfolio.isPending}
-            />
-          )}
+          actions={
+            !showInvestors && (isAdmin || !isLedger) && (
+              <PortfolioActionButtons
+                portfolioCode={code}
+                status={portfolio.status as "draft" | "active" | "closed"}
+                kind={portfolio.kind}
+                basePath="/portfolio"
+                variant="desktop"
+                isAdmin={isAdmin}
+                onActivateClick={() =>
+                  isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code)
+                }
+                isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
+                onDeleteClick={isAdmin && isDeletable ? () => setIsDeleteOpen(true) : undefined}
+                isDeletePending={deletePortfolio.isPending}
+              />
+            )
+          }
         />
           {/* 删除空壳确认（#820 扩围）：点名 name + code + 不可恢复 */}
           <DeletePortfolioDialog
@@ -266,13 +268,6 @@ function PortfolioDetailInner() {
                     onOpenChange={setDisplayConfigOpen}
                     portfolioCode={code}
                     currentConfig={portfolio.display_config}
-                  />
-
-                  {/* 管理入口（持仓管理/申赎赎回/调仓交易/现金流水；事件/快照已上移，#786 场景去重） */}
-                  <ManageLinksCard
-                    basePath="/portfolio"
-                    code={code}
-                    status={portfolio.status as "draft" | "active" | "closed"}
                   />
                 </div>
 

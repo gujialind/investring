@@ -24,7 +24,7 @@ import {
   createPortfolioViaApi,
   isolatedPortfolioCode,
   openAppAndAuth,
-  openMobilePageActionsIfMobile,
+  openPortfolioMoreMenu,
 } from './helpers';
 
 const DELETE_BUTTON = '删除组合';
@@ -127,12 +127,13 @@ test.describe('组合删除闭环（#820）', () => {
     await createPortfolioViaApi(page, headers, code, `详情页删除 ${code}`);
 
     await gotoDetailAndWait(page, code);
-    // 移动删除入口收 ⋯ 抽屉（#904 P1c-3），先开再点
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await page.getByRole('button', { name: DELETE_BUTTON }).click();
+    await openPortfolioMoreMenu(page, testInfo);
+    await cardDeleteButton(page, code).click();
 
     const dialog = deleteDialog(page);
+    await expect(page.getByTestId('portfolio-more-menu')).toBeHidden();
     await expect(dialog.getByText(code, { exact: false })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeFocused();
     await dialog.getByRole('button', { name: '确认删除' }).click();
 
     // 成功后回组合列表（mobile project 由 proxy 重定向到 /m/portfolio）
@@ -155,7 +156,8 @@ test.describe('组合删除闭环（#820）', () => {
     await expect(cardDeleteButton(page, code)).toHaveCount(0);
 
     await gotoDetailAndWait(page, code);
-    await expect(page.getByRole('button', { name: DELETE_BUTTON })).toHaveCount(0);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(cardDeleteButton(page, code)).toHaveCount(0);
     // 夹具由 admin 会话创建，viewer 删不掉——留残留属既有清理定案（见文件头）
   });
 

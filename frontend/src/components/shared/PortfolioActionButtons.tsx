@@ -1,99 +1,227 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Power, Plus, ArrowRightLeft, CalendarClock, Camera, Trash2, MoreHorizontal, X } from "lucide-react";
-import Link from "next/link";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Sheet,
-  SheetTrigger,
+  SheetBody,
   SheetClose,
   SheetContent,
   SheetHeader,
   SheetTitle,
-  SheetBody,
+  SheetTrigger,
 } from "@/components/ui/sheet";
+import {
+  ArrowRightLeft,
+  CalendarClock,
+  Camera,
+  MoreHorizontal,
+  Plus,
+  Power,
+  Trash2,
+  Wallet,
+  X,
+} from "lucide-react";
+import Link from "next/link";
 
 interface PortfolioActionButtonsProps {
   portfolioCode: string;
   status: "draft" | "active" | "closed";
-  /** 组合类型（issue #905）：ledger 台账型 draft 走手动激活、active 无申赎/调仓/事件/快照入口 */
   kind?: string;
-  /** 链接前缀，如 "/portfolio" 或 "/m/portfolio" */
   basePath: string;
-  /** desktop: 行内按钮（可换行）；mobile: 单层 2 列网格，draft/closed 整行（#786 收敛嵌套 grid） */
   variant?: "desktop" | "mobile";
+  isAdmin: boolean;
   onActivateClick: () => void;
   isActivatePending?: boolean;
-  /** 仅 draft/closed 且调用方（详情页 admin 门控）传入时渲染删除入口（issue #820 扩围） */
   onDeleteClick?: () => void;
   isDeletePending?: boolean;
 }
 
-/**
- * 组合详情页操作按钮组（草稿/活跃/关闭三态，issue #99）。
- * 详情页不再提供「关闭组合」入口（关闭仅在列表页）；业务逻辑两端一致，
- * 仅布局与链接前缀通过 variant / basePath 区分。
- * 删除入口在 draft/closed 出现（issue #820 扩围：空壳两态可物理删除，active 保留历史；
- * 「是否真空壳」不由前端预判，后端 409  govern），
- * 由页面侧的 admin 门控决定是否传入 onDeleteClick。
- * #595 曾把份额变动/快照管理等低频入口收敛到「管理」入口卡（ManageLinksCard），
- * 操作区只保留高频动作（D1：页头仅 申购赎回 / 调仓）。
- * #786 部分反转 #595：份额变动事件（可见文案简称「事件」）与快照管理是常用入口，
- * 持仓多时从页底管理卡需滚动多屏才可达，故上移与申购赎回/调仓平行；
- * 管理卡按场景去重（见 ManageLinksCard），draft/closed 入口不丢失。
- */
 export default function PortfolioActionButtons({
   portfolioCode,
   status,
   kind,
   basePath,
   variant = "desktop",
+  isAdmin,
   onActivateClick,
   isActivatePending,
   onDeleteClick,
   isDeletePending,
 }: PortfolioActionButtonsProps) {
-  const container = "ml-auto flex flex-wrap gap-2";
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuContentRef = useRef<HTMLDivElement>(null);
+  const hoverOpenedRef = useRef(false);
+  const keyboardNavigatingRef = useRef(false);
+  const hoverFocusRef = useRef<HTMLElement | null>(null);
+  const restoringHoverFocusRef = useRef(false);
+  const skipCloseFocusRef = useRef(false);
+  const pendingFocusRestoreRef = useRef<HTMLElement | null>(null);
+  const container = "ml-auto flex flex-wrap items-center gap-2";
 
-  // #904 P1c-3：移动改吸底拇指区 bar（主动作两枚 + ⋯ 抽屉收次动作/删除）；
-  // 桌面行内可换行形态不变。fixed bar 脱离文档流，页面侧补 pb-24 防遮内容。
+  const cancelClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+
+  // 点击触发器的共同意图：未开则打开；悬停打开的这次点击转为固定；已固定的再点则关闭
+  const toggleFromClick = () => {
+    if (!open) {
+      hoverFocusRef.current = null;
+      pendingFocusRestoreRef.current = null;
+      setOpen(true);
+    } else if (hoverOpenedRef.current) {
+      hoverOpenedRef.current = false;
+    } else {
+      setOpen(false);
+    }
+  };
+
+  // 悬停打开的菜单离开后才延时关闭；点击/键盘打开的菜单不随鼠标离开关闭
+  const closeSoon = () => {
+    if (!hoverOpenedRef.current) return;
+    cancelClose();
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null;
+      if (keyboardNavigatingRef.current && menuContentRef.current?.contains(document.activeElement)) {
+        return;
+      }
+      hoverOpenedRef.current = false;
+      skipCloseFocusRef.current = true;
+      pendingFocusRestoreRef.current = hoverFocusRef.current;
+      setOpen(false);
+    }, 120);
+  };
+
+  // 悬停打开时 Radix 默认把焦点移进菜单；把焦点还给打开前的元素
+  useEffect(() => {
+    if (!open) {
+      hoverFocusRef.current = null;
+      restoringHoverFocusRef.current = false;
+      keyboardNavigatingRef.current = false;
+      const target = pendingFocusRestoreRef.current;
+      pendingFocusRestoreRef.current = null;
+      if (target?.isConnected) queueMicrotask(() => target.focus({ preventScroll: true }));
+      return;
+    }
+    if (!hoverOpenedRef.current) return;
+    const target = hoverFocusRef.current;
+    if (!target?.isConnected) return;
+    restoringHoverFocusRef.current = true;
+    queueMicrotask(() => {
+      target.focus({ preventScroll: true });
+      restoringHoverFocusRef.current = false;
+    });
+  }, [open]);
+
+  useEffect(() => {
+    const close = () => {
+      cancelClose();
+      hoverOpenedRef.current = false;
+      setOpen(false);
+    };
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("blur", close);
+      cancelClose();
+    };
+  }, []);
+
+  const historyLinks = [
+    { href: "subscriptions", label: "申购赎回记录", icon: Plus },
+    { href: "trades", label: "调仓交易记录", icon: ArrowRightLeft },
+    { href: "share-change-events", label: "份额变动事件", icon: CalendarClock },
+    ...(isAdmin ? [{ href: "snapshots", label: "快照管理", icon: Camera }] : []),
+    { href: "cash-flows", label: "现金流水", icon: Wallet },
+  ];
+  // 台账无净值管理菜单；active admin 的申赎/调仓留在页头，菜单只收次动作
+  const menuLinks = () => {
+    if (kind === "ledger") return [];
+    if (isAdmin && status === "active") {
+      return historyLinks.filter(({ href }) => href !== "subscriptions" && href !== "trades");
+    }
+    return historyLinks;
+  };
+  const renderActivateButton = () => {
+    if (status === "closed") {
+      return (
+        <Button
+          variant="outline"
+          className={variant === "mobile" ? "w-full" : undefined}
+          onClick={onActivateClick}
+          disabled={isActivatePending}
+        >
+          <Power className="mr-2 h-4 w-4 text-success" />
+          重新激活
+        </Button>
+      );
+    }
+    if (kind === "ledger") {
+      return (
+        <Button
+          className={variant === "mobile" ? "w-full" : undefined}
+          onClick={onActivateClick}
+          disabled={isActivatePending}
+          data-testid="ledger-activate"
+        >
+          <Power className="mr-2 h-4 w-4 text-success" />
+          激活组合
+        </Button>
+      );
+    }
+    if (status !== "draft") return null;
+    return (
+      <Link
+        href={`${basePath}/${portfolioCode}/subscriptions`}
+        className={variant === "mobile" ? "block w-full" : undefined}
+      >
+        <Button className={variant === "mobile" ? "w-full" : undefined}>
+          <Plus className="mr-2 h-4 w-4" />
+          首次申购激活
+        </Button>
+      </Link>
+    );
+  };
+  const activateButton = renderActivateButton();
+
+  if (variant === "desktop" && kind === "ledger") {
+    if (status === "active" || !isAdmin) return null;
+    return (
+      <div className={container}>
+        {activateButton}
+        {onDeleteClick && (
+          <Button
+            variant="outline"
+            onClick={onDeleteClick}
+            disabled={isDeletePending}
+            data-testid={`portfolio-delete-${portfolioCode}`}
+          >
+            <Trash2 className="mr-2 h-4 w-4 text-destructive" />
+            删除组合
+          </Button>
+        )}
+      </div>
+    );
+  }
+
   if (variant === "mobile") {
-    // 台账型 active 无申赎/调仓/事件/快照入口（issue #905），bar 不渲染
-    if (kind === "ledger" && status === "active") return null;
+    if (kind === "ledger" && (status === "active" || !isAdmin)) return null;
+
     return (
       <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card px-4 py-3">
-        <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
-          {status === "draft" &&
-            (kind === "ledger" ? (
-              <Button
-                className="col-span-2 w-full"
-                onClick={onActivateClick}
-                disabled={isActivatePending}
-                data-testid="ledger-activate"
-              >
-                <Power className="mr-2 h-4 w-4 text-success" />
-                激活组合
-              </Button>
-            ) : (
-              <Link href={`${basePath}/${portfolioCode}/subscriptions`} className="col-span-2">
-                <Button className="w-full">
-                  <Plus className="mr-2 h-4 w-4" />
-                  首次申购激活
-                </Button>
-              </Link>
-            ))}
-          {status === "closed" && (
-            <Button
-              variant="outline"
-              className="col-span-2 w-full"
-              onClick={onActivateClick}
-              disabled={isActivatePending}
-            >
-              <Power className="mr-2 h-4 w-4 text-success" />
-              重新激活
-            </Button>
-          )}
-          {status === "active" && (
+        <div className={isAdmin ? "grid grid-cols-[1fr_1fr_auto] gap-2" : "grid grid-cols-1 gap-2"}>
+          {isAdmin && status !== "active" && <div className="col-span-2">{activateButton}</div>}
+          {isAdmin && status === "active" && (
             <>
               <Link href={`${basePath}/${portfolioCode}/trades`}>
                 <Button variant="outline" className="w-full">
@@ -111,11 +239,18 @@ export default function PortfolioActionButtons({
           )}
           <Sheet>
             <SheetTrigger asChild>
-              <Button variant="outline" size="icon" className="h-11 w-11" aria-label="页面更多操作">
-                <MoreHorizontal className="h-4 w-4" />
+              <Button
+                variant="outline"
+                size={isAdmin ? "icon" : "default"}
+                className={isAdmin ? "h-11 w-11" : "h-11 w-full"}
+                aria-label="更多操作"
+                data-testid="portfolio-more-trigger"
+              >
+                <MoreHorizontal className={isAdmin ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+                {!isAdmin && "更多"}
               </Button>
             </SheetTrigger>
-            <SheetContent>
+            <SheetContent data-testid="portfolio-more-menu">
               <SheetHeader>
                 <SheetTitle>更多操作</SheetTitle>
                 <SheetClose asChild>
@@ -124,38 +259,34 @@ export default function PortfolioActionButtons({
                   </Button>
                 </SheetClose>
               </SheetHeader>
-              <SheetBody>
-                {status === "active" && (
-                  <>
+              <SheetBody className="space-y-1">
+                {menuLinks().map(({ href, label, icon: Icon }) => (
+                  <SheetClose asChild key={href}>
                     <Link
-                      href={`${basePath}/${portfolioCode}/share-change-events`}
+                      href={`${basePath}/${portfolioCode}/${href}`}
                       className="flex h-11 items-center gap-2 text-sm"
                     >
-                      <CalendarClock className="h-4 w-4 text-muted-foreground" />
-                      份额变动事件
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      {label}
                     </Link>
-                    <Link
-                      href={`${basePath}/${portfolioCode}/snapshots`}
-                      className="flex h-11 items-center gap-2 text-sm"
-                    >
-                      <Camera className="h-4 w-4 text-muted-foreground" />
-                      快照管理
-                    </Link>
-                  </>
-                )}
-                {onDeleteClick && (
-                  <SheetClose asChild>
-                    <button
-                      type="button"
-                      onClick={onDeleteClick}
-                      disabled={isDeletePending}
-                      data-testid={`portfolio-delete-${portfolioCode}`}
-                      className="flex h-11 w-full items-center gap-2 text-sm text-destructive disabled:opacity-50"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      删除组合
-                    </button>
                   </SheetClose>
+                ))}
+                {onDeleteClick && (
+                  <div className="mt-2 border-t pt-2">
+                    <p className="px-2 py-1 text-xs font-medium text-muted-foreground">危险操作</p>
+                    <SheetClose asChild>
+                      <button
+                        type="button"
+                        onClick={onDeleteClick}
+                        disabled={isDeletePending}
+                        data-testid={`portfolio-delete-${portfolioCode}`}
+                        className="flex h-11 w-full items-center gap-2 text-sm text-destructive disabled:opacity-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        删除组合
+                      </button>
+                    </SheetClose>
+                  </div>
                 )}
               </SheetBody>
             </SheetContent>
@@ -165,101 +296,148 @@ export default function PortfolioActionButtons({
     );
   }
 
-  if (status === "draft") {
-    return (
-      <div className={container}>
-        {kind === "ledger" ? (
-          <Button
-            onClick={onActivateClick}
-            disabled={isActivatePending}
-            data-testid="ledger-activate"
-          >
-            <Power className="mr-2 h-4 w-4 text-success" />
-            激活组合
-          </Button>
-        ) : (
+  return (
+    <div className={container}>
+      {isAdmin && status === "active" && (
+        <>
+          <Link href={`${basePath}/${portfolioCode}/trades`}>
+            <Button variant="outline">
+              <ArrowRightLeft className="mr-2 h-4 w-4" />
+              调仓
+            </Button>
+          </Link>
           <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
-              首次申购激活
+              申购赎回
             </Button>
           </Link>
-        )}
-        {onDeleteClick && (
-          <Button
-            variant="outline"
-            onClick={onDeleteClick}
-            disabled={isDeletePending}
-          >
-            <Trash2 className="mr-2 h-4 w-4 text-destructive" />
-            删除组合
-          </Button>
-        )}
-      </div>
-    );
-  }
-
-  if (status === "active") {
-    // 台账型无申赎/调仓/份额事件/快照（issue #905）：操作区不渲染净值型入口；
-    // 登记市值/进出在 LedgerContent 内（按角色门控）。
-    if (kind === "ledger") return null;
-    return (
-      <div className={container}>
-        <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            申购赎回
-          </Button>
-        </Link>
-        <Link href={`${basePath}/${portfolioCode}/trades`}>
-          <Button variant="outline">
-            <ArrowRightLeft className="mr-2 h-4 w-4" />
-            调仓交易
-          </Button>
-        </Link>
-        {/* #786：事件/快照上移；可见文案「事件」，accessible name 保留全称
-            （WCAG 2.5.3 label-in-name，且现有 E2E 按「份额变动事件」定位不失效） */}
-        <Link
-          href={`${basePath}/${portfolioCode}/share-change-events`}
-          aria-label="份额变动事件"
-          title="份额变动事件"
-        >
-          <Button variant="outline">
-            <CalendarClock className="mr-2 h-4 w-4" />
-            事件
-          </Button>
-        </Link>
-        <Link href={`${basePath}/${portfolioCode}/snapshots`}>
-          <Button variant="outline">
-            <Camera className="mr-2 h-4 w-4" />
-            快照管理
-          </Button>
-        </Link>
-      </div>
-    );
-  }
-
-  // closed
-  return (
-    <div className={container}>
-      <Button
-        variant="outline"
-        onClick={onActivateClick}
-        disabled={isActivatePending}
-      >
-        <Power className="mr-2 h-4 w-4 text-success" />
-        重新激活
-      </Button>
-      {onDeleteClick && (
-        <Button
-          variant="outline"
-          onClick={onDeleteClick}
-          disabled={isDeletePending}
-        >
-          <Trash2 className="mr-2 h-4 w-4 text-destructive" />
-          删除组合
-        </Button>
+        </>
       )}
+      {isAdmin && status !== "active" && activateButton}
+      <DropdownMenu
+        modal={false}
+        open={open}
+        onOpenChange={(next) => {
+          cancelClose();
+          if (next) {
+            skipCloseFocusRef.current = false;
+            hoverFocusRef.current = null;
+            keyboardNavigatingRef.current = false;
+            pendingFocusRestoreRef.current = null;
+          } else {
+            hoverOpenedRef.current = false;
+          }
+          setOpen(next);
+        }}
+      >
+        <DropdownMenuTrigger asChild>
+          <Button
+            ref={triggerRef}
+            variant="outline"
+            aria-label="更多操作"
+            data-testid="portfolio-more-trigger"
+            onPointerDown={(event) => {
+              if (event.button !== 0 || event.ctrlKey) return;
+              // 接管左键点击，避免 Radix 默认 toggle 关闭刚悬停打开的菜单
+              event.preventDefault();
+              toggleFromClick();
+            }}
+            onPointerEnter={(event) => {
+              if (event.pointerType !== "mouse") return;
+              cancelClose();
+              if (!open) {
+                hoverOpenedRef.current = true;
+                pendingFocusRestoreRef.current = null;
+                hoverFocusRef.current =
+                  document.activeElement instanceof HTMLElement ? document.activeElement : null;
+              }
+              setOpen(true);
+            }}
+            onPointerLeave={closeSoon}
+            onKeyDown={(event) => {
+              // Enter/Space 交由 Radix 合成 click = detail 0
+              if (event.key !== "ArrowDown" || !open) return;
+              event.preventDefault();
+              keyboardNavigatingRef.current = true;
+              queueMicrotask(() => {
+                const firstItem = menuContentRef.current?.querySelector<HTMLElement>(
+                  '[role="menuitem"]:not([data-disabled])',
+                );
+                firstItem?.focus();
+              });
+            }}
+            onClick={(event) => {
+              if (event.detail !== 0) return;
+              event.preventDefault();
+              toggleFromClick();
+            }}
+          >
+            <MoreHorizontal className="mr-2 h-4 w-4" />
+            更多
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          ref={menuContentRef}
+          align="end"
+          className="w-56"
+          data-testid="portfolio-more-menu"
+          onCloseAutoFocus={(event) => {
+            if (!skipCloseFocusRef.current) return;
+            skipCloseFocusRef.current = false;
+            event.preventDefault();
+          }}
+          onFocusOutside={(event) => {
+            if (!restoringHoverFocusRef.current) return;
+            restoringHoverFocusRef.current = false;
+            event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            // 放行触发器 pointerdown，由组件显式决定固定或关闭
+            const original = event.detail.originalEvent;
+            if (original.button !== 0 || original.ctrlKey || !triggerRef.current) return;
+            if (event.composedPath().includes(triggerRef.current)) event.preventDefault();
+          }}
+          onPointerEnter={cancelClose}
+          onPointerLeave={closeSoon}
+          onKeyDown={(event) => {
+            if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+              keyboardNavigatingRef.current = true;
+            }
+          }}
+        >
+          {menuLinks().map(({ href, label, icon: Icon }) => (
+            <DropdownMenuItem asChild key={href} className="h-11">
+              <Link href={`${basePath}/${portfolioCode}/${href}`}>
+                <Icon className="mr-2 h-4 w-4 text-muted-foreground" />
+                {label}
+              </Link>
+            </DropdownMenuItem>
+          ))}
+          {onDeleteClick && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs text-muted-foreground">危险操作</DropdownMenuLabel>
+              <DropdownMenuItem
+                className="h-11 text-destructive"
+                disabled={isDeletePending}
+                onSelect={(event) => {
+                  // 拦掉 Radix 的返回焦点，让 AlertDialog 自己接管
+                  event.preventDefault();
+                  hoverOpenedRef.current = false;
+                  skipCloseFocusRef.current = true;
+                  setOpen(false);
+                  onDeleteClick();
+                }}
+                data-testid={`portfolio-delete-${portfolioCode}`}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                删除组合
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

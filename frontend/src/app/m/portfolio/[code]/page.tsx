@@ -31,7 +31,6 @@ import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
-import ManageLinksCard from "@/components/shared/ManageLinksCard";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
 import SnapshotCatchupAlert from "@/components/shared/SnapshotCatchupAlert";
 import LedgerContent from "@/components/shared/LedgerContent";
@@ -130,6 +129,21 @@ function MobilePortfolioDetailInner() {
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses, theme);
+  // 组合操作组（#943 S4）：台账与非台账共用同一组入参，仅放置位置不同
+  const actionButtons = (
+    <PortfolioActionButtons
+      portfolioCode={code}
+      status={portfolio.status as "draft" | "active" | "closed"}
+      kind={portfolio.kind}
+      basePath="/m/portfolio"
+      variant="mobile"
+      isAdmin={isAdmin}
+      onActivateClick={() => (isLedger && isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code))}
+      isActivatePending={isLedger && isDraft ? activateLedger.isPending : activatePortfolio.isPending}
+      onDeleteClick={isAdmin && isDeletable ? () => setIsDeleteOpen(true) : undefined}
+      isDeletePending={deletePortfolio.isPending}
+    />
+  );
 
   return (
     <div className="space-y-4 p-4 pb-24">
@@ -177,19 +191,7 @@ function MobilePortfolioDetailInner() {
       {isLedger ? (
         /* 台账型独立视图（issue #905 PR3）：操作区（激活/删除）+ LedgerContent；无净值/份额/投资人 Tab */
         <>
-          {isAdmin && (
-            <PortfolioActionButtons
-              portfolioCode={code}
-              status={portfolio.status as "draft" | "active" | "closed"}
-              kind={portfolio.kind}
-              basePath="/m/portfolio"
-              variant="mobile"
-              onActivateClick={() => (isDraft ? activateLedger.mutate(code) : activatePortfolio.mutate(code))}
-              isActivatePending={isDraft ? activateLedger.isPending : activatePortfolio.isPending}
-              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
-              isDeletePending={deletePortfolio.isPending}
-            />
-          )}
+          {isAdmin && actionButtons}
           <DeletePortfolioDialog
             open={isDeleteOpen}
             onOpenChange={setIsDeleteOpen}
@@ -223,20 +225,8 @@ function MobilePortfolioDetailInner() {
             />
           )}
 
-          {/* 高频操作 + #786 上移入口：单层 2 列网格由组件内部控制（draft/closed 整行），
-              外层不再嵌套 grid（#786 收敛既有双层 grid 挤压） */}
-          {isAdmin && (
-            <PortfolioActionButtons
-              portfolioCode={code}
-              status={portfolio.status as "draft" | "active" | "closed"}
-              basePath="/m/portfolio"
-              variant="mobile"
-              onActivateClick={() => activatePortfolio.mutate(code)}
-              isActivatePending={activatePortfolio.isPending}
-              onDeleteClick={isDeletable ? () => setIsDeleteOpen(true) : undefined}
-              isDeletePending={deletePortfolio.isPending}
-            />
-          )}
+          {/* 吸底操作 bar（#943 S4）：主动作 +「更多」Sheet，单层网格由组件内部控制 */}
+          {actionButtons}
           {/* 删除空壳确认（#820 扩围，与桌面端共用弹窗） */}
           <DeletePortfolioDialog
             open={isDeleteOpen}
@@ -304,13 +294,6 @@ function MobilePortfolioDetailInner() {
               <PerformanceMetrics data={performance} variant="mobile" />
             </>
           )}
-
-          {/* 页尾「管理」列表（#595 抽取共享卡，桌面端同卡；#786 按场景去重） */}
-          <ManageLinksCard
-            basePath="/m/portfolio"
-            code={code}
-            status={portfolio.status as "draft" | "active" | "closed"}
-          />
         </>
       )}
     </div>
@@ -318,7 +301,7 @@ function MobilePortfolioDetailInner() {
 }
 
 /**
- * 移动端组合详情页（issue #99 单列同构；#595 持仓双视图 + ?view= 持久化 + 管理卡共享）。
+ * 移动端组合详情页（issue #99 单列同构；#595 持仓双视图 + ?view= 持久化 + #943 统一操作菜单）。
  * useSearchParams 需包 Suspense 边界（Next 15 静态预渲染要求）。
  */
 export default function MobilePortfolioDetailPage() {

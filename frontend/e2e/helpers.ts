@@ -111,42 +111,29 @@ export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): 
 }
 
 /**
- * 打开移动端页头/吸底 bar 的 ⋯「页面更多操作」抽屉（#904 P1c-3）：
- * 次动作与删除入口收进 sheet，断言/点击前须先开；桌面无 sheet，no-op。
+ * 打开组合详情「更多」菜单（#943）：桌面先移开指针再 hover 触发 enter，打开后勿移开指针，
+ * 否则悬停菜单会自动关闭；移动端从关闭态点击打开 Sheet。
  */
-export async function openMobilePageActionsIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
-  if (testInfo.project.name !== 'mobile') return;
-  await page.getByRole('button', { name: '页面更多操作' }).click();
-}
-
-/**
- * 点击组合详情页尾「管理」卡链接（#904 P1c-3）：移动 fixed 吸底 bar 占视口底部，
- * 管理卡在页尾、pb-24 预留空间须滚到页底才露出链接；Playwright 最小滚动会把链接
- * 落在 bar 下被拦截，故移动先滚页底再点。桌面无 bar，no-op 直点。
- */
-export async function clickPortfolioManageLink(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+export async function openPortfolioMoreMenu(page: Page, testInfo: TestInfo): Promise<void> {
+  await settlePopovers(page);
+  const trigger = page.getByTestId('portfolio-more-trigger');
   if (testInfo.project.name === 'mobile') {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(300);
+    await trigger.click();
+  } else {
+    await page.mouse.move(0, 0);
+    await trigger.hover();
   }
-  await page.getByRole('link', { name }).click();
+  await expect(page.getByTestId('portfolio-more-menu')).toBeVisible();
 }
 
-/**
- * 组合详情页「份额变动事件」入口（#904 P1c-3，状态感知）：draft 管理卡含该链接；
- * active 管理卡不含（#786 移页头操作区，c-3 移动收 ⋯ 抽屉）。E2E_PORT 的 draft 契约
- * 会被并行 trade-buy-amount-linkage 激活（#636），故按 API 现状分流，不假设状态。
- */
-export async function clickEventsEntryFromDetail(page: Page, testInfo: TestInfo, code: string): Promise<void> {
-  const headers = await authHeaders(page);
-  const resp = await page.request.get(`/api/portfolios/${code}`, { headers });
-  const status = ((await resp.json()) as { status: string }).status;
-  if (testInfo.project.name === 'mobile' && status !== 'draft') {
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await page.getByRole('link', { name: '份额变动事件' }).click();
-  } else {
-    await clickPortfolioManageLink(page, testInfo, '份额变动事件');
-  }
+/** 从组合详情「更多」菜单（双端同一入口）进入历史导航页。 */
+export async function clickPortfolioMoreMenuItem(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+  await openPortfolioMoreMenu(page, testInfo);
+  const menu = page.getByTestId('portfolio-more-menu');
+  await menu
+    .getByRole('menuitem', { name, exact: true })
+    .or(menu.getByRole('link', { name, exact: true }))
+    .click();
 }
 
 /**

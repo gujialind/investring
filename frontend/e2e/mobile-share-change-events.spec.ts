@@ -14,9 +14,8 @@ import {
   E2E_ACTIVE,
   E2E_PORT,
   authHeaders,
+  clickPortfolioMoreMenuItem,
   collectPageErrors,
-  clickEventsEntryFromDetail,
-  openMobilePageActionsIfMobile,
   dialogByTitle,
   gotoPortfolioDetail,
 } from './helpers';
@@ -24,18 +23,17 @@ import {
 /** 进入 E2E_PORT 移动端详情页（经 middleware 重定向到 /m），返回组合 code */
 async function gotoMobilePortfolioDetail(page: Page): Promise<string> {
   await gotoPortfolioDetail(page, E2E_PORT);
-  await expect(page.getByRole('heading', { name: '管理' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('page-header')).toBeVisible({ timeout: 15_000 });
   return E2E_PORT;
 }
 
 test.describe('移动端份额变动事件页（#276）', () => {
-  test('管理列表入口跳转并渲染列表/筛选', async ({ page }, testInfo) => {
+  test('更多菜单入口跳转并渲染列表/筛选', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '移动端入口断言仅针对移动项目');
     const errors = collectPageErrors(page);
 
     const code = await gotoMobilePortfolioDetail(page);
-    // 入口：页尾「管理」列表第 5 项
-    await clickEventsEntryFromDetail(page, testInfo, code);
+    await clickPortfolioMoreMenuItem(page, testInfo, '份额变动事件');
     await expect(page).toHaveURL(`/m/portfolio/${code}/share-change-events`);
 
     // 页面骨架：标题 + 新建按钮 + 筛选折叠按钮（移动端形态）
@@ -51,8 +49,8 @@ test.describe('移动端份额变动事件页（#276）', () => {
 
   test('筛选折叠面板展开显示控件', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '仅移动端项目');
-    const code = await gotoMobilePortfolioDetail(page);
-    await clickEventsEntryFromDetail(page, testInfo, code);
+    await gotoMobilePortfolioDetail(page);
+    await clickPortfolioMoreMenuItem(page, testInfo, '份额变动事件');
     await page.getByRole('button', { name: '筛选' }).waitFor({ timeout: 15_000 });
 
     // 折叠态：筛选控件不可见
@@ -65,8 +63,8 @@ test.describe('移动端份额变动事件页（#276）', () => {
 
   test('新建事件弹窗可打开（移动端单列表单）', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '仅移动端项目');
-    const code = await gotoMobilePortfolioDetail(page);
-    await clickEventsEntryFromDetail(page, testInfo, code);
+    await gotoMobilePortfolioDetail(page);
+    await clickPortfolioMoreMenuItem(page, testInfo, '份额变动事件');
     await page.getByRole('button', { name: '新建事件' }).waitFor({ timeout: 15_000 });
 
     await page.getByRole('button', { name: '新建事件' }).click();
@@ -110,7 +108,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
     const created = await createResp.json();
 
     try {
-      await clickEventsEntryFromDetail(page, testInfo, code);
+      await clickPortfolioMoreMenuItem(page, testInfo, '份额变动事件');
 
       // 列表展示（#342 → #355 双行）：产品列主行名称、次行 `显示码 · 市场名`（虚拟产品 market 为空则无后缀）
       // #705：行内代码位是显示码而非机器码，故按列表端点派生的 display_code 定位（产品列表
@@ -156,7 +154,7 @@ test.describe('移动端份额变动事件页（#276）', () => {
     // 最新快照，若最早快照日尚无该 (product, market, platform) 持仓行，创建期放行、
     // 预览精查 POSITION_NOT_FOUND → 弹窗走 error 通道，用例硬失败而非 skip
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    await expect(page.getByRole('heading', { name: '管理' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('page-header')).toBeVisible({ timeout: 15_000 });
     const headers = await authHeaders(page);
 
     const navHistory = await (
@@ -244,10 +242,8 @@ test.describe('移动端份额变动事件页（#276）', () => {
     const divEvent = await divResp.json();
 
     try {
-      // active 组合的事件入口在页头操作区（#786），c-3 起移动收 ⋯ 抽屉；
-      // 桌面行内链接直点（helper no-op）
-      await openMobilePageActionsIfMobile(page, testInfo);
-      await page.getByRole('link', { name: '份额变动事件' }).click();
+      // active 组合的事件入口在「更多」菜单（#943 S4，双端同一 helper）
+      await clickPortfolioMoreMenuItem(page, testInfo, '份额变动事件');
       // 同产品两条事件，按事件类型文案区分行
       const row = page.locator('[data-testid^="share-event-"]')
         .filter({ hasText: heldDisplay })
