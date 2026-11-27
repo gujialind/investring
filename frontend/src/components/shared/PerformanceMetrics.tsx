@@ -18,14 +18,12 @@ function Metric({
   value,
   hint,
   colored = true,
-  suffix,
 }: {
   label: string;
   value: number | null | undefined;
   hint?: string;
   /** 是否按涨跌着色（回撤/波动率等非收益指标不着色） */
   colored?: boolean;
-  suffix?: string;
 }) {
   const hasValue = value !== null && value !== undefined;
   return (
@@ -39,7 +37,7 @@ function Metric({
           hasValue && colored ? getReturnColorClass(value) : ""
         }`}
       >
-        {hasValue ? `${formatReturnRate(value, 2, colored)}${suffix || ""}` : "--"}
+        {hasValue ? formatReturnRate(value, 2, colored) : "--"}
       </div>
     </div>
   );

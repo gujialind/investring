@@ -15,6 +15,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const suppressFocusOpen = useRef(false);
+  const focusWithinContent = useRef(false);
 
   const cancelClose = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -24,7 +25,6 @@ export default function InfoTip({ label, content }: InfoTipProps) {
   const closeSoon = () => {
     cancelClose();
     closeTimer.current = setTimeout(() => {
-      suppressFocusOpen.current = true;
       setOpen(false);
     }, 120);
   };
@@ -43,17 +43,16 @@ export default function InfoTip({ label, content }: InfoTipProps) {
       open={open}
       onOpenChange={(next) => {
         cancelClose();
-        if (!next) suppressFocusOpen.current = true;
         setOpen(next);
       }}
     >
-      <span className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center">
+      <span className="relative mx-3 inline-flex h-5 w-5 shrink-0 items-center justify-center">
         <PopoverTrigger asChild>
           <button
             type="button"
             aria-label={label}
             aria-expanded={open}
-            aria-controls={contentId}
+            aria-controls={open ? contentId : undefined}
             aria-describedby={open ? contentId : undefined}
             className="absolute inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             onPointerDown={() => {
@@ -87,10 +86,9 @@ export default function InfoTip({ label, content }: InfoTipProps) {
               if (!next && open) return;
               closeSoon();
             }}
-            onClick={() => {
+            onClick={(event) => {
               cancelClose();
-              if (open) suppressFocusOpen.current = true;
-              setOpen((current) => !current);
+              if (open && canHover() && event.detail !== 0) event.preventDefault();
             }}
           >
             <Info aria-hidden="true" className="h-3.5 w-3.5" />
@@ -100,10 +98,33 @@ export default function InfoTip({ label, content }: InfoTipProps) {
       <PopoverContent
         ref={contentRef}
         id={contentId}
+        aria-label={label}
         sideOffset={6}
         className="w-80 max-w-[calc(100vw-2rem)] text-sm leading-6"
         data-testid="info-tip-content"
         onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => {
+          const restoreFocus = focusWithinContent.current;
+          focusWithinContent.current = false;
+          suppressFocusOpen.current = restoreFocus;
+          if (restoreFocus) {
+            // Radix 随后同步归还焦点；微任务仅清理未被 onFocus 消费的抑制标记。
+            queueMicrotask(() => {
+              suppressFocusOpen.current = false;
+            });
+          } else {
+            event.preventDefault();
+          }
+        }}
+        onFocusCapture={() => {
+          focusWithinContent.current = true;
+        }}
+        onBlurCapture={(event) => {
+          const next = event.relatedTarget as Node | null;
+          focusWithinContent.current = next
+            ? (contentRef.current?.contains(next) ?? false)
+            : false;
+        }}
         onPointerEnter={(event) => {
           if (event.pointerType === "mouse" && canHover()) cancelClose();
         }}

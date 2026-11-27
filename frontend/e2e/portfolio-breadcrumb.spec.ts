@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { E2E_ACTIVE, portfolioPath } from "./helpers";
+import { BREADCRUMB_LONG_NAME, E2E_ACTIVE, portfolioPath } from "./helpers";
 
 const portfolioApi = /\/api\/portfolios\/E2E_ACTIVE$/;
 const portfolioName = "E2E 活跃组合";
 
 test.describe("组合子页面包屑（#943 S1）", () => {
   test("长组合名完整可访问、href 仍用 code，窄栏不产生页面横向溢出", async ({ page }, testInfo) => {
-    const longName = "这是一个用于验证组合子页面包屑长名称换行与完整可访问语义的家庭投资组合";
+    const longName = BREADCRUMB_LONG_NAME;
     await page.route(portfolioApi, async (route) => {
       const response = await route.fetch();
       const body = await response.json();
