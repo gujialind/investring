@@ -18,10 +18,7 @@ interface BottomNavProps {
 
 /**
  * 底部导航（#650 合并自 layout/MobileNav 与 mobile/BottomNav 两份实现，样式取较新一套：
- * backdrop-blur、图标胶囊、激活圆点。合并说明原先还把 `safe-area-pb` 列为「较新一套」的
- * 依据之一，但该类全仓无定义（globals.css 只有 number-cell / amount-large / amount-small
- * 三个 @utility），是个不生效的空类名；它在本组件与已删的 mobile/BottomNav 里都存在，
- * 属既存、不作为选型理由，也不要在别处照抄）。
+ * backdrop-blur、图标胶囊、激活圆点、safe-area-pb 底部安全区）。
  * 桌面窄屏（视口 <1024px）由 MainLayout 常驻渲染；移动站由 MobileLayout 仅在一级 Tab 页渲染。
  */
 export default function BottomNav({ basePath }: BottomNavProps) {
