@@ -65,11 +65,28 @@ const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-rese
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 const INFO_TIP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
 
+/** --path 可带查询串，故一律按 URL 解析；相对路径以占位 base 补全 */
+function parseUrl(path) {
+  return new URL(path, 'http://localhost');
+}
+
+function isProductDetailPath(pathname) {
+  return pathname.includes('/product/') || (pathname.includes('/platforms/') && pathname.includes('/products/'));
+}
+
 function infoTipLabelForPath(path) {
-  const pathname = new URL(path, 'http://localhost').pathname;
+  const url = parseUrl(path);
+  if (url.hash) return null;
+  const { pathname } = url;
+  const isProductDetail = isProductDetailPath(pathname);
+  if (url.search) {
+    const keys = [...url.searchParams.keys()];
+    if (!isProductDetail || keys.length !== 1 || keys[0] !== 'market') return null;
+  }
   if (pathname.endsWith('/snapshots')) return '查看自动生成快照说明';
-  if (pathname.includes('/product/') || (pathname.includes('/platforms/') && pathname.includes('/products/'))) return '查看累计收益说明';
+  if (isProductDetail) return '查看累计收益说明';
   if (pathname === INFO_TIP_DEFAULT_PATH || pathname === `/m${INFO_TIP_DEFAULT_PATH}`) {
+    // 与 PerformanceMetrics 的 label="MWR 年化" + `查看${label}说明` 组合保持一致。
     return '查看MWR 年化说明';
   }
   return null;
@@ -131,19 +148,21 @@ if (opts.scenario === 'portfolio-breadcrumb-long-name') {
 }
 if (opts.scenario === 'info-tip') {
   if (!pathsExplicit) opts.paths = [INFO_TIP_DEFAULT_PATH];
-  const shotSlugs = new Set();
   for (const path of opts.paths) {
     if (!infoTipLabelForPath(path)) {
       console.error(`info-tip 场景不支持路径: ${path}；可用：种子组合详情（${INFO_TIP_DEFAULT_PATH}）、产品/平台产品详情、快照页`);
       process.exit(2);
     }
-    const slug = shotSlug(path);
-    if (shotSlugs.has(slug)) {
-      console.error(`info-tip 场景截图文件名冲突: ${path}（slug ${slug}）；请改用可区分的路径`);
-      process.exit(2);
-    }
-    shotSlugs.add(slug);
   }
+}
+const shotSlugs = new Set();
+for (const path of opts.paths) {
+  const slug = shotSlug(path);
+  if (shotSlugs.has(slug)) {
+    console.error(`截图文件名冲突: ${path}（slug ${slug}）；请改用可区分的路径`);
+    process.exit(2);
+  }
+  shotSlugs.add(slug);
 }
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
@@ -175,7 +194,8 @@ async function ensureLoggedIn(page, context) {
 }
 
 function shotSlug(path) {
-  return path.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+  const pathname = parseUrl(path).pathname;
+  return pathname.split('/').filter(Boolean).slice(-2).join('-') || 'root';
 }
 
 function shotName(path, device, theme) {
@@ -188,7 +208,7 @@ function shotName(path, device, theme) {
 async function runScenario(page, scenario, device) {
   if (scenario === 'info-tip') {
     const label = infoTipLabelForPath(page.url());
-    if (!label) throw new Error(`info-tip 场景不支持路径: ${new URL(page.url()).pathname}`);
+    if (!label) throw new Error(`info-tip 场景不支持路径: ${page.url()}`);
     const trigger = page.getByRole('button', { name: label });
     if (device === 'desktop') await trigger.hover();
     else await trigger.tap();

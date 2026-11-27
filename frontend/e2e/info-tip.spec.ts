@@ -31,6 +31,9 @@ test.describe("共享说明触发器（#943 S2）", () => {
     expect(box).not.toBeNull();
     expect(box!.width).toBeGreaterThanOrEqual(44);
     expect(box!.height).toBeGreaterThanOrEqual(44);
+    const valueBox = await page.getByTestId("product-cumulative-profit").boundingBox();
+    expect(valueBox).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(valueBox!.y + 1);
 
     if (testInfo.project.name === "chromium") {
       await page.evaluate(() => {
@@ -112,6 +115,51 @@ test.describe("共享说明触发器（#943 S2）", () => {
     }
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
+  });
+
+  test("触控设备即使报告支持悬停，再次点按仍可关闭说明", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "需要触控输入语义；键盘 Tab/Enter/Escape 镜像由 chromium 分支覆盖");
+    await page.goto(PRODUCT_PATH);
+    // 与 InfoTip.canHover 的媒体查询保持同步，确保本用例确实进入 hover-capable 分支。
+    await page.evaluate((hoverQuery) => {
+      const originalMatchMedia = window.matchMedia.bind(window);
+      window.matchMedia = ((query: string) => {
+        if (query !== hoverQuery) return originalMatchMedia(query);
+        return {
+          matches: true,
+          media: query,
+          onchange: null,
+          addListener() {},
+          removeListener() {},
+          addEventListener() {},
+          removeEventListener() {},
+          dispatchEvent: () => false,
+        } as MediaQueryList;
+      }) as typeof window.matchMedia;
+    }, "(hover: hover) and (pointer: fine)");
+    const trigger = page.getByRole("button", { name: "查看累计收益说明" });
+    const content = page.getByTestId("info-tip-content");
+
+    await trigger.tap();
+    await expect(content).toBeVisible();
+    await trigger.tap();
+    await expect(content).toHaveCount(0);
+  });
+
+  test("窗口失去焦点时释放说明浮层的焦点锁定", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "chromium", "需要键盘焦点与鼠标悬停语义");
+    await page.goto(PRODUCT_PATH);
+    const trigger = page.getByRole("button", { name: "查看累计收益说明" });
+    const content = page.getByTestId("info-tip-content");
+
+    await trigger.focus();
+    await expect(content).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await expect(content).toHaveCount(0);
+    await trigger.hover();
+    await expect(content).toBeVisible();
+    await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
+    await expect(content).toHaveCount(0);
   });
 
   test("自动快照说明默认收起，点说明文字不误关且不触发开关写入", async ({ page }, testInfo) => {

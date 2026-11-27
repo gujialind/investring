@@ -17,6 +17,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
   const suppressFocusOpen = useRef(false);
   const focusPinned = useRef(false);
   const focusWithinContent = useRef(false);
+  const lastPointerType = useRef<string | null>(null);
 
   const cancelClose = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -33,6 +34,8 @@ export default function InfoTip({ label, content }: InfoTipProps) {
 
   const canHover = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
   const hoverCloseSuppressed = () => focusPinned.current || focusWithinContent.current;
+  const lastPressWasTouch = () =>
+    lastPointerType.current === "touch" || lastPointerType.current === "pen";
 
   const handleHoverEnd = (event: PointerEvent) => {
     if (event.pointerType === "mouse" && canHover() && !hoverCloseSuppressed()) {
@@ -40,12 +43,20 @@ export default function InfoTip({ label, content }: InfoTipProps) {
     }
   };
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const releaseFocusPin = () => {
       if (closeTimer.current) clearTimeout(closeTimer.current);
-    },
-    [],
-  );
+      closeTimer.current = null;
+      focusPinned.current = false;
+      focusWithinContent.current = false;
+      setOpen(false);
+    };
+    window.addEventListener("blur", releaseFocusPin);
+    return () => {
+      window.removeEventListener("blur", releaseFocusPin);
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    };
+  }, []);
 
   return (
     <Popover
@@ -56,7 +67,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
         setOpen(next);
       }}
     >
-      <span className="relative mx-3 inline-flex h-5 w-5 shrink-0 items-center justify-center">
+      <span className="relative inline-flex h-11 w-11 shrink-0 items-center justify-center">
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -64,8 +75,9 @@ export default function InfoTip({ label, content }: InfoTipProps) {
             aria-expanded={open}
             aria-controls={open ? contentId : undefined}
             aria-describedby={open ? contentId : undefined}
-            className="absolute inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            onPointerDown={() => {
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            onPointerDown={(event) => {
+              lastPointerType.current = event.pointerType;
               suppressFocusOpen.current = false;
               focusPinned.current = false;
             }}
@@ -102,7 +114,9 @@ export default function InfoTip({ label, content }: InfoTipProps) {
             }}
             onClick={(event) => {
               cancelClose();
-              if (open && canHover() && event.detail !== 0) event.preventDefault();
+              const touchLike = lastPressWasTouch();
+              lastPointerType.current = null;
+              if (open && !touchLike && canHover() && event.detail !== 0) event.preventDefault();
             }}
           >
             <Info aria-hidden="true" className="h-3.5 w-3.5" />
