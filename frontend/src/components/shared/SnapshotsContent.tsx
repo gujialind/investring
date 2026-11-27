@@ -375,16 +375,14 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
 
           {/* 组合级自动快照开关（#156） */}
           <div className="mt-4 flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-1">
-                <Label htmlFor="auto-snapshot-switch" className="text-sm font-medium">
-                  自动生成快照
-                </Label>
-                <InfoTip
-                  label="查看自动生成快照说明"
-                  content="开启后每个交易日由定时任务自动补齐快照；关闭不影响手动生成"
-                />
-              </div>
+            <div className="flex items-center gap-1">
+              <Label htmlFor="auto-snapshot-switch" className="text-sm font-medium">
+                自动生成快照
+              </Label>
+              <InfoTip
+                label="查看自动生成快照说明"
+                content="开启后每个交易日由定时任务自动补齐快照；关闭不影响手动生成"
+              />
             </div>
             <Switch
               id="auto-snapshot-switch"

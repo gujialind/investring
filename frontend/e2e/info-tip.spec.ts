@@ -24,6 +24,7 @@ test.describe("共享说明触发器（#943 S2）", () => {
     const trigger = page.getByRole("button", { name: "查看累计收益说明" });
     const content = page.getByTestId("info-tip-content");
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(await trigger.getAttribute("aria-controls")).toBeNull();
     await expect(page.getByText(CUMULATIVE_HINT, { exact: true })).toHaveCount(0);
 
     const box = await trigger.boundingBox();
@@ -32,19 +33,39 @@ test.describe("共享说明触发器（#943 S2）", () => {
     expect(box!.height).toBeGreaterThanOrEqual(44);
 
     if (testInfo.project.name === "chromium") {
+      await page.evaluate(() => {
+        const input = document.createElement("input");
+        input.id = "info-tip-focus-probe";
+        input.style.position = "fixed";
+        input.style.left = "-10000px";
+        document.body.append(input);
+      });
+      const focusProbe = page.locator("#info-tip-focus-probe");
+      await focusProbe.focus();
       await trigger.hover();
       await expect(content).toBeVisible();
+      const contentId = await trigger.getAttribute("aria-controls");
+      expect(contentId).not.toBeNull();
+      await expect(content).toHaveAttribute("id", contentId!);
+      await expect(content).toHaveAttribute("aria-label", "查看累计收益说明");
       await content.hover();
       await expect(content).toBeVisible();
 
       await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
       await expect(content).toHaveCount(0);
+      await expect(focusProbe).toBeFocused();
 
       await page.keyboard.press("Tab");
       await trigger.focus();
       await expect(content).toBeVisible();
       const shadow = await trigger.evaluate((element) => getComputedStyle(element).boxShadow);
       expect(shadow).not.toBe("none");
+      await page.keyboard.press("Tab");
+      await expect(content).toHaveCount(0);
+      await expect(trigger).not.toBeFocused();
+
+      await trigger.focus();
+      await expect(content).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(content).toHaveCount(0);
     } else {
@@ -69,6 +90,12 @@ test.describe("共享说明触发器（#943 S2）", () => {
     const toggle = page.getByRole("switch", { name: "自动生成快照" });
     const trigger = page.getByRole("button", { name: "查看自动生成快照说明" });
     const content = page.getByTestId("info-tip-content");
+    const label = page.locator('label[for="auto-snapshot-switch"]');
+    const labelBox = await label.boundingBox();
+    const triggerBox = await trigger.boundingBox();
+    expect(labelBox).not.toBeNull();
+    expect(triggerBox).not.toBeNull();
+    expect(triggerBox!.x).toBeGreaterThanOrEqual(labelBox!.x + labelBox!.width - 1);
     const checked = await toggle.isChecked();
     const updates: string[] = [];
     page.on("request", (request) => {

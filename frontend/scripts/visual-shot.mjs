@@ -17,7 +17,8 @@
  *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）；
  *             portfolio-breadcrumb-long-name = 组合子页长名称面包屑（#943 S1，仅改写
  *             当前页面的组合查询响应，不写库、不生成/重算快照）；
- *             info-tip = 说明浮层取证（#943 S2，按 path 打开产品/平台产品/快照/绩效说明）
+ *             info-tip = 说明浮层取证（#943 S2，未传 --path 时默认组合详情，也可指定
+ *             产品/平台产品/快照/绩效说明所在页面）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -63,6 +64,18 @@ const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 const BREADCRUMB_SCENARIO_PATH = '/portfolio/E2E_ACTIVE/trades';
 const BREADCRUMB_FIXTURE_CODE = BREADCRUMB_SCENARIO_PATH.split('/')[2];
 const BREADCRUMB_LONG_NAME = '这是一个用于验证组合子页面包屑长名称换行与完整可访问语义的家庭投资组合';
+const INFO_TIP_DEFAULT_PATH = '/portfolio/E2E_ACTIVE';
+
+function infoTipLabelForPath(path) {
+  const pathname = new URL(path, 'http://localhost').pathname;
+  if (pathname.endsWith('/snapshots')) return '查看自动生成快照说明';
+  if (pathname.includes('/platforms/') && pathname.includes('/products/')) return '查看累计收益说明';
+  if (pathname.includes('/product/')) return '查看累计收益说明';
+  if (pathname === INFO_TIP_DEFAULT_PATH || pathname === `/m${INFO_TIP_DEFAULT_PATH}`) {
+    return '查看MWR 年化说明';
+  }
+  return null;
+}
 
 const opts = {
   base: 'http://localhost:3000',
@@ -118,6 +131,22 @@ if (opts.scenario === 'portfolio-breadcrumb-long-name') {
   }
   opts.paths = [BREADCRUMB_SCENARIO_PATH];
 }
+if (opts.scenario === 'info-tip') {
+  if (!pathsExplicit) opts.paths = [INFO_TIP_DEFAULT_PATH];
+  const shotSlugs = new Set();
+  for (const path of opts.paths) {
+    if (!infoTipLabelForPath(path)) {
+      console.error(`info-tip 场景不支持路径: ${path}；可用：种子组合详情（${INFO_TIP_DEFAULT_PATH}）、产品/平台产品详情、快照页`);
+      process.exit(2);
+    }
+    const slug = shotSlug(path);
+    if (shotSlugs.has(slug)) {
+      console.error(`info-tip 场景截图文件名冲突: ${path}（slug ${slug}）；请改用可区分的路径`);
+      process.exit(2);
+    }
+    shotSlugs.add(slug);
+  }
+}
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
   if (!(d in DEVICES)) {
@@ -147,8 +176,12 @@ async function ensureLoggedIn(page, context) {
   console.log(`✔ 登录态已失效，重新登录并写入 ${AUTH_FILE}`);
 }
 
+function shotSlug(path) {
+  return path.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+}
+
 function shotName(path, device, theme) {
-  const slug = path.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+  const slug = shotSlug(path);
   const suffix = theme === 'dark' ? '-dark' : '';
   return `${slug}-${device}${suffix}.png`;
 }
@@ -156,13 +189,8 @@ function shotName(path, device, theme) {
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
   if (scenario === 'info-tip') {
-    const path = new URL(page.url()).pathname;
-    let label;
-    if (path.endsWith('/snapshots')) label = '查看自动生成快照说明';
-    else if (path.includes('/platforms/') && path.includes('/products/')) label = '查看累计收益说明';
-    else if (path.includes('/product/')) label = '查看累计收益说明';
-    else if (/\/portfolio\/E2E_ACTIVE$/.test(path)) label = '查看MWR 年化说明';
-    else throw new Error(`info-tip 场景不支持路径: ${path}`);
+    const label = infoTipLabelForPath(page.url());
+    if (!label) throw new Error(`info-tip 场景不支持路径: ${new URL(page.url()).pathname}`);
     const trigger = page.getByRole('button', { name: label });
     if (device === 'desktop') await trigger.hover();
     else await trigger.tap();
@@ -302,7 +330,6 @@ for (const device of opts.devices) {
       if (loginOnly) await ctx.addInitScript((t) => localStorage.setItem('theme', t), theme);
       const page = await ctx.newPage();
       await page.goto(path, { waitUntil: 'domcontentloaded' });
-      const suffix = theme === 'dark' ? '-dark' : '';
       if (opts.scenario && !loginOnly) {
         const handle = await runScenario(page, opts.scenario, device);
         await page.waitForTimeout(300); // 浮层入场收尾
