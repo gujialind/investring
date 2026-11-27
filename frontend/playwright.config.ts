@@ -30,6 +30,7 @@ export default defineConfig({
   testDir: './e2e',
   outputDir: process.env.E2E_OUTPUT_DIR || 'test-results',
   timeout: 30_000,
+  // 断言轮询上界：全局 5s；mobile project 单独放宽到 15s（#958，理由见 projects.mobile 注释）
   expect: { timeout: 5_000 },
 
   // CI 中失败自动重试 2 次
@@ -54,6 +55,12 @@ export default defineConfig({
     // 会在回落到 actionTimeout 之前先短路，所以放宽动作上界也救不了卡住的导航。
     // 另外 helpers.ts 的 3_000 分支探针必须保持显式且小于本值，否则 openPopover 的
     // 「有没有开成」判定会被上界改写。
+    // ③ 三层上界按 project 分级（#958，沿用 #763 的帧率计费口径；实测判据见下方
+    // projects.mobile 注释）：mobile 把动作上界放宽到 20_000、断言上界放宽到
+    // 15_000、用例总预算放宽到 90_000，chromium 全部保持本文件的全局值。三者的
+    // 从属关系不变：各自的 actionTimeout 仍须严格小于所属 project 的用例总预算
+    // （mobile 20s < 90s）；navigationTimeout 不随 project 变，仍 15_000，对 mobile
+    // 90s 的用例预算同样成立。spec 内显式 `{ timeout: N }` 是语义而非兜底，恒优先。
     actionTimeout: 10_000,
     // 导航上界（#665）：platform-detail 的深链用例偶发抖动此前只能撞 timeout: 30_000
     // 收场，报错是「Test timeout exceeded」，指不到 waitForURL 这一步。取 15_000：
@@ -103,9 +110,27 @@ export default defineConfig({
     //      （JS 较慢的引擎先触发）——auth.setup.ts/auth.spec.ts 已加水合等待
     {
       name: 'mobile',
+      // mobile 的三层预算单点放宽（#958，沿用 #763 的帧率计费口径）：
+      //   actionTimeout 10_000 → 20_000（动作/`locator.waitFor`/`page.waitForRequest`）
+      //   expect.timeout 5_000 → 15_000（断言轮询）
+      //   timeout 30_000 → 90_000（用例总预算）
+      // 为什么必须放宽内层而不只是总预算：PR #951 第 6 轮采集（run 45869732853）的
+      // 失败点是 `locator.click / page.waitForRequest: Timeout 10000ms exceeded` 与
+      // `toHaveAttribute ... Timeout: 5000ms`——被动作/断言上界卡住，#763 那种只放宽
+      // 用例总预算的写法（mobileTimeout 助手）在这类失败上根本没机会生效。帧间隔实测
+      // 1.7–1.9s，10s 只够约 5 帧（stable 判定本身就要连续两帧），20s 给到约 10 帧。
+      // 顺带把 #763 遗留的「逐 spec 复制 mobileTimeout、其余 spec 内层从未放宽」收成
+      // 单点配置；spec 内显式 test.setTimeout(90_000/120_000) 与显式 `{ timeout: N }`
+      // 仍覆盖本处取值，保持不动。chromium 帧调度不依赖页面视觉变化，三层都保持全局
+      // 值，桌面慢回归照样红。
+      // 「少产生抖动」的另一条（capture 侧 mobile 降并发/串行，#958 方向 3）**尚未落地**：
+      // 须先读到 trace 结论再定，见 frontend/e2e/AGENTS.md §1；trace 取证已同批落地。
+      timeout: 90_000,
+      expect: { timeout: 15_000 },
       use: {
         ...devices['iPhone 13'],
         storageState: authFile,
+        actionTimeout: 20_000,
       },
       dependencies: ['setup'],
     },

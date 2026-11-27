@@ -18,7 +18,7 @@ import {
   nearestTradingDay,
   openAppAndAuth,
   openFilterPanelIfMobile,
-  openMobilePageActionsIfMobile,
+  openPortfolioMoreMenu,
   openPopover,
   openSettingsSection,
   portfolioPath,
@@ -61,9 +61,8 @@ test.describe('页面渲染回归（防 P0 复发）', () => {
     const draftCode = isolatedPortfolioCode('E820R', testInfo, 'D');
     await createPortfolioViaApi(page, headers, draftCode);
     await page.goto(`/portfolio/${draftCode}`);
-    // 移动删除入口收 ⋯ 抽屉（#904 P1c-3），开抽屉再断言入口有无
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(1);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(page.getByTestId(`portfolio-delete-${draftCode}`)).toHaveCount(1);
 
     // closed 夹具必须「先激活再关闭」：#820 收紧后 draft 直接 close 会 422。
     // 激活必落 subscription 行，故这是「closed 且有账」形态——入口仍出现（不本地预判），
@@ -73,13 +72,13 @@ test.describe('页面渲染回归（防 P0 复发）', () => {
     await activatePortfolioViaApi(page, headers, closedCode);
     await closePortfolioViaApi(page, headers, closedCode);
     await page.goto(`/portfolio/${closedCode}`);
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(1);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(page.getByTestId(`portfolio-delete-${closedCode}`)).toHaveCount(1);
 
     // active 用种子契约组合（形态由 backend/tests/integration/test_seed_contract.py 锁定）
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    await openMobilePageActionsIfMobile(page, testInfo);
-    await expect(page.getByRole('button', { name: '删除组合' })).toHaveCount(0);
+    await openPortfolioMoreMenu(page, testInfo);
+    await expect(page.getByTestId(`portfolio-delete-${E2E_ACTIVE}`)).toHaveCount(0);
   });
 });
 

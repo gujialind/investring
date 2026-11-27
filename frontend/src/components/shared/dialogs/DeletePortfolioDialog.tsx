@@ -1,5 +1,6 @@
 "use client";
 
+import type { RefObject } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,6 +20,8 @@ interface DeletePortfolioDialogProps {
   /** 组合代码与名称：确认文案必须点名两者，删除不可恢复（issue #820 口径 Q4） */
   portfolioCode: string;
   portfolioName?: string;
+  /** 菜单/Sheet 打开删除确认时，关闭后回到常驻触发器；列表内联按钮可不传。 */
+  returnFocusRef?: RefObject<HTMLButtonElement | null>;
 }
 
 /**
@@ -36,10 +39,18 @@ export default function DeletePortfolioDialog({
   isPending,
   portfolioCode,
   portfolioName,
+  returnFocusRef,
 }: DeletePortfolioDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        onCloseAutoFocus={(event) => {
+          const target = returnFocusRef?.current;
+          if (!target?.isConnected) return;
+          event.preventDefault();
+          target.focus({ preventScroll: true });
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>删除组合</AlertDialogTitle>
           <AlertDialogDescription>

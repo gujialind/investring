@@ -177,7 +177,7 @@ test.describe('逐笔选择分红方式（#775，桌面/移动共用）', () => 
 
     // #907 移动卡化后列表更高：编辑 toast（fixed top-right）盖住页头「新建事件」，且卡列表
     // settle 后 webkit 停帧致按钮 stability 不可确认（#763 同族）。移动先等 toast 卸载、滚顶
-    // 复位吸顶页头并 nudge 帧再点（同 clickPortfolioManageLink 先例）；桌面不变。
+    // 复位吸顶页头并 nudge 帧再点；桌面不变。
     if (info.project.name === 'mobile') {
       await expect(page.getByTestId('toast-card')).toHaveCount(0, { timeout: 5_000 });
       await page.evaluate(() => window.scrollTo(0, 0));
