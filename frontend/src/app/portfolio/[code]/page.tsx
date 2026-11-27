@@ -4,7 +4,6 @@ import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
 import PageHeader from "@/components/shared/PageHeader";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,7 +23,7 @@ import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { usePortfolioSnapshotSummary } from "@/hooks/useSnapshot";
 import DeletePortfolioDialog from "@/components/shared/dialogs/DeletePortfolioDialog";
-import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
+import AssetCompositionCard from "@/components/shared/AssetCompositionCard";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
@@ -69,7 +68,7 @@ function PortfolioDetailInner() {
   const { data: positionsData, isLoading: positionsLoading } = usePositionList(code, {
     page_size: 100,
   });
-  // asset_class 维度字典（issue #128）：驱动饼图颜色/顺序与持仓分区
+  // asset_class 维度字典（issue #128）：驱动资产构成颜色与持仓分区
   const { data: assetClassDict, isLoading: dictLoading } =
     useAssetClassifications("asset_class");
 
@@ -277,13 +276,8 @@ function PortfolioDetailInner() {
                 </div>
 
                 <div className="w-[360px] shrink-0 space-y-4">
-                  {/* 资产分布（环形图 + 图例；右栏 360 强制竖排，防图例挤压竖排） */}
-                  <Card>
-                    <CardContent className="pt-6">
-                      <h3 className="mb-4 text-sm font-medium">资产分布</h3>
-                      <AssetAllocationPie items={allocation} forceColumn />
-                    </CardContent>
-                  </Card>
+                  {/* 资产分布：默认条形图，可选环形图；右栏 360 强制竖排 */}
+                  <AssetCompositionCard items={allocation} forceColumn />
 
                   {/* #649 起双端共享组件（右栏窄：标题与区间 chips 放不下时整组换行） */}
                   <PortfolioNavTrendCard code={code} variant="desktop" />

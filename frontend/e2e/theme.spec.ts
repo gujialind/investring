@@ -213,6 +213,7 @@ test('登录页双端暗色生效（B1/B5，未认证 context）', async ({ brow
 test('图表暗色：饼图扇区/净值主线走暗色板，Tooltip 无白底（A③/D1）', async ({ page }) => {
   await initTheme(page, 'dark');
   await page.goto(`/portfolio/${E2E_ACTIVE}`);
+  await page.getByTestId('asset-composition-view-pie').click();
   const sector = page.locator('.recharts-pie-sector path').first();
   await expect(sector).toHaveAttribute('fill', '#5C82E0');
   const line = page.locator('.recharts-line-curve').first();

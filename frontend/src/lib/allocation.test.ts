@@ -4,10 +4,18 @@ import {
   categoryCodeOf,
   buildRowPercents,
   buildAllocation,
+  sortAllocationItems,
   PSEUDO_IN_TRANSIT_CODE,
   PSEUDO_OTHER_CODE,
+  type AllocationItem,
 } from "@/lib/allocation";
-import { assetClassColor, DARK_CHART_COLORS, IN_TRANSIT_COLOR, OTHER_COLOR } from "@/lib/colors";
+import {
+  assetClassColor,
+  DARK_CHART_COLORS,
+  IN_TRANSIT_COLOR,
+  OTHER_COLOR,
+  otherColor,
+} from "@/lib/colors";
 import type { Position } from "@/types/position";
 import type { AssetClassificationItem } from "@/types/asset-classification";
 
@@ -164,5 +172,107 @@ describe("buildAllocation theme（#872 PR1，默认 light 行为不变）", () =
 
   it("显式 light 与默认调用结果全等", () => {
     expect(buildAllocation(positions, DICT, "light")).toEqual(buildAllocation(positions, DICT));
+  });
+});
+
+describe("sortAllocationItems", () => {
+  function item(code: string, value: number, percent: number, color = code): AllocationItem {
+    return { code, key: code, value, percent, color };
+  }
+
+  it("按市值降序且不改输入与身份色，同值保持原顺序", () => {
+    const items = [
+      item("cash", 300, 30, assetClassColor(4)),
+      item("stock", 600, 60, assetClassColor(1)),
+      item("bond-a", 200, 10, assetClassColor(2)),
+      item("bond-b", 200, 10, assetClassColor(2)),
+    ];
+    const original = structuredClone(items);
+
+    const result = sortAllocationItems(items, "light");
+
+    expect(result.map((entry) => entry.code)).toEqual(["stock", "cash", "bond-a", "bond-b"]);
+    expect(result.map((entry) => entry.color)).toEqual([
+      assetClassColor(1),
+      assetClassColor(4),
+      assetClassColor(2),
+      assetClassColor(2),
+    ]);
+    expect(items).toEqual(original);
+  });
+
+  it("默认最多 6 类，尾部并入其他且金额与占比守恒", () => {
+    const items = [
+      item("a", 40, 22.2),
+      item("b", 35, 19.5),
+      item("c", 30, 16.7),
+      item("d", 25, 13.9),
+      item("e", 20, 11.1),
+      item("f", 15, 8.3),
+      item("g", 10, 5.6),
+      item("h", 5, 2.7),
+    ];
+
+    const result = sortAllocationItems(items, "light");
+
+    expect(result.map((entry) => entry.code)).toEqual([
+      "a",
+      "b",
+      "c",
+      PSEUDO_OTHER_CODE,
+      "d",
+      "e",
+    ]);
+    expect(result.map((entry) => entry.value)).toEqual([40, 35, 30, 30, 25, 20]);
+    expect(result.map((entry) => entry.percent)).toEqual([22.2, 19.5, 16.7, 16.6, 13.9, 11.1]);
+    expect(result[3].key).toBe("其他");
+    expect(result[3].color).toBe(otherColor("light"));
+    expect(result.reduce((sum, entry) => sum + entry.value, 0)).toBe(180);
+    expect(result.reduce((sum, entry) => sum + entry.percent, 0)).toBeCloseTo(100, 6);
+  });
+
+  it("已有其他与尾部只合并一次，合并后仍按市值降序", () => {
+    const items = [
+      item(PSEUDO_OTHER_CODE, 100, 20, OTHER_COLOR),
+      item("a", 90, 18),
+      item("b", 80, 16),
+      item("c", 70, 14),
+      item("d", 60, 12),
+      item("e", 50, 10),
+      item("f", 40, 10),
+    ];
+
+    const result = sortAllocationItems(items, "dark");
+
+    expect(result.map((entry) => entry.code)).toEqual([
+      PSEUDO_OTHER_CODE,
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+    ]);
+    expect(result[0]).toMatchObject({ value: 140, percent: 30, color: otherColor("dark") });
+    expect(result.filter((entry) => entry.code === PSEUDO_OTHER_CODE)).toHaveLength(1);
+    expect(result.reduce((sum, entry) => sum + entry.value, 0)).toBe(490);
+    expect(result.reduce((sum, entry) => sum + entry.percent, 0)).toBe(100);
+  });
+
+  it("恰好达到上限不合成其他，自定义上限生效", () => {
+    const six = Array.from({ length: 6 }, (_, index) => item(`c${index}`, 60 - index * 10, 10));
+    expect(sortAllocationItems(six, "light")).toHaveLength(6);
+    expect(sortAllocationItems(six, "light").some((entry) => entry.code === PSEUDO_OTHER_CODE)).toBe(false);
+
+    const result = sortAllocationItems(
+      [item("a", 50, 50), item("b", 30, 30), item("c", 20, 20), item("d", 10, 10)],
+      "light",
+      3
+    );
+    expect(result.map((entry) => entry.code)).toEqual(["a", "b", PSEUDO_OTHER_CODE]);
+    expect(result[2]).toMatchObject({ value: 30, percent: 30 });
+  });
+
+  it("空数组返回空数组", () => {
+    expect(sortAllocationItems([], "light")).toEqual([]);
   });
 });

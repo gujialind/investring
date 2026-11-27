@@ -6,7 +6,6 @@ import { getStatusBadgeVariant } from "@/lib/utils";
 
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ArrowLeft, Settings2 } from "lucide-react";
@@ -25,7 +24,7 @@ import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
 import { usePortfolioSnapshotSummary } from "@/hooks/useSnapshot";
 import DeletePortfolioDialog from "@/components/shared/dialogs/DeletePortfolioDialog";
-import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
+import AssetCompositionCard from "@/components/shared/AssetCompositionCard";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
@@ -65,7 +64,7 @@ function MobilePortfolioDetailInner() {
   const { data: positionsData, isLoading: positionsLoading } = usePositionList(code, {
     page_size: 100,
   });
-  // asset_class 维度字典（issue #128）：驱动饼图颜色/顺序与持仓分区
+  // asset_class 维度字典（issue #128）：驱动资产构成颜色与持仓分区
   const { data: assetClassDict, isLoading: dictLoading } =
     useAssetClassifications("asset_class");
 
@@ -255,13 +254,8 @@ function MobilePortfolioDetailInner() {
 
           {!isDraft && (
             <>
-              {/* 资产分布 */}
-              <Card>
-                <CardContent className="p-4">
-                  <h3 className="mb-3 text-sm font-medium">资产分布</h3>
-                  <AssetAllocationPie items={allocation} height={150} />
-                </CardContent>
-              </Card>
+              {/* 资产分布：默认条形图，可选环形图 */}
+              <AssetCompositionCard items={allocation} variant="mobile" pieHeight={150} />
 
               {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
                   二级组合键子集优先取组合级 display_config（issue #144/#915） */}

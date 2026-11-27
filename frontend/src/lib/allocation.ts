@@ -130,3 +130,29 @@ export function buildAllocation(
   }
   return items;
 }
+
+export function sortAllocationItems(
+  items: AllocationItem[],
+  theme: ChartTheme,
+  maxSlices: number = 6
+): AllocationItem[] {
+  const sorted = items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => b.item.value - a.item.value || a.index - b.index)
+    .map(({ item }) => item);
+  const limit = Math.max(1, Math.floor(maxSlices));
+  if (sorted.length <= limit) return sorted;
+
+  const existingOther = sorted.filter((item) => item.code === PSEUDO_OTHER_CODE);
+  const categories = sorted.filter((item) => item.code !== PSEUDO_OTHER_CODE);
+  const kept = categories.slice(0, limit - 1);
+  const folded = [...categories.slice(limit - 1), ...existingOther];
+  const other: AllocationItem = {
+    key: "其他",
+    code: PSEUDO_OTHER_CODE,
+    value: folded.reduce((sum, item) => sum + item.value, 0),
+    percent: folded.reduce((sum, item) => sum + item.percent, 0),
+    color: otherColor(theme),
+  };
+  return [...kept, other].sort((a, b) => b.value - a.value);
+}
