@@ -168,6 +168,9 @@
 @utility safe-area-pb {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+@utility safe-area-pb-16 {
+  padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+}
 
 @keyframes slideIn {
   from {

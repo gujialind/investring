@@ -50,11 +50,7 @@ export default function BackToTop({ returnFocusSelector }: BackToTopProps) {
       type="button"
       variant="outline"
       size="icon"
-      className="fixed z-40 h-11 w-11 rounded-full"
-      style={{
-        right: "calc(1rem + env(safe-area-inset-right, 0px))",
-        bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))",
-      }}
+      className="fixed right-[calc(1rem_+_env(safe-area-inset-right,0px))] bottom-[calc(1rem_+_env(safe-area-inset-bottom,0px))] z-40 h-11 w-11 rounded-full"
       aria-label="回到顶部"
       title="回到顶部"
       data-testid="back-to-top"

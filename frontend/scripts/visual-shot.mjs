@@ -167,7 +167,8 @@ if (opts.scenario === 'portfolio-back-to-top') {
     !/^\/(?:m\/)?portfolio\/[^/]+\/?$/.test(parseUrl(path).pathname),
   );
   if (invalidPath) {
-    throw new Error(`portfolio-back-to-top 仅支持组合详情路径: ${invalidPath}`);
+    console.error(`portfolio-back-to-top 仅支持组合详情路径: ${invalidPath}`);
+    process.exit(2);
   }
 }
 const shotSlugs = new Set();
@@ -340,18 +341,20 @@ async function runScenario(page, scenario, device) {
   } };
 }
 
-/** 回顶场景仅移动端：注入前置空白并滚到三屏阈值，交给调用方截图（桌面只截页首） */
+/** 回顶场景仅移动端：在正文后注入视口相关空白并滚到三屏阈值，交给调用方截图（桌面只截页首） */
 async function scrollToBackToTopThreshold(page) {
-  // 前置空白只用于把真实详情内容推到三屏之后；截图发生在滚动态，不把夹具空白当产品 UI。
-  await page.addStyleTag({ content: 'main::before { content: ""; display: block; height: 2200px; }' });
-  // 先越过真实页头并等折叠提交，避免滚动锚点补偿让三屏截图落到阈值下方。
-  await page.evaluate(() => window.scrollTo(0, 2300));
+  // 阈值与 BackToTop 的 VISIBILITY_MULTIPLIER=3 同步；空白放在正文后，保持页头真实吸顶状态。
+  const spacerHeight = await page.evaluate(() => 4 * window.innerHeight);
+  await page.addStyleTag({ content: `main::after { content: ""; display: block; height: ${spacerHeight}px; }` });
+  const targetScroll = await page.evaluate(() => 3 * window.innerHeight + 1);
+  await page.evaluate((target) => window.scrollTo(0, target), targetScroll);
   await page.getByTestId('page-header').getByRole('navigation', { name: '面包屑' }).waitFor({ state: 'hidden' });
-  await page.evaluate(() => window.scrollTo(0, 3 * window.innerHeight));
+  // 页头折叠改变文档高度；等提交后重新定位，抵消浏览器滚动锚点补偿。
+  await page.evaluate((target) => window.scrollTo(0, target), targetScroll);
   const button = page.getByRole('button', { name: '回到顶部', exact: true });
   await button.waitFor({ state: 'visible', timeout: 15_000 });
-  const atThreshold = await page.evaluate(() => window.scrollY === 3 * window.innerHeight);
-  if (!atThreshold) {
+  const nearThreshold = await page.evaluate((target) => Math.abs(window.scrollY - target) <= 1, targetScroll);
+  if (!nearThreshold) {
     throw new Error('回顶目检未落在三屏阈值');
   }
 }
@@ -386,8 +389,12 @@ for (const device of opts.devices) {
         await page.getByTestId('page-header').waitFor({ state: 'visible', timeout: 15_000 });
         const allocationHeading = page.getByRole('heading', { name: '资产分布', exact: true });
         if (await allocationHeading.count()) {
-          // ResponsiveContainer 挂载晚于页头；等真实饼图 sector 出现，避免截到空图容器。
-          await page.locator('path.recharts-sector').first().waitFor({ state: 'visible', timeout: 15_000 });
+          // ResponsiveContainer 挂载晚于页头；空持仓与有数据都视为就绪，避免截到空图容器。
+          await page.locator('path.recharts-sector').first()
+            .or(page.getByText('暂无持仓数据', { exact: true }))
+            .waitFor({ state: 'visible', timeout: 15_000 });
+          // Recharts 默认饼图入场约 1.5s，sector 出现不代表动画完成。
+          await page.waitForTimeout(1600);
         }
         const top = resolve(opts.out, `portfolio-back-to-top-top-${shotName(path, device, theme)}`);
         await page.screenshot({ path: top, fullPage: false });

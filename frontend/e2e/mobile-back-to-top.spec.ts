@@ -138,7 +138,7 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
       expect(geometry.columns).toBe(3);
       expect(geometry.statsBottom).toBeLessThanOrEqual(geometry.actionTop);
       expect(geometry.actionBottom).toBeLessThan(geometry.allocationTop);
-      expect(geometry.parentPaddingBottom, '只保留普通 p-4，不保留 pb-24').toBe('16px');
+      expect(geometry.parentPaddingBottom, '保留回顶按钮所需普通底部留白，而非 pb-24').toBe('64px');
       expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
 
       await collapsePageHeader(page);
@@ -265,8 +265,6 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
         right: style.right,
         bottom: style.bottom,
         zIndex: style.zIndex,
-        inlineRight: (element as HTMLElement).style.right,
-        inlineBottom: (element as HTMLElement).style.bottom,
       };
     });
     expect(baseGeometry.width).toBe(44);
@@ -274,8 +272,6 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     expect(baseGeometry.right).toBe('16px');
     expect(baseGeometry.bottom).toBe('16px');
     expect(baseGeometry.zIndex).toBe('40');
-    expect(baseGeometry.inlineRight).toContain('env(safe-area-inset-right, 0px)');
-    expect(baseGeometry.inlineBottom).toContain('env(safe-area-inset-bottom, 0px)');
 
     if (testInfo.project.name === 'chromium') {
       const session = await page.context().newCDPSession(page);
