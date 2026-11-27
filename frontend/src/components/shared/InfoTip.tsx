@@ -3,13 +3,15 @@
 import { useEffect, useId, useRef, useState, type PointerEvent } from "react";
 import { Info } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 
 interface InfoTipProps {
   label: string;
   content: string;
+  triggerClassName?: string;
 }
 
-export default function InfoTip({ label, content }: InfoTipProps) {
+export default function InfoTip({ label, content, triggerClassName }: InfoTipProps) {
   const [open, setOpen] = useState(false);
   const contentId = useId();
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,7 +70,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
         setOpen(next);
       }}
     >
-      <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center">
+      <span className={cn("inline-flex h-11 w-11 shrink-0 items-center justify-center", triggerClassName)}>
         <PopoverTrigger asChild>
           <button
             type="button"

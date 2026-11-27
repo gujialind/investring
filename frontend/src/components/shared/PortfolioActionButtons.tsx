@@ -183,7 +183,7 @@ export default function PortfolioActionButtons({
       return (
         <Button
           variant="outline"
-          className={variant === "mobile" ? "w-full" : undefined}
+          className={variant === "mobile" ? "h-11 w-full" : undefined}
           onClick={onActivateClick}
           disabled={isActivatePending}
         >
@@ -195,7 +195,7 @@ export default function PortfolioActionButtons({
     if (kind === "ledger") {
       return (
         <Button
-          className={variant === "mobile" ? "w-full" : undefined}
+          className={variant === "mobile" ? "h-11 w-full" : undefined}
           onClick={onActivateClick}
           disabled={isActivatePending}
           data-testid="ledger-activate"
@@ -211,7 +211,7 @@ export default function PortfolioActionButtons({
         href={`${basePath}/${portfolioCode}/subscriptions`}
         className={variant === "mobile" ? "block w-full" : undefined}
       >
-        <Button className={variant === "mobile" ? "w-full" : undefined}>
+        <Button className={variant === "mobile" ? "h-11 w-full" : undefined}>
           <Plus className="mr-2 h-4 w-4" />
           首次申购激活
         </Button>
@@ -244,19 +244,19 @@ export default function PortfolioActionButtons({
     if (kind === "ledger" && (status === "active" || !isAdmin)) return null;
 
     return (
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card px-4 py-3">
+      <div data-testid="portfolio-action-buttons">
         <div className={isAdmin ? "grid grid-cols-[1fr_1fr_auto] gap-2" : "grid grid-cols-1 gap-2"}>
           {isAdmin && status !== "active" && <div className="col-span-2">{activateButton}</div>}
           {isAdmin && status === "active" && (
             <>
               <Link href={`${basePath}/${portfolioCode}/trades`}>
-                <Button variant="outline" className="w-full">
+                <Button variant="outline" className="h-11 w-full">
                   <ArrowRightLeft className="mr-2 h-4 w-4" />
                   调仓
                 </Button>
               </Link>
               <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
-                <Button className="w-full">
+                <Button className="h-11 w-full">
                   <Plus className="mr-2 h-4 w-4" />
                   申购赎回
                 </Button>
