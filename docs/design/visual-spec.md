@@ -381,14 +381,14 @@
 
 ### 20.2 桌面顶部导航与窄屏回退
 
-- **宽屏（`≥lg`）使用横向 `TopNav`**（#944 V2-2）：品牌在左、主导航居中/靠左、`AccountMenu` + `NotificationBell` 在右。TopNav **静态、非 sticky**，不与 `PageHeader` 的 `top-0 z-30` 吸顶层争位；导航壳高度沿用紧凑顶栏的 `h-14` 节奏。
+- **宽屏（`≥lg`）使用横向 `TopNav`**（#944 V2-2）：品牌在左、主导航居中/靠左、`NotificationBell` + `AccountMenu` 在右。TopNav **静态、非 sticky**，不与 `PageHeader` 的 `top-0 z-30` 吸顶层争位；导航壳高度沿用紧凑顶栏的 `h-14` 节奏。
 - **侧栏与收起机制退役**：删除 `components/layout/Sidebar.tsx` 及 `uiStore` 的 `sidebarOpen` / `sidebarCollapsed` 与切换方法；不再有侧栏宽度、折叠偏好或 Tooltip-only 标签。`main` 的 `min-w-0` 与 padding 保持不变，TopNav 不占主区横向宽度。
 - 主导航继续单源消费 `navItems.ts::sidebarItemsForRole`（函数名保留），激活判据为一级路径精确匹配或前缀匹配，`aria-current="page"` 与视觉激活同源；链接保留 `aria-label={item.label}`，不依赖图标或 Tooltip 传达名称。
 - **窄屏（`<lg`）回退**：TopNav 隐藏，`MainLayout` 保留 `h-14` 紧凑顶栏（Logo + 通知 + 账户）与 `BottomNav`。任意宽度下「用户菜单」触发器恰好一个可见；1024px 顶部导航几何与 900px 紧凑顶栏/底部导航回退由 `e2e/top-nav.spec.ts` 守门。
 
 ### 20.3 账户区位置
 
-- **桌面账户区在 TopNav 右侧**：`AccountMenu` 使用紧凑头像触发器，下拉内展示姓名/角色与修改密码/退出登录；`NotificationBell` 紧随其右。紧凑触发器避免长姓名在 1024px 挤压主导航，账户身份与操作不减少。
+- **桌面账户区在 TopNav 右侧**：`NotificationBell` 在左、`AccountMenu` 在右，与紧凑顶栏保持同一顺序；`AccountMenu` 使用紧凑头像触发器，下拉内展示姓名/角色与修改密码/退出登录。紧凑触发器避免长姓名在 1024px 挤压主导航，账户身份与操作不减少。
 - **桌面窄屏账户区在紧凑顶栏右侧**，与宽屏共用同一组件；移动端首页（`app/m/dashboard`）底部「账户」卡继续保留，补齐移动端原先无退出登录入口的缺口（修改密码 / 退出登录，全角色）。
 - `AccountMenu` / `ChangePasswordDialog` / `BrandLogo` 放 `components/shared/`，双端共用同一份。
 

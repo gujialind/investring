@@ -58,7 +58,7 @@ test.describe('桌面顶部导航（#944 V2-2）', () => {
     expect(bellBox, '通知触发器应有可见盒').not.toBeNull();
     expect(brandBox!.x + brandBox!.width).toBeLessThanOrEqual(navBox!.x + 1);
     expect(accountBox!.x).toBeGreaterThanOrEqual(navBox!.x + navBox!.width - 1);
-    expect(accountBox!.x + accountBox!.width).toBeLessThanOrEqual(bellBox!.x + 1);
+    expect(bellBox!.x + bellBox!.width).toBeLessThanOrEqual(accountBox!.x + 1);
   });
 
   test('viewer 只见首页与组合，admin-only 项不进入 TopNav', async ({ page }) => {

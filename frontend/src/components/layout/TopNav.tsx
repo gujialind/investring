@@ -57,9 +57,9 @@ export default function TopNav() {
           })}
         </nav>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <AccountMenu collapsed align="end" />
+        <div className="flex shrink-0 items-center gap-1">
           <NotificationBell />
+          <AccountMenu collapsed align="end" />
         </div>
       </div>
     </header>

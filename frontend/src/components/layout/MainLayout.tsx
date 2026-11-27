@@ -66,8 +66,7 @@ export default function MainLayout({
           <AccountMenu collapsed align="end" />
         </div>
       </header>
-      {/* min-w-0 解除 flex 子项的内容自动最小宽：否则页内的表/长数值会把主区顶出视口
-          （#772），窄内容由各自的滚动容器承接。 */}
+      {/* 保留 min-w-0 作为内容宽度防御；纵向 flex 由 flex-1 承接剩余高度，窄内容由各自滚动容器约束。 */}
       <main className="min-w-0 flex-1 p-4 lg:p-8 pb-20 lg:pb-8">
         {children}
       </main>

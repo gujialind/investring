@@ -1408,14 +1408,20 @@ export async function expectTopNavDetailLayout(
   history: Locator,
   label: string,
 ): Promise<void> {
-  const topNav = page.getByTestId("top-nav");
+  expect(page.viewportSize()?.width, `${label}: 顶部导航几何要求视口宽度 ≥1024px`).toBeGreaterThanOrEqual(1024);
+  const topNav = page.getByTestId('top-nav');
   await expect(topNav).toBeVisible();
-  await expect(topNav).toHaveCSS("position", "static");
-  await expect(page.locator("aside")).toHaveCount(0);
+  await expect(topNav).toHaveCSS('position', 'static');
+  await expect(page.locator('aside')).toHaveCount(0);
 
   await expect(async () => {
-    const mainBox = await page.locator("main").boundingBox();
+    const main = page.locator('main');
+    const mainBox = await main.boundingBox();
     if (!mainBox) throw new Error(`${label}: main 没有可见盒`);
+    const mainHorizontalPadding = await main.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+    });
     const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const m = await measureNavDetailLayout(history, label);
     expect(Math.abs(mainBox.x), `${label}: main 左侧不应有侧栏占宽`).toBeLessThanOrEqual(1);
@@ -1423,7 +1429,7 @@ export async function expectTopNavDetailLayout(
     expectNavDetailColumns(m, label);
     expect(m.tracks.length, `${label}: 1024px 顶部导航下内容应保持双栏`).toBe(2);
     expect(
-      Math.abs(m.containerWidth - (mainBox.width - 64 - 48)),
+      Math.abs(m.containerWidth - (mainBox.width - mainHorizontalPadding - 48)),
       `${label}: 历史卡容器应等于 main 内容宽扣除详情 p-6，不被导航横向占宽`,
     ).toBeLessThanOrEqual(1);
   }).toPass({ timeout: 5_000 });
