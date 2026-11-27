@@ -28,8 +28,8 @@ export default function BottomNav({ basePath }: BottomNavProps) {
   const items = navItemsForRole(user?.role).filter((item) => item.mobileTab);
 
   return (
-    // data-testid 是 E2E 的容器锚点：Navbar 同样是 <nav> 且带 /dashboard 链接，裸
-    // nav a[href=...] 会命中两处（#650 待实现项「必要时补锚点」）
+    // data-testid 是 E2E 的容器锚点：桌面 TopNav 同样是 <nav> 且带 /dashboard 链接，
+    // 裸 nav a[href=...] 在宽屏会命中两处，故两端导航各自保留稳定容器锚点。
     <nav
       data-testid="bottom-nav"
       className="lg:hidden fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50 safe-area-pb"

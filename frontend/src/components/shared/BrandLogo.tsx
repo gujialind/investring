@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 interface BrandLogoProps {
   /** mark 边长（px），常用 16/20/24/32/48 */
   size?: number;
-  /** 是否带 InvestRing 字标（侧栏展开 / 登录页）；false 仅图形（侧栏收起） */
+  /** 是否带 InvestRing 字标（顶部导航 / 登录页）；false 仅图形（紧凑顶栏） */
   withWordmark?: boolean;
   /** 单色形态：环与箭头都取 currentColor（favicon 之外的单色场景） */
   mono?: boolean;

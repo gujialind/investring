@@ -22,7 +22,7 @@ const LEVEL_DOT: Record<string, string> = {
 };
 
 /**
- * Navbar 通知铃铛：未读角标 + 下拉列表 + 已读/全部已读。
+ * 顶部导航通知铃铛：未读角标 + 下拉列表 + 已读/全部已读。
  * （issue：后端通知三端点与定时任务产出的通知此前无任何前端入口）
  */
 export default function NotificationBell() {
@@ -36,7 +36,12 @@ export default function NotificationBell() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+        <Button
+          variant="ghost"
+          className="relative h-8 w-8 rounded-full"
+          aria-label="通知"
+          title="通知"
+        >
           <Bell className="h-4 w-4" />
           {unreadCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive-solid px-1 text-[10px] font-medium text-white">
