@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { E2E_ACTIVE, collectPageErrors, openPopover, settlePopovers } from "./helpers";
 
 const PRODUCT_PATH = `/portfolio/${E2E_ACTIVE}/product/510300.SH?market=CN_EXCHANGE`;
@@ -238,14 +238,36 @@ test.describe("共享说明触发器（#943 S2）", () => {
 
     const overviewTrigger = page.getByRole("button", { name: "查看绩效指标说明" });
     const content = page.getByTestId("info-tip-content");
-    // 持仓卡新增 44px 说明触点后，320px 视口的滚动落点可能正卡在吸顶页头/底栏边缘；
-    // 先显式居中，再测真实悬停/点按，不绕过命中检测。
-    await overviewTrigger.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    const centerTrigger = async (trigger: Locator) => {
+      // 滚动会把旧触发器移到固定指针下；先移出图表，避免重新悬停打开两个说明。
+      await page.mouse.move(0, 0);
+      await settlePopovers(page);
+      await trigger.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      // 滚动超过 32px 会收起页头面包屑、改变文档高度；等折叠提交后再按页头与底栏之间的
+      // 安全区重新居中。两个项目在本用例都固定为 320px，不能按项目名推断视口。
+      await expect(page.getByTestId("page-header").getByRole("navigation", { name: "面包屑" })).toHaveCount(0);
+      await trigger.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const headerBottom = document.querySelector('[data-testid="page-header"]')?.getBoundingClientRect().bottom ?? 0;
+        const bottomNavTop = document.querySelector('[data-testid="bottom-nav"]')?.getBoundingClientRect().top ?? window.innerHeight;
+        window.scrollBy(0, (box.top + box.height / 2) - (headerBottom + bottomNavTop) / 2);
+      });
+      await expect.poll(
+        () => trigger.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return element.contains(top);
+        }),
+        { message: "说明触发器中心应真实命中按钮，不能被吸顶页头、底栏或相邻卡片遮挡" },
+      ).toBe(true);
+    };
+    await centerTrigger(overviewTrigger);
     if (testInfo.project.name === "chromium") {
       await overviewTrigger.hover();
     } else {
       await openPopover(page, overviewTrigger, content);
     }
+    await expect(content).toHaveCount(1);
     await expect(content).toHaveText(PERFORMANCE_HINT);
     const box = await content.boundingBox();
     expect(box).not.toBeNull();
@@ -257,12 +279,13 @@ test.describe("共享说明触发器（#943 S2）", () => {
 
     for (const [label, hint] of metricHints) {
       const trigger = page.getByRole("button", { name: `查看${label}说明` });
-      await trigger.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await centerTrigger(trigger);
       if (testInfo.project.name === "chromium") {
         await trigger.hover();
       } else {
         await openPopover(page, trigger, content);
       }
+      await expect(content).toHaveCount(1);
       await expect(content).toContainText(hint);
       await page.keyboard.press("Escape");
       await expect(content).toHaveCount(0);

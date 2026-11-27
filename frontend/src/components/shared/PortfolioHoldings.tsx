@@ -78,7 +78,7 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
  */
 export function cardGridClass(variant: "desktop" | "mobile"): string {
   return variant === "desktop"
-    ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(350px,1fr))]"
+    ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(350px,100%),1fr))]"
     : "space-y-2.5";
 }
 
