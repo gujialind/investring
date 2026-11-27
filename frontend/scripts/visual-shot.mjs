@@ -16,7 +16,9 @@
  *             snapshot-catchup-alert = 快照停更提示态（#906，API 造隔离组合把最新快照
  *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）；
  *             portfolio-breadcrumb-long-name = 组合子页长名称面包屑（#943 S1，仅改写
- *             当前页面的组合查询响应，不写库、不生成/重算快照）
+ *             当前页面的组合查询响应，不写库、不生成/重算快照）；
+ *             info-tip = 说明浮层取证（#943 S2，未传 --path 时默认组合详情，也可指定
+ *             产品/平台产品/快照/绩效说明所在页面）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -58,9 +60,37 @@ const DEFAULT_PATHS = [
   portfolioPath(E2E_ACTIVE, 'subscriptions'),
   portfolioPath(E2E_ACTIVE, 'share-change-events'),
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
+const INFO_TIP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
+
+/** --path 可带查询串，故一律按 URL 解析；相对路径以占位 base 补全 */
+function parseUrl(path) {
+  return new URL(path, 'http://localhost');
+}
+
+function isProductDetailPath(pathname) {
+  return pathname.includes('/product/') || (pathname.includes('/platforms/') && pathname.includes('/products/'));
+}
+
+function infoTipLabelForPath(path) {
+  const url = parseUrl(path);
+  if (url.hash) return null;
+  const { pathname } = url;
+  const isProductDetail = isProductDetailPath(pathname);
+  if (url.search) {
+    const keys = [...url.searchParams.keys()];
+    if (!isProductDetail || keys.length !== 1 || keys[0] !== 'market') return null;
+  }
+  if (pathname.endsWith('/snapshots')) return '查看自动生成快照说明';
+  if (isProductDetail) return '查看累计收益说明';
+  if (pathname === INFO_TIP_DEFAULT_PATH || pathname === `/m${INFO_TIP_DEFAULT_PATH}`) {
+    // 与 PerformanceMetrics 的 label="MWR 年化" + `查看${label}说明` 组合保持一致。
+    return '查看MWR 年化说明';
+  }
+  return null;
+}
 
 const opts = {
   base: 'http://localhost:3000',
@@ -116,6 +146,24 @@ if (opts.scenario === 'portfolio-breadcrumb-long-name') {
   }
   opts.paths = [BREADCRUMB_SCENARIO_PATH];
 }
+if (opts.scenario === 'info-tip') {
+  if (!pathsExplicit) opts.paths = [INFO_TIP_DEFAULT_PATH];
+  for (const path of opts.paths) {
+    if (!infoTipLabelForPath(path)) {
+      console.error(`info-tip 场景不支持路径: ${path}；可用：种子组合详情（${INFO_TIP_DEFAULT_PATH}）、产品/平台产品详情（仅允许 ?market= 查询参数）、快照页；不支持 hash 及其他查询参数`);
+      process.exit(2);
+    }
+  }
+}
+const shotSlugs = new Set();
+for (const path of opts.paths) {
+  const slug = shotSlug(path);
+  if (shotSlugs.has(slug)) {
+    console.error(`截图文件名冲突: ${path}（slug ${slug}）；请改用可区分的路径`);
+    process.exit(2);
+  }
+  shotSlugs.add(slug);
+}
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
   if (!(d in DEVICES)) {
@@ -145,14 +193,35 @@ async function ensureLoggedIn(page, context) {
   console.log(`✔ 登录态已失效，重新登录并写入 ${AUTH_FILE}`);
 }
 
+function shotSlug(path) {
+  const url = parseUrl(path);
+  const base = url.pathname.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+  const market = url.searchParams.get('market');
+  const safeMarket = market ? market.replace(/[^A-Za-z0-9_-]/g, '_') : '';
+  return safeMarket ? `${base}-${safeMarket}` : base;
+}
+
 function shotName(path, device, theme) {
-  const slug = path.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+  const slug = shotSlug(path);
   const suffix = theme === 'dark' ? '-dark' : '';
   return `${slug}-${device}${suffix}.png`;
 }
 
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
+  if (scenario === 'info-tip') {
+    const label = infoTipLabelForPath(page.url());
+    if (!label) throw new Error(`info-tip 场景不支持路径: ${page.url()}`);
+    const trigger = page.getByRole('button', { name: label });
+    if (device === 'desktop') await trigger.hover();
+    else await trigger.tap();
+    const content = page.getByTestId('info-tip-content');
+    await content.waitFor({ state: 'visible', timeout: 15_000 });
+    return { close: async () => {
+      await page.keyboard.press('Escape');
+      await content.waitFor({ state: 'hidden', timeout: 15_000 });
+    } };
+  }
   if (scenario === 'portfolio-breadcrumb-long-name') {
     const portfolioApi = new RegExp(`/api/portfolios/${BREADCRUMB_FIXTURE_CODE}$`);
     const headers = await authHeaders(page);
