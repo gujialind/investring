@@ -205,7 +205,10 @@ export default function PlatformProductDetailContent({
                 content="累计收益含已卖出实现盈亏，与持仓卡「累计收益」（持有收益口径）不同"
               />
             </div>
-            <div className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}>
+            <div
+              data-testid="platform-product-cumulative-profit"
+              className={`text-sm font-medium tabular-nums ${getReturnColorClass(slice.cumulative_profit)}`}
+            >
               {formatSignedCurrency(slice.cumulative_profit)}
             </div>
           </div>
