@@ -95,6 +95,9 @@ function dialogDateTrigger(dlg: Locator): Locator {
 test.describe("平台详情页", () => {
   test("页头与概览卡：平台名、代码·类型、市值、指标行", async ({ page }) => {
     await page.goto(PLATFORM_PATH);
+    const portfolioCrumb = page.getByRole("link", { name: "返回组合详情" });
+    await expect(portfolioCrumb).toHaveText("E2E 活跃组合");
+    await expect(portfolioCrumb).toHaveAttribute("href", /\/portfolio\/E2E_ACTIVE$/);
     // #935 A4：平台详情保留实体名页标题（非三类产品详情），字号归 20/600/28 档
     const platformH1 = page.getByRole("heading", { level: 1, name: "华宝证券" });
     await expect(platformH1).toBeVisible();
@@ -631,6 +634,13 @@ test.describe("平台-产品详情页", () => {
 
   test("「查看该产品全部平台持仓」链接 → 产品详情页", async ({ page }) => {
     await page.goto(PLATFORM_PRODUCT_PATH);
+    const portfolioCrumb = page.getByRole("link", { name: "返回组合详情" });
+    await expect(portfolioCrumb).toHaveText("E2E 活跃组合");
+    await expect(portfolioCrumb).toHaveAttribute("href", /\/portfolio\/E2E_ACTIVE$/);
+    await expect(page.getByRole("link", { name: "返回平台详情" })).toHaveAttribute(
+      "href",
+      /\/portfolio\/E2E_ACTIVE\/platforms\/HBZQ$/,
+    );
     const link = page.getByTestId("view-all-platforms-link");
     // 单平台时该链接仍存在（指向产品详情页）
     await expect(link).toBeVisible();

@@ -14,7 +14,9 @@
  *             investor-reset-password = 投资人管理页重置密码 Dialog（#893，只开不提交，
  *             填短密码截校验 Alert 态）；
  *             snapshot-catchup-alert = 快照停更提示态（#906，API 造隔离组合把最新快照
- *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）
+ *             停在 4 个交易日前，详情页截 trailing 缺口 Alert；非浮层，close 为 no-op）；
+ *             portfolio-breadcrumb-long-name = 组合子页长名称面包屑（#943 S1，仅改写
+ *             当前页面的组合查询响应，不写库、不生成/重算快照）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -42,19 +44,21 @@ if (Number(process.versions.node.split('.')[0]) < 24) {
   process.exit(2);
 }
 // 停更夹具造数与认证头与 E2E 共用 helpers 单点（ocr r3/r4 防漂移）
-const { authHeaders, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
+const { authHeaders, BREADCRUMB_LONG_NAME, E2E_ACTIVE, portfolioPath, staleBaselineDates, seedStaleBaseline } = await import('../e2e/helpers.ts');
 
 const DEVICES = {
   desktop: { descriptor: devices['Desktop Chrome'], launch: () => chromium.launch() },
   mobile: { descriptor: devices['iPhone 13'], launch: () => webkit.launch() },
 };
 // 种子契约组合（见 frontend/e2e/AGENTS.md §1）：E2E_ACTIVE 有已确认交易/申赎，表格里有行
+const BREADCRUMB_SCENARIO_PATH = portfolioPath(E2E_ACTIVE, 'trades');
+const BREADCRUMB_FIXTURE_CODE = E2E_ACTIVE;
 const DEFAULT_PATHS = [
-  '/portfolio/E2E_ACTIVE/trades',
-  '/portfolio/E2E_ACTIVE/subscriptions',
-  '/portfolio/E2E_ACTIVE/share-change-events',
+  portfolioPath(E2E_ACTIVE, 'trades'),
+  portfolioPath(E2E_ACTIVE, 'subscriptions'),
+  portfolioPath(E2E_ACTIVE, 'share-change-events'),
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 
@@ -106,6 +110,12 @@ if (opts.scenario === 'snapshot-catchup-alert') {
   }
   opts.paths = [`/portfolio/${CATCHUP_FIXTURE_CODE}`];
 }
+if (opts.scenario === 'portfolio-breadcrumb-long-name') {
+  if (pathsExplicit) {
+    console.warn(`⚠ scenario portfolio-breadcrumb-long-name 忽略 --path，统一截 ${BREADCRUMB_SCENARIO_PATH}`);
+  }
+  opts.paths = [BREADCRUMB_SCENARIO_PATH];
+}
 if (opts.devices.length === 0) opts.devices = Object.keys(DEVICES);
 for (const d of opts.devices) {
   if (!(d in DEVICES)) {
@@ -143,6 +153,29 @@ function shotName(path, device, theme) {
 
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
+  if (scenario === 'portfolio-breadcrumb-long-name') {
+    const portfolioApi = new RegExp(`/api/portfolios/${BREADCRUMB_FIXTURE_CODE}$`);
+    const headers = await authHeaders(page);
+    const response = await page.request.get(`/api/portfolios/${BREADCRUMB_FIXTURE_CODE}`, { headers });
+    if (!response.ok()) {
+      throw new Error(`目检夹具组合读取失败: ${response.status()} ${await response.text()}`);
+    }
+    const body = await response.json();
+    await page.route(portfolioApi, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({ json: { ...body, name: BREADCRUMB_LONG_NAME } });
+    });
+    await page.goto(BREADCRUMB_SCENARIO_PATH, { waitUntil: 'domcontentloaded' });
+    const crumb = page.getByRole('link', { name: '返回组合详情' });
+    await crumb.waitFor({ state: 'visible', timeout: 15_000 });
+    const text = await crumb.textContent();
+    if (text !== BREADCRUMB_LONG_NAME) {
+      throw new Error(`目检夹具面包屑名称不完整: ${text}`);
+    }
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    if (overflow > 1) throw new Error(`目检夹具长名称横向溢出: ${overflow}px`);
+    return { close: async () => {} };
+  }
   if (scenario === 'snapshot-catchup-alert') {
     // #906：API 造隔离组合（申购+确认+generate，纯 CASH 无需行情），最新快照停在
     // today 前第 4 个开市日 → trailing 缺口确定性非空（与 E2E setupStalePortfolio 同形）。
@@ -249,7 +282,6 @@ for (const device of opts.devices) {
       if (loginOnly) await ctx.addInitScript((t) => localStorage.setItem('theme', t), theme);
       const page = await ctx.newPage();
       await page.goto(path, { waitUntil: 'domcontentloaded' });
-      const suffix = theme === 'dark' ? '-dark' : '';
       if (opts.scenario && !loginOnly) {
         const handle = await runScenario(page, opts.scenario, device);
         await page.waitForTimeout(300); // 浮层入场收尾

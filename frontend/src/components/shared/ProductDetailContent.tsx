@@ -30,6 +30,7 @@ import {
   getTradeStatusLabel,
 } from "@/lib/utils";
 import { useHoldingsByProduct } from "@/hooks/usePosition";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useNavHistory } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
@@ -72,6 +73,13 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const searchParams = useSearchParams();
   const portfolioCode = params.code as string;
   const productCode = params.productCode as string;
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(portfolioCode);
   const isCash = productCode === CASH_PRODUCT_CODE;
   // R-8：现金归一 market=""——手改 ?market=CN_OTC 不得把净值请求与交易过滤带偏；
   // 非现金仍以 query 为准（缺失守卫见下方 EmptyState）
@@ -113,6 +121,12 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
     [platformsData]
   );
 
+  if (portfolioError) {
+    return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  }
+  if (portfolioLoading || !portfolio) {
+    return <LoadingState />;
+  }
   if (holdingsLoading) {
     return <LoadingState />;
   }
@@ -320,7 +334,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${portfolioCode}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title="产品详情"
       />

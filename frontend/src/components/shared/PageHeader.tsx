@@ -73,7 +73,7 @@ export default function PageHeader({
             className="flex flex-wrap items-center gap-1.5 text-sm leading-5.5 text-muted-foreground"
           >
             {crumbs.map((crumb, i) => (
-              <span key={crumb.href} className="flex items-center gap-1.5">
+              <span key={crumb.href} className="flex min-w-0 max-w-full items-center gap-1.5">
                 {i > 0 && (
                   <span aria-hidden="true" className="text-border">
                     /
@@ -82,7 +82,7 @@ export default function PageHeader({
                 <Link
                   href={crumb.href}
                   aria-label={crumb.ariaLabel ?? `返回${crumb.label}`}
-                  className="flex items-center gap-1 hover:text-foreground"
+                  className="flex min-w-0 items-center gap-1 [overflow-wrap:anywhere] hover:text-foreground"
                 >
                   {i === 0 && <ArrowLeft className="h-3.5 w-3.5" />}
                   {crumb.label}

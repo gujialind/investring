@@ -35,6 +35,7 @@ import {
   getTradeStatusLabel,
 } from "@/lib/utils";
 import { useHoldingsByProduct } from "@/hooks/usePosition";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useNavHistory } from "@/hooks/useProduct";
 import { useTradeList } from "@/hooks/useTrade";
 import { usePlatformList } from "@/hooks/usePlatform";
@@ -68,6 +69,13 @@ export default function PlatformProductDetailContent({
   const portfolioCode = params.code as string;
   const platformCode = params.platformCode as string;
   const productCode = params.productCode as string;
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(portfolioCode);
   const market = searchParams.get("market") ?? "";
   const isMobile = variant === "mobile";
   const isCash = productCode === CASH_PRODUCT_CODE;
@@ -114,6 +122,12 @@ export default function PlatformProductDetailContent({
     [platformsData?.items]
   );
 
+  if (portfolioError) {
+    return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  }
+  if (portfolioLoading || !portfolio) {
+    return <LoadingState />;
+  }
   if (holdingsLoading) return <LoadingState />;
   if (holdingsError) {
     return <QueryErrorState error={holdingsErr} onRetry={refetchHoldings} />;
@@ -325,7 +339,7 @@ export default function PlatformProductDetailContent({
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${portfolioCode}`, label: portfolioCode, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${portfolioCode}`, label: portfolio.name, ariaLabel: "返回组合详情" },
           {
             href: `${basePath}/${portfolioCode}/platforms/${platformCode}`,
             label: platformCode,

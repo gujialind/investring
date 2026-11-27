@@ -90,6 +90,7 @@ import {
 } from "@/hooks/useTrade";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { usePlatformList } from "@/hooks/usePlatform";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useUIStore } from "@/stores/uiStore";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
@@ -256,6 +257,13 @@ export default function TradesContent({
   const unconfirmTrade = useUnconfirmTrade();
   const deleteTradeMutation = useDeleteTrade();
   const { data: platformsData } = usePlatformList({ page_size: 100 });
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
 
   const trades = data?.items || [];
   const total = data?.total ?? 0;
@@ -968,6 +976,9 @@ export default function TradesContent({
     );
   };
 
+  if (portfolioLoading) return <LoadingState />;
+  if (portfolioError) return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  if (!portfolio) return <LoadingState />;
   if (isLoading) return <LoadingState />;
 
   return (
@@ -976,7 +987,7 @@ export default function TradesContent({
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title="调仓交易"
         meta={`组合代码: ${code}`}

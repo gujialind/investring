@@ -42,6 +42,7 @@ import { platformApi } from "@/lib/api";
 import { EventType } from "@/types/common";
 import type { ShareChangeEvent } from "@/types/share-change-event";
 import { useUIStore } from "@/stores/uiStore";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { useQuery } from "@tanstack/react-query";
 import {
   useShareChangeEventList,
@@ -55,6 +56,8 @@ import { useCreateDividendConfig } from "@/hooks/useDividendConfig";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import type { DateRange } from "react-day-picker";
 import PaginationBar from "@/components/shared/PaginationBar";
+import LoadingState from "@/components/shared/LoadingState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import ProductFilterSelect from "@/components/shared/ProductFilterSelect";
 import { ProductSelection } from "@/components/shared/ProductFilterDialog";
 import EmptyState from "@/components/shared/EmptyState";
@@ -171,6 +174,13 @@ export default function ShareChangeEventsContent({
     ex_date_end: exRange?.to ? toDateOnly(exRange.to) : undefined,
   };
   const { data: eventsData, isLoading, isFetching } = useShareChangeEventList(code, listParams);
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
 
   // 非默认筛选判定（默认集 = 无任何筛选）：驱动「重置」按钮显隐与空态文案
   const hasNonDefaultFilter =
@@ -555,13 +565,17 @@ export default function ShareChangeEventsContent({
     );
   };
 
+  if (portfolioLoading) return <LoadingState />;
+  if (portfolioError) return <QueryErrorState error={portfolioErr} onRetry={refetchPortfolio} />;
+  if (!portfolio) return <LoadingState />;
+
   return (
     <div className="space-y-6">
       <PageHeader
         variant={variant}
         crumbs={[
           { href: basePath, label: "组合", ariaLabel: "返回组合列表" },
-          { href: `${basePath}/${code}`, label: code, ariaLabel: "返回组合详情" },
+          { href: `${basePath}/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title="份额变动事件"
         meta={`组合代码: ${code}`}

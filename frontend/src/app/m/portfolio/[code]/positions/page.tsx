@@ -7,10 +7,13 @@ import { useParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatCurrency, getReturnColorClass } from "@/lib/utils";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { usePositionList } from "@/hooks/usePosition";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import PositionCard from "@/components/shared/PositionCard";
+import LoadingState from "@/components/shared/LoadingState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
 import type { Position } from "@/types/position";
 
@@ -18,7 +21,20 @@ export default function MobilePositionsPage() {
   const params = useParams();
   const code = params.code as string;
 
-  const { data: positionsData, isLoading } = usePositionList(code);
+  const {
+    data: portfolio,
+    isLoading: portfolioLoading,
+    isError: portfolioError,
+    error: portfolioErr,
+    refetch: refetchPortfolio,
+  } = usePortfolio(code);
+  const {
+    data: positionsData,
+    isLoading,
+    isError: positionsError,
+    error: positionsErr,
+    refetch: refetchPositions,
+  } = usePositionList(code);
   const positions: Position[] = positionsData?.items || [];
 
   // #595 §4.5：现金市值更新 Dialog 开关
@@ -28,12 +44,20 @@ export default function MobilePositionsPage() {
   const totalCost = positions.reduce((sum, p) => sum + ((p.shares || 0) * (p.cost_price || 0)), 0);
   const totalProfitLoss = totalMarketValue - totalCost;
 
-  if (isLoading) {
+  if (portfolioError || positionsError) {
     return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
+      <QueryErrorState
+        error={portfolioErr ?? positionsErr}
+        onRetry={() => {
+          refetchPortfolio();
+          refetchPositions();
+        }}
+      />
     );
+  }
+
+  if (portfolioLoading || isLoading || !portfolio) {
+    return <LoadingState />;
   }
 
   return (
@@ -43,7 +67,7 @@ export default function MobilePositionsPage() {
         variant="mobile"
         crumbs={[
           { href: "/m/portfolio", label: "组合", ariaLabel: "返回组合列表" },
-          { href: `/m/portfolio/${code}`, label: code, ariaLabel: "返回组合详情" },
+          { href: `/m/portfolio/${code}`, label: portfolio.name, ariaLabel: "返回组合详情" },
         ]}
         title="持仓管理"
         meta={code}
