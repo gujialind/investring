@@ -17,7 +17,7 @@
    | 使用边界 | 只用于**裸数值/图标**（涨跌幅、盈亏额） | 只用于**带文字标签的载体**（badge、按钮、错误提示），永不单独给数字着色 |
 
    二者从不出现在同一上下文；绛红永远伴随「失败/异常」文字，不靠颜色单独表意。
-3. **success ≠ 绿**。绿色被「跌」独占后，完成/确认语义移交**靛蓝 `#2B5CD7`，并兼任品牌主色 primary**（链接、主按钮、focus 环同源）。完成态是系统里出现频率最高的状态，让默认观感就是「一切正常」，减少色彩噪音。
+3. **success ≠ 绿**。绿色被「跌」独占后，靛蓝 `#2B5CD7` 兼任品牌主色 primary（链接、主按钮、focus 环同源）。**状态徽章降噪（#944 D3·S6）**：最高频的正常完成/活跃/终态（confirmed/active/success/passed/启用/cancelled/closed/draft/停用）一律 **neutral 灰**，让默认观感「一切正常」最不抢色；靛蓝软底（`success` variant）改留给**正常等待**（pending/running/在途），赭珀 `warning` 只给**需关注**（partial_success/interrupted），绛红 `destructive` 只给**失败/异常**。映射单点见 §1.3。
 4. **cancelled / closed / draft / 停用 → neutral 灰 badge**。用户主动撤销 ≠ 系统异常，不再用红。
 5. **dark mode 已启用（#872 PR2）**：三档偏好（浅色/深色/跟随系统，默认 system，D2 已批）；next-themes class 通道 + 内联脚本首屏不闪白；双端同源 token，无端侧独有配色。实测对比度与闭合证据见 §17；回退＝revert PR2（整体回浅色，PR1/#874 清理留存）。**首绘无内联取色圆点**：2026-11-13 实测（domcontentloaded 时刻取样 + 原始 SSR HTML，chromium 与 webkit 双端）确认 SSR 首绘 HTML 不含内联 style 取色的圆点，且此时 `.dark` 已就位；圆点在客户端取数完成后首次出现时即为暗色板。故不存在『暗色首绘浅色圆点』瞬态，此前登记的限制系误判，已撤销。证据归档：群共享 `shared/pr876-evidence/`（probe v1/v2 双端 JSON + run2/run3 日志）。
 
@@ -40,11 +40,11 @@
 
 | Token | 用途 | 色名 | Light | Dark 终值（#872） |
 |---|---|---|---|---|
-| `--color-success` | 完成/确认/启用；**兼品牌主色 primary / ring** | 靛蓝 | `#2B5CD7` hsl(223,68%,51%) ≈5.8:1 | `#7FA3F0` |
-| `--color-success-soft` | 成功态 badge/提示底 | 浅靛 | `#E8EEFA` hsl(220,64%,95%) | `#22304F` |
+| `--color-success` | 品牌主色 primary / ring、成功提示/选中态；**状态徽章映射见 §1.3**（#944 D3 后完成态徽章用 neutral，软靛蓝留给正常等待） | 靛蓝 | `#2B5CD7` hsl(223,68%,51%) ≈5.8:1 | `#7FA3F0` |
+| `--color-success-soft` | 正常等待 badge（#944 D3）/成功提示底 | 浅靛 | `#E8EEFA` hsl(220,64%,95%) | `#22304F` |
 | `--color-success-foreground` | success-soft 上文字 | 深靛 | `#1D47B0` hsl(223,72%,40%) | `#A8C2F5` |
-| `--color-warning` | 待定/进行中 | 赭珀 | `#96620A` hsl(38,88%,31%) ≈5.2:1 | `#E5AC4A` |
-| `--color-warning-soft` | 待定 badge/提示底 | 浅珀 | `#FBF3E2` hsl(41,76%,94%) | `#3D3020` |
+| `--color-warning` | 需关注/待定（badge 映射见 §1.3） | 赭珀 | `#96620A` hsl(38,88%,31%) ≈5.2:1 | `#E5AC4A` |
+| `--color-warning-soft` | 需关注 badge（#944 D3）/提示底 | 浅珀 | `#FBF3E2` hsl(41,76%,94%) | `#3D3020` |
 | `--color-warning-foreground` | warning-soft 上文字 | 深珀 | `#7C4A03` hsl(35,95%,25%) | `#EBC88A` |
 | `--color-destructive` | 异常/失败文字、状态圆点；solid 危险载体底见 `--color-destructive-solid` 行 | 绛红 | `#C22745` hsl(348,67%,46%) ≈5.7:1 | `#EE6B80` |
 | `--color-destructive-soft` | 失败 badge 底、错误提示底 | 浅绛 | `#FAE8EC` hsl(347,64%,95%) | `#42242C` |
@@ -61,11 +61,13 @@
 
 | 业务状态 | variant | 示例场景 |
 |---|---|---|
-| confirmed / active / success / passed / 启用 | `success` | 已确认交易、活跃组合、成功任务 |
-| pending / running / partial_success / 在途 | `warning` | 待确认申赎/trade、跨天转移在途、运行中任务 |
+| confirmed / active / success / passed / 启用 / cancelled / closed / draft / 停用 | `neutral` | 已确认交易、活跃组合、成功任务、已关闭/草稿/撤销/禁用（正常完成与终态，最高频「一切正常」不抢色） |
+| pending / running / 在途 | `success`（软靛蓝低强调） | 待确认申赎/trade、运行中任务、跨天转移在途（正常等待） |
+| partial_success / interrupted | `warning`（赭珀） | 部分成功、被启动期回收中断的作业（需关注） |
 | failed / error | `destructive` | 失败任务、数据缺失告警、校验未通过 |
-| closed / draft / cancelled / 停用 | `neutral` | 已关闭组合、草稿、已撤销、禁用 |
 | （操作型危险按钮，非 badge） | solid `bg-destructive-solid text-white` | 删除、关闭组合等确认按钮 |
+
+**#944 D3·S6 降噪口径**：正常完成→中性、正常等待→低强调靛蓝、需关注→琥珀、失败→异常红。现金转移组 `TRANSFER_GROUP_STATUS_META` 同口径（在途→`success`、已完成→`neutral`、已取消→`neutral`、状态异常→`destructive`）。首页待确认议程卡是「需关注议程」载体，显式 `bg-warning-soft` 保持琥珀，不走状态徽章映射。本次仅改映射、**无新 token**，§1.2 色值与 `theme.spec.ts` 金值不变。
 
 **无状态语义的标识**（买卖方向、管理员角色、资产名目 chip）不许占用状态色：方向/角色用「neutral badge + 彩色小圆点」或 `default` variant，圆点色取自 `lib/colors.ts`（见 §2）。
 

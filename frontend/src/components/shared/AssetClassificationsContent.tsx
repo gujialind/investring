@@ -42,7 +42,7 @@ import {
   useUpdateAssetClassification,
 } from "@/hooks/useAssetClassification";
 import { useUIStore } from "@/stores/uiStore";
-import { cn } from "@/lib/utils";
+import { cn, getStatusBadgeVariant } from "@/lib/utils";
 import { DIMENSION_LABELS, RULE_DIMENSIONS, RULE_LABELS } from "@/lib/dimensions";
 import LoadingState from "@/components/shared/LoadingState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
@@ -530,11 +530,9 @@ export default function AssetClassificationsContent({
                     <TableCell className="number-cell">{c.sort_order}</TableCell>
                     <TableCell className="text-xs">{rulesSummary(c.code)}</TableCell>
                     <TableCell>
-                      {c.is_active ? (
-                        <Badge variant="success">启用</Badge>
-                      ) : (
-                        <Badge variant="neutral">停用</Badge>
-                      )}
+                      <Badge variant={getStatusBadgeVariant(c.is_active ? "enabled" : "disabled")}>
+                        {c.is_active ? "启用" : "停用"}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <RowActionButton icon={Pencil} label="编辑" onClick={() => openEdit(c)} />
