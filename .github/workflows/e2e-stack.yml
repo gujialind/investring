@@ -8,8 +8,9 @@
 # 两种模式：
 #   - main    ：全量 E2E 门禁（retries 由调用方给 2，容错偶发抖动），产出 html 报告
 #               与 flaky 汇总用的 JSON；失败证据 + 后端日志进单一 artifact。
-#   - capture ：E2E 形态对比采集（retries=0 保形态真实、workers=2、JSON 落文件供
-#               scripts/e2e_normalize.py 归一化）；baseline 侧只换 frontend/e2e 目录。
+#   - capture ：E2E 形态对比采集（retries=0 保形态真实、workers=2、trace 只留失败样本
+#               供抖动取证、JSON 落文件供 scripts/e2e_normalize.py 归一化）；baseline
+#               侧只换 frontend/e2e 目录。
 #               **只在形态触发时被实跑**（命中 frontend/e2e、playwright 配置、种子、
 #               normalizer、scripts/tests 时）——只改本文件不会触发它，改 capture 分支
 #               请手动确认一次形态 PR 的 CI（#467 评审登记）。
@@ -29,7 +30,8 @@
 #   - 其余诊断品 artifact 一律 `if: always()` + `continue-on-error`（#414：上传失败不染红）。
 #
 # 上面这些不变量、以及 artifact 前缀在本文件与 ci.yml 之间的多处耦合，现由
-# scripts/tests/test_ci_e2e_compare.py 守门（#490）：capture 运行步的 --workers=2、
+# scripts/tests/test_ci_e2e_compare.py 守门（#490）：capture 运行步的 --workers=2
+# 与 --trace retain-on-failure（#958 证据缺口）、
 # swap 步的 mode+side 双条件、分叉点检出与 $FORK_SHA 引号（空值不引号 = baseline 静默等同
 # candidate → 恒空 diff 且全绿）、`if-no-files-found: error` 只许挂在 raw JSON 上。
 # 改这些位置会同步红，不必等一次形态 PR。仍然手动确认的只有 capture 的 runtime 面
@@ -324,6 +326,11 @@ jobs:
       # capture 模式：--retries=0 让 flaky 不能被洗成 passed（形态对比失真，见
       # frontend/e2e/AGENTS.md §3）；rc 非 0 不直接失败——用例状态已进 JSON，
       # 由 compare job 的形态 diff 判定。
+      #
+      # --trace retain-on-failure（#958）：playwright.config.ts 缺省是 on-first-retry，
+      # 在 --retries=0 下**永不产出 trace**，mobile 抖动红只能靠截图猜帧间隔；显式加本参数
+      # 后失败样本带 trace.zip 落 test-results/，由下方 "Upload failure evidence" 上传
+      # （该步 if-no-files-found: warn，采集失败时不叠加红）。只在失败时保留，产物体积可控。
       - name: Run Playwright tests (capture)
         if: inputs.mode == 'capture'
         working-directory: frontend
@@ -332,7 +339,7 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/e2e-raw-${{ inputs.side }}.json
         run: |
           rc=0
-          npx playwright test --retries=${{ inputs.retries }} --workers=2 --reporter=list,json || rc=$?
+          npx playwright test --retries=${{ inputs.retries }} --workers=2 --trace retain-on-failure --reporter=list,json || rc=$?
           echo "playwright rc=$rc（非 0 = 有用例未通过，状态已进 JSON）"
 
       # flaky 显性化（#466）：retries 保留（偶发抖动不阻断 PR），但重试转绿的用例
