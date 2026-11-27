@@ -1204,14 +1204,12 @@ export async function expectNavCurveGeometry(
       const line = group.querySelector('.recharts-cartesian-axis-line');
       return line ? rect(line) : null;
     });
-    const xAxis = axes.find((line) => line && line.width > line.height);
-    const yAxis = axes.find((line) => line && line.height > line.width);
+    const xLine = axes.find((line) => line && line.width > line.height);
+    const yLine = axes.find((line) => line && line.height > line.width);
     const allTicks = Array.from(svg.querySelectorAll('.recharts-cartesian-axis-tick-value')).map((tick) => ({
       text: (tick.textContent ?? '').trim(),
       box: rect(tick),
     }));
-    const xLine = xAxis ?? null;
-    const yLine = yAxis ?? null;
     // Recharts 3 把自定义 XAxisTickContent 放入独立 z-index 层，不再挂在 axis g 下。
     // X 按公开 MM-DD 文本识别；Y 按轴线左侧邻域与刻度中心识别，避免误收图内其他四位小数标签。
     const xTicks = allTicks.filter((tick) => /^\d{2}-\d{2}$/.test(tick.text)).sort((a, b) => a.box.left - b.box.left);
@@ -1220,7 +1218,6 @@ export async function expectNavCurveGeometry(
     }
     // Y 刻度垂直居中，首尾文字会各伸出轴线半字高；按中心定位，1px 只吸收轴线亚像素误差。
     const yTicks = allTicks.filter((tick) =>
-      /^-?\d{1,3}(?:,\d{3})*\.\d{4}$/.test(tick.text) &&
       tick.box.left < yLine.left &&
       tick.box.right <= yLine.left + 0.5 &&
       tick.box.top + tick.box.height / 2 >= yLine.top - 1 &&
