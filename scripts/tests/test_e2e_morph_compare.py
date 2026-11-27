@@ -171,3 +171,69 @@ def test_empty_tsv_is_loud(tmp_path):
     base.write_text("", encoding="utf-8")
     cand = write_tsv(tmp_path / "cand.tsv", [row()])
     assert_loud(["--base", str(base), "--candidate", str(cand)])
+
+
+def test_invalid_utf8_is_loud(tmp_path, capsys):
+    """UnicodeDecodeError 不是 OSError：漏掉它会以 rc=1 崩掉、被标签当成形态差异放行。"""
+    base = tmp_path / "base.tsv"
+    base.write_bytes(b"demo\tchromium\t\xff\xfe\tunexpected\tfailed\n")
+    cand = write_tsv(tmp_path / "cand.tsv", [row()])
+    assert_loud(["--base", str(base), "--candidate", str(cand)])
+    assert "读不到 baseline 侧 TSV" in capsys.readouterr().err
+
+
+def test_unexpected_crash_maps_to_rc_2(monkeypatch):
+    """rc=1 必须只表示「对比完成且存在形态差异」：任何崩溃都要归到 rc=2（不可豁免）。"""
+
+    def boom(argv):
+        raise RuntimeError("模拟脚本自身崩溃")
+
+    monkeypatch.setattr(e2e_morph_compare, "_run", boom)
+    assert e2e_morph_compare.main(["--base", "x", "--candidate", "y"]) == 2
+
+
+def test_status_sentinel_is_rejected_but_result_sentinel_tolerated(tmp_path):
+    """第 4 列 "?"（reporter 形态漂移）语义不明 -> 拒止；第 5 列 "?" 只影响披露 -> 容忍。"""
+    base = write_tsv(tmp_path / "base.tsv", [row(status="?", result="passed")])
+    cand = write_tsv(tmp_path / "cand.tsv", [row()])
+    assert_loud(["--base", str(base), "--candidate", str(cand)])
+    base = write_tsv(tmp_path / "base.tsv", [row(result="?")])
+    assert e2e_morph_compare.main(["--base", str(base), "--candidate", str(cand)]) == 0
+
+
+def test_title_with_unicode_line_separator_is_not_torn(tmp_path):
+    """splitlines() 会在 \\u2028 处断行；只按 \\n 切行才不会把标题撕成两行误报列数不符。"""
+    base = write_tsv(tmp_path / "base.tsv", [row(title="A\u2028B")])
+    cand = write_tsv(tmp_path / "cand.tsv", [row(title="A\u2028B")])
+    assert e2e_morph_compare.main(["--base", str(base), "--candidate", str(cand)]) == 0
+
+
+def test_crlf_is_tolerated(tmp_path):
+    base = tmp_path / "base.tsv"
+    base.write_bytes("\t".join(row()).encode() + b"\r\n")
+    cand = write_tsv(tmp_path / "cand.tsv", [row()])
+    assert e2e_morph_compare.main(["--base", str(base), "--candidate", str(cand)]) == 0
+
+
+def test_run_row_description_change_is_visible(tmp_path):
+    """形态键含 skip 文案（非 skip 行也一样）：诊断必须显示文案差异，不能渲染成两个 run。"""
+    rc, summary = run(
+        tmp_path,
+        [row(status="expected", skip_desc="注解A")],
+        [row(status="expected", skip_desc="注解B")],
+    )
+    assert rc == 1
+    assert "run:注解A" in summary and "run:注解B" in summary
+
+
+def test_full_disclosure_reaches_stdout_while_summary_is_capped(tmp_path, capsys):
+    """Summary 超 LIST_CAP 会写「见 job 日志」：日志里必须真有全量，不能指向空处。"""
+    n = e2e_morph_compare.LIST_CAP + 10
+    base_rows = [row(title=f"用例{i:03d}") for i in range(n)]
+    cand_rows = [row(title=f"用例{i:03d}", status="unexpected", result="failed")
+                 for i in range(n)]
+    rc, summary = run(tmp_path, base_rows, cand_rows)
+    assert rc == 0
+    assert f"另有 {n - e2e_morph_compare.LIST_CAP} 条，见 job 日志" in summary
+    out = capsys.readouterr().out
+    assert "用例000" in out and f"用例{n - 1:03d}" in out, "stdout 必须给出全量（不截断）"

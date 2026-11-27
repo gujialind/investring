@@ -894,6 +894,23 @@ class TestJudgeBodyRuntime:
         assert result.returncode == 1, result.stdout + result.stderr
         assert "rc=2" in result.stdout + result.stderr
 
+    def test_corrupt_encoding_is_not_exemptable(self, judge_body, tmp_path):
+        """坏编码不是形态差异：UnicodeDecodeError 若不归到 rc=2，会被标签当成形态差异放行。"""
+        self.tsv(tmp_path, "base.tsv", self.ROWS["same"])
+        (tmp_path / "cand.tsv").write_bytes(
+            b"demo\tchromium\t\xff\xfe\tunexpected\tfailed\t\n"
+        )
+        result = subprocess.run(
+            ["bash", "-e", str(self.script(tmp_path, judge_body))],
+            cwd=REPO_ROOT,
+            env={**os.environ, "EXEMPT": "true",
+                 "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md")},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "rc=2" in result.stdout + result.stderr
+
 
 class TestBaselineForkPointReplay:
     """#827：合成 git 回放——落后分支下 baseline 必须取分叉点，而不是 base.sha。"""

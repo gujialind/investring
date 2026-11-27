@@ -997,7 +997,7 @@ jobs:
             exit 0
           fi
           if [ "$rc" -ne 1 ]; then
-            echo "::error::形态对比脚本异常退出（rc=$rc）：TSV 缺失或列序不符，不适用标签豁免"
+            echo "::error::形态对比脚本异常退出（rc=$rc）：输入无效或运行环境故障（详见上方脚本输出），不适用标签豁免"
           else
             echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
           fi
