@@ -23,6 +23,11 @@ import {
 import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import { largestRemainderPercents } from "@/lib/utils";
 
+export const CUMULATIVE_PROFIT_INFO_TIP = {
+  label: "查看累计收益说明",
+  content: "累计收益含已卖出实现盈亏",
+} as const;
+
 export const UNCATEGORIZED_GROUP_NAME = "未分类";
 export const OTHER_SECTION_NAME = "其他";
 /** 组合键显示名分隔符（U+00B7，两侧不加空格；存量观感契约，SPEC §6.1） */

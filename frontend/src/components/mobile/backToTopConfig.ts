@@ -1,0 +1,1 @@
+export const BACK_TO_TOP_VISIBILITY_MULTIPLIER = 3;

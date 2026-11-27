@@ -29,6 +29,7 @@ import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
 import PerformanceMetrics from "@/components/shared/PerformanceMetrics";
 import PortfolioActionButtons from "@/components/shared/PortfolioActionButtons";
+import BackToTop from "@/components/mobile/BackToTop";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
@@ -153,8 +154,8 @@ function MobilePortfolioDetailInner() {
     />
   );
 
-  return (
-    <div className="space-y-4 p-4 pb-24">
+  const detailContent = (
+    <div className="space-y-4 px-4 pt-4 safe-area-pb-16">
       {snapshotError && (
         <QueryErrorState
           error={snapshotErr}
@@ -234,7 +235,7 @@ function MobilePortfolioDetailInner() {
             />
           )}
 
-          {/* 吸底操作 bar（#943 S4）：主动作 +「更多」Sheet，单层网格由组件内部控制 */}
+          {/* 入流操作区（#937）：主动作 +「更多」Sheet，单层网格由组件内部控制 */}
           {actionButtons}
           {/* 删除空壳确认（#820 扩围，与桌面端共用弹窗） */}
           <DeletePortfolioDialog
@@ -307,6 +308,13 @@ function MobilePortfolioDetailInner() {
         </>
       )}
     </div>
+  );
+
+  return (
+    <>
+      {detailContent}
+      <BackToTop returnFocusSelector='[data-testid="page-header"] a[href]' />
+    </>
   );
 }
 

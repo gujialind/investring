@@ -37,7 +37,7 @@ export interface HoldingProductAggregate {
   ratio: number | null;
   shares: number | null;
   cash_amount: number | null;
-  /** 持有收益（卡片「累计收益」标签口径，D-3） */
+  /** 持有收益（当前持仓口径；详情页与 HoldingPlatformCard 使用） */
   holding_profit: number | null;
   holding_profit_percent: number | null;
   daily_profit: number | null;

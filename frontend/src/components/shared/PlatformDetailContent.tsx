@@ -255,20 +255,17 @@ export default function PlatformDetailContent({ basePath, variant }: PlatformDet
                 market_value: slice.market_value,
                 shares: slice.shares,
                 holding_profit: slice.holding_profit,
+                cumulative_profit: slice.cumulative_profit,
                 daily_profit: slice.daily_profit,
               };
               return (
                 <div key={`${p.product_code}-${p.market}`} className="space-y-1">
-                  <Link
+                  <HoldingProductCard
+                    product={cardProduct}
+                    percent={productPercents[i] ?? 0}
+                    snapshotDate={snapshotDate}
                     href={`${basePath}/${portfolioCode}/platforms/${platformCode}/products/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
-                    className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <HoldingProductCard
-                      product={cardProduct}
-                      percent={productPercents[i] ?? 0}
-                      snapshotDate={snapshotDate}
-                    />
-                  </Link>
+                  />
                   {p.market === "CN_OTC" && (
                     <RowActionButton
                       icon={Settings2}

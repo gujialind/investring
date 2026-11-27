@@ -6,6 +6,7 @@ import {
   authHeaders,
   closePortfolioViaApi,
   gotoPortfolioDetail,
+  openPopover,
   openPortfolioMoreMenu,
   toISODate,
 } from './helpers';
@@ -138,6 +139,26 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
   });
 
   test('默认按产品视图：URL 无 view 参数，产品聚合卡与现金聚合卡渲染', async ({ page }) => {
+    // 种子没有已卖出仓位，持有/累计收益恰好同值；读侧注入异号哨兵值，钉住 row3
+    // 确实取 cumulative_profit，并同时覆盖数值与涨跌色两个绑定。
+    await page.route(/\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/, async (route) => {
+      const resp = await route.fetch();
+      const json = (await resp.json()) as {
+        products: Array<{
+          product_code: string;
+          holding_profit: number | null;
+          cumulative_profit: number | null;
+        }>;
+      };
+      const target = json.products.find((product) => product.product_code === '510300.SH');
+      expect(target, '种子须包含 510300.SH 产品聚合').toBeDefined();
+      target!.holding_profit = -1234.5;
+      target!.cumulative_profit = 9876.5;
+      const headers = { ...resp.headers() };
+      delete headers['content-length'];
+      delete headers['content-encoding'];
+      await route.fulfill({ status: resp.status(), headers, json });
+    });
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });
 
@@ -172,8 +193,31 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     expect(Math.abs(totalBox!.y - dailyBox!.y), '两列标题须同一行').toBeLessThanOrEqual(1);
     expect(Math.abs(totalBox!.height - dailyBox!.height), '两列标题须同高（无一侧折行）').toBeLessThanOrEqual(1);
     // CSS 省略号不改 DOM 文本，文本级断言看不见 truncate 回归；按计算值钉住「不出省略号」本体（#636）
-    await expect(productCard.getByTestId('total-profit-value')).toHaveCSS('text-overflow', 'clip');
+    const totalValue = productCard.getByTestId('total-profit-value');
+    await expect(totalValue).toHaveText('+9,876.50');
+    await expect(totalValue).not.toHaveText('-1,234.50');
+    await expect(totalValue).toHaveClass(/text-gain/);
+    await expect(totalValue).not.toHaveClass(/text-loss/);
+    await expect(totalValue).toHaveCSS('text-overflow', 'clip');
     await expect(productCard.getByTestId('daily-profit-value')).toHaveCSS('text-overflow', 'clip');
+    // 持仓卡与详情页使用同一累计收益口径；说明默认收起，打开不触发整卡链接。
+    const tipTrigger = productCard.getByRole('button', { name: '查看累计收益说明' });
+    const tipContent = page.getByTestId('info-tip-content');
+    await expect(tipTrigger).toHaveAttribute('aria-expanded', 'false');
+    const tipBox = await tipTrigger.boundingBox();
+    const totalValueBox = await totalValue.boundingBox();
+    expect(tipBox).not.toBeNull();
+    expect(totalValueBox).not.toBeNull();
+    expect(tipBox!.width, '持仓卡说明触点至少 44px 宽').toBeGreaterThanOrEqual(44);
+    expect(tipBox!.height, '持仓卡说明触点至少 44px 高').toBeGreaterThanOrEqual(44);
+    expect(tipBox!.y + tipBox!.height, '说明触点不得覆盖下方收益值').toBeLessThanOrEqual(totalValueBox!.y + 1);
+    await expect(page.getByText('累计收益含已卖出实现盈亏', { exact: true })).toHaveCount(0);
+    const cardPageUrl = page.url();
+    await openPopover(page, tipTrigger, tipContent);
+    await expect(tipContent).toHaveText('累计收益含已卖出实现盈亏');
+    expect(page.url(), '打开持仓卡说明不得跳转产品详情').toBe(cardPageUrl);
+    await page.keyboard.press('Escape');
+    await expect(tipContent).toHaveCount(0);
     await expect(productCard).toContainText('占比');
 
     // 现金聚合卡（可用现金 · 平台名）
