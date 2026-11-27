@@ -44,6 +44,8 @@ test.describe("共享说明触发器（#943 S2）", () => {
       await focusProbe.focus();
       await trigger.hover();
       await expect(content).toBeVisible();
+      await trigger.click();
+      await expect(content).toBeVisible();
       const contentId = await trigger.getAttribute("aria-controls");
       expect(contentId).not.toBeNull();
       await expect(content).toHaveAttribute("id", contentId!);
@@ -53,6 +55,12 @@ test.describe("共享说明触发器（#943 S2）", () => {
 
       await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
       await expect(content).toHaveCount(0);
+
+      await focusProbe.focus();
+      await trigger.hover();
+      await expect(content).toBeVisible();
+      await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
+      await expect(content).toHaveCount(0);
       await expect(focusProbe).toBeFocused();
 
       await page.keyboard.press("Tab");
@@ -60,6 +68,11 @@ test.describe("共享说明触发器（#943 S2）", () => {
       await expect(content).toBeVisible();
       const shadow = await trigger.evaluate((element) => getComputedStyle(element).boxShadow);
       expect(shadow).not.toBe("none");
+      await page.keyboard.press("Enter");
+      await expect(content).toHaveCount(0);
+      await page.keyboard.press("Tab");
+      await trigger.focus();
+      await expect(content).toBeVisible();
       await page.keyboard.press("Tab");
       await expect(content).toHaveCount(0);
       await expect(trigger).not.toBeFocused();
@@ -116,7 +129,11 @@ test.describe("共享说明触发器（#943 S2）", () => {
     await expect(toggle).toHaveAttribute("aria-checked", checked ? "true" : "false");
     expect(updates).toHaveLength(0);
 
-    await trigger.click();
+    if (testInfo.project.name === "chromium") {
+      await page.keyboard.press("Escape");
+    } else {
+      await trigger.click();
+    }
     await expect(content).toHaveCount(0);
     await settlePopovers(page);
   });

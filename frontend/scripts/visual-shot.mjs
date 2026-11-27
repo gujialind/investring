@@ -69,8 +69,7 @@ const INFO_TIP_DEFAULT_PATH = '/portfolio/E2E_ACTIVE';
 function infoTipLabelForPath(path) {
   const pathname = new URL(path, 'http://localhost').pathname;
   if (pathname.endsWith('/snapshots')) return '查看自动生成快照说明';
-  if (pathname.includes('/platforms/') && pathname.includes('/products/')) return '查看累计收益说明';
-  if (pathname.includes('/product/')) return '查看累计收益说明';
+  if (pathname.includes('/product/') || (pathname.includes('/platforms/') && pathname.includes('/products/'))) return '查看累计收益说明';
   if (pathname === INFO_TIP_DEFAULT_PATH || pathname === `/m${INFO_TIP_DEFAULT_PATH}`) {
     return '查看MWR 年化说明';
   }

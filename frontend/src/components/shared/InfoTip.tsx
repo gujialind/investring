@@ -86,7 +86,10 @@ export default function InfoTip({ label, content }: InfoTipProps) {
               if (!next && open) return;
               closeSoon();
             }}
-            onClick={cancelClose}
+            onClick={(event) => {
+              cancelClose();
+              if (open && canHover() && event.detail !== 0) event.preventDefault();
+            }}
           >
             <Info aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
@@ -118,7 +121,9 @@ export default function InfoTip({ label, content }: InfoTipProps) {
         }}
         onBlurCapture={(event) => {
           const next = event.relatedTarget as Node | null;
-          if (next) focusWithinContent.current = contentRef.current?.contains(next) ?? false;
+          focusWithinContent.current = next
+            ? (contentRef.current?.contains(next) ?? false)
+            : false;
         }}
         onPointerEnter={(event) => {
           if (event.pointerType === "mouse" && canHover()) cancelClose();
