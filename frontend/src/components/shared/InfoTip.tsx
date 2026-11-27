@@ -28,6 +28,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
     cancelClose();
     closeTimer.current = setTimeout(() => {
       focusPinned.current = false;
+      focusWithinContent.current = false;
       setOpen(false);
     }, 120);
   };
@@ -67,7 +68,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
         setOpen(next);
       }}
     >
-      <span className="relative inline-flex h-11 w-11 shrink-0 items-center justify-center">
+      <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center">
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -145,6 +146,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
           }
         }}
         onFocusCapture={() => {
+          cancelClose();
           focusWithinContent.current = true;
         }}
         onBlurCapture={(event) => {

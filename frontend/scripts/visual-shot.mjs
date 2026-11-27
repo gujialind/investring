@@ -150,7 +150,7 @@ if (opts.scenario === 'info-tip') {
   if (!pathsExplicit) opts.paths = [INFO_TIP_DEFAULT_PATH];
   for (const path of opts.paths) {
     if (!infoTipLabelForPath(path)) {
-      console.error(`info-tip 场景不支持路径: ${path}；可用：种子组合详情（${INFO_TIP_DEFAULT_PATH}）、产品/平台产品详情、快照页`);
+      console.error(`info-tip 场景不支持路径: ${path}；可用：种子组合详情（${INFO_TIP_DEFAULT_PATH}）、产品/平台产品详情（仅允许 ?market= 查询参数）、快照页；不支持 hash 及其他查询参数`);
       process.exit(2);
     }
   }
@@ -194,8 +194,10 @@ async function ensureLoggedIn(page, context) {
 }
 
 function shotSlug(path) {
-  const pathname = parseUrl(path).pathname;
-  return pathname.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+  const url = parseUrl(path);
+  const base = url.pathname.split('/').filter(Boolean).slice(-2).join('-') || 'root';
+  const market = url.searchParams.get('market');
+  return market ? `${base}-${market}` : base;
 }
 
 function shotName(path, device, theme) {

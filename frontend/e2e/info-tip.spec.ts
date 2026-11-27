@@ -69,8 +69,10 @@ test.describe("共享说明触发器（#943 S2）", () => {
       await expect(content).toHaveCount(0);
 
       await focusProbe.focus();
+      await expect(focusProbe).toBeFocused();
       await trigger.hover();
       await expect(content).toBeVisible();
+      await expect(focusProbe).toBeFocused();
       await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
       await expect(content).toHaveCount(0);
       await expect(focusProbe).toBeFocused();
@@ -115,6 +117,21 @@ test.describe("共享说明触发器（#943 S2）", () => {
     }
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
+  });
+
+  test("平台内产品累计收益触控区不覆盖下方数值", async ({ page }) => {
+    await page.goto(
+      `/portfolio/${E2E_ACTIVE}/platforms/HBZQ/products/510300.SH?market=CN_EXCHANGE`,
+    );
+    const trigger = page.getByRole("button", { name: "查看累计收益说明" });
+    const value = page.getByTestId("platform-product-cumulative-profit");
+    const triggerBox = await trigger.boundingBox();
+    const valueBox = await value.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    expect(valueBox).not.toBeNull();
+    expect(triggerBox!.width).toBeGreaterThanOrEqual(44);
+    expect(triggerBox!.height).toBeGreaterThanOrEqual(44);
+    expect(triggerBox!.y + triggerBox!.height).toBeLessThanOrEqual(valueBox!.y + 1);
   });
 
   test("触控设备即使报告支持悬停，再次点按仍可关闭说明", async ({ page }, testInfo) => {
