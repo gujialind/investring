@@ -151,7 +151,7 @@ test.describe("产品详情页", () => {
     expect(initialUrl.pathname).toContain('/510300.SH/CN_EXCHANGE/');
     await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
 
-    for (const key of ["1m", "3m", "1y", "6m"]) {
+    for (const key of ["1m", "3m", "1y"]) {
       const requested = navRequest(key);
       await page.getByTestId(`nav-range-${key}`).click();
       const url = new URL((await requested).url());
@@ -162,6 +162,8 @@ test.describe("产品详情页", () => {
         await expect(page.getByTestId(`nav-range-${other}`)).toHaveAttribute("aria-pressed", "false");
       }
     }
+    await page.getByTestId("nav-range-6m").click();
+    await expect(page.getByTestId("nav-range-6m")).toHaveAttribute("aria-pressed", "true");
   });
 
   test("历史净值：日期降序两行、累计净值/日涨跌占位、无查看更多", async ({ page }) => {

@@ -266,9 +266,7 @@ test('净值图键盘焦点浅暗均走 ring，局部规则不污染饼图与普
     const pieSvg = page.locator('svg.recharts-surface').filter({ has: page.locator('.recharts-pie-sector') }).first();
     await expect(pieSvg, `${scheme}: 资产饼图应仍存在`).toBeVisible();
     await expect(pieSvg).toHaveCSS('outline-style', 'none');
-    const ordinary = testInfo.project.name === 'mobile'
-      ? page.getByRole('button', { name: '页面更多操作' })
-      : page.getByRole('button', { name: '收起侧栏' });
+    const ordinary = card.getByTestId('nav-range-6m');
     await ordinary.focus();
     await page.keyboard.press('Tab');
     await page.keyboard.press('Shift+Tab');
