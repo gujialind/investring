@@ -457,6 +457,14 @@ class TestDashboardQueryCount:
         three_portfolio_kind_pairs = capture_selects()
 
         assert len(three_portfolio_kind_pairs) == len(one_portfolio_kind_pair)
+        date_range_sql = next(
+            statement.lower()
+            for statement in three_portfolio_kind_pairs
+            if "ledger_entry" in statement.lower()
+            and "min(" in statement.lower()
+            and "max(" in statement.lower()
+        )
+        assert "group by" in date_range_sql
         expected_table_counts = {
             "portfolio": 2,                 # active 集合 + 台账批量状态
             "portfolio_value_snapshot": 2,  # latest + first

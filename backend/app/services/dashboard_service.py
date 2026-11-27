@@ -8,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 from typing import List, Optional, Sequence, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.ledger_entry import LedgerEntry
@@ -85,19 +86,17 @@ def _ledger_entry_date_ranges(db: Session, ledger_codes: List[str]) -> dict:
     """一次 IN 查询求每个台账组合首末记录日，供持有期与可靠性判断。"""
     if not ledger_codes:
         return {}
-    ranges: dict = {}
     rows = (
-        db.query(LedgerEntry.portfolio_code, LedgerEntry.value_date)
+        db.query(
+            LedgerEntry.portfolio_code,
+            func.min(LedgerEntry.value_date),
+            func.max(LedgerEntry.value_date),
+        )
         .filter(LedgerEntry.portfolio_code.in_(ledger_codes))
-        .order_by(LedgerEntry.portfolio_code.asc(), LedgerEntry.value_date.asc())
+        .group_by(LedgerEntry.portfolio_code)
         .all()
     )
-    for code, value_date in rows:
-        if code not in ranges:
-            ranges[code] = [value_date, value_date]
-        else:
-            ranges[code][1] = value_date
-    return ranges
+    return {code: [first, last] for code, first, last in rows}
 
 
 def _ledger_flows_by_code(db: Session, ledger_codes: List[str]) -> dict:
