@@ -206,7 +206,7 @@
 - **圆角**：统一走 `--radius` 派生档位——卡片/对话框 `rounded-lg`、输入与按钮 `rounded-md`、badge/chip/状态点 `rounded-full`、checkbox `rounded-sm`（基件规格登记见 §13）；禁用 `rounded-[Npx]` 任意值。
 - **阴影**：扁平金融风，**卡片一律无投影**，靠「页面底 → 白卡 → 边框」三级明度差分层；`Card` 基件已移除 `shadow-sm`，不再由消费页逐处覆盖。投影仅用于浮层例外——Toast / 下拉 / Popover 用 `shadow-lg`，模态遮罩不动卡片本体。
 - **内边距**：卡片内容桌面 `p-6`（CardContent 默认）、移动 `p-3`；区块间距桌面 `space-y-6`/移动 `space-y-4` 为既有惯例，新页面沿用，禁用 `p-[Npx]`/`gap-[Npx]` 任意值。
-- **z-index（现状登记，2026-08-29）**：浮层统一 `z-50`（shadcn 基件默认：Dialog/AlertDialog 遮罩与内容、Select/Dropdown/Popover/Tooltip、移动端底部导航）；Toast 容器 `z-[100]`——**唯一例外**，须盖过模态层。不自定义其他层级；新增浮层一律复用基件，不手写 z 值。
+- **z-index（现状登记，2026-08-29；#937 补窄例外）**：浮层统一 `z-50`（shadcn 基件默认：Dialog/AlertDialog 遮罩与内容、Select/Dropdown/Popover/Tooltip、移动端底部导航）；Toast 容器 `z-[100]`，须盖过模态层。**唯一新增非模态例外**：移动组合详情长页的「回到顶部」小按钮用 `z-40`，低于 Sheet/Dialog 的 `z-50` 遮罩，不抢点击或焦点；它不是整条底栏，也不引入新层级体系。除此例外与 Toast 外不自定义其他层级；新增浮层一律复用基件。
 - **focus 态（现状登记，2026-08-29）**：走基件默认 `focus-visible:ring`（`ring-ring` = primary 靛蓝，§1.4；button/checkbox/input/switch/tabs 已带），不自定义 ring 宽度/offset；自绘可交互元素必须保留等价 focus 可见反馈。
 
 ## 8. 表格规范
@@ -304,6 +304,7 @@
 - **说明浮层 InfoTip**（#943 S2）：真实 `button` 承载 lucide Info，提供可访问名、`aria-expanded`/`aria-controls` 与打开时 `aria-describedby`，键盘焦点有可见 ring；触控盒至少 44×44 CSS px，图标仍用 14px 紧凑档，触发器本身预留 44×44 布局空间，透明放大区域不得覆盖相邻数值。桌面鼠标悬停或键盘聚焦打开，指针可移入文字继续阅读，离开触发器和浮层后关闭；移动/触控点按打开，再次点触发器或点外部关闭，点文字本身不误关；Escape 关闭。浮层最大宽 320px 且不超过 `100vw - 2rem`，在 320/390px 与桌面 360px 窄栏内完整换行、不裁切、不新增页面级滚动容器。
 - **局部加载态**（筛选变更/翻页等局部刷新，#125/#126 起）：保留旧数据，表格容器 `opacity-50` + 右上角 `Loader2` 小 spinner；不切换为空态或区块级 spinner，避免闪烁与布局跳动。首次进入页面的全量加载仍走区块级 spinner（§8）。**卡片数据区的重取同理（#683 D-1）**：同一区块容器 `opacity-50` + 卡片右上角 `Loader2`，并把该状态显式写成 `aria-busy="true"/"false"`——定位器契约禁止按 Tailwind 工具类定位，故这个属性同时是状态语义与 E2E 锚点（手法同 #650 的 `aria-current`）。这里**不得**为消除「旧值看起来像当前值」的观感而删掉 `placeholderData: keepPreviousData`（那是筛选/翻页不闪烁的既有行为，属另一项业务判定）；也不得只看数值是否变旧来判——`isRefetching` 为真即标 busy，首屏在途不标。
 - **操作区按钮层级**：每卡片/区块主操作唯一（`default` primary solid），其余 `outline`/`ghost`；危险操作与主操作分区放置，不与主操作并排。
+- **移动组合详情页内操作区与长页回顶（#937）**：操作区取消 fixed/sticky 底栏，回到 `space-y-4 p-4` 正文流；净值型位于统计之后、资产分布之前，draft/台账沿用各自既有位置。保留「调仓 / 申购赎回 / 更多」单组三列与主次样式，移动操作按钮统一 44px 高、更多 44×44；不增加卡片、重复操作条或 `pb-24` 专用预留。仅移动组合详情在 `scrollY >= 3 * innerHeight` 时显示右下角「回到顶部」44×44 按钮，挂正文间距容器外，右/底距为 `1rem + env(safe-area-inset-*)`；短页不显示，scroll/resize 重算，层级为 §7 的 `z-40`。点击或键盘触发瞬时回到文档顶，不改 URL/视图参数、不发业务请求、不加平滑滚动；页头恢复展开，按钮隐藏时若持有焦点则交还页头返回出口。该按钮是阅读导航，普通详情、投资人和台账长页均可使用，不新增管理权限。
 - **视图状态即时切换（#915 B2）**：持仓明细「按产品」视图各大类分区头下的子集切换 chip 行（`PortfolioHoldings.tsx::SubDimSwitchRow`，双端同形态、`flex-wrap` 换行）——「默认」+ 该大类非禁止维，chip 形态沿用净值区间先例（`rounded-full px-3 py-1.5 text-xs`，激活 `bg-primary` 白字、未激活 `bg-muted`，`aria-pressed` 表态）；点击即时重分组、无 toast/无加载态/无确认（纯视图状态，URL `?sub=` 持久化、不写回配置，口径正文见[业务规则·组合](../reference/business-constraints.md#rule-portfolio) display_config 条）。现金（0 维）与「其他」桶不渲染切换行；按平台视图不渲染。E2E 门禁：`frontend/e2e/portfolio-subset-switch.spec.ts`（双端）。
 - **错误提示分工**：操作结果（增删改/同步/确认的成败）用 **toast**（success/error/warning/info 四型，映射 success/destructive/warning/success 色系，info 不单独设色）；表单校验、数据完整性、阻断性提示用 **inline Alert**（`default` / `destructive` 两 variant；校验通过/警告用 success/warning 的 `bg-*-soft` + `border-*/30` 组合，不新增 Alert variant）。
 - **后台任务进度**（sync-job 类，#146 起）：进行中 = 状态 Badge（`running`→`warning`，§1.3）+ `Loader2` + 文案的行内区块；不引入 Progress 条组件（任务无可靠百分比，YAGNI）。终态反馈仍走上述 toast 分工，页面数据随之刷新。

@@ -18,11 +18,14 @@
  *             portfolio-breadcrumb-long-name = 组合子页长名称面包屑（#943 S1，仅改写
  *             当前页面的组合查询响应，不写库、不生成/重算快照）；
  *             info-tip = 说明浮层取证（#943 S2，未传 --path 时默认组合详情，也可指定
- *             产品/平台产品/快照/绩效说明所在页面）
+ *             产品/平台产品/快照/绩效说明所在页面）；
+ *             portfolio-back-to-top = 移动组合详情页内操作区与三屏回顶（#937，
+ *             先截页首，再仅移动端注入长页前置空白并滚到阈值截回顶态）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
  * --scenario 时改出打开态整页图（overlay-<scenario>-<device>[-dark].png）。
+ * portfolio-back-to-top 特例：桌面出页首视图，移动出页首 + 三屏阈值两张视口图。
  * /login 特例：无认证 context 截（其余页复用 auth.json）。
  *
  * 与 playwright.config.ts 同口径：desktop = Desktop Chrome(1280x720)，
@@ -60,10 +63,11 @@ const DEFAULT_PATHS = [
   portfolioPath(E2E_ACTIVE, 'subscriptions'),
   portfolioPath(E2E_ACTIVE, 'share-change-events'),
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip', 'portfolio-back-to-top'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 const INFO_TIP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
+const BACK_TO_TOP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
 
 /** --path 可带查询串，故一律按 URL 解析；相对路径以占位 base 补全 */
 function parseUrl(path) {
@@ -153,6 +157,17 @@ if (opts.scenario === 'info-tip') {
       console.error(`info-tip 场景不支持路径: ${path}；可用：种子组合详情（${INFO_TIP_DEFAULT_PATH}）、产品/平台产品详情（仅允许 ?market= 查询参数）、快照页；不支持 hash 及其他查询参数`);
       process.exit(2);
     }
+  }
+}
+if (opts.scenario === 'portfolio-back-to-top' && !pathsExplicit) {
+  opts.paths = [BACK_TO_TOP_DEFAULT_PATH];
+}
+if (opts.scenario === 'portfolio-back-to-top') {
+  const invalidPath = opts.paths.find((path) =>
+    !/^\/(?:m\/)?portfolio\/[^/]+\/?$/.test(parseUrl(path).pathname),
+  );
+  if (invalidPath) {
+    throw new Error(`portfolio-back-to-top 仅支持组合详情路径: ${invalidPath}`);
   }
 }
 const shotSlugs = new Set();
@@ -325,6 +340,22 @@ async function runScenario(page, scenario, device) {
   } };
 }
 
+/** 回顶场景仅移动端：注入前置空白并滚到三屏阈值，交给调用方截图（桌面只截页首） */
+async function scrollToBackToTopThreshold(page) {
+  // 前置空白只用于把真实详情内容推到三屏之后；截图发生在滚动态，不把夹具空白当产品 UI。
+  await page.addStyleTag({ content: 'main::before { content: ""; display: block; height: 2200px; }' });
+  // 先越过真实页头并等折叠提交，避免滚动锚点补偿让三屏截图落到阈值下方。
+  await page.evaluate(() => window.scrollTo(0, 2300));
+  await page.getByTestId('page-header').getByRole('navigation', { name: '面包屑' }).waitFor({ state: 'hidden' });
+  await page.evaluate(() => window.scrollTo(0, 3 * window.innerHeight));
+  const button = page.getByRole('button', { name: '回到顶部', exact: true });
+  await button.waitFor({ state: 'visible', timeout: 15_000 });
+  const atThreshold = await page.evaluate(() => window.scrollY === 3 * window.innerHeight);
+  if (!atThreshold) {
+    throw new Error('回顶目检未落在三屏阈值');
+  }
+}
+
 const written = [];
 for (const device of opts.devices) {
   const { descriptor, launch } = DEVICES[device];
@@ -351,7 +382,26 @@ for (const device of opts.devices) {
       if (loginOnly) await ctx.addInitScript((t) => localStorage.setItem('theme', t), theme);
       const page = await ctx.newPage();
       await page.goto(path, { waitUntil: 'domcontentloaded' });
-      if (opts.scenario && !loginOnly) {
+      if (opts.scenario === 'portfolio-back-to-top') {
+        await page.getByTestId('page-header').waitFor({ state: 'visible', timeout: 15_000 });
+        const allocationHeading = page.getByRole('heading', { name: '资产分布', exact: true });
+        if (await allocationHeading.count()) {
+          // ResponsiveContainer 挂载晚于页头；等真实饼图 sector 出现，避免截到空图容器。
+          await page.locator('path.recharts-sector').first().waitFor({ state: 'visible', timeout: 15_000 });
+        }
+        const top = resolve(opts.out, `portfolio-back-to-top-top-${shotName(path, device, theme)}`);
+        await page.screenshot({ path: top, fullPage: false });
+        written.push(top);
+        if (device === 'mobile') {
+          await scrollToBackToTopThreshold(page);
+          const overlay = resolve(opts.out, `overlay-portfolio-back-to-top-${shotName(path, device, theme)}`);
+          await page.screenshot({ path: overlay, fullPage: false });
+          written.push(overlay);
+          console.log(`✔ [${device}/${theme}] portfolio-back-to-top top + threshold`);
+        } else {
+          console.log(`✔ [${device}/${theme}] portfolio-back-to-top desktop unchanged`);
+        }
+      } else if (opts.scenario && !loginOnly) {
         const handle = await runScenario(page, opts.scenario, device);
         await page.waitForTimeout(300); // 浮层入场收尾
         // 复用 shotName 带 path slug，避免多 --path 时场景图静默互相覆盖（#876 L2 S2）
