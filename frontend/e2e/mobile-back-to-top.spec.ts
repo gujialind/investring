@@ -341,6 +341,8 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
   test('A7：admin 状态/台账/投资人分支保留原操作矩阵，回顶不受管理权限门控', async ({ page }, testInfo) => {
     test.setTimeout(120_000);
     const headers = await openAppAndAuth(page);
+    const draftCode = isolatedPortfolioCode('E937D', testInfo);
+    await createPortfolioViaApi(page, headers, draftCode);
     const closedCode = isolatedPortfolioCode('E937C', testInfo);
     await createPortfolioViaApi(page, headers, closedCode);
     await activatePortfolioViaApi(page, headers, closedCode);
@@ -366,7 +368,7 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
 
     const cases = [
       { code: E2E_ACTIVE, query: '', labels: ['调仓', '申购赎回', '更多操作'], placement: 'nav' as const },
-      { code: E2E_PORT, query: '', labels: ['首次申购激活', '更多操作'], placement: 'draft' as const },
+      { code: draftCode, query: '', labels: ['首次申购激活', '更多操作'], placement: 'draft' as const },
       { code: closedCode, query: '', labels: ['重新激活', '更多操作'], placement: 'nav' as const },
       { code: ledgerCodes.draft, query: '?tab=investors', labels: ['激活组合', '更多操作'], placement: 'ledger' as const },
       { code: ledgerCodes.active, query: '', labels: [], placement: 'none' as const },
@@ -377,7 +379,7 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
       await gotoMobileDetail(page, item.code, item.query);
       await expectActionButtons(page, item.labels);
       await expectActionPlacement(page, item.placement);
-      if (item.code === E2E_PORT) {
+      if (item.code === draftCode) {
         await page.screenshot({ path: testInfo.outputPath('portfolio-inflow-draft-light.png') });
         await page.emulateMedia({ colorScheme: 'dark' });
         await expect(page.locator('html')).toHaveClass(/dark/);
@@ -433,8 +435,11 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     await expect(page.getByTestId('back-to-top')).toHaveCount(0);
   });
 
-  test('A8：Sheet/AlertDialog 的 z-50 遮罩覆盖且不穿透回顶，关闭后滚动与焦点正常', async ({ page }) => {
-    await gotoMobileDetail(page, E2E_PORT);
+  test('A8：Sheet/AlertDialog 的 z-50 遮罩覆盖且不穿透回顶，关闭后滚动与焦点正常', async ({ page }, testInfo) => {
+    const headers = await openAppAndAuth(page);
+    const draftCode = isolatedPortfolioCode('E937A8', testInfo);
+    await createPortfolioViaApi(page, headers, draftCode);
+    await gotoMobileDetail(page, draftCode);
     await makeLongPage(page);
     const back = page.getByTestId('back-to-top');
     const captureBackGeometry = async () => {
@@ -450,6 +455,8 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     };
     const assertCovered = async (modal: ReturnType<Page['getByTestId']>, geometry: Awaited<ReturnType<typeof captureBackGeometry>>) => {
       await expect(modal).toBeVisible();
+      const modalBox = await modal.boundingBox();
+      if (!modalBox) throw new Error('模态没有可测量边界');
       const modalZIndex = await modal.evaluate((element) => Number(getComputedStyle(element).zIndex));
       expect(geometry.zIndex).toBe(40);
       expect(modalZIndex).toBe(50);
@@ -458,8 +465,13 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
         { x: geometry.x, y: geometry.y },
       );
       expect(topElementIsBack, '模态遮罩应覆盖回顶按钮原位置').toBe(false);
+      const overlayPoint = {
+        x: Math.min(geometry.x, modalBox.x + modalBox.width - 1),
+        y: modalBox.y - 8,
+      };
+      expect(overlayPoint.y, '遮挡点击点应位于模态内容上方的真实遮罩').toBeGreaterThan(0);
       const scrollBefore = await page.evaluate(() => window.scrollY);
-      await page.mouse.click(geometry.x, geometry.y);
+      await page.mouse.click(overlayPoint.x, overlayPoint.y);
       expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
     };
 
@@ -470,10 +482,11 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     await assertCovered(sheet, sheetGeometry);
     await page.keyboard.press('Escape');
     await expect(sheet).toBeHidden();
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).overflowY)).toBe('visible');
 
     const dialogGeometry = await captureBackGeometry();
     await trigger.dispatchEvent('click');
-    await sheet.getByTestId(`portfolio-delete-${E2E_PORT}`).click();
+    await sheet.getByTestId(`portfolio-delete-${draftCode}`).click();
     const dialog = page.getByRole('alertdialog');
     await assertCovered(dialog, dialogGeometry);
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
