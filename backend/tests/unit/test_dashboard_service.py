@@ -92,6 +92,25 @@ class TestAggregateXirr:
             "holding_days": 0,
         }
 
+    def test_incomplete_terminal_data_does_not_solve(self, monkeypatch):
+        def fail(_flows):
+            raise AssertionError("任一组合缺正期末值时不得求解聚合 XIRR")
+
+        monkeypatch.setattr(performance_service, "_xirr", fail)
+        start = date(2025, 1, 1)
+        end = date(2025, 7, 1)
+        assert _aggregate_xirr(
+            [(start, -100.0), (end, 150.0)],
+            [(end, 1100.0)],
+            incomplete=True,
+        ) == {
+            "value": None,
+            "reliable": False,
+            "reason": "insufficient_flows",
+            "cash_flow_count": 2,
+            "holding_days": 181,
+        }
+
     def test_unions_all_external_and_per_portfolio_terminals_once(self, monkeypatch):
         captured = []
 

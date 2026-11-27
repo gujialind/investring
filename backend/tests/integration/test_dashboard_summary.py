@@ -325,6 +325,64 @@ class TestDashboardAggregation:
         }
         assert all(row["mwr"] is None for row in payload["portfolios"])
 
+    @pytest.mark.parametrize("kind,terminal", [
+        ("nav", "missing"),
+        ("nav", "zero"),
+        ("ledger", "zero"),
+    ])
+    def test_external_flows_without_positive_terminal_make_aggregate_insufficient(
+        self, client, admin_headers, test_db, monkeypatch, kind, terminal
+    ):
+        _base(test_db)
+        D = date(2026, 10, 1)
+        start = date(2026, 1, 1)
+        middle = date(2026, 7, 1)
+        monkeypatch.setattr(dashboard_service, "business_today", lambda: D)
+        monkeypatch.setattr(ledger_profit_service, "business_today", lambda: D)
+        _nav(
+            test_db, "DASH_VALUED",
+            snapshots=[(start, 1000.0, 1.0), (D, 1100.0, 1.1)],
+            subscriptions=[("subscribe", 1000.0, start)],
+        )
+        if kind == "nav":
+            _nav(
+                test_db, "DASH_UNVALUED",
+                snapshots=[] if terminal == "missing" else [(middle, 0.0, 0.0)],
+                subscriptions=[("subscribe", 100.0, start), ("redeem", 150.0, middle)],
+            )
+        else:
+            _ledger(
+                test_db, "DASH_UNVALUED",
+                flows=[(start, "inflow", 100.0), (middle, "outflow", 150.0)],
+            )
+
+        calls = []
+        solve = performance_service._xirr
+
+        def capture(flows):
+            calls.append(list(flows))
+            return solve(flows)
+
+        monkeypatch.setattr(performance_service, "_xirr", capture)
+        response = client.get("/api/dashboard/summary", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["aggregate_xirr"] == {
+            "value": None,
+            "reliable": False,
+            "reason": "insufficient_flows",
+            "cash_flow_count": 3,
+            "holding_days": (D - start).days,
+        }
+        unvalued = _by_code(payload)["DASH_UNVALUED"]
+        assert unvalued["mwr"] is None
+        assert unvalued["total_value"] == (
+            None if kind == "nav" and terminal == "missing" else 0.0
+        )
+        assert len(calls) == 1
+        assert (start, -100.0) not in calls[0]
+        assert (middle, 150.0) not in calls[0]
+
     def test_external_flows_without_solution_report_no_solution(
         self, client, admin_headers, test_db
     ):
@@ -333,8 +391,8 @@ class TestDashboardAggregation:
         end = date(2026, 1, 1)
         _nav(
             test_db, "DASH_NO_SOLUTION",
-            snapshots=[(start, 1000.0, 1.0), (end, 0.0, 0.0)],
-            subscriptions=[("subscribe", 1000.0, start)],
+            snapshots=[(start, 1000.0, 1.0), (end, 1100.0, 1.1)],
+            subscriptions=[("redeem", 1000.0, start)],
         )
         payload = client.get("/api/dashboard/summary", headers=admin_headers).json()
         assert payload["aggregate_xirr"] == {

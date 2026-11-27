@@ -23,17 +23,22 @@ from app.utils.quantize import quantize_nav
 Flow = Tuple[date, float]
 
 
-def _aggregate_xirr(external_flows: Sequence[Flow], terminal_flows: Sequence[Flow]) -> dict:
+def _aggregate_xirr(
+    external_flows: Sequence[Flow],
+    terminal_flows: Sequence[Flow],
+    *,
+    incomplete: bool = False,
+) -> dict:
     """对外部现金流与各组合期末现金流求并集 XIRR（纯函数）。"""
     all_flows = [*external_flows, *terminal_flows]
     flow_dates = [when for when, _ in all_flows]
     holding_days = (max(flow_dates) - min(flow_dates)).days if flow_dates else None
-    if not external_flows:
+    if not external_flows or incomplete:
         return {
             "value": None,
             "reliable": False,
             "reason": "insufficient_flows",
-            "cash_flow_count": 0,
+            "cash_flow_count": len(external_flows),
             "holding_days": holding_days,
         }
 
@@ -147,6 +152,7 @@ def get_dashboard_summary(db: Session) -> dict:
 
     external_flows: List[Flow] = []
     terminal_flows: List[Flow] = []
+    aggregate_complete = True
     items = []
     for portfolio in portfolios:
         if portfolio.kind == "ledger":
@@ -169,7 +175,10 @@ def get_dashboard_summary(db: Session) -> dict:
                 if rate is not None:
                     mwr = float(quantize_nav(Decimal(str(rate)) * 100))
             external_flows.extend(row_external_flows)
-            terminal_flows.extend(row_all_flows[len(row_external_flows):])
+            if end_value > 0:
+                terminal_flows.extend(row_all_flows[len(row_external_flows):])
+            elif row_external_flows:
+                aggregate_complete = False
             cumulative_return = None
         else:
             aggregate = nav_agg.get(portfolio.code, {})
@@ -200,8 +209,14 @@ def get_dashboard_summary(db: Session) -> dict:
                     subscriptions, latest.snapshot_date, float(latest.total_value)
                 )["mwr"]
             external_flows.extend(row_external_flows)
-            if latest is not None and latest.total_value is not None:
+            if (
+                latest is not None
+                and latest.total_value is not None
+                and float(latest.total_value) > 0
+            ):
                 terminal_flows.append((latest.snapshot_date, float(latest.total_value)))
+            elif row_external_flows:
+                aggregate_complete = False
 
         items.append({
             "code": portfolio.code,
@@ -219,7 +234,9 @@ def get_dashboard_summary(db: Session) -> dict:
         # 与前端 R8 一致：active 行的 None 按 0 合并，空集合同样返回 0。
         "total_value": float(sum((item["total_value"] or 0.0) for item in items)),
         "total_profit": float(sum((item["total_profit"] or 0.0) for item in items)),
-        "aggregate_xirr": _aggregate_xirr(external_flows, terminal_flows),
+        "aggregate_xirr": _aggregate_xirr(
+            external_flows, terminal_flows, incomplete=not aggregate_complete
+        ),
         "pending_subscription_count": pending_subscription_count,
         "pending_trade_count": pending_trade_count,
         "portfolios": items,
