@@ -57,7 +57,6 @@ function PortfolioDetailInner() {
   const {
     snapshot,
     dailyReturn,
-    hasData: snapshotHasData,
     isLoading: snapshotLoading,
     isError: snapshotError,
     error: snapshotErr,
@@ -133,14 +132,6 @@ function PortfolioDetailInner() {
     );
   }
 
-  if (snapshotError && !snapshotHasData) {
-    return (
-      <MainLayout>
-        <QueryErrorState error={snapshotErr} onRetry={() => void refetchSnapshots()} />
-      </MainLayout>
-    );
-  }
-
   const isDraft = portfolio.status === "draft";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
@@ -149,7 +140,7 @@ function PortfolioDetailInner() {
   return (
     <MainLayout>
       <div className="space-y-6">
-        {snapshotError && snapshotHasData && (
+        {snapshotError && (
           <QueryErrorState
             error={snapshotErr}
             onRetry={() => void refetchSnapshots()}

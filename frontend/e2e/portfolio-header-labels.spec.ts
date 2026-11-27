@@ -69,6 +69,12 @@ async function mockSnapshotReads(
   );
 }
 
+async function retrySnapshotReads(page: Page, onBeforeClick: () => void) {
+  onBeforeClick();
+  await page.getByRole('button', { name: '重试' }).click();
+  await expect(page.getByText('加载失败：快照读取失败')).toHaveCount(0);
+}
+
 async function expectHeaderDate(page: Page, date: string) {
   await expect(page.getByTestId('page-header')).toContainText(`最新快照日期 ${date}`);
   await expect(page.getByText(/最新快照日期：/)).toHaveCount(0);
@@ -206,20 +212,38 @@ test.describe('组合详情页头快照日期与百分比标签（#943 S3）', (
     expect(snapshotReads).toBe(0);
   });
 
-  test('快照列表失败：显示查询失败态而非空快照', async ({ page }, testInfo) => {
-    await mockSnapshotReads(page, [], [], 500);
-    await page.goto('/portfolio/E2E_ACTIVE');
+  test('快照列表首次失败：保留详情与管理入口并支持重试', async ({ page }) => {
+    let failList = true;
+    await mockSnapshotReads(
+      page,
+      [snapshot(LATEST, 1.0123), snapshot(PREVIOUS, 1)],
+      [],
+      () => (failList ? 500 : 200),
+    );
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const basePath = new URL(page.url()).pathname.startsWith('/m/') ? '/m' : '';
 
     await expect(page.getByText('加载失败：快照读取失败')).toBeVisible();
     await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
+    await expect(page.getByTestId('page-header')).toBeVisible();
+    await expect(page.getByRole('link', { name: '返回组合列表', exact: true })).toHaveAttribute(
+      'href',
+      `${basePath}/portfolio`,
+    );
+    await expectHeaderDate(page, '--');
+    await expect(page.getByRole('button', { name: '申购赎回', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: '申购赎回', exact: true })).toHaveAttribute(
+      'href',
+      `${basePath}/portfolio/${E2E_ACTIVE}/subscriptions`,
+    );
     await expect(page.getByTestId('portfolio-stat-daily-return-chip')).toHaveCount(0);
-    await expect(page.getByTestId('page-header')).toHaveCount(0);
-    if (testInfo.project.name === 'mobile') {
-      await expect(page.getByRole('link', { name: '返回列表' })).toHaveAttribute(
-        'href',
-        '/m/portfolio',
-      );
-    }
+
+    await retrySnapshotReads(page, () => {
+      failList = false;
+    });
+    await expectHeaderDate(page, LATEST);
+    await expect(page.getByTestId('portfolio-stat-nav')).toHaveText('1.0123');
+    await expect(page.getByTestId('portfolio-stat-daily-return-chip')).toHaveText('+1.23%');
   });
 
   for (const scenario of [
@@ -258,9 +282,9 @@ test.describe('组合详情页头快照日期与百分比标签（#943 S3）', (
       await expect(page.getByTestId('portfolio-stat-nav')).toHaveText(scenario.nav);
       await expect(page.getByTestId('portfolio-stat-daily-return-chip')).toHaveCount(0);
 
-      failList = false;
-      await page.getByRole('button', { name: '重试' }).click();
-      await expect(page.getByText('加载失败：快照读取失败')).toHaveCount(0);
+      await retrySnapshotReads(page, () => {
+        failList = false;
+      });
       if (scenario.change) {
         await expect(page.getByTestId('portfolio-stat-daily-return-chip')).toHaveText(scenario.change);
       } else {

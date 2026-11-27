@@ -2,11 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { snapshotApi, getErrorMessage } from "@/lib/api";
 import { formatNav } from "@/lib/utils";
 import { queryKeys, type SnapshotListRange } from "@/lib/queryKeys";
-import { getSnapshotDailyReturn } from "@/lib/portfolioSnapshot";
+import { getSnapshotDailyReturn, SNAPSHOT_DAILY_RETURN_WINDOW } from "@/lib/portfolioSnapshot";
 import { useUIStore } from "@/stores/uiStore";
 import type { BulkDeleteDryRunResult, BulkDeleteResult } from "@/types/snapshot";
-
-const SNAPSHOT_QUERY_KEY = "snapshots";
 
 const snapshotStatusQueryOptions = (portfolioCode: string) => ({
   queryKey: queryKeys.snapshots.status(portfolioCode),
@@ -52,7 +50,7 @@ export function usePortfolioSnapshotSummary(portfolioCode: string, enabled: bool
       // 内层禁用新鲜缓存，确保 list/status 来自同一轮网络读取。
       const [list, status] = await Promise.all([
         queryClient.fetchQuery({
-          ...snapshotListQueryOptions(portfolioCode, { limit: 2 }),
+          ...snapshotListQueryOptions(portfolioCode, { limit: SNAPSHOT_DAILY_RETURN_WINDOW }),
           staleTime: 0,
         }),
         queryClient.fetchQuery({
@@ -79,7 +77,6 @@ export function usePortfolioSnapshotSummary(portfolioCode: string, enabled: bool
   return {
     snapshot,
     dailyReturn,
-    hasData: enabled && summary.data !== undefined,
     isLoading: enabled && summary.isLoading,
     isError: enabled && summary.isError,
     error: enabled ? summary.error : null,
@@ -96,7 +93,7 @@ export function useGenerateSnapshot() {
     mutationFn: ({ portfolioCode, targetDate }: { portfolioCode: string; targetDate: string }) =>
       snapshotApi.generate(portfolioCode, targetDate),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [SNAPSHOT_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
       addToast({
         type: "success",
@@ -122,7 +119,7 @@ export function useGenerateNextSnapshot() {
   return useMutation({
     mutationFn: (portfolioCode: string) => snapshotApi.generateNext(portfolioCode),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [SNAPSHOT_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
       addToast({
         type: "success",
@@ -150,7 +147,7 @@ export function useCatchUpSnapshots() {
     mutationFn: ({ portfolioCode, toDate }: { portfolioCode: string; toDate: string }) =>
       snapshotApi.catchUp(portfolioCode, toDate),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [SNAPSHOT_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
       if (data.failed_date) {
         addToast({
@@ -218,7 +215,7 @@ export function useBulkDeleteSnapshots() {
         : snapshotApi.deleteBulk(vars.portfolioCode, vars.fromDate, "confirm"),
     onSuccess: (_data, variables) => {
       if (variables.mode === "confirm") {
-        queryClient.invalidateQueries({ queryKey: [SNAPSHOT_QUERY_KEY] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
         queryClient.invalidateQueries({ queryKey: ["portfolios"] });
       }
     },
@@ -251,7 +248,7 @@ export function useDeleteSnapshot() {
     mutationFn: ({ portfolioCode, snapshotDate }: { portfolioCode: string; snapshotDate: string }) =>
       snapshotApi.delete(portfolioCode, snapshotDate),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [SNAPSHOT_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
       addToast({
         type: "success",

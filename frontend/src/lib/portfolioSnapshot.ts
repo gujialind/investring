@@ -1,6 +1,8 @@
 import type { SnapshotListItem } from "@/types/snapshot";
 
-/** items 为倒序 limit=2 响应；missingDates 来自 status，连续性未知或区间有缺口时不显示。 */
+export const SNAPSHOT_DAILY_RETURN_WINDOW = 2;
+
+/** items 为倒序 limit=SNAPSHOT_DAILY_RETURN_WINDOW 响应；missingDates 来自 status，连续性未知或区间有缺口时不显示。 */
 export function getSnapshotDailyReturn(
   items: SnapshotListItem[] | undefined,
   missingDates: string[] | null | undefined,

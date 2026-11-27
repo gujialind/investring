@@ -57,7 +57,6 @@ function MobilePortfolioDetailInner() {
   const {
     snapshot,
     dailyReturn,
-    hasData: snapshotHasData,
     isLoading: snapshotLoading,
     isError: snapshotError,
     error: snapshotErr,
@@ -127,24 +126,6 @@ function MobilePortfolioDetailInner() {
     );
   }
 
-  if (snapshotError && !snapshotHasData) {
-    return (
-      <div className="space-y-4 p-4">
-        <Link href="/m/portfolio">
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            返回列表
-          </Button>
-        </Link>
-        <QueryErrorState
-          error={snapshotErr}
-          onRetry={() => void refetchSnapshots()}
-          className="py-8 text-center"
-        />
-      </div>
-    );
-  }
-
   const isDraft = portfolio.status === "draft";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
@@ -152,7 +133,7 @@ function MobilePortfolioDetailInner() {
 
   return (
     <div className="space-y-4 p-4 pb-24">
-      {snapshotError && snapshotHasData && (
+      {snapshotError && (
         <QueryErrorState
           error={snapshotErr}
           onRetry={() => void refetchSnapshots()}
