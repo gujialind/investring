@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { Bell, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,7 @@ export default function NotificationBell() {
 
   const notifications = data?.items || [];
   const unreadCount = notifications.filter((n) => n.status !== "read").length;
+  const unreadDescriptionId = useId();
 
   return (
     <DropdownMenu>
@@ -40,13 +42,22 @@ export default function NotificationBell() {
           variant="ghost"
           className="relative h-8 w-8 rounded-full"
           aria-label="通知"
+          aria-describedby={unreadCount > 0 ? unreadDescriptionId : undefined}
           title="通知"
         >
           <Bell className="h-4 w-4" />
           {unreadCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive-solid px-1 text-[10px] font-medium text-white">
-              {unreadCount > 9 ? "9+" : unreadCount}
-            </span>
+            <>
+              <span
+                aria-hidden="true"
+                className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive-solid px-1 text-[10px] font-medium text-white"
+              >
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+              <span id={unreadDescriptionId} className="sr-only">
+                {unreadCount > 9 ? "9+" : unreadCount} 条未读通知
+              </span>
+            </>
           )}
         </Button>
       </DropdownMenuTrigger>

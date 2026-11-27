@@ -105,6 +105,31 @@ test.describe('桌面顶部导航（#944 V2-2）', () => {
     await expect(menu).toHaveCount(0);
   });
 
+  test('通知未读数量通过可访问描述暴露且保持按钮名称', async ({ page }) => {
+    await page.route('**/api/system/notifications?*', async (route) => {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              id: 1,
+              type: 'test',
+              level: 'info',
+              title: '测试通知',
+              channel: 'in_app',
+              status: 'pending',
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 20,
+        },
+      });
+    });
+    await page.goto('/dashboard');
+    const bell = page.getByRole('button', { name: '通知', exact: true });
+    await expect(bell).toHaveAccessibleDescription('1 条未读通知');
+  });
+
   test('1024px 显示静态 TopNav，不占侧栏宽度且主导航不横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 900 });
     await page.goto('/dashboard');

@@ -1415,14 +1415,12 @@ export async function expectTopNavDetailLayout(
   await expect(topNav).toHaveCSS("position", "static");
   await expect(page.locator("aside")).toHaveCount(0);
 
-  const mainBox = await page.locator("main").boundingBox();
-  if (!mainBox) throw new Error(`${label}: main 没有可见盒`);
-  const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth);
-  expect(Math.abs(mainBox.x), `${label}: main 左侧不应有侧栏占宽`).toBeLessThanOrEqual(1);
-  expect(Math.abs(mainBox.width - layoutWidth), `${label}: main 应铺满布局视口`).toBeLessThanOrEqual(1);
-
   await expect(async () => {
+    const mainBox = (await page.locator("main").boundingBox())!;
+    const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const m = await measureNavDetailLayout(history, label);
+    expect(Math.abs(mainBox.x), `${label}: main 左侧不应有侧栏占宽`).toBeLessThanOrEqual(1);
+    expect(Math.abs(mainBox.width - layoutWidth), `${label}: main 应铺满布局视口`).toBeLessThanOrEqual(1);
     expectNavDetailColumns(m, label);
     expect(m.tracks.length, `${label}: 1024px 顶部导航下内容应保持双栏`).toBe(2);
     expect(

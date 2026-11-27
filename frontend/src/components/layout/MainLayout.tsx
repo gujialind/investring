@@ -51,7 +51,7 @@ export default function MainLayout({
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="flex min-h-screen flex-col bg-background">
       <TopNav />
       {/* 窄屏（<lg）紧凑顶栏：Logo/通知/账户入口保持可达；宽屏由静态 TopNav 承载。 */}
       <header

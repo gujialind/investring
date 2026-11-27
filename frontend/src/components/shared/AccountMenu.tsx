@@ -24,9 +24,10 @@ interface AccountMenuProps {
 }
 
 /**
- * 账户菜单（#878）：头像 + 姓名/角色触发器，向上展开，含「修改密码」（弹窗）与
+ * 账户菜单（#878）：头像 + 姓名/角色触发器，含「修改密码」（弹窗）与
  * 「退出登录」。全角色可用——补上移动端此前无退出入口的缺口。桌面顶部导航、窄屏
  * 顶栏与移动首页账户区共用同一份；触发器 aria-label 恒为「用户菜单」（E2E 锚点）。
+ * 弹层优先向上展开，顶部空间不足时由 Radix 碰撞规避向下翻转。
  */
 export default function AccountMenu({ collapsed = false, align = "start", className }: AccountMenuProps) {
   const { user } = useAuthStore();
