@@ -7,7 +7,7 @@ TWR/波动率/回撤/nav 类恒 None（台账无净值序列，不硬算）。�
 """
 from datetime import date
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Sequence, Tuple
 
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
@@ -190,6 +190,24 @@ def _modified_dietz(db: Session, code: str, start: date, end: date) -> Optional[
     return quantize_nav(R * 100)
 
 
+def ledger_xirr_flows(
+    ledger_flow_rows: Sequence[LedgerFlow],
+    end_date: date,
+    end_value: float | Decimal,
+) -> List[Tuple[date, float]]:
+    """提取台账 XIRR 现金流（纯函数）：inflow 负流、outflow 正流。
+
+    期末市值仅在大于 0 时追加为正流；调用方决定是否存在外部现金流及是否求解。
+    """
+    flows = [
+        (row.flow_date, -float(row.amount) if row.direction == "inflow" else float(row.amount))
+        for row in ledger_flow_rows
+    ]
+    if end_value > 0:
+        flows.append((end_date, float(end_value)))
+    return flows
+
+
 def compute_ledger_performance(db: Session, code: str) -> dict:
     """台账型绩效（口径A）：mwr(XIRR) + 区间收益(Modified Dietz)；其余 nav/逐日序列类 None。"""
     from app.services.performance_service import _xirr
@@ -231,12 +249,8 @@ def compute_ledger_performance(db: Session, code: str) -> dict:
 
     # mwr（XIRR）：inflow 负流（投入）/ outflow 正流（取回）+ 期末市值正流
     end_value = _step_forward_value(db, code, D)
-    xirr_flows = []
-    for f in flows:
-        amt = float(f.amount)
-        xirr_flows.append((f.flow_date, -amt if f.direction == "inflow" else amt))
-    if xirr_flows and end_value > 0:
-        xirr_flows.append((D, float(end_value)))
+    xirr_flows = ledger_xirr_flows(flows, D, end_value)
+    if flows and end_value > 0:
         rate = _xirr(xirr_flows)
         if rate is not None:
             result["mwr"] = float(quantize_nav(Decimal(str(rate)) * 100))

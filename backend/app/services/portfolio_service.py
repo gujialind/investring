@@ -266,7 +266,7 @@ def _nav_list_aggregates(db: Session, nav_codes: list) -> dict:
     """nav 列表批量聚合（#905 PR3 S1）：固定 4 查询（latest/first/holdings/subs）覆盖本页全部
     nav 组合，非逐组合 N+1——与 ledger 批量同口径，消除列表循环里的逐组合申赎/快照读放大。
     数值口径与逐组合路径（_nav_totals_from_latest + 快照 cumulative_return/investor_count）逐字一致。
-    返回 {code: {latest, cumulative_return, investor_count, net_invested}}。
+    返回 {code: {latest, first, cumulative_return, investor_count, net_invested}}。
     """
     if not nav_codes:
         return {}
@@ -316,6 +316,7 @@ def _nav_list_aggregates(db: Session, nav_codes: list) -> dict:
             )
         agg[code] = {
             "latest": lat,
+            "first": fir,
             "cumulative_return": cumulative,
             "investor_count": counts.get(code, 0),
             "net_invested": _sum_net_invested(subs_by_code.get(code, [])),

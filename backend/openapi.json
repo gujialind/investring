@@ -9120,6 +9120,33 @@
         }
       }
     },
+    "/api/dashboard/summary": {
+      "get": {
+        "tags": [
+          "仪表盘"
+        ],
+        "summary": "Get Dashboard Summary",
+        "description": "只读仪表盘汇总；事务边界不在此提交。",
+        "operationId": "get_dashboard_summary_api_dashboard_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummary"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/": {
       "get": {
         "summary": "Read Root",
@@ -10375,6 +10402,193 @@
           "new_password"
         ],
         "title": "ChangePasswordRequest"
+      },
+      "DashboardAggregateXirr": {
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "reliable": {
+            "type": "boolean",
+            "title": "Reliable"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "no_solution",
+                  "insufficient_flows",
+                  "short_history"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "cash_flow_count": {
+            "type": "integer",
+            "title": "Cash Flow Count"
+          },
+          "holding_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holding Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "reliable",
+          "reason",
+          "cash_flow_count",
+          "holding_days"
+        ],
+        "title": "DashboardAggregateXirr"
+      },
+      "DashboardPortfolioSummary": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "total_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Value"
+          },
+          "total_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Profit"
+          },
+          "cumulative_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cumulative Return"
+          },
+          "mwr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mwr"
+          },
+          "annualization_reliable": {
+            "type": "boolean",
+            "title": "Annualization Reliable"
+          },
+          "holding_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holding Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "kind",
+          "total_value",
+          "total_profit",
+          "cumulative_return",
+          "mwr",
+          "annualization_reliable",
+          "holding_days"
+        ],
+        "title": "DashboardPortfolioSummary"
+      },
+      "DashboardSummary": {
+        "properties": {
+          "total_value": {
+            "type": "number",
+            "title": "Total Value"
+          },
+          "total_profit": {
+            "type": "number",
+            "title": "Total Profit"
+          },
+          "aggregate_xirr": {
+            "$ref": "#/components/schemas/DashboardAggregateXirr"
+          },
+          "pending_subscription_count": {
+            "type": "integer",
+            "title": "Pending Subscription Count"
+          },
+          "pending_trade_count": {
+            "type": "integer",
+            "title": "Pending Trade Count"
+          },
+          "portfolios": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardPortfolioSummary"
+            },
+            "type": "array",
+            "title": "Portfolios"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_value",
+          "total_profit",
+          "aggregate_xirr",
+          "pending_subscription_count",
+          "pending_trade_count",
+          "portfolios"
+        ],
+        "title": "DashboardSummary"
       },
       "DataSourceUpdate": {
         "properties": {
