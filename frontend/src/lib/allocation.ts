@@ -152,7 +152,7 @@ export function sortAllocationItems(
   const kept = categories.slice(0, limit - 1);
   const folded = [...categories.slice(limit - 1), ...existingOther];
   const other: AllocationItem = {
-    key: "其他",
+    key: OTHER_LABEL,
     code: PSEUDO_OTHER_CODE,
     value: folded.reduce((sum, item) => sum + item.value, 0),
     percent: folded.reduce((sum, item) => sum + item.percent, 0),
