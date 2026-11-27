@@ -366,7 +366,7 @@ async function scrollToBackToTopThreshold(page) {
     max: document.documentElement.scrollHeight - window.innerHeight,
   }), targetScroll);
   if (Math.abs(thresholdGeometry.actual - thresholdGeometry.target) > 1) {
-    throw new Error(`回顶目检未落在三屏阈值：实际 ${thresholdGeometry.actual}px，目标 ${thresholdGeometry.target}px，最大滚动 ${thresholdGeometry.max}px`);
+    throw new Error(`回顶目检未落在 ${BACK_TO_TOP_VISIBILITY_MULTIPLIER} 屏阈值：实际 ${thresholdGeometry.actual}px，目标 ${thresholdGeometry.target}px，最大滚动 ${thresholdGeometry.max}px`);
   }
 }
 
