@@ -6,7 +6,7 @@ import {
   authHeaders,
   closePortfolioViaApi,
   gotoPortfolioDetail,
-  openMobilePageActionsIfMobile,
+  openPortfolioMoreMenu,
   toISODate,
 } from './helpers';
 
@@ -313,95 +313,70 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await expect(page.getByTestId('holding-product-card').first()).toBeVisible();
   });
 
-  test('管理入口渲染（#786：页头 4 入口 + 管理卡场景去重，双端）', async ({ page }, testInfo) => {
+  test('active 管理操作统一收进更多菜单，主页不再重复管理入口（#943 S4，双端）', async ({ page }, testInfo) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    const isMobile = testInfo.project.name === 'mobile';
-    // 页头/操作区 4 入口：申购赎回唯一 primary；「事件」可见文案为简称，
-    // accessible name 保留全称「份额变动事件」（aria-label，WCAG 2.5.3 + 既有定位契约）
     await expect(page.getByRole('link', { name: '申购赎回', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: '调仓', exact: true })).toBeVisible();
+    await expect(page.getByTestId('manage-links-card')).toHaveCount(0);
+
+    await openPortfolioMoreMenu(page, testInfo);
+    const menu = page.getByTestId('portfolio-more-menu');
+    await expect(menu.locator('a')).toHaveText(['份额变动事件', '快照管理', '现金流水']);
+    await expect(menu.getByRole('menuitem', { name: '申购赎回记录' })).toHaveCount(0);
+    await expect(menu.getByRole('menuitem', { name: '调仓交易记录' })).toHaveCount(0);
     await expect(
-      page.getByRole('link', { name: isMobile ? '调仓' : '调仓交易', exact: true }),
-    ).toBeVisible();
-    // #904 P1c-3：移动 active 的事件/快照收 ⋯ 抽屉，先开再断；modal aria-hidden
-    // 会遮抽屉外节点，断完须关抽屉才能断管理卡
-    if (isMobile) {
-      await openMobilePageActionsIfMobile(page, testInfo);
-    }
-    await expect(page.getByRole('link', { name: '份额变动事件' })).toBeVisible();
-    await expect(page.getByRole('link', { name: '快照管理' })).toBeVisible();
-    // 唯一性守卫：active+admin 详情页同名 link 仅操作区一处（桌面页头/移动 ⋯ 抽屉；
-    // 管理卡去重后不得双匹配）
-    await expect(page.getByRole('link', { name: '份额变动事件' })).toHaveCount(1);
-    await expect(page.getByRole('link', { name: '快照管理' })).toHaveCount(1);
-    if (isMobile) {
-      await page.keyboard.press('Escape');
-      await expect(page.getByRole('link', { name: '份额变动事件' })).toHaveCount(0);
-    }
-    // 管理卡：保留其余 4 入口，事件/快照不再重复出现
-    const card = page.getByTestId('manage-links-card');
-    await expect(card.getByRole('link', { name: '持仓管理' })).toBeVisible();
-    await expect(card.getByRole('link', { name: '申购赎回记录' })).toBeVisible();
-    await expect(card.getByRole('link', { name: '调仓交易记录' })).toBeVisible();
-    await expect(card.getByRole('link', { name: '现金流水' })).toBeVisible();
-    await expect(card.getByRole('link', { name: '份额变动事件' })).toHaveCount(0);
-    await expect(card.getByRole('link', { name: '快照管理' })).toHaveCount(0);
+      page.getByRole('menuitem', { name: '份额变动事件' }).or(page.getByRole('link', { name: '份额变动事件' })),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole('menuitem', { name: '快照管理' }).or(page.getByRole('link', { name: '快照管理' })),
+    ).toHaveCount(1);
+    await expect(page.getByRole('link', { name: '持仓管理' })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
   });
 
-  test('draft/closed 管理卡保留事件/快照入口（#786 去重条件回归反例）', async ({ page }, testInfo) => {
-    // 反例守卫：ManageLinksCard 的去重条件（isActive / isActive&&isAdmin）若写反，
-    // 上一条 active+admin 断言抓不住（它只证 active 形态），本条在 draft/closed 必红。
-    // viewer 会话不受现有 E2E 基建覆盖（admin-only，regression.spec.ts:274），
-    // 角色×状态的 viewer 侧由作者手动核查脚本覆盖，取舍见 PR #819 处置评论。
-    // authHeaders 经 localStorage 取 token，须先落到同源页（about:blank 会 SecurityError）
+  test('draft/closed 更多菜单保留历史入口、快照与危险操作（#943 S4，双端）', async ({ page }, testInfo) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     const headers = await authHeaders(page);
     const suffix = `${testInfo.project.name}_${testInfo.retry}`;
-    const isMobile = testInfo.project.name === 'mobile';
-
-    // draft 自建（E2E_PORT 草稿态会漂移，#636，不复用）
-    const draftCode = `E786D_${suffix}`;
+    const draftCode = `E943D_${suffix}`;
     const draftResp = await page.request.post('/api/portfolios', {
-      data: { code: draftCode, name: `去重边界 draft ${draftCode}` },
+      data: { code: draftCode, name: `更多菜单 draft ${draftCode}` },
       headers,
     });
     await expect(draftResp, `创建 draft 组合失败 ${draftResp.status()}`).toBeOK();
 
-    // closed 夹具必须「先激活再关闭」：#820 收紧 close 为仅 active，
-    // 对 draft 直接调 close 会 422 PORTFOLIO_NOT_ACTIVE（激活经首购确认）
-    const closedCode = `E786C_${suffix}`;
+    const closedCode = `E943C_${suffix}`;
     const closedResp = await page.request.post('/api/portfolios', {
-      data: { code: closedCode, name: `去重边界 closed ${closedCode}` },
+      data: { code: closedCode, name: `更多菜单 closed ${closedCode}` },
       headers,
     });
     await expect(closedResp, `创建 closed 组合失败 ${closedResp.status()}`).toBeOK();
     await activatePortfolioViaApi(page, headers, closedCode);
     await closePortfolioViaApi(page, headers, closedCode);
 
-    // draft：桌面既存形态不渲染管理卡；移动卡保留事件/快照（去重仅限 active）
-    await page.goto(`/portfolio/${draftCode}`);
-    await page
-      .getByRole('heading', { level: 1 })
-      .first()
-      .waitFor({ state: 'visible', timeout: 15_000 });
-    if (isMobile) {
-      const draftCard = page.getByTestId('manage-links-card');
-      await expect(draftCard.getByRole('link', { name: '份额变动事件' })).toHaveCount(1);
-      await expect(draftCard.getByRole('link', { name: '快照管理' })).toHaveCount(1);
-    } else {
+    for (const code of [draftCode, closedCode]) {
+      await page.goto(`/portfolio/${code}`);
+      await page.getByTestId('page-header').waitFor({ state: 'visible', timeout: 15_000 });
       await expect(page.getByTestId('manage-links-card')).toHaveCount(0);
+      await expect(page.getByRole('link', { name: '持仓管理' })).toHaveCount(0);
+      await expect(
+        page.getByRole('button', { name: code === draftCode ? '首次申购激活' : '重新激活' }),
+      ).toBeVisible();
+      await openPortfolioMoreMenu(page, testInfo);
+      const menu = page.getByTestId('portfolio-more-menu');
+      await expect(menu.locator('a')).toHaveText([
+        '申购赎回记录',
+        '调仓交易记录',
+        '份额变动事件',
+        '快照管理',
+        '现金流水',
+      ]);
+      await expect(menu.getByText('危险操作')).toBeVisible();
+      await expect(page.getByTestId(`portfolio-delete-${code}`)).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
     }
-
-    // closed：双端渲染管理卡且保留事件/快照；页头 closed 分支无事件/快照入口
-    await page.goto(`/portfolio/${closedCode}`);
-    await page
-      .getByRole('heading', { level: 1 })
-      .first()
-      .waitFor({ state: 'visible', timeout: 15_000 });
-    const closedCard = page.getByTestId('manage-links-card');
-    await expect(closedCard.getByRole('link', { name: '份额变动事件' })).toHaveCount(1);
-    await expect(closedCard.getByRole('link', { name: '快照管理' })).toHaveCount(1);
-    await expect(page.getByRole('link', { name: '份额变动事件' })).toHaveCount(1);
-    await expect(page.getByRole('link', { name: '快照管理' })).toHaveCount(1);
   });
 
   test('draft 组合不渲染持仓明细区', async ({ page }, testInfo) => {
