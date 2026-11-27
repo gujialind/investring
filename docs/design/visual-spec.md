@@ -345,6 +345,7 @@
 - **全站普通标题字号已一次性迁移（#935，2026-11-20）**：页面标题 24→20px、普通分区标题 18→16px，规范与实现同批交付（本 §5/§13/§19 与代码同一批次）。覆盖 `PageHeader` h1（展开/折叠统一 20/28）、`CardTitle` 默认值（24→16/24）及消费者显式 `text-lg` 覆盖、`DialogTitle`/`AlertDialogTitle`/`SheetTitle`（18→16/24）、非 PageHeader 页标题（双端 dashboard/设置首页/移动设置子页）、自写 h3 分区标题（交易记录/持仓明细/净值三卡/平台分布）；面包屑导航 12→14px/22px。数值/品牌专属角色（§5 登记）保留不动；登录品牌与 14px 紧凑提示卡标题显式补 `leading-none` 保持原形态。三类产品详情同批改为短页标题「产品详情」+ `ProductIdentity` 正文全文身份区（§13）。#386/#394 的 24px 收敛史保留于下条，不撤销其当时决策。
 - **中性色硬编码已清零（#872 PR1）**：18 处处置完毕（7 替换 / 9 白字载体换 destructive-solid / 2 遮罩保留），`slate/gray` 类名不再属渐进存量。**刻意例外**：`text-white`（solid 危险载体与未读气泡，双主题白字）与 `bg-black/80`（Dialog/AlertDialog scrim，双主题同值）——回流判定以 issue #872 处置清单为准，不得一律当违规清理。中性色 ESLint ratchet 已于 #872 PR2 落地（§1.5 第 3 道）。
 - **登录页渐变端点色已 token 化（#872 PR2）**：`from-blue-50 to-indigo-100` → `from-success-soft to-secondary`（light 浅靛→浅灰蓝，dark 自动随 token），消除暗色整页浅底残留（C1）。渐变端点色 from-/to- 的 ESLint 拦截不在 D6 已批范围，未加（扩面须维护者另行批准）。
+- **移动账户卡随顶栏迁移退役（#944 PR4.2）**：删除 `app/m/dashboard` 的账户卡、账户区标题与专用 `p-2` 承载类，同时移除不再使用的 `AccountMenu` 导入；账户操作统一由 `MobileLayout` 顶栏承载。`Card` / `CardContent` 仍有其他消费者，不做全局删除；顶栏复用既有共享组件与 `h-14` / `px-4` 档位，不新增导航状态或端侧专属尺寸。
 - **危险载体/前景配对缺陷家族已归零（#874）**：PR1 迁移 9 处 `bg-destructive text-white` 载体后，#874 再迁移 4 处 `bg-destructive text-destructive-foreground`（PortfolioListContent/TradesContent/SubscriptionsContent/DeletePortfolioDialog；light 1.59:1、dark 预案 1.51:1——前景 token 本为 soft 底定义，压 solid 底属配对错误）至同一分工，白字 light 5.64:1 / dark 5.50:1。`--destructive-foreground` 仅用于 soft 底（badge/Alert/错误块）；全仓剩余 `bg-destructive` 仅 NotificationBell 状态圆点（非文字载体）。
 - 已登记、**不适用**「顺手替换」原则的存量：~~桌面页面标题 `<h1>` `text-3xl font-bold tracking-tight`（12 处 / 12 文件）~~ **已于 #386 一次性整体收敛为 §5 页面标题档**（`text-2xl font-semibold`，含 4 个共享组件移动分支的 `font-bold` 字重同步对齐，2026-09-05）。~~收敛时核对移动端发现新漂移：3 处移动端专属薄壳页 h1 不符 §5~~ **已于 #394 判定为非刻意紧凑形态并一次性对齐 §5 页面标题档**（`app/m/dashboard` 字重 `font-bold`→`font-semibold`；`app/m/portfolio/[code]` 与 `positions` `text-xl font-bold`→`text-2xl font-semibold`。判定依据：#386 已将共享组件移动分支收敛为 semibold，此三处为全站仅剩孤例，且 §6 不发明端侧独有字号，2026-09-06）。
 
@@ -391,12 +392,14 @@
 ### 20.3 账户区位置
 
 - **桌面账户区在 TopNav 右侧**：`NotificationBell` 在左、`AccountMenu` 在右，与紧凑顶栏保持同一顺序；`AccountMenu` 使用紧凑头像触发器，下拉内展示姓名/角色与修改密码/退出登录。紧凑触发器避免长姓名在 1024px 挤压主导航，账户身份与操作不减少。
-- **桌面窄屏账户区在紧凑顶栏右侧**，与宽屏共用同一组件；移动端首页（`app/m/dashboard`）底部「账户」卡继续保留，补齐移动端原先无退出登录入口的缺口（修改密码 / 退出登录，全角色）。
-- `AccountMenu` / `ChangePasswordDialog` / `BrandLogo` 放 `components/shared/`，双端共用同一份。
+- **桌面窄屏账户区在紧凑顶栏右侧**，与宽屏共用同一组件。
+- **移动站所有 `/m` 内容页由 `MobileLayout` 顶栏承载账户与通知**（#944 PR4.2）：左侧 `BrandLogo` 返回 `/m/dashboard`，右侧 `NotificationBell` + 紧凑 `AccountMenu`；顶栏静态、不 sticky，避免与 `PageHeader` 的 `sticky top-0 z-30` 争位。`/m/login` 不套该布局。移动首页底部「账户」卡退役，修改密码 / 退出登录对全角色始终可达，不再依赖首页滚动位置。
+- **移动底部避让**：底部导航继续由 `mobileTabPaths("/m")` 单源判定，仅一级 Tab 页显示；`main` 保留 `pb-16`，布局按显示条件叠加既有 `safe-area-pb`。`BottomNav` 保留 `safe-area-pb`、内容行 `h-16` 与 `z-50`，末操作滚到底时不得被固定底栏遮盖。
+- `AccountMenu` / `ChangePasswordDialog` / `BrandLogo` 放 `components/shared/`，双端共用同一份；`NotificationBell` 同样直接复用，不在移动布局复制通知状态。
 
 ### 20.4 设置页结构（桌面三 Tab / 移动分组列表）
 
-- **设置整体 admin-only**（#878 验收：viewer「设置不可达 = 导航无项 + 深链 AdminGuard 拦截」）：桌面 `app/settings/page.tsx` 与移动 `app/m/settings/page.tsx` 页壳均包 `AdminGuard`（viewer 呈「无权限访问」EmptyState）；移动钻取子页对 viewer **整体**回退（`forbidden = !meta || !isAdmin`，不只 logs），弹回设置首页后由首页 AdminGuard 呈无权限态。全角色改密不依赖设置可达，由设置外的 `AccountMenu` / 移动首页账户区提供。
+- **设置整体 admin-only**（#878 验收：viewer「设置不可达 = 导航无项 + 深链 AdminGuard 拦截」）：桌面 `app/settings/page.tsx` 与移动 `app/m/settings/page.tsx` 页壳均包 `AdminGuard`（viewer 呈「无权限访问」EmptyState）；移动钻取子页对 viewer **整体**回退（`forbidden = !meta || !isAdmin`，不只 logs），弹回设置首页后由首页 AdminGuard 呈无权限态。全角色改密不依赖设置可达，由设置外的 `AccountMenu`（含移动顶栏）提供。
 - **桌面**（`SettingsContent.tsx`，仅桌面）：三 Tab——**通用**（合并 外观与主题 / 账户安全 / 数据源 / 系统信息 四卡）、**交易日历同步**、**日志管理**（admin-only，水合前按非 admin 不渲染，承继 #715）。分区卡片在 `settingsSections.tsx`（`AppearanceCard` / `PasswordCard` / `DataSourceCard` / `SystemInfoCard` / `CalendarSyncCard`）。`?tab=` 深链选中分区（calendar/logs，其余落通用），`useSearchParams` 包 Suspense。
 - **移动**（`app/m/settings`）：分组列表 `MobileSettingsList`——**通用**组（外观与主题 / 数据源 / 修改密码 / 系统信息）+ **系统维护**组（交易日历同步 / 日志管理）。行级钻取到 `app/m/settings/[section]`（appearance / datasource / system / calendar / logs），子页自带「返回设置」链接、**不渲染底部 Tab**（`MobileLayout` 只在一级 Tab 页显示底部导航，子页既非一级 Tab 也非 `mobileExitPaths` 出口）。非法/越权 section `router.replace("/m/settings")`。
 - **跨 UA 设置子页映射**（#878 L2 Blocker 2）：桌面设置是单页三 Tab、无 `/settings/[section]` 同形路由，`proxy.ts` 对桌面 UA 的 `/m/settings/[section]` 显式映射到 `/settings?tab=<对应分区>`（appearance/datasource/system→general、calendar→calendar、logs→logs，未知落 general），不机械去 `/m` 落 404。

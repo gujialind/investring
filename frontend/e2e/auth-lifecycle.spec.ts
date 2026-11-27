@@ -175,7 +175,7 @@ test.describe('凭证生命周期', () => {
   });
 
   test('登出立即返回登录页，迟到回执不打断新登录', async ({ page }) => {
-    // #878：移动端首页底部账户区补了退出入口（AccountMenu），双端均可登出，不再 skip
+    // #878/#944：移动端顶栏账户菜单提供退出入口（AccountMenu），双端均可登出，不再 skip
     const original = await ownSession(page, false);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });

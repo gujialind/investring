@@ -425,7 +425,8 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
 
       // 该页不在本端主导航里——这正是出口必须存在的理由，也是修复前桌面红的那一条
       if (isMobile) {
-        // MobileLayout 只在一级 Tab 页渲染底部导航
+        // MobileLayout 在所有 /m 内容页渲染顶栏，但只在一级 Tab 页渲染底部导航
+        await expect(page.getByTestId('mobile-top-bar')).toBeVisible();
         await expect(page.getByTestId('bottom-nav')).toHaveCount(0);
       } else {
         // 桌面宽屏 TopNav 可见，但不列出语境分布入口页
@@ -460,6 +461,7 @@ test.describe('桌面窄屏管理页出口（#894/#944：TopNav 隐藏 + 底部�
         `${exit.path} 窄屏应有站内出口`,
       ).toBeVisible();
       await expect(page.getByTestId('top-nav')).toBeHidden();
+      await expect(page.getByTestId('mobile-top-bar')).toHaveCount(0);
       await expect(nav).toBeVisible();
       await expect(nav.locator(`a[href="${exit.path}"]`)).toHaveCount(0);
     }
