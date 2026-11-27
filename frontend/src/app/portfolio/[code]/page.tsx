@@ -243,9 +243,9 @@ function PortfolioDetailInner() {
             </div>
 
             {!isDraft && (
-              /* 主体左右分栏（D1）：左=持仓明细双视图+管理入口，右栏 360 固定 */
-              <div className="flex items-start gap-6">
-                <div className="min-w-0 flex-1 space-y-4">
+              /* 宽屏左右分栏（D1）；窄屏改为单列，避免持仓网格与右侧 360px 栏重叠。 */
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+                <div className="min-w-0 space-y-4 lg:flex-1">
                   {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
                       二级组合键子集优先取组合级 display_config（issue #144/#915） */}
                   <PortfolioHoldings
@@ -280,7 +280,7 @@ function PortfolioDetailInner() {
                   />
                 </div>
 
-                <div className="w-[360px] shrink-0 space-y-4">
+                <div className="w-full space-y-4 lg:w-[360px] lg:shrink-0">
                   {/* 资产分布（环形图 + 图例；右栏 360 强制竖排，防图例挤压竖排） */}
                   <Card>
                     <CardContent className="pt-6">

@@ -2,6 +2,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
   E2E_ACTIVE,
   gotoPortfolioDetail,
+  openPopover,
   authHeaders,
   dialogByTitle,
   pickCalendarDay,
@@ -164,11 +165,42 @@ test.describe("平台详情页", () => {
   });
 
   test("持仓明细：510300.SH 产品卡可点击进入平台-产品详情", async ({ page }) => {
+    // 平台详情卡消费本平台切片；用不同哨兵值区分切片 cumulative_profit 与产品合计，
+    // 防止共享 HoldingProductCard 换字段后误显示跨平台累计收益。
+    await page.route(/\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/, async (route) => {
+      const resp = await route.fetch();
+      const json = (await resp.json()) as {
+        products: Array<{
+          product_code: string;
+          cumulative_profit: number | null;
+          platforms: Array<{
+            platform_code: string | null;
+            holding_profit: number | null;
+            cumulative_profit: number | null;
+          }>;
+        }>;
+      };
+      const target = json.products.find((product) => product.product_code === "510300.SH");
+      expect(target, "种子须包含 510300.SH 产品聚合").toBeDefined();
+      target!.cumulative_profit = 1111.1;
+      const slice = target!.platforms.find((platform) => platform.platform_code === "HBZQ");
+      expect(slice, "种子须包含 HBZQ 平台切片").toBeDefined();
+      slice!.holding_profit = -1234.5;
+      slice!.cumulative_profit = 2222.2;
+      const headers = { ...resp.headers() };
+      delete headers["content-length"];
+      delete headers["content-encoding"];
+      await route.fulfill({ status: resp.status(), headers, json });
+    });
     await page.goto(PLATFORM_PATH);
     const holdings = page.getByTestId("platform-holdings-section");
     await expect(holdings).toBeVisible();
-    // 510300.SH 产品卡存在
+    // 510300.SH 产品卡存在，row3 显示本平台切片累计收益（非产品合计、非持有收益）
     await expect(holdings.getByText("沪深300ETF")).toBeVisible();
+    const card = holdings.getByTestId("holding-product-card").filter({ hasText: "沪深300ETF" });
+    await expect(card.getByTestId("total-profit-value")).toHaveText("+2,222.20");
+    await expect(card.getByTestId("total-profit-value")).not.toHaveText("+1,111.10");
+    await expect(card.getByTestId("total-profit-value")).not.toHaveText("-1,234.50");
     // 点击产品卡 → 平台-产品详情页（#935 起平台上下文与产品名分别断言）
     await holdings.getByRole("link", { name: /沪深300ETF/ }).first().click();
     await page.waitForURL(/\/platforms\/HBZQ\/products\/510300\.SH/);
@@ -422,13 +454,17 @@ test.describe("平台-产品详情页", () => {
     await expect(overview).toContainText("100.0%");
     // #729 统计卡主数值左对齐（visual-spec §5），同产品详情/平台详情两处断言
     await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
-    // 累计收益说明默认收起，真实按钮承载可访问语义
+    // 累计收益说明默认收起，展开后与产品详情、持仓卡使用同一口径文案。
     await expect(overview).toContainText("累计收益");
-    await expect(overview).not.toContainText("*累计收益含已卖出实现盈亏");
-    await expect(overview.getByRole("button", { name: "查看累计收益说明" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    const tipTrigger = overview.getByRole("button", { name: "查看累计收益说明" });
+    const tipContent = page.getByTestId("info-tip-content");
+    await expect(tipTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText("累计收益含已卖出实现盈亏", { exact: true })).toHaveCount(0);
+    await openPopover(page, tipTrigger, tipContent);
+    await expect(tipContent).toHaveText("累计收益含已卖出实现盈亏");
+    await expect(tipContent).not.toContainText("与持仓卡");
+    await page.keyboard.press("Escape");
+    await expect(tipContent).toHaveCount(0);
   });
 
   test("操作行买入：trades 页平台+产品预填且过滤生效", async ({ page }, testInfo) => {

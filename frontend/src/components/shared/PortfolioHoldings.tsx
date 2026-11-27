@@ -78,7 +78,7 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
  */
 export function cardGridClass(variant: "desktop" | "mobile"): string {
   return variant === "desktop"
-    ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(350px,1fr))]"
+    ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(350px,100%),1fr))]"
     : "space-y-2.5";
 }
 
@@ -269,23 +269,16 @@ function ProductSections({
                       )}
                     >
                       {g.products.map((p) => {
-                        const card = (
-                          <HoldingProductCard
-                            product={p}
-                            percent={percentOf(p)}
-                            snapshotDate={snapshotDate}
-                          />
-                        );
                         // #595 步骤③/⑤：产品卡点击 → 产品详情页；
                         // market 走 ?market=（步骤⑤起），现金 market="" 与平台-产品页现金形态一致
                         return (
-                          <Link
+                          <HoldingProductCard
                             key={productCardKey(p)}
+                            product={p}
+                            percent={percentOf(p)}
+                            snapshotDate={snapshotDate}
                             href={`${productLinkPrefix}/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
-                            className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            {card}
-                          </Link>
+                          />
                         );
                       })}
                     </div>
