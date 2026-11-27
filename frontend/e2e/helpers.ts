@@ -1071,7 +1071,7 @@ export async function clearTradeDateRange(page: Page, testInfo: TestInfo): Promi
 export const NAV_CURVE_STANDARD: NavCurvePoint[] = [
   { date: '2024-01-02', nav: 0.9 },
   { date: '2024-02-01', nav: 0.92 },
-  { date: '2024-03-01', nav: 0.89 },
+  { date: '2024-03-01', nav: 0.9 },
   { date: '2024-04-01', nav: 0.95 },
   { date: '2024-05-01', nav: 1.0 },
   { date: '2024-06-03', nav: 0.98 },
@@ -1205,10 +1205,6 @@ export async function expectNavCurveGeometry(
       return {
         group,
         line: line ? rect(line) : null,
-        ticks: Array.from(group.querySelectorAll('.recharts-cartesian-axis-tick-value')).map((tick) => ({
-          text: (tick.textContent ?? '').trim(),
-          box: rect(tick),
-        })),
       };
     });
     const xAxis = axes.find((a) => a.line && a.line.width > a.line.height);
@@ -1217,13 +1213,21 @@ export async function expectNavCurveGeometry(
       text: (tick.textContent ?? '').trim(),
       box: rect(tick),
     }));
+    const xLine = xAxis?.line;
+    const yLine = yAxis?.line;
     // Recharts 3 把自定义 XAxisTickContent 放入独立 z-index 层，不再挂在 axis g 下。
-    // 按公开刻度文本形态识别 MM-DD，Y 轴仍从真实 axis g 取，避免依赖生成 ID。
+    // X 按公开 MM-DD 文本识别；Y 按轴线左侧邻域与垂直范围识别，避免误收图内其他四位小数标签。
     const xTicks = allTicks.filter((tick) => /^\d{2}-\d{2}$/.test(tick.text)).sort((a, b) => a.box.left - b.box.left);
-    const yTicks = allTicks.filter((tick) => /^-?\d{1,3}(?:,\d{3})*\.\d{4}$/.test(tick.text));
-    if (!xAxis?.line || !yAxis?.line) {
+    if (!xLine || !yLine) {
       throw new Error(`未找到可量测的 X/Y 轴线：${JSON.stringify(axes.map((a) => a.line))}`);
     }
+    // 0.5/1px 容差只吸收亚像素与字体 descent 舍入，不扩大刻度可接受区域。
+    const yTicks = allTicks.filter((tick) =>
+      tick.box.left < yLine.left &&
+      tick.box.right <= yLine.left + 0.5 &&
+      tick.box.top >= yLine.top - 1 &&
+      tick.box.bottom <= yLine.bottom + 1,
+    );
     const svgBox = rect(svg);
     const ref = Array.from(svg.querySelectorAll('.recharts-label')).find((label) =>
       (label.textContent ?? '').trim() === '初始净值',
@@ -1233,8 +1237,8 @@ export async function expectNavCurveGeometry(
       Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
     return {
       svgBox,
-      xLine: xAxis.line,
-      yLine: yAxis.line,
+      xLine,
+      yLine,
       xTicks,
       yTicks,
       reference: ref ? { text: (ref.textContent ?? '').trim(), box: rect(ref) } : null,
@@ -1305,13 +1309,13 @@ export async function expectNavRangeLayout(
   const m = await group.evaluate((el) => {
     const card = el.closest<HTMLElement>('[data-testid$="-card"]');
     if (!card) throw new Error('区间组不在净值卡片内，无法确定内容边界');
-    let content: HTMLElement | null = el.parentElement;
-    while (content && content !== card) {
+    // 没有带内边距的中间层时，card 自身就是内容盒；这是当前卡片结构的明确回退。
+    let content: HTMLElement = el.parentElement ?? card;
+    while (content !== card) {
       const s = getComputedStyle(content);
       if (parseFloat(s.paddingLeft) > 0 || parseFloat(s.paddingRight) > 0) break;
-      content = content.parentElement;
+      content = content.parentElement ?? card;
     }
-    if (!content) throw new Error('未找到卡片内容容器');
     const cs = getComputedStyle(content);
     const cr = content.getBoundingClientRect();
     const contentLeft = cr.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
@@ -1344,51 +1348,13 @@ export async function expectNavRangeLayout(
       if (node === card) break;
       node = node.parentElement;
     }
-    const layoutChain: { tag: string; testid: string | null; left: number; right: number; width: number; minWidth: string; padding: string; display: string }[] = [];
-    let chainNode: Element | null = el;
-    while (chainNode && chainNode !== document.body) {
-      const r = chainNode.getBoundingClientRect();
-      const s = getComputedStyle(chainNode);
-      layoutChain.push({
-        tag: chainNode.tagName,
-        testid: chainNode.getAttribute('data-testid'),
-        left: Math.round(r.left * 10) / 10,
-        right: Math.round(r.right * 10) / 10,
-        width: Math.round(r.width * 10) / 10,
-        minWidth: s.minWidth,
-        padding: s.padding,
-        display: s.display,
-      });
-      chainNode = chainNode.parentElement;
-    }
     return {
       rects,
       contentLeft,
       contentRight,
       contentWidth: contentRight - contentLeft,
       clippedAncestors,
-      layoutChain,
       pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      overflowNodes: Array.from(document.querySelectorAll('body *'))
-        .map((node) => {
-          const r = node.getBoundingClientRect();
-          return {
-            node,
-            left: r.left,
-            right: r.right,
-            width: r.width,
-          };
-        })
-        .filter((r) => r.width > 0 && (r.right > document.documentElement.clientWidth + 1 || r.left < -1))
-        .sort((a, b) => Math.max(b.right - document.documentElement.clientWidth, -b.left) - Math.max(a.right - document.documentElement.clientWidth, -a.left))
-        .slice(0, 12)
-        .map(({ node, left, right }) => ({
-          tag: node.tagName,
-          testid: node.getAttribute('data-testid'),
-          class: node.getAttribute('class')?.slice(0, 120),
-          left: Math.round(left * 10) / 10,
-          right: Math.round(right * 10) / 10,
-        })),
     };
   });
   expect(m.contentWidth, `${label}: 卡片内容宽必须为正`).toBeGreaterThan(0);
@@ -1409,9 +1375,48 @@ export async function expectNavRangeLayout(
   }
   const rows = new Set(m.rects.map((b) => Math.round(b.top))).size;
   if (options.singleRow) expect(rows, `${label}: 常规宽度四颗应同排`).toBe(1);
+  let overflowDiagnostics = '';
+  if (m.pageOverflowX > 1) {
+    const diagnostics = await group.evaluate((el) => {
+      const layoutChain: { tag: string; testid: string | null; left: number; right: number; width: number; minWidth: string; padding: string; display: string }[] = [];
+      let chainNode: Element | null = el;
+      while (chainNode && chainNode !== document.body) {
+        const r = chainNode.getBoundingClientRect();
+        const s = getComputedStyle(chainNode);
+        layoutChain.push({
+          tag: chainNode.tagName,
+          testid: chainNode.getAttribute('data-testid'),
+          left: Math.round(r.left * 10) / 10,
+          right: Math.round(r.right * 10) / 10,
+          width: Math.round(r.width * 10) / 10,
+          minWidth: s.minWidth,
+          padding: s.padding,
+          display: s.display,
+        });
+        chainNode = chainNode.parentElement;
+      }
+      const overflowNodes = Array.from(document.querySelectorAll('body *'))
+        .map((node) => {
+          const r = node.getBoundingClientRect();
+          return { node, left: r.left, right: r.right, width: r.width };
+        })
+        .filter((r) => r.width > 0 && (r.right > document.documentElement.clientWidth + 1 || r.left < -1))
+        .sort((a, b) => Math.max(b.right - document.documentElement.clientWidth, -b.left) - Math.max(a.right - document.documentElement.clientWidth, -a.left))
+        .slice(0, 12)
+        .map(({ node, left, right }) => ({
+          tag: node.tagName,
+          testid: node.getAttribute('data-testid'),
+          class: node.getAttribute('class')?.slice(0, 120),
+          left: Math.round(left * 10) / 10,
+          right: Math.round(right * 10) / 10,
+        }));
+      return { layoutChain, overflowNodes };
+    });
+    overflowDiagnostics = `, chain=${JSON.stringify(diagnostics.layoutChain)}, nodes=${JSON.stringify(diagnostics.overflowNodes)}`;
+  }
   expect(
     m.pageOverflowX,
-    `${label}: 区间组不得引入整页横向滚动；overflow=${m.pageOverflowX}px, chain=${JSON.stringify(m.layoutChain)}, nodes=${JSON.stringify(m.overflowNodes)}`,
+    `${label}: 区间组不得引入整页横向滚动；overflow=${m.pageOverflowX}px${overflowDiagnostics}`,
   ).toBeLessThanOrEqual(1);
   return {
     rows,
@@ -1463,20 +1468,19 @@ export async function expectNavCurvePointerInteraction(
     else await page.touchscreen.tap(point.x, point.y);
     if (input === 'mouse') {
       await expect
-        .poll(() => page.evaluate(() => {
-          const active = document.activeElement;
-          const svg = document.querySelector('.nav-curve svg.recharts-surface');
-          return !!active && !!svg && svg.contains(active);
+        .poll(() => curve.evaluate((svg) => {
+          const active = svg.ownerDocument.activeElement;
+          return !!active && svg.contains(active);
         }), { message: `${label}: ${point.name} 鼠标点击后焦点应留在净值图内`, timeout: 3_000 })
         .toBe(true);
     }
-    const focus = await page.evaluate(() => {
-      const active = document.activeElement as HTMLElement | SVGElement | null;
+    const focus = await curve.evaluate((svg) => {
+      const active = svg.ownerDocument.activeElement as HTMLElement | SVGElement | null;
       if (!active) return null;
       const s = getComputedStyle(active);
       return {
         tag: active.tagName,
-        inside: !!active.closest('.nav-curve svg.recharts-surface'),
+        inside: svg.contains(active),
         outlineStyle: s.outlineStyle,
       };
     });
@@ -1528,15 +1532,14 @@ export async function expectNavCurveKeyboardNavigation(
 
   await page.keyboard.press('Tab');
   await expect
-    .poll(() => page.evaluate(() => {
-      const active = document.activeElement;
-      const svg = document.querySelector('.nav-curve svg.recharts-surface');
-      return !!active && !!svg && svg.contains(active);
+    .poll(() => curve.evaluate((svg) => {
+      const active = svg.ownerDocument.activeElement;
+      return !!active && svg.contains(active);
     }), { message: `${label}: Tab 应离开图表（内部 g 不得变成额外 Tab 停靠点）` })
     .toBe(false);
 }
 
-/** A9：在既有 E2E 内留浅/暗卡片目检证据；调用方负责先打开需要的 Tooltip/焦点。 */
+/** A9：在既有 E2E 内留浅/暗卡片目检证据；调用方须保持 next-themes 为 system 模式。 */
 export async function captureNavCardThemes(
   page: Page,
   card: Locator,
@@ -1554,14 +1557,20 @@ export async function captureNavCardThemes(
     // Recharts 入场期间用 stroke-dasharray 控制可见长度；属性消失即主线已完整绘制。
     await expect.poll(() => line.getAttribute('stroke-dasharray')).toBeNull();
   };
-  await page.emulateMedia({ colorScheme: 'light' });
-  await settleChart();
-  await card.screenshot({ path: `${pathStem}-light.png` });
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await expect(page.locator('html')).toHaveClass(/dark/);
-  await settleChart();
-  await card.screenshot({ path: `${pathStem}-dark.png` });
-  await page.emulateMedia({ colorScheme: 'light' });
+  const previousColorScheme = await page.evaluate(() =>
+    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+  );
+  try {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await settleChart();
+    await card.screenshot({ path: `${pathStem}-light.png` });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    await settleChart();
+    await card.screenshot({ path: `${pathStem}-dark.png` });
+  } finally {
+    await page.emulateMedia({ colorScheme: previousColorScheme });
+  }
 }
 
 // ===========================================================================

@@ -37,7 +37,9 @@ function NavDateTick({
   tickFormatter,
   verticalAnchor,
 }: XAxisTickContentProps) {
-  const textAnchor = index === 0 ? "start" : index === visibleTicksCount - 1 ? "end" : "middle";
+  let textAnchor: "start" | "middle" | "end" = "middle";
+  if (index === 0) textAnchor = "start";
+  else if (index === visibleTicksCount - 1) textAnchor = "end";
   return (
     <Text
       x={x}
