@@ -13,7 +13,6 @@ import { ArrowLeft, Settings2 } from "lucide-react";
 import Link from "next/link";
 import {
   usePortfolio,
-  useLatestSnapshot,
   usePositionList,
   usePortfolioInvestors,
   useActivatePortfolio,
@@ -24,6 +23,7 @@ import {
 } from "@/hooks/usePortfolio";
 import { useRoleCheck } from "@/hooks/useAuth";
 import { useAssetClassifications } from "@/hooks/useAssetClassification";
+import { usePortfolioSnapshotSummary } from "@/hooks/useSnapshot";
 import DeletePortfolioDialog from "@/components/shared/dialogs/DeletePortfolioDialog";
 import AssetAllocationPie from "@/components/charts/AssetAllocationPie";
 import PortfolioStatsCards from "@/components/shared/PortfolioStatsCards";
@@ -38,6 +38,7 @@ import LedgerContent from "@/components/shared/LedgerContent";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
+import QueryErrorState from "@/components/shared/QueryErrorState";
 import { buildAllocation } from "@/lib/allocation";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { useViewQueryState } from "@/hooks/useViewQueryState";
@@ -50,7 +51,18 @@ function MobilePortfolioDetailInner() {
   const showInvestors = searchParams.get("tab") === "investors";
 
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(code);
-  const { data: snapshot, isLoading: snapshotLoading } = useLatestSnapshot(code);
+  const isDraftStatus = portfolio?.status === "draft";
+  const isLedger = portfolio?.kind === "ledger";
+  const snapshotReadsEnabled = !!portfolio && !isDraftStatus && !isLedger;
+  const {
+    snapshot,
+    dailyReturn,
+    hasData: snapshotHasData,
+    isLoading: snapshotLoading,
+    isError: snapshotError,
+    error: snapshotErr,
+    refetch: refetchSnapshots,
+  } = usePortfolioSnapshotSummary(code, snapshotReadsEnabled);
   const { data: positionsData, isLoading: positionsLoading } = usePositionList(code, {
     page_size: 100,
   });
@@ -77,7 +89,6 @@ function MobilePortfolioDetailInner() {
   const theme = useChartTheme();
 
   // 绩效指标：draft 组合无快照，不请求
-  const isDraftStatus = portfolio?.status === "draft";
   const { data: performance } = usePortfolioPerformance(code, !isDraftStatus);
   // 累计收益率 chip 数据源（#904 P0b）：returns 端点后端单点计算
   const { data: returns } = usePortfolioReturns(code, !isDraftStatus);
@@ -116,14 +127,38 @@ function MobilePortfolioDetailInner() {
     );
   }
 
+  if (snapshotError && !snapshotHasData) {
+    return (
+      <div className="space-y-4 p-4">
+        <Link href="/m/portfolio">
+          <Button variant="outline" size="sm">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            返回列表
+          </Button>
+        </Link>
+        <QueryErrorState
+          error={snapshotErr}
+          onRetry={() => void refetchSnapshots()}
+          className="py-8 text-center"
+        />
+      </div>
+    );
+  }
+
   const isDraft = portfolio.status === "draft";
-  const isLedger = portfolio.kind === "ledger";
   // 删除入口可见性（#820 扩围）：draft/closed 两态出现，是否真空壳由后端 409 判定
   const isDeletable = portfolio.status === "draft" || portfolio.status === "closed";
   const allocation = buildAllocation(positions, assetClasses, theme);
 
   return (
     <div className="space-y-4 p-4 pb-24">
+      {snapshotError && snapshotHasData && (
+        <QueryErrorState
+          error={snapshotErr}
+          onRetry={() => void refetchSnapshots()}
+          className="rounded-md border border-destructive/30 bg-destructive-soft p-4 text-center"
+        />
+      )}
       {/* Header */}
       <PageHeader
         variant="mobile"
@@ -139,8 +174,8 @@ function MobilePortfolioDetailInner() {
         meta={
           <>
             {portfolio.code}
-            {portfolio.started_at && (
-              <span> · 成立于 {portfolio.started_at.split("T")[0]}</span>
+            {!isLedger && (
+              <span> · 最新快照日期 {snapshot?.snapshot_date || "--"}</span>
             )}
           </>
         }
@@ -156,7 +191,7 @@ function MobilePortfolioDetailInner() {
       )}
 
       {/* 快照停更可见提示（#906 SPEC §4，与桌面同构）：trailing 缺口非空才渲染 */}
-      {!isLedger && <SnapshotCatchupAlert portfolioCode={code} />}
+      {!isLedger && !isDraft && <SnapshotCatchupAlert portfolioCode={code} />}
 
       {isLedger ? (
         /* 台账型独立视图（issue #905 PR3）：操作区（激活/删除）+ LedgerContent；无净值/份额/投资人 Tab */
@@ -196,19 +231,15 @@ function MobilePortfolioDetailInner() {
         <>
           {/* Stats Cards */}
           {!isDraft && (
-            <div>
-              <PortfolioStatsCards
-                totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
-                unitPrice={snapshot?.unit_price ?? null}
-                totalProfit={portfolio.total_profit ?? null}
-                cumulativeReturn={returns?.cumulative_return ?? null}
-                holdingDays={performance?.holding_days ?? null}
-                variant="mobile"
-              />
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                最新快照日期：{snapshot?.snapshot_date || "--"}
-              </p>
-            </div>
+            <PortfolioStatsCards
+              totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
+              unitPrice={snapshot?.unit_price ?? null}
+              totalProfit={portfolio.total_profit ?? null}
+              cumulativeReturn={returns?.cumulative_return ?? null}
+              dailyReturn={dailyReturn}
+              holdingDays={performance?.holding_days ?? null}
+              variant="mobile"
+            />
           )}
 
           {/* 高频操作 + #786 上移入口：单层 2 列网格由组件内部控制（draft/closed 整行），

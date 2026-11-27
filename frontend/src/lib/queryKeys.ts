@@ -39,6 +39,8 @@ export function normalizePreviewOption<T>(
   return chosen !== undefined && chosen !== backendDefault ? chosen : undefined;
 }
 
+export type SnapshotListRange = { startDate?: string; endDate?: string; limit?: number };
+
 export const queryKeys = {
   investors: {
     root: ["investors"] as const,
@@ -49,6 +51,8 @@ export const queryKeys = {
     root: ["portfolios"] as const,
     list: (params?: unknown) => ["portfolios", "list", params] as const,
     detail: (code: string) => ["portfolios", code] as const,
+    /** 快照汇总须挂在组合详情前缀下，申赎/份额事件失效 detail 时才能同步刷新。 */
+    snapshotSummary: (code: string) => ["portfolios", code, "snapshots", "summary"] as const,
     /** 组合投资人列表（#693 收敛自 usePortfolio 字面量，值逐元素相等）；
      * 与全局投资人 CRUD 的 investors 域（root ["investors"]）无关 */
     investorsByPortfolio: (code: string) => ["portfolios", code, "investors"] as const,
@@ -101,6 +105,15 @@ export const queryKeys = {
   snapshots: {
     root: ["snapshots"] as const,
     status: (portfolioCode: string) => ["snapshots", "status", portfolioCode] as const,
+    list: (portfolioCode: string, range?: SnapshotListRange) =>
+      [
+        "snapshots",
+        "list",
+        portfolioCode,
+        range?.startDate,
+        range?.endDate,
+        range?.limit,
+      ] as const,
   },
   shareChangeEvents: {
     root: ["share-change-events"] as const,

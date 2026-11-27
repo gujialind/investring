@@ -1,35 +1,90 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { snapshotApi, getErrorMessage } from "@/lib/api";
 import { formatNav } from "@/lib/utils";
+import { queryKeys, type SnapshotListRange } from "@/lib/queryKeys";
+import { getSnapshotDailyReturn } from "@/lib/portfolioSnapshot";
 import { useUIStore } from "@/stores/uiStore";
 import type { BulkDeleteDryRunResult, BulkDeleteResult } from "@/types/snapshot";
 
 const SNAPSHOT_QUERY_KEY = "snapshots";
 
+const snapshotStatusQueryOptions = (portfolioCode: string) => ({
+  queryKey: queryKeys.snapshots.status(portfolioCode),
+  queryFn: () => snapshotApi.getStatus(portfolioCode),
+});
+
+const snapshotListQueryOptions = (portfolioCode: string, range?: SnapshotListRange) => ({
+  queryKey: queryKeys.snapshots.list(portfolioCode, range),
+  queryFn: () =>
+    snapshotApi.list(portfolioCode, {
+      start_date: range?.startDate,
+      end_date: range?.endDate,
+      limit: range?.limit,
+    }),
+});
+
 // 查询组合快照状态
-export function useSnapshotStatus(portfolioCode: string) {
+export function useSnapshotStatus(portfolioCode: string, enabled = true) {
   return useQuery({
-    queryKey: [SNAPSHOT_QUERY_KEY, "status", portfolioCode],
-    queryFn: () => snapshotApi.getStatus(portfolioCode),
-    enabled: !!portfolioCode,
+    ...snapshotStatusQueryOptions(portfolioCode),
+    enabled: !!portfolioCode && enabled,
   });
 }
 
 // 快照历史列表（#146；#152 日期区间筛选）：["snapshots"] 前缀失效即同时刷 status+list。
-// 区间入 queryKey 防缓存碰撞；undefined 字段 axios 自然不传参（X 清空 = 不按日期过滤）
+// 区间与 limit 入 queryKey 防缓存碰撞；undefined 字段 axios 自然不传参（X 清空 = 不按日期过滤）
 export function useSnapshotList(
   portfolioCode: string,
-  range?: { startDate?: string; endDate?: string }
+  range?: SnapshotListRange,
+  enabled = true
 ) {
   return useQuery({
-    queryKey: [SNAPSHOT_QUERY_KEY, "list", portfolioCode, range?.startDate, range?.endDate],
-    queryFn: () =>
-      snapshotApi.list(portfolioCode, {
-        start_date: range?.startDate,
-        end_date: range?.endDate,
-      }),
-    enabled: !!portfolioCode,
+    ...snapshotListQueryOptions(portfolioCode, range),
+    enabled: !!portfolioCode && enabled,
   });
+}
+
+export function usePortfolioSnapshotSummary(portfolioCode: string, enabled: boolean) {
+  const queryClient = useQueryClient();
+  const summary = useQuery({
+    queryKey: queryKeys.portfolios.snapshotSummary(portfolioCode),
+    queryFn: async () => {
+      // 内层禁用新鲜缓存，确保 list/status 来自同一轮网络读取。
+      const [list, status] = await Promise.all([
+        queryClient.fetchQuery({
+          ...snapshotListQueryOptions(portfolioCode, { limit: 2 }),
+          staleTime: 0,
+        }),
+        queryClient.fetchQuery({
+          ...snapshotStatusQueryOptions(portfolioCode),
+          staleTime: 0,
+        }),
+      ]);
+      return { list, status };
+    },
+    enabled: !!portfolioCode && enabled,
+    staleTime: 30 * 1000,
+    // 单项 fetchQuery 已按 React Query 默认策略重试，避免内外层重复重试。
+    retry: false,
+  });
+  const items = enabled ? summary.data?.list.items ?? [] : [];
+  const snapshot = items[0];
+  const status = summary.data?.status;
+  // list 与 status 原子提交；最新日期仍不一致时保守不展示日涨跌。
+  const dailyReturn =
+    !summary.isError && status && snapshot && status.latest_snapshot_date === snapshot.snapshot_date
+      ? getSnapshotDailyReturn(items, status.missing_dates)
+      : null;
+
+  return {
+    snapshot,
+    dailyReturn,
+    hasData: enabled && summary.data !== undefined,
+    isLoading: enabled && summary.isLoading,
+    isError: enabled && summary.isError,
+    error: enabled ? summary.error : null,
+    refetch: summary.refetch,
+  };
 }
 
 // 单日生成快照
