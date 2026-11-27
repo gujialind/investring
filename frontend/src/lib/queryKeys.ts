@@ -42,6 +42,10 @@ export function normalizePreviewOption<T>(
 export type SnapshotListRange = { startDate?: string; endDate?: string; limit?: number };
 
 export const queryKeys = {
+  dashboard: {
+    root: ["dashboard"] as const,
+    summary: ["dashboard", "summary"] as const,
+  },
   investors: {
     root: ["investors"] as const,
     list: (params?: unknown) => ["investors", "list", params] as const,

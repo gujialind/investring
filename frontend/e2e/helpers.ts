@@ -204,7 +204,7 @@ export function toastByTitle(page: Page, title: string | RegExp): Locator {
  *    viewer 登录压测 6/6 触发；同一消息有两种形态——
  *    `XMLHttpRequest cannot load http://127.0.0.1:<port>/api/...` 与
  *    `/127.0.0.1:<port>/api/... due to access control checks`；被拦的恰是 dashboard
- *    聚合查询 useDashboardStats 的 4 个 GET）。请求未达后端、react-query 下一次重试即
+ *    聚合查询 useDashboardStats 的 3 个 GET）。请求未达后端、react-query 下一次重试即
  *    恢复，数据与 UI 断言照常通过——是引擎在导航竞态里抛的 rejection，不是应用崩溃。
  *    只有真的做 UI 登录的用例才该声明它；同源 API 真接错时，该用例的数据断言会先红。
  */

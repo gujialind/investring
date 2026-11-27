@@ -630,42 +630,18 @@ test.describe('组合统计卡累计收益率 chip（#904 P0b）', () => {
 });
 
 /**
- * 统计卡栅格（#774，双端）：首页 DashboardStatsCards 与组合详情 PortfolioStatsCards 同构，
- * 桌面列数按**容器宽**取（`@min-[848px]:grid-cols-4`，#904 P0b mono 化后阈值；推导见组件注释）。
- *
- * 钉两端而不只钉窄窗：既有用例形态是「窄档不是四列」，四列分支若静默失效（类名写错、
- * Tailwind 未产出该任意容器查询变体）它们照样绿，故宽视口另断「确为四列单行」。
- * 金额注入 8 位带符号最坏值（`-12345678.90`，格式化后 15 字符）——栅格轨道是
- * `minmax(0,1fr)`，能被压到单行墨迹之下，只有够宽的值才让「列数不足」显形为邻卡数字相碰。
+ * 组合详情统计卡栅格（#774，双端）：桌面列数按**容器宽**取
+ * （`@min-[848px]:grid-cols-4`，#904 P0b mono 化后阈值；推导见组件注释）。
+ * 首页已改为 DashboardSummary 的三指标布局，几何守护见本文件末尾「首页汇总宽金额」。
  */
 const D8 = '-12345678.90';
-const DASHBOARD_STAT_IDS = ['total_value', 'avg_return', 'active_count', 'investor_count'] as const;
 const PORTFOLIO_STAT_IDS = ['total_value', 'nav', 'profit', 'holding_days'] as const;
 
-type StatPrefix = 'dashboard' | 'portfolio';
+type StatPrefix = 'portfolio';
 
-/** 把概览统计卡的金额数据源注成指定值（只改响应体，不落库、不碰种子） */
-async function mockStatAmount(page: Page, target: StatPrefix, raw: string): Promise<void> {
+/** 把组合详情统计卡的金额数据源注成指定值（只改响应体，不落库、不碰种子） */
+async function mockStatAmount(page: Page, raw: string): Promise<void> {
   const value = Number(raw);
-  if (target === 'dashboard') {
-    await page.route(
-      (url) => url.pathname === '/api/portfolios' && url.searchParams.get('page_size') === '100',
-      async (route) => {
-        const resp = await route.fetch();
-        const json = (await resp.json()) as {
-          items: { code: string; total_value: number | null }[];
-        };
-        // useDashboardStats 的 totalValue = **全部活跃组合** total_value 之和，其余组合的余额会被
-        // 同批用例的写操作改动，故一并注成 0，让首页总额恰等于夹具值（断言不依赖执行时序）
-        json.items = json.items.map((it) => ({
-          ...it,
-          total_value: it.code === E2E_ACTIVE ? value : 0,
-        }));
-        await route.fulfill({ response: resp, body: JSON.stringify(json) });
-      },
-    );
-    return;
-  }
   await page.route(
     (url) => url.pathname === `/api/portfolios/${E2E_ACTIVE}`,
     async (route) => {
@@ -758,74 +734,166 @@ function fmtStatGrid(prefix: StatPrefix, m: StatGridMeasure): string {
   );
 }
 
-/** 注入 8 位带符号金额、进页面、等到注入值上屏，再量栅格 */
+/** 注入 8 位带符号金额、进页面、等到注入值上屏，再量组合详情栅格 */
 async function measureWithWideAmount(
   page: Page,
-  target: StatPrefix,
   ids: readonly string[],
   mobilePath: boolean,
 ): Promise<StatGridMeasure> {
-  await mockStatAmount(page, target, D8);
+  await mockStatAmount(page, D8);
   const prefix = mobilePath ? '/m' : '';
-  await page.goto(target === 'dashboard' ? `${prefix}/dashboard` : `${prefix}/portfolio/${E2E_ACTIVE}`);
-  await expect(page.getByTestId(`${target}-stat-total_value`)).toContainText('12,345,678.90', {
+  await page.goto(`${prefix}/portfolio/${E2E_ACTIVE}`);
+  await expect(page.getByTestId('portfolio-stat-total_value')).toContainText('12,345,678.90', {
     timeout: 15_000,
   });
-  return measureStatGrid(page, target, ids);
+  return measureStatGrid(page, 'portfolio', ids);
 }
 
-test.describe('统计卡栅格宽视口与移动端（#774）', () => {
-  test('宽视口桌面：两页统计卡为四列单行，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+test.describe('组合统计卡栅格宽视口与移动端（#774）', () => {
+  test('宽视口桌面：组合详情统计卡为四列单行，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name === 'mobile', '四列断言针对桌面项目（1280 视口 → 容器 960px）');
     const errors = collectPageErrors(page);
-
-    const dashboard = await measureWithWideAmount(page, 'dashboard', DASHBOARD_STAT_IDS, false);
-    expect(dashboard.columns, fmtStatGrid('dashboard', dashboard)).toBe(4);
-    expect(dashboard.rows, fmtStatGrid('dashboard', dashboard)).toHaveLength(1);
-    expect(dashboard.minGap, fmtStatGrid('dashboard', dashboard)).toBeGreaterThan(0);
-
-    const portfolio = await measureWithWideAmount(page, 'portfolio', PORTFOLIO_STAT_IDS, false);
+    const portfolio = await measureWithWideAmount(page, PORTFOLIO_STAT_IDS, false);
     expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(4);
     expect(portfolio.rows, fmtStatGrid('portfolio', portfolio)).toHaveLength(1);
     expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
-
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
-  test('移动端：两页统计卡为两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+  test('移动端：组合详情统计卡为两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile', '移动 variant 断言针对移动项目（iPhone 13 原生视口）');
     const errors = collectPageErrors(page);
-
-    const dashboard = await measureWithWideAmount(page, 'dashboard', DASHBOARD_STAT_IDS, true);
-    expect(dashboard.columns, fmtStatGrid('dashboard', dashboard)).toBe(2);
-    expect(dashboard.minGap, fmtStatGrid('dashboard', dashboard)).toBeGreaterThan(0);
-
-    const portfolio = await measureWithWideAmount(page, 'portfolio', PORTFOLIO_STAT_IDS, true);
+    const portfolio = await measureWithWideAmount(page, PORTFOLIO_STAT_IDS, true);
     expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(2);
     expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
-
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 });
 
-test.describe('统计卡栅格窄桌面档（#774，1024 视口）', () => {
+test.describe('组合统计卡栅格窄桌面档（#774，1024 视口）', () => {
   test.use({ viewport: { width: 1024, height: 900 } });
 
-  // #772 给 main 加了全局 min-w-0，1024 档 main 内容宽从 750 降到 704px；四列轨道随之
-  // 只有 164px，8 位带符号金额的单行墨迹（详情页 191px、首页 195px）越出卡片压到邻卡
-  // （重叠 11px / 15px），故按容器宽降到两列（轨道 344px）。
-  test('1024 档：两页统计卡降两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+  test('1024 档：组合详情统计卡降两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'chromium', '窄桌面档断言仅针对桌面项目');
     const errors = collectPageErrors(page);
-
-    const dashboard = await measureWithWideAmount(page, 'dashboard', DASHBOARD_STAT_IDS, false);
-    expect(dashboard.columns, fmtStatGrid('dashboard', dashboard)).toBe(2);
-    expect(dashboard.minGap, fmtStatGrid('dashboard', dashboard)).toBeGreaterThan(0);
-
-    const portfolio = await measureWithWideAmount(page, 'portfolio', PORTFOLIO_STAT_IDS, false);
+    const portfolio = await measureWithWideAmount(page, PORTFOLIO_STAT_IDS, false);
     expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(2);
     expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+});
 
+const DASHBOARD_WIDE_SUMMARY = {
+  total_value: 12345678.9,
+  total_profit: -12345678.9,
+  aggregate_xirr: {
+    value: -12.34,
+    reliable: true,
+    reason: null,
+    cash_flow_count: 2,
+    holding_days: 420,
+  },
+  pending_subscription_count: 0,
+  pending_trade_count: 0,
+  portfolios: [{
+    code: 'ESP_WIDE',
+    name: '宽金额组合',
+    kind: 'nav',
+    total_value: 12345678.9,
+    total_profit: -12345678.9,
+    cumulative_return: -1,
+    mwr: -12.34,
+    annualization_reliable: true,
+    holding_days: 420,
+  }],
+};
+
+interface DashboardSummaryMeasure {
+  fontSizes: Record<string, string>;
+  inks: { id: string; text: string; left: number; right: number; top: number; bottom: number }[];
+  overlaps: string[];
+  overflow: number;
+}
+
+async function measureDashboardSummary(page: Page): Promise<DashboardSummaryMeasure> {
+  return page.evaluate(() => {
+    const root = document.querySelector('[data-testid="dashboard-summary"]');
+    if (!root) throw new Error('dashboard-summary 未渲染');
+    const ids = ['total_value', 'total_profit', 'aggregate_xirr'];
+    const fontSizes: Record<string, string> = {};
+    const inks = ids.map((id) => {
+      const element = root.querySelector(`[data-testid="dashboard-summary-${id}"]`);
+      const node = element?.firstChild;
+      if (!element || !node) throw new Error(`dashboard-summary-${id} 文本节点缺失`);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      const round = (value: number) => Math.round(value * 100) / 100;
+      fontSizes[id] = getComputedStyle(element).fontSize;
+      return {
+        id,
+        text: (element.textContent ?? '').trim(),
+        left: round(rect.left),
+        right: round(rect.right),
+        top: round(rect.top),
+        bottom: round(rect.bottom),
+      };
+    });
+    const overlaps: string[] = [];
+    for (let i = 0; i < inks.length; i += 1) {
+      for (let j = i + 1; j < inks.length; j += 1) {
+        const a = inks[i];
+        const b = inks[j];
+        if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+          overlaps.push(`${a.id}↔${b.id}`);
+        }
+      }
+    }
+    return {
+      fontSizes,
+      inks,
+      overlaps,
+      overflow: root.scrollWidth - root.clientWidth,
+    };
+  });
+}
+
+async function openWideDashboard(page: Page, mobilePath: boolean): Promise<DashboardSummaryMeasure> {
+  await page.route(
+    (url) => url.pathname === '/api/dashboard/summary',
+    (route) => route.fulfill({ json: DASHBOARD_WIDE_SUMMARY }),
+  );
+  await page.goto(mobilePath ? '/m/dashboard' : '/dashboard');
+  await expect(page.getByTestId('dashboard-summary-total_value')).toContainText('12,345,678.90', {
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId('dashboard-summary-total_profit')).toHaveText('-¥12,345,678.90');
+  return measureDashboardSummary(page);
+}
+
+test.describe('首页汇总宽金额几何（#944 Phase 3.2）', () => {
+  test('双端：48/36px hero 与 24/18px 收益指标不叠印、不横溢', async ({ page }, testInfo) => {
+    const errors = collectPageErrors(page);
+    const mobile = testInfo.project.name === 'mobile';
+    const measured = await openWideDashboard(page, mobile);
+    expect(measured.fontSizes.total_value).toBe(mobile ? '36px' : '48px');
+    expect(measured.fontSizes.total_profit).toBe(mobile ? '18px' : '24px');
+    expect(measured.fontSizes.aggregate_xirr).toBe(mobile ? '18px' : '24px');
+    expect(measured.overlaps, JSON.stringify(measured.inks)).toHaveLength(0);
+    expect(measured.overflow, JSON.stringify(measured.inks)).toBeLessThanOrEqual(0);
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+});
+
+test.describe('首页汇总窄桌面几何（1024 视口）', () => {
+  test.use({ viewport: { width: 1024, height: 900 } });
+
+  test('hero 与右侧指标不叠印、不横溢', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', '窄桌面档断言仅针对桌面项目');
+    const errors = collectPageErrors(page);
+    const measured = await openWideDashboard(page, false);
+    expect(measured.overlaps, JSON.stringify(measured.inks)).toHaveLength(0);
+    expect(measured.overflow, JSON.stringify(measured.inks)).toBeLessThanOrEqual(0);
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 });

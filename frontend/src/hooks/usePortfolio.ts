@@ -37,6 +37,7 @@ export function useCreatePortfolio() {
     mutationFn: (data: PortfolioCreate) => portfolioApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "创建成功",
@@ -63,6 +64,7 @@ export function useUpdatePortfolio(code: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "更新成功",
@@ -89,6 +91,7 @@ export function useClosePortfolio() {
     onSuccess: (_, code) => {
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "关闭成功",
@@ -115,6 +118,7 @@ export function useActivatePortfolio() {
     onSuccess: (_, code) => {
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "激活成功",
@@ -142,6 +146,7 @@ export function useActivateLedgerPortfolio() {
     onSuccess: (_, code) => {
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       // S2（#905 PR3 L2）：激活使台账 totals 从 draft(None) 变 active(0/值)，须失效台账读侧，
       // 否则汇总停旧值（--）。
       queryClient.invalidateQueries({ queryKey: queryKeys.ledger.byPortfolio(code) });
@@ -173,6 +178,7 @@ export function useDeletePortfolio() {
       // 失败不做本地乐观移除——后端判据（状态 + 关联记录）比前端可见信息更全
       queryClient.removeQueries({ queryKey: [PORTFOLIO_QUERY_KEY, code] });
       queryClient.invalidateQueries({ queryKey: [PORTFOLIO_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "删除成功",

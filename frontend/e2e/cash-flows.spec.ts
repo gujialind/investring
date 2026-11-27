@@ -95,14 +95,13 @@ async function prevTradingDay(
   throw new Error(`交易日历中找不到 ${d} 之前最近一个交易日`);
 }
 
-/** dashboard 首屏四查询（page_size=100）落定等待：换登录/换页前若还在途，
+/** dashboard 首屏三查询落定等待：换登录/换页前若还在途，
  * 清 auth 或导航会把 fetch 中止成「access control checks」未捕获异常（webkit 必现） */
 function dashboardBatch(page: Page): Promise<void> {
   return Promise.all([
-    page.waitForResponse(/\/api\/portfolios\?/),
+    page.waitForResponse(/\/api\/dashboard\/summary/),
     page.waitForResponse(/\/api\/subscriptions\?/),
     page.waitForResponse(/\/api\/trades\?/),
-    page.waitForResponse(/\/api\/investors\?/),
   ]).then(() => undefined);
 }
 
