@@ -207,7 +207,7 @@
 - **阴影**：扁平金融风，**卡片一律无投影**，靠「页面底 → 白卡 → 边框」三级明度差分层；`Card` 基件已移除 `shadow-sm`，不再由消费页逐处覆盖。投影仅用于浮层例外——Toast / 下拉 / Popover 用 `shadow-lg`，模态遮罩不动卡片本体。
 - **内边距**：卡片内容桌面 `p-6`（CardContent 默认）、移动 `p-3`；区块间距桌面 `space-y-6`/移动 `space-y-4` 为既有惯例，新页面沿用，禁用 `p-[Npx]`/`gap-[Npx]` 任意值。
 - **z-index（现状登记，2026-08-29；#937 补窄例外）**：浮层统一 `z-50`（shadcn 基件默认：Dialog/AlertDialog 遮罩与内容、Select/Dropdown/Popover/Tooltip、移动端底部导航）；Toast 容器 `z-[100]`，须盖过模态层。**唯一新增非模态例外**：移动组合详情长页的「回到顶部」小按钮用 `z-40`，低于 Sheet/Dialog 的 `z-50` 遮罩，不抢点击或焦点；它不是整条底栏，也不引入新层级体系。除此例外与 Toast 外不自定义其他层级；新增浮层一律复用基件。
-- **focus 态（现状登记，2026-08-29）**：走基件默认 `focus-visible:ring`（`ring-ring` = primary 靛蓝，§1.4；button/checkbox/input/switch/tabs 已带），不自定义 ring 宽度/offset；自绘可交互元素必须保留等价 focus 可见反馈。
+- **focus 态（现状登记，2026-08-29；#941 补净值图局部例外）**：走基件默认 `focus-visible:ring`（`ring-ring` = primary 靛蓝，§1.4；button/checkbox/input/switch/tabs 已带），不自定义 ring 宽度/offset；自绘可交互元素必须保留等价 focus 可见反馈。**净值折线图例外**只绑定 `NavCurve` 外层容器的 `nav-curve` 类，再限定其根 `svg.recharts-surface` 与内部 `g[tabindex]`：pointer/touch 聚焦时移除浏览器默认粗轮廓，键盘 `:focus-visible` 时用 `2px solid hsl(var(--ring))` + `2px` offset 保持可见；Recharts `accessibilityLayer`、根 SVG Tab 停靠与内部 `tabindex=-1` 分层均保留，内部层不新增 Tab 停靠点。不得把该规则扩成全站 `svg { outline: none }`，也不得用点击后强制 blur、关闭无障碍层或给卡片 `overflow-hidden` 替代；饼图、普通按钮与其它 SVG 仍按各自焦点约定。
 
 ## 8. 表格规范
 
@@ -293,6 +293,7 @@
 - **产品身份区单点 = `components/shared/ProductIdentity.tsx`**（#935 S2）：三类产品详情共用的非吸顶全文身份区，位于页眉之后、概览/操作与一栏或两栏内容之前，双端用主内容宽度（不塞桌面 360px 右栏）。产品全名 h2 16/600/24 自然换行、不限行、不 ellipsis/clamp/仅 tooltip（长连续串 `break-words` 必要时断行）；代码/市场 14px/22px 在名称下方；平台-产品页的平台名（回退平台码）为独立上下文行；停用 badge 与名称分别占位、窄屏可换行。消费方传入既有格式化结果（显示码/港互认双码/市场格式/空名回退代码/现金 market 口径不变），组件不新增请求、缓存、路由判断或 scroll state。管理操作行由 `ProductManageDetailContent` 在身份区下方维护（编辑/启停图标+文字、删除独立图标危险色，随正文滚动），不扩成通用详情框架。
 - **流水卡解剖单点 = `components/shared/FlowCard.tsx`**（#907）：`FlowCard` / `FlowCardHeader` / `FlowCardKVGrid` / `FlowCardActions` / `FlowCardSubBlock` 五件组合承载流水卡（容器 / 头行 / kv 栅格 / 操作行 / 结对子块），调仓/申赎/事件/快照四页移动分支共用；新流水卡禁止手写卡内 flex/grid 解剖，形态与字段口径详见 §8。桌面表格分支不消费（仍走 `Table`）。
 - **历史净值卡单点 = `components/shared/ProductNavCards.tsx`**（#934）：四列共享轨道（`grid-cols-[max-content_repeat(3,minmax(max-content,1fr))]`，日期按完整内容占宽、数值列不小于内容宽），表头/ul/li 逐层 subgrid 继承同一祖先轨道与列间距，**禁止每行独立分列**（#934 叠印根因）；宽度不足时仅数据区横滚，表头与全部行同步横移，标题与查看更多留在滚动区外（tabIndex/role/aria 提供键盘滚动入口）。三个详情页（产品/平台-产品/平台管理-产品）桌面净值分支按**内容容器宽**降栏：外层套 `@container` **父**元素（容器查询按最近祖先容器求值，挂在栅格自身不生效，同 #774 口径），容器 ≥800px 双栏（右栏 360px、栏距 16px）、<800px 单栏左组上/右组下；现金/虚拟产品分支不参与。800px 为 #934 SPEC v2 定稿阈值（决策与实测记录见该 issue 正文）；守卫 = 三个 detail spec 的「A2 桌面父布局：容器 799/800 降栏与顶部导航几何」用例 + `e2e/helpers.ts::expectNavHistoryGeometry` / `expectNavDetailColumns` / `expectTopNavDetailLayout` 几何断言。新增消费方或触及该布局时按本条复核，不得绕开共享轨道另写分列。
+- **净值区间组按内容宽换行（#941）**：`PortfolioNavTrendCard` 与 `ProductNavCards` 的两套区间容器都用 `min-w-0 max-w-full flex-wrap`，受所在卡片内容宽约束；单颗按钮 `shrink-0 whitespace-nowrap`，窄屏/放大时整颗换到下一行，不拆字、不省略、不缩字号、不做横向滚动。常规宽度四颗同排，间距与横向 padding 只能沿用既有档位；两套原有文案、字号、默认项、选中态与 `aria-pressed` 不统一成同一视觉样式。按钮键盘焦点环必须完整可见，因此不得用 `overflow-hidden` 裁切换取“无溢出”。#934 的历史数据局部横滚是另一职责，不得借此把区间组改成滚动容器。
 - 双端页面优先 `components/shared/` + `variant`，只有布局本质差异才拆 `components/mobile/` / `components/desktop/`。
 - 弹窗一律走 `Dialog` / `AlertDialog` 基件；提示一律走 `Alert` / toast，不自绘浮层。
 - **待建基件登记**（规格已定、随首个使用页面落地；未建前禁止手写同功能件）：`checkbox`（#146 首个使用，shadcn 基件，`rounded-sm`、选中态 `bg-primary`）、`date-range-picker`（#125，形态见 §10）、`pagination`（#125/#126，形态见 §11）。
@@ -319,6 +320,7 @@
 - **图例位置**：环形图左图右例（移动端上下堆叠），图例 = 色点 + 名称 + 占比（1 位小数，§4）；不单独发明图例样式。
 - **tooltip**：金额 `${formatCurrency(value)}`（可带「元」补语义）、净值 `formatNav`、占比 1 位小数；tooltip 内涨跌数值用 `text-gain`/`text-loss`，图表元素本身（线/柱/扇区）永不用涨跌色。
 - **折线**：净值主线恒 `NAV_LINE`（C1 靛蓝）、无数据点圆点（`dot={false}`）、参考线用 `CHART_OTHER` 灰蓝虚线；多序列按 C1→C8 顺序取色。
+- **净值图绘图区（#941）**：`NavCurve` 的 `margin.left=0`，Y 轴 `width="auto"` 由真实 `formatNav` 刻度决定宽度，右边距从 `8px` 起步；不得恢复库默认 60px 轴宽再与固定左边距叠加。X 轴首末日期分别向内锚定（首 `start`、末 `end`），完整保留 `MM-DD` 语义且不被有限右边距裁切；参考线「初始净值」用 `insideRight` 放在图内靠右，保留原参考值与显示条件，不压首末刻度。普通六字符刻度（如 `0.9000–1.0200`）在图表宽 ≥230px 时左预留 ≤60px、右预留 ≤12px；长刻度必须自动扩宽，不能把普通阈值当截断上限。`formatNav` 四位小数、自动 Y 域、数据顺序、插值、主题色与桌面 300/移动 200（产品 220）图高均不随布局调整改变。
 
 ## 16. 图标体系与着色
 

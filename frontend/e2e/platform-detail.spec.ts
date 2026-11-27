@@ -20,6 +20,9 @@ import {
   expectFullNameReadable,
   expectProductHeaderCollapsed,
   scrollWindowTo,
+  captureNavCardThemes,
+  expectNavCurveGeometry,
+  expectNavRangeLayout,
 } from "./helpers";
 
 /**
@@ -525,7 +528,7 @@ test.describe("平台-产品详情页", () => {
     await expect(productTrigger(dlg, "510300")).toBeVisible();
   });
 
-  test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }) => {
+  test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }, testInfo) => {
     // 与 product-detail.spec.ts 的同名用例同形：三卡判序统一由共享 ProductNavCards 提供，
     // 本页的接线点是 testIdPrefix="platform-product"（testid 不串台）+ market 透传。
     await page.goto(PLATFORM_PRODUCT_PATH);
@@ -535,6 +538,13 @@ test.describe("平台-产品详情页", () => {
     ).toBeVisible();
     await expect(curve.getByTestId("nav-basis-note")).toContainText("不含分红再投资");
     await expect(curve).not.toContainText("暂无净值数据");
+    // #941：平台入口同样消费共享 NavCurve/ProductNavCards；市价标题不能成为漏验理由。
+    await expectNavCurveGeometry(curve, "平台产品市价曲线");
+    await expectNavRangeLayout(curve.getByRole("group", { name: "净值区间" }), "平台产品市价区间", {
+      fontSize: 14,
+      singleRow: true,
+    });
+    await captureNavCardThemes(page, curve, testInfo.outputPath("nav941-platform-market-price"));
 
     const returns = page.getByTestId("platform-product-returns-card");
     await expect(

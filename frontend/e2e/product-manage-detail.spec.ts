@@ -1,6 +1,6 @@
 import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
 import { subMonths } from "date-fns";
-import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
+import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo, captureNavCardThemes, expectNavCurveGeometry, expectNavRangeLayout } from "./helpers";
 
 /**
  * #824 产品管理页列合并与净值型产品详情页。
@@ -605,6 +605,24 @@ test.describe("详情页管理动作与同步周期（#856 块2/块3）", () => 
     const today = new Date();
     expect(body1.end_date).toBe(toISODate(today));
     expect(body1.start_date).toBe(toISODate(subMonths(today, 1)));
+  });
+});
+
+test.describe("产品管理净值曲线集成（#941）", () => {
+  test("A1/A4 场外单位净值口径使用共享几何与同排区间，不因标题不含「净值」漏验", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    const errors = collectPageErrors(page);
+    await page.goto("/products/000300.OF?market=CN_OTC");
+    const card = page.getByTestId("product-curve-card");
+    await expect(card.getByRole("heading", { name: "单位净值走势" })).toBeVisible();
+    await expect(card.getByTestId("nav-basis-note")).toContainText("不含分红再投资");
+    await expectNavCurveGeometry(card, "产品管理单位净值曲线");
+    await expectNavRangeLayout(card.getByRole("group", { name: "净值区间" }), "产品管理单位净值区间", {
+      fontSize: 14,
+      singleRow: true,
+    });
+    await captureNavCardThemes(page, card, testInfo.outputPath("nav941-product-manage-unit-nav"));
+    expect(errors, `页面抛出未捕获异常: ${errors.join(" | ")}`).toHaveLength(0);
   });
 });
 

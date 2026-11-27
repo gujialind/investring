@@ -151,6 +151,18 @@
   }
 }
 
+/* #941：仅净值折线图局部治理焦点。根 SVG 与 Recharts 可点击聚焦的绘图 g 都可能获得焦点；
+   指针/触摸不显示浏览器默认粗框，键盘仍走主题 ring。规则不向其它 SVG、按钮或饼图扩散。 */
+.nav-curve svg.recharts-surface:focus,
+.nav-curve g[tabindex]:focus {
+  outline: none;
+}
+.nav-curve svg.recharts-surface:focus-visible,
+.nav-curve g[tabindex]:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
 /* Financial number display utilities */
 @utility number-cell {
   /* nowrap：数字+单位（如「份」）不应在窄列下折行（#394） */
