@@ -232,12 +232,31 @@ describe("涨跌色与状态徽标", () => {
     expect(getReturnBgClass("-1")).toBe("bg-loss-soft");
   });
 
-  it("状态到 variant 的映射，未知状态回落 neutral", () => {
-    expect(getStatusBadgeVariant("confirmed")).toBe("success");
-    expect(getStatusBadgeVariant("pending")).toBe("warning");
+  it("状态到 variant 的映射（#944 D3·S6 降噪），未知状态回落 neutral", () => {
+    // 正常完成/活跃/终态 → neutral（最高频「一切正常」不抢色）
+    expect(getStatusBadgeVariant("confirmed")).toBe("neutral");
+    expect(getStatusBadgeVariant("active")).toBe("neutral");
+    expect(getStatusBadgeVariant("success")).toBe("neutral");
+    expect(getStatusBadgeVariant("passed")).toBe("neutral");
+    expect(getStatusBadgeVariant("enabled")).toBe("neutral");
+    expect(getStatusBadgeVariant("cancelled")).toBe("neutral");
+    expect(getStatusBadgeVariant("closed")).toBe("neutral");
+    expect(getStatusBadgeVariant("draft")).toBe("neutral");
+    expect(getStatusBadgeVariant("disabled")).toBe("neutral");
+    // 正常等待 → success（软靛蓝低强调）
+    expect(getStatusBadgeVariant("pending")).toBe("success");
+    expect(getStatusBadgeVariant("running")).toBe("success");
+    expect(getStatusBadgeVariant("in_transit")).toBe("success");
+    // 需关注 → warning（赭珀）
+    expect(getStatusBadgeVariant("partial_success")).toBe("warning");
+    expect(getStatusBadgeVariant("interrupted")).toBe("warning");
+    // 失败/异常 → destructive（绛红）
     expect(getStatusBadgeVariant("failed")).toBe("destructive");
+    expect(getStatusBadgeVariant("error")).toBe("destructive");
+    // 未知/空回落 neutral
     expect(getStatusBadgeVariant("whatever")).toBe("neutral");
     expect(getStatusBadgeVariant(null)).toBe("neutral");
+    expect(getStatusBadgeVariant(undefined)).toBe("neutral");
   });
 
   it("getSignedReturn 文本与颜色自洽", () => {
@@ -289,9 +308,9 @@ describe("现金转移组状态派生（#787/#788）", () => {
     ).toBe("abnormal");
   });
 
-  it("状态徽标文案与 variant", () => {
-    expect(TRANSFER_GROUP_STATUS_META.in_transit).toEqual({ label: "在途", variant: "warning" });
-    expect(TRANSFER_GROUP_STATUS_META.completed).toEqual({ label: "已完成", variant: "success" });
+  it("状态徽标文案与 variant（#944 D3：在途=正常等待软靛蓝、已完成=中性）", () => {
+    expect(TRANSFER_GROUP_STATUS_META.in_transit).toEqual({ label: "在途", variant: "success" });
+    expect(TRANSFER_GROUP_STATUS_META.completed).toEqual({ label: "已完成", variant: "neutral" });
     expect(TRANSFER_GROUP_STATUS_META.cancelled).toEqual({ label: "已取消", variant: "neutral" });
     expect(TRANSFER_GROUP_STATUS_META.abnormal).toEqual({ label: "状态异常", variant: "destructive" });
   });

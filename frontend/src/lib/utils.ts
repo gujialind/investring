@@ -316,23 +316,23 @@ export function getReturnSoftTextClass(value: number | string | undefined | null
 export type StatusBadgeVariant = "success" | "warning" | "destructive" | "neutral";
 
 /**
- * 业务状态 → Badge variant 单一映射（issue #127，visual-spec §1.3）：
- * 完成/活跃 → success（靛蓝）；待定/在途/进行中 → warning（赭珀）；
- * 失败/异常 → destructive（绛红）；取消/关闭/草稿/停用 → neutral（灰）。
+ * 业务状态 → Badge variant 单一映射（issue #127 / #944 D3·S6，visual-spec §1.3）：
+ * 状态降噪——正常完成/活跃/终态 → neutral（灰，最高频的「一切正常」不抢色）；
+ * 正常等待 → success（软靛蓝低强调）；需关注 → warning（赭珀）；失败/异常 → destructive（绛红）。
  * 状态色永远不许用 gain/loss token（涨跌专属数值场景）。
  */
 const STATUS_BADGE_VARIANTS: Record<string, StatusBadgeVariant> = {
-  confirmed: "success",
-  active: "success",
-  success: "success",
-  passed: "success",
-  enabled: "success",
-  pending: "warning",
-  running: "warning",
-  partial_success: "warning",
-  in_transit: "warning",
-  // #714：任务/作业被启动期回收标记为 interrupted，属"未完成"而非"失败"，取 warning
+  confirmed: "neutral",
+  active: "neutral",
+  success: "neutral",
+  passed: "neutral",
+  enabled: "neutral",
+  pending: "success",
+  running: "success",
+  in_transit: "success",
+  // #714：任务/作业被启动期回收标记为 interrupted，属"未完成"而非"失败"，需关注取 warning
   interrupted: "warning",
+  partial_success: "warning",
   failed: "destructive",
   error: "destructive",
   cancelled: "neutral",
@@ -375,8 +375,8 @@ export const TRANSFER_GROUP_STATUS_META: Record<
   TransferGroupStatus,
   { label: string; variant: StatusBadgeVariant }
 > = {
-  in_transit: { label: "在途", variant: "warning" },
-  completed: { label: "已完成", variant: "success" },
+  in_transit: { label: "在途", variant: "success" },
+  completed: { label: "已完成", variant: "neutral" },
   cancelled: { label: "已取消", variant: "neutral" },
   abnormal: { label: "状态异常", variant: "destructive" },
 };

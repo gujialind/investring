@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { Bell, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +23,7 @@ const LEVEL_DOT: Record<string, string> = {
 };
 
 /**
- * Navbar 通知铃铛：未读角标 + 下拉列表 + 已读/全部已读。
+ * 顶部导航通知铃铛：未读角标 + 下拉列表 + 已读/全部已读。
  * （issue：后端通知三端点与定时任务产出的通知此前无任何前端入口）
  */
 export default function NotificationBell() {
@@ -32,16 +33,32 @@ export default function NotificationBell() {
 
   const notifications = data?.items || [];
   const unreadCount = notifications.filter((n) => n.status !== "read").length;
+  const unreadBadgeText = unreadCount > 9 ? "9+" : unreadCount;
+  const unreadDescriptionId = useId();
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+        <Button
+          variant="ghost"
+          className="relative h-8 w-8 rounded-full"
+          aria-label="通知"
+          aria-describedby={unreadCount > 0 ? unreadDescriptionId : undefined}
+          title="通知"
+        >
           <Bell className="h-4 w-4" />
           {unreadCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive-solid px-1 text-[10px] font-medium text-white">
-              {unreadCount > 9 ? "9+" : unreadCount}
-            </span>
+            <>
+              <span
+                aria-hidden="true"
+                className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive-solid px-1 text-[10px] font-medium text-white"
+              >
+                {unreadBadgeText}
+              </span>
+              <span id={unreadDescriptionId} className="sr-only">
+                {unreadBadgeText} 条未读通知
+              </span>
+            </>
           )}
         </Button>
       </DropdownMenuTrigger>

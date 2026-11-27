@@ -31,21 +31,23 @@ import { NAV_ITEMS, mobileExitPaths } from '../src/components/shared/navItems';
 test.describe('页面渲染回归（防 P0 复发）', () => {
   // #715：任务页（双端）下线，功能迁到设置页「日志管理」Tab 与产品页「批量净值同步」。
   // 防回归：导航项与旧路由都不该复活（旧 P0-2「tasks.map 白屏」随页面删除已无载体）。
-  test('任务页已下线：侧边栏无「任务」项、/settings/tasks 不再渲染任务管理页（#715）', async ({
+  test('任务页已下线：主导航无「任务」项、/settings/tasks 不再渲染任务管理页（#715）', async ({
     page,
   }) => {
     await page.goto('/dashboard');
-    // 桌面侧边栏（aside）无任务项；mobile 项目 aside 本就不渲染，count 0 恒成立
-    await expect(page.locator('aside a[href="/settings/tasks"]')).toHaveCount(0);
+    // 桌面 TopNav 与窄屏/移动 BottomNav 都不得复活旧任务入口。
+    await expect(page.getByTestId('top-nav').locator('a[href="/settings/tasks"]')).toHaveCount(0);
+    await expect(page.getByTestId('bottom-nav').locator('a[href="/settings/tasks"]')).toHaveCount(0);
     // 旧路由已删：standalone 落 not-found，绝不再出现「任务管理」标题
     await page.goto('/settings/tasks');
     await expect(page.getByRole('heading', { name: '任务管理' })).toHaveCount(0);
   });
 
-  // 防 P0-7：侧边栏曾有指向不存在页面的「日志」死链
-  test('侧边栏不应包含指向未实现页面的死链', async ({ page }) => {
+  // 防 P0-7：主导航曾有指向不存在页面的「日志」死链
+  test('主导航不应包含指向未实现页面的死链', async ({ page }) => {
     await page.goto('/dashboard');
-    await expect(page.locator('aside a[href="/settings/logs"]')).toHaveCount(0);
+    await expect(page.getByTestId('top-nav').locator('a[href="/settings/logs"]')).toHaveCount(0);
+    await expect(page.getByTestId('bottom-nav').locator('a[href="/settings/logs"]')).toHaveCount(0);
   });
 
   // 防 P0-5 的既有意图（前后端契约一致）保留，判据按 #820 反转、再按扩围口径放宽：
@@ -95,15 +97,15 @@ test.describe('移动端渲染回归（防 P0 复发）', () => {
 });
 
 test.describe('移动端布局回归（防 P0-8 复发）', () => {
-  // 防 P0-8：/m 页面曾直接复用含 MainLayout 的 PC 页面，导致 PC 侧栏 + 底部 Tab 双导航
-  test('移动端管理页不应出现 PC 侧边栏', async ({ page }, testInfo) => {
-    // 仅 mobile 项目有意义：桌面 UA 访问 /m/products 会被 middleware 重定向
-    // 回 /products（含 PC 侧边栏），断言必挂（此前编译慢时幸免）
+  // 防 P0-8：/m 页面曾直接复用含 MainLayout 的 PC 页面，导致桌面 TopNav + 底部 Tab 双导航
+  test('移动端管理页不应出现桌面 TopNav', async ({ page }, testInfo) => {
+    // 仅 mobile 项目有意义：桌面 UA 访问 /m/products 会被 proxy 重定向
+    // 回 /products（含桌面 TopNav），断言必挂（此前编译慢时幸免）
     test.skip(testInfo.project.name !== 'mobile', '移动端布局断言仅针对移动项目');
 
     await page.goto('/m/products');
-    // PC 侧边栏是 <aside>，移动端布局只应有 BottomNav（<nav>）
-    await expect(page.locator('aside')).toHaveCount(0);
+    // 移动端布局只应有自己的壳与 BottomNav，不得挂载桌面 TopNav。
+    await expect(page.getByTestId('top-nav')).toHaveCount(0);
   });
 });
 
@@ -398,7 +400,7 @@ test.describe('桌面窄屏底部导航（#658 L2 Blocker 1 回归网）', () =>
 
 test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 补桌面侧）', () => {
   // 本用例原以「桌面端这些页走侧边栏，无此形态」为由 skip 桌面端。该前提在 #878 把
-  // 投资人/平台/分类设为 inNav:false（侧栏不再列出）后已失效，桌面因此既漏了出口、
+  // 投资人/平台/分类设为 inNav:false（顶部导航不再列出）后已失效，桌面因此既漏了出口、
   // 守卫又静默放行——与 e2e/AGENTS.md 禁止的「把未证前提写进 skip」同一种病。
   // 现双端真跑：出口自 #904 起由页头 PageHeader 面包屑承载（布局不再渲染返回行），
   // href 仍由 mobileExitPaths 按自己的轴派生；viewer 无权限态出口在 AdminGuard。
@@ -426,8 +428,8 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
         // MobileLayout 只在一级 Tab 页渲染底部导航
         await expect(page.getByTestId('bottom-nav')).toHaveCount(0);
       } else {
-        // 桌面宽屏侧栏可见，但不列出语境分布入口页
-        await expect(page.locator(`aside a[href="${exit.path}"]`)).toHaveCount(0);
+        // 桌面宽屏 TopNav 可见，但不列出语境分布入口页
+        await expect(page.getByTestId('top-nav').locator(`a[href="${exit.path}"]`)).toHaveCount(0);
       }
 
       await back.click();
@@ -437,14 +439,14 @@ test.describe('非主导航管理页的站内出口（#658 L2 Blocker 2 / #894 �
   });
 });
 
-test.describe('桌面窄屏管理页出口（#894：侧栏隐藏 + 底部导航不含该页）', () => {
-  // 最严重的一档：<lg 时侧栏 hidden lg:flex 不渲染，底部导航又按 mobileTab 过滤同样
+test.describe('桌面窄屏管理页出口（#894/#944：TopNav 隐藏 + 底部导航不含该页）', () => {
+  // 最严重的一档：<lg 时 TopNav hidden lg:block 不显示，底部导航又按 mobileTab 过滤同样
   // 不含这三页，页内唯一出路只剩指向 /dashboard 的紧凑头栏 Logo（不是宿主页）。
   // chromium project 固定 1280 宽，只跑宽屏会整档漏掉，故显式降视口（手法同上一条
   // #658 窄屏导航用例）。
   test.use({ viewport: { width: 900, height: 800 } });
 
-  test('窄屏三页仍有返回宿主出口，侧栏隐藏且底部导航不含该页', async ({ page }, testInfo) => {
+  test('窄屏三页仍有返回宿主出口，TopNav 隐藏且底部导航不含该页', async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name !== 'chromium',
       '桌面窄视口断言仅针对桌面项目（mobile 项目 390px 走 /m 端、由 MobileLayout 提供出口，镜像用例是上一条双端出口断言）',
@@ -457,7 +459,7 @@ test.describe('桌面窄屏管理页出口（#894：侧栏隐藏 + 底部导航�
         page.getByRole('link', { name: `返回${exit.label}` }),
         `${exit.path} 窄屏应有站内出口`,
       ).toBeVisible();
-      await expect(page.locator('aside')).toBeHidden();
+      await expect(page.getByTestId('top-nav')).toBeHidden();
       await expect(nav).toBeVisible();
       await expect(nav.locator(`a[href="${exit.path}"]`)).toHaveCount(0);
     }
@@ -769,14 +771,18 @@ test.describe('组合统计卡栅格宽视口与移动端（#774）', () => {
   });
 });
 
-test.describe('组合统计卡栅格窄桌面档（#774，1024 视口）', () => {
+test.describe('组合统计卡栅格桌面 1024 档（#774/#944）', () => {
   test.use({ viewport: { width: 1024, height: 900 } });
 
-  test('1024 档：组合详情统计卡降两列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== 'chromium', '窄桌面档断言仅针对桌面项目');
+  // #944 删除侧栏后，TopNav 不占横向宽度，1024 档组合详情卡片容器约 910px ≥848px，
+  // 从历史两列形态恢复为四列；首页三指标几何由本文件末尾「首页汇总宽金额」保护。
+  test('1024 档：组合详情统计卡保持四列，8 位带符号金额不与邻卡墨迹相碰', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', '桌面 1024 档断言仅针对桌面项目');
     const errors = collectPageErrors(page);
+
     const portfolio = await measureWithWideAmount(page, PORTFOLIO_STAT_IDS, false);
-    expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(2);
+    expect(portfolio.columns, fmtStatGrid('portfolio', portfolio)).toBe(4);
+    expect(portfolio.rows, fmtStatGrid('portfolio', portfolio)).toHaveLength(1);
     expect(portfolio.minGap, fmtStatGrid('portfolio', portfolio)).toBeGreaterThan(0);
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });

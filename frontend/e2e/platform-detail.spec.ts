@@ -14,6 +14,7 @@ import {
   expectNavHistoryHScroll,
   measureNavDetailLayout,
   expectNavDetailColumns,
+  expectTopNavDetailLayout,
   expectProductDetailIdentity,
   expectFullNameReadable,
   expectProductHeaderCollapsed,
@@ -1077,7 +1078,7 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
     const widths = isMobile ? [390, 375, 320] : [600, 640, 700, 768, 900, 1024, 1152, 1280];
     for (const width of widths) {
       await page.setViewportSize({ width, height });
-      // 侧栏在 lg 边界有宽度过渡，等布局稳定再断言（#934 A2 口径）
+      // TopNav 在 lg 边界切换显示，等布局稳定再断言（#934/#944 A2 口径）
       await expect(async () => {
         await expectNavHistoryGeometry(history, "platform-product", `视口${width}`);
       }).toPass({ timeout: 5_000 });
@@ -1111,7 +1112,7 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
-  test("A2 桌面父布局：容器 799/800 降栏与侧栏联动", async ({ page }, testInfo) => {
+  test("A2 桌面父布局：容器 799/800 降栏与顶部导航几何", async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name === "mobile",
       "移动 variant 无桌面双栏布局（功能确实缺，#934 S4 仅改 desktop 分支）"
@@ -1129,9 +1130,10 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
       }).toPass({ timeout: 5_000 });
     }
 
-    await page.setViewportSize({ width: 1280, height: 720 });
-    const base = await measureNavDetailLayout(history, "1280 基线");
-    const viewportAt800 = 1280 + (800 - base.containerWidth);
+    // 在同一 <lg（main p-4）档内反推边界，避免跨 lg 后 padding 从 32px 变 64px。
+    await page.setViewportSize({ width: 900, height: 720 });
+    const base = await measureNavDetailLayout(history, "900 基线");
+    const viewportAt800 = 900 + (800 - base.containerWidth);
     await page.setViewportSize({ width: viewportAt800, height: 720 });
     await expect(async () => {
       const m = await measureNavDetailLayout(history, "容器800");
@@ -1148,21 +1150,7 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
     }).toPass({ timeout: 5_000 });
 
     await page.setViewportSize({ width: 1024, height: 720 });
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 展开侧栏");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "收起侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 收起侧栏");
-      expectNavDetailColumns(m, "1024 收起侧栏");
-      expect(m.tracks.length).toBe(2);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "展开侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 再展开");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
+    await expectTopNavDetailLayout(page, history, "1024 顶部导航");
   });
 
   test("A5 局部横滚：首末列可达、表头同步、键盘可滚、标题不动", async ({ page }, testInfo) => {
