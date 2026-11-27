@@ -35,6 +35,9 @@ import {
 } from "@/lib/utils";
 import type { Subscription } from "@/types/subscription";
 import type { Trade } from "@/types/trade";
+import { cashLegOrigin, isCashLeg } from "@/lib/tradePairs";
+
+const PENDING_PREVIEW_LIMIT = 6;
 
 interface DashboardSummaryProps {
   summary: DashboardSummaryData;
@@ -206,13 +209,13 @@ export default function DashboardSummary({
         date: item.apply_date,
       })),
       ...trades
-        .filter((item) => !(item.product_code === "CASH" && item.transfer_group?.startsWith("sub_")))
+        .filter((item) => !(isCashLeg(item) && cashLegOrigin(item) === "subscription"))
         .map((item) => ({
-        kind: "trade" as const,
-        id: item.id,
-        item,
-        date: item.trade_date,
-      })),
+          kind: "trade" as const,
+          id: item.id,
+          item,
+          date: item.trade_date,
+        })),
     ];
     return items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
   }, [subscriptions, trades]);
@@ -335,16 +338,16 @@ export default function DashboardSummary({
                 </p>
               ) : (
                 <>
-                  {pendingItems.slice(0, 6).map((entry) => (
+                  {pendingItems.slice(0, PENDING_PREVIEW_LIMIT).map((entry) => (
                     <PendingAgendaRow
                       key={`${entry.kind}-${entry.id}`}
                       entry={entry}
                       basePath={basePath}
                     />
                   ))}
-                  {pendingCount > Math.min(pendingItems.length, 6) && (
+                  {pendingCount > Math.min(pendingItems.length, PENDING_PREVIEW_LIMIT) && (
                     <p className="mt-2 text-xs text-warning-foreground">
-                      还有 {pendingCount - Math.min(pendingItems.length, 6)} 笔，请前往组合页查看
+                      还有 {pendingCount - Math.min(pendingItems.length, PENDING_PREVIEW_LIMIT)} 笔，请前往组合页查看
                     </p>
                   )}
                 </>
@@ -488,21 +491,21 @@ export default function DashboardSummary({
           </h2>
           <p className="text-sm text-muted-foreground">最近的投资操作记录</p>
         </div>
-        {activityError ? (
-          <QueryErrorState
-            error={activityError}
-            onRetry={onRetryActivity}
-            className="mt-3"
-          />
-        ) : recentItems.length === 0 ? (
-          <EmptyState message="暂无交易记录" />
-        ) : (
+        {recentItems.length > 0 && (
           <div data-testid="dashboard-recent-activity" className="divide-y divide-border border-y">
             {recentItems.map((entry) => (
               <RecentActivityRow key={`${entry.kind}-${entry.id}`} entry={entry} />
             ))}
           </div>
         )}
+        {Boolean(activityError) && (
+          <QueryErrorState
+            error={activityError}
+            onRetry={onRetryActivity}
+            className="mt-3"
+          />
+        )}
+        {recentItems.length === 0 && !activityError && <EmptyState message="暂无交易记录" />}
       </section>
     </div>
   );

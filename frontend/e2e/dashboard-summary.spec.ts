@@ -286,12 +286,13 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
 
   test('活动列表失败保留 summary，显示失败态而非空态，重试后恢复', async ({ page }) => {
     let attempts = 0;
+    let fail = true;
     await mockDashboard(page, reliableSummary);
     await page.route(
       (url) => url.pathname === '/api/subscriptions' && url.searchParams.get('page_size') === '100',
       (route) => {
         attempts += 1;
-        return attempts <= 2
+        return fail
           ? route.fulfill({
               status: 500,
               json: { detail: { error: 'SUBSCRIPTIONS_UNAVAILABLE', message: '申赎记录暂不可用' } },
@@ -306,9 +307,26 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
     await expect(page.getByText('加载失败：申赎记录暂不可用')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('暂无交易记录')).toHaveCount(0);
+    fail = false;
     await page.getByRole('button', { name: '重试', exact: true }).click();
     await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
-    expect(attempts).toBeGreaterThanOrEqual(3);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+
+    fail = true;
+    await page.clock.setFixedTime(Date.now() + 31_000);
+    await page.locator('a[href$="/portfolio"]:visible').first().click();
+    await expect(page).toHaveURL(/\/portfolio$/);
+    await page.locator('a[href$="/dashboard"]:visible').first().click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByText('加载失败：申赎记录暂不可用')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
+    await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
+    await expect(page.getByText('暂无交易记录')).toHaveCount(0);
+    fail = false;
+    await page.getByRole('button', { name: '重试', exact: true }).click();
+    await expect(page.getByText('加载失败：申赎记录暂不可用')).toHaveCount(0);
+    await expect(page.getByTestId('dashboard-recent-activity')).toContainText('ESP_SHORT');
+    expect(attempts).toBeGreaterThanOrEqual(4);
   });
 
   test('汇总后台刷新失败保留上次数据并独立重试，不污染活动列表', async ({ page }) => {
