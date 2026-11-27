@@ -928,16 +928,18 @@ jobs:
           python3 scripts/ci_gate.py detect
 
   # E2E 形态对比（issue #410）：纯测试重构 PR 的「假绿灯」防线——base 与 PR 两侧
-  # 各跑一遍全量 E2E，归一化（scripts/e2e_normalize.py）成 TSV 后 diff，期望空 diff；
-  # 非空 diff 拦合入，预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
+  # 各跑一遍全量 E2E，归一化（scripts/e2e_normalize.py）成 TSV 后比对，期望无形态差异；
+  # 判据拆两类（#957）：形态列（spec/project/标题/skip 文案/是否 skip）差异拦合入，
+  # 结果列（status/结果）差异与两侧 unexpected 只披露——运行期 pass/fail 抖动不再
+  # 被当成形态变化。预期形态变化（增删用例/调整 skip）的 PR 打 e2e-morph-expected
   # 标签豁免。两侧构建源同为 PR head，唯一变量是 frontend/e2e/ 目录；栈步骤已抽到
   # .github/workflows/e2e-stack.yml（issue #467），baseline 换目录在 called workflow 内完成。
   #
-  # 下面两个 job 的判定体顺序、EXEMPT 的来源、needs 接线与 artifact 命名的多处耦合，
-  # 由 scripts/tests/test_ci_e2e_compare.py 逐条守门（#490）：这些位置改错不会让任何
-  # 用例变红，只会让门禁静默失效而 CI 依旧全绿。改这里必须同步那个文件——而只改
-  # workflow 的 PR 因为 .github/workflows/** 的强制位必然跑 scripts/tests，所以漏改
-  # 会在同一个 PR 里红，不需要等一次真实 run。
+  # 下面两个 job 的判定体调用与退出码契约、EXEMPT 的来源、needs 接线与 artifact 命名的
+  # 多处耦合，由 scripts/tests/test_ci_e2e_compare.py 逐条守门（#490）：这些位置改错
+  # 不会让任何用例变红，只会让门禁静默失效而 CI 依旧全绿。改这里必须同步那个文件——
+  # 而只改 workflow 的 PR 因为 .github/workflows/** 的强制位必然跑 scripts/tests，
+  # 所以漏改会在同一个 PR 里红，不需要等一次真实 run。
   e2e-compare-capture:
     name: "E2E Capture (${{ matrix.side }})"
     needs: changes
@@ -979,26 +981,26 @@ jobs:
             --input /tmp/raw/e2e-raw-candidate/e2e-raw-candidate.json \
             --output /tmp/cand.tsv --projects chromium,mobile --side candidate
 
-      # diff 退出码显式捕获，不依赖 shell 的 pipefail 默认值
+      # 判定体拆两类（#957）：形态列（spec/project/标题/skip 文案/是否 skip）差异 → 硬 fail；
+      # 结果列（status/结果）差异与两侧 unexpected 只披露（::warning:: + Step Summary）。
+      # 判定本体在 scripts/e2e_morph_compare.py（stdlib-only，单测在 scripts/tests/
+      # test_e2e_morph_compare.py）；本步只保留退出码契约与标签豁免分支，#490 守门。
       - name: Diff morphology
         env:
           EXEMPT: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-morph-expected') }}
         run: |
           rc=0
-          diff /tmp/base.tsv /tmp/cand.tsv > /tmp/morph.diff || rc=$?
-          cat /tmp/morph.diff
-          if [ "$rc" -eq 0 ]; then echo "✅ 形态一致（空 diff）"; exit 0; fi
-          {
-            echo '### E2E 形态 diff'
-            echo '```diff'
-            cat /tmp/morph.diff
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$EXEMPT" = "true" ]; then
-            echo "::warning::形态有差异，经 e2e-morph-expected 标签放行"
+          python3 scripts/e2e_morph_compare.py --base /tmp/base.tsv --candidate /tmp/cand.tsv --summary "$GITHUB_STEP_SUMMARY" || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "✅ 形态一致（无形态列差异）"; exit 0; fi
+          if [ "$rc" -eq 1 ] && [ "$EXEMPT" = "true" ]; then
+            echo "::warning::形态列有差异，经 e2e-morph-expected 标签放行"
             exit 0
           fi
-          echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::形态对比脚本异常退出（rc=$rc）：TSV 缺失或列序不符，不适用标签豁免"
+          else
+            echo "::error::E2E 形态非预期变化；若属预期（增删用例/调整 skip），请给 PR 加 e2e-morph-expected 标签（labeled 触发重跑）"
+          fi
           exit 1
 
   # 汇总门禁（#211/#587）：缺席的必需检查不能等同于通过。
