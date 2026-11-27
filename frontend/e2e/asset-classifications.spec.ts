@@ -33,6 +33,13 @@ test.describe("资产分类弹窗滚动契约（#910）", () => {
     const errors = collectPageErrors(page);
     await page.goto("/asset-classifications");
     await expect(page.getByRole("button", { name: "新建维度值" })).toBeVisible({ timeout: 15_000 });
+    if (testInfo.project.name === "chromium") {
+      const row = page.getByRole("row").filter({ hasText: "ASSET_STOCK" });
+      await expect(row.getByText("启用", { exact: true })).toHaveClass(/\bbg-muted\b/);
+    } else {
+      const card = page.getByTestId("asset-class-card").filter({ hasText: "ASSET_STOCK" });
+      await expect(card.getByText("启用", { exact: true })).toHaveCount(0);
+    }
     for (const vp of dialogTestViewports(testInfo, page)) {
       await page.setViewportSize(vp);
       const label = `新建维度值 ${vp.width}×${vp.height}`;

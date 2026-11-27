@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
+import { E2E_ACTIVE, dialogByTitle, gotoPortfolioDetail, openPopover, productTrigger, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
 
 /**
  * #595 步骤③ 持仓产品详情页（M3/D3，双端共享 ProductDetailContent）。
@@ -45,13 +45,18 @@ test.describe("产品详情页", () => {
     await expect(overview).toContainText("(+5.00%)");
     // 单位净值行（最新一条净值，日期随种子滚动只断言数值与标签）
     await expect(overview).toContainText("单位净值 4.2000");
-    // 累计收益说明默认收起，真实按钮承载可访问语义
+    // 累计收益说明默认收起，真实按钮承载可访问语义；展开只解释含已卖出实现盈亏，
+    // 不再声称与持仓卡口径不同（#944 V2-16 起两者同 basis）。
     await expect(overview).toContainText("累计收益");
-    await expect(overview).not.toContainText("*累计收益含已卖出实现盈亏");
-    await expect(overview.getByRole("button", { name: "查看累计收益说明" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    const tipTrigger = overview.getByRole("button", { name: "查看累计收益说明" });
+    const tipContent = page.getByTestId("info-tip-content");
+    await expect(tipTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText("累计收益含已卖出实现盈亏", { exact: true })).toHaveCount(0);
+    await openPopover(page, tipTrigger, tipContent);
+    await expect(tipContent).toHaveText("累计收益含已卖出实现盈亏");
+    await expect(tipContent).not.toContainText("与持仓卡");
+    await page.keyboard.press("Escape");
+    await expect(tipContent).toHaveCount(0);
   });
 
   test("夹具无累计净值 → 曲线回退市价口径且区间收益率按同 basis 计算（#703）", async ({ page }) => {
@@ -539,7 +544,7 @@ test.describe("历史净值窄宽布局（#934）", () => {
     const widths = isMobile ? [390, 375, 320] : [600, 640, 700, 768, 900, 1024, 1152, 1280];
     for (const width of widths) {
       await page.setViewportSize({ width, height });
-      // 侧栏在 lg 边界有宽度过渡，等布局稳定再断言（#934 A2 口径）
+      // TopNav 在 lg 边界切换显示，等布局稳定再断言（#934/#944 A2 口径）
       await expect(async () => {
         await expectNavHistoryGeometry(history, "product", `视口${width}`);
       }).toPass({ timeout: 5_000 });
@@ -573,7 +578,7 @@ test.describe("历史净值窄宽布局（#934）", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
-  test("A2 桌面父布局：容器 799/800 降栏与侧栏联动", async ({ page }, testInfo) => {
+  test("A2 桌面父布局：容器 799/800 降栏与顶部导航几何", async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name === "mobile",
       "移动 variant 无桌面双栏布局（功能确实缺，#934 S4 仅改 desktop 分支）"
@@ -591,9 +596,10 @@ test.describe("历史净值窄宽布局（#934）", () => {
       }).toPass({ timeout: 5_000 });
     }
 
-    await page.setViewportSize({ width: 1280, height: 720 });
-    const base = await measureNavDetailLayout(history, "1280 基线");
-    const viewportAt800 = 1280 + (800 - base.containerWidth);
+    // 在同一 <lg（main p-4）档内反推边界，避免跨 lg 后 padding 从 32px 变 64px。
+    await page.setViewportSize({ width: 900, height: 720 });
+    const base = await measureNavDetailLayout(history, "900 基线");
+    const viewportAt800 = 900 + (800 - base.containerWidth);
     await page.setViewportSize({ width: viewportAt800, height: 720 });
     await expect(async () => {
       const m = await measureNavDetailLayout(history, "容器800");
@@ -610,21 +616,7 @@ test.describe("历史净值窄宽布局（#934）", () => {
     }).toPass({ timeout: 5_000 });
 
     await page.setViewportSize({ width: 1024, height: 720 });
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 展开侧栏");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "收起侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 收起侧栏");
-      expectNavDetailColumns(m, "1024 收起侧栏");
-      expect(m.tracks.length).toBe(2);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "展开侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 再展开");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
+    await expectTopNavDetailLayout(page, history, "1024 顶部导航");
   });
 
   test("A5 局部横滚：首末列可达、表头同步、键盘可滚、标题不动", async ({ page }, testInfo) => {

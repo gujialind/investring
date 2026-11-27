@@ -610,8 +610,9 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
           {/* 桌面列数按**容器宽**而非视口宽取（#772）：主数值是 nowrap 墨迹，栅格轨道
               用 minmax(0,1fr) 可被压到墨迹之下——轨道叠印、末卡墨迹越出卡片。四列不叠印
               需轨道 ≥ 15 字符墨迹（实测 216.05px）− gap 16 = 200px，即容器 ≥ 4×200 + 3×16
-              = 848px；窄于此就降两列。用 lg: 视口断点判不了这件事：main 从视口扣掉
-              sidebar 256 与 p-8 64 后，1024 视口只剩 654 容器（轨道 151.5，必叠印）。 */}
+              = 848px；窄于此就降两列。判据是容器宽而非 lg: 视口断点：#944 前含侧栏时
+              1024 视口仅余 654px 容器（历史形态）；当前 TopNav 不占横向宽度，1024 主区
+              内容容器约 910px，达到四列阈值。 */}
           <div className={cn("grid gap-4", isMobile ? (wideValue ? "grid-cols-1" : "grid-cols-2") : (wideValueDesktop ? "grid-cols-2" : "grid-cols-2 @min-[848px]:grid-cols-4"))}>
             {statCards.map((s) => (
               <div key={s.key} className="flex flex-col gap-1" data-testid={`stat-${s.key}`}>

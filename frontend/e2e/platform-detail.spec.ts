@@ -2,6 +2,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
   E2E_ACTIVE,
   gotoPortfolioDetail,
+  openPopover,
   authHeaders,
   dialogByTitle,
   pickCalendarDay,
@@ -14,6 +15,7 @@ import {
   expectNavHistoryHScroll,
   measureNavDetailLayout,
   expectNavDetailColumns,
+  expectTopNavDetailLayout,
   expectProductDetailIdentity,
   expectFullNameReadable,
   expectProductHeaderCollapsed,
@@ -163,11 +165,42 @@ test.describe("平台详情页", () => {
   });
 
   test("持仓明细：510300.SH 产品卡可点击进入平台-产品详情", async ({ page }) => {
+    // 平台详情卡消费本平台切片；用不同哨兵值区分切片 cumulative_profit 与产品合计，
+    // 防止共享 HoldingProductCard 换字段后误显示跨平台累计收益。
+    await page.route(/\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/, async (route) => {
+      const resp = await route.fetch();
+      const json = (await resp.json()) as {
+        products: Array<{
+          product_code: string;
+          cumulative_profit: number | null;
+          platforms: Array<{
+            platform_code: string | null;
+            holding_profit: number | null;
+            cumulative_profit: number | null;
+          }>;
+        }>;
+      };
+      const target = json.products.find((product) => product.product_code === "510300.SH");
+      expect(target, "种子须包含 510300.SH 产品聚合").toBeDefined();
+      target!.cumulative_profit = 1111.1;
+      const slice = target!.platforms.find((platform) => platform.platform_code === "HBZQ");
+      expect(slice, "种子须包含 HBZQ 平台切片").toBeDefined();
+      slice!.holding_profit = -1234.5;
+      slice!.cumulative_profit = 2222.2;
+      const headers = { ...resp.headers() };
+      delete headers["content-length"];
+      delete headers["content-encoding"];
+      await route.fulfill({ status: resp.status(), headers, json });
+    });
     await page.goto(PLATFORM_PATH);
     const holdings = page.getByTestId("platform-holdings-section");
     await expect(holdings).toBeVisible();
-    // 510300.SH 产品卡存在
+    // 510300.SH 产品卡存在，row3 显示本平台切片累计收益（非产品合计、非持有收益）
     await expect(holdings.getByText("沪深300ETF")).toBeVisible();
+    const card = holdings.getByTestId("holding-product-card").filter({ hasText: "沪深300ETF" });
+    await expect(card.getByTestId("total-profit-value")).toHaveText("+2,222.20");
+    await expect(card.getByTestId("total-profit-value")).not.toHaveText("+1,111.10");
+    await expect(card.getByTestId("total-profit-value")).not.toHaveText("-1,234.50");
     // 点击产品卡 → 平台-产品详情页（#935 起平台上下文与产品名分别断言）
     await holdings.getByRole("link", { name: /沪深300ETF/ }).first().click();
     await page.waitForURL(/\/platforms\/HBZQ\/products\/510300\.SH/);
@@ -421,13 +454,17 @@ test.describe("平台-产品详情页", () => {
     await expect(overview).toContainText("100.0%");
     // #729 统计卡主数值左对齐（visual-spec §5），同产品详情/平台详情两处断言
     await expect(page.getByTestId("overview-market-value")).toHaveCSS("text-align", "left");
-    // 累计收益说明默认收起，真实按钮承载可访问语义
+    // 累计收益说明默认收起，展开后与产品详情、持仓卡使用同一口径文案。
     await expect(overview).toContainText("累计收益");
-    await expect(overview).not.toContainText("*累计收益含已卖出实现盈亏");
-    await expect(overview.getByRole("button", { name: "查看累计收益说明" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    const tipTrigger = overview.getByRole("button", { name: "查看累计收益说明" });
+    const tipContent = page.getByTestId("info-tip-content");
+    await expect(tipTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText("累计收益含已卖出实现盈亏", { exact: true })).toHaveCount(0);
+    await openPopover(page, tipTrigger, tipContent);
+    await expect(tipContent).toHaveText("累计收益含已卖出实现盈亏");
+    await expect(tipContent).not.toContainText("与持仓卡");
+    await page.keyboard.press("Escape");
+    await expect(tipContent).toHaveCount(0);
   });
 
   test("操作行买入：trades 页平台+产品预填且过滤生效", async ({ page }, testInfo) => {
@@ -1077,7 +1114,7 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
     const widths = isMobile ? [390, 375, 320] : [600, 640, 700, 768, 900, 1024, 1152, 1280];
     for (const width of widths) {
       await page.setViewportSize({ width, height });
-      // 侧栏在 lg 边界有宽度过渡，等布局稳定再断言（#934 A2 口径）
+      // TopNav 在 lg 边界切换显示，等布局稳定再断言（#934/#944 A2 口径）
       await expect(async () => {
         await expectNavHistoryGeometry(history, "platform-product", `视口${width}`);
       }).toPass({ timeout: 5_000 });
@@ -1111,7 +1148,7 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
-  test("A2 桌面父布局：容器 799/800 降栏与侧栏联动", async ({ page }, testInfo) => {
+  test("A2 桌面父布局：容器 799/800 降栏与顶部导航几何", async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name === "mobile",
       "移动 variant 无桌面双栏布局（功能确实缺，#934 S4 仅改 desktop 分支）"
@@ -1129,9 +1166,10 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
       }).toPass({ timeout: 5_000 });
     }
 
-    await page.setViewportSize({ width: 1280, height: 720 });
-    const base = await measureNavDetailLayout(history, "1280 基线");
-    const viewportAt800 = 1280 + (800 - base.containerWidth);
+    // 在同一 <lg（main p-4）档内反推边界，避免跨 lg 后 padding 从 32px 变 64px。
+    await page.setViewportSize({ width: 900, height: 720 });
+    const base = await measureNavDetailLayout(history, "900 基线");
+    const viewportAt800 = 900 + (800 - base.containerWidth);
     await page.setViewportSize({ width: viewportAt800, height: 720 });
     await expect(async () => {
       const m = await measureNavDetailLayout(history, "容器800");
@@ -1148,21 +1186,7 @@ test.describe("平台-产品详情历史净值窄宽布局（#934）", () => {
     }).toPass({ timeout: 5_000 });
 
     await page.setViewportSize({ width: 1024, height: 720 });
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 展开侧栏");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "收起侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 收起侧栏");
-      expectNavDetailColumns(m, "1024 收起侧栏");
-      expect(m.tracks.length).toBe(2);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "展开侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 再展开");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
+    await expectTopNavDetailLayout(page, history, "1024 顶部导航");
   });
 
   test("A5 局部横滚：首末列可达、表头同步、键盘可滚、标题不动", async ({ page }, testInfo) => {

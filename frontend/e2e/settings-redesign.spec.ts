@@ -1,4 +1,4 @@
-/** #878 L2 修后回归：设置角色门控 / 跨 UA 设置子页映射 / 改密弹窗关闭收口 / 收起侧栏可访问名称。
+/** #878 L2 修后回归：设置角色门控 / 跨 UA 设置子页映射 / 改密弹窗关闭收口 / 顶部导航可访问名称。
  * 默认 admin 会话（auth.setup）；viewer 用例清凭证后走真实登录流（VIEWER/viewer123 种子）。
  * 改密用例 mock /api/auth/password，不真改共享种子密码。
  */
@@ -142,16 +142,16 @@ test.describe('改密弹窗关闭收口（#878 L2 Suggestion 3）', () => {
   });
 });
 
-test.describe('收起侧栏导航可访问名称（#878 L2 Suggestion 4）', () => {
-  test('收起后主导航链接仍按名称可访问（aria-label，非仅 Tooltip）', async ({ page }, testInfo) => {
+test.describe('顶部导航可访问名称（#944）', () => {
+  test('主导航链接可按名称访问（aria-label，非仅图标）', async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name !== 'chromium',
-      '桌面侧栏仅桌面项目（移动无侧栏，账户/导航走底部 Tab）',
+      '桌面 TopNav 仅桌面项目（移动 /m 使用 MobileLayout 与底部 Tab，无此组件）',
     );
     await page.goto('/dashboard');
-    await page.getByRole('button', { name: '收起侧栏', exact: true }).click();
+    const nav = page.getByTestId('top-nav').getByRole('navigation', { name: '主导航' });
     for (const label of ['首页', '组合', '产品', '设置']) {
-      const link = page.getByRole('link', { name: label, exact: true });
+      const link = nav.getByRole('link', { name: label, exact: true });
       await expect(link).toBeVisible();
       await expect(link).toHaveAttribute('aria-label', label);
     }

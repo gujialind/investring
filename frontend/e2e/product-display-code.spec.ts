@@ -82,7 +82,7 @@ test.describe('#705 产品标准码展示', () => {
 
     // 标识符不变量：卡片 href 仍是原始码（换成显示码会让港互认/LOF 链接失效）。
     // 用尾部正则而非全等——mobile project 经 middleware 重定向到 /m/... 前缀
-    const hkLink = page.locator('a', { has: hkCard });
+    const hkLink = hkCard.getByRole('link');
     await expect(hkLink).toHaveAttribute(
       'href',
       new RegExp(`/portfolio/${E2E_ACTIVE}/product/${HK_CODE}\\?market=HK_MUTUAL$`)

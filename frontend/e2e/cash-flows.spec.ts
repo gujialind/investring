@@ -1149,20 +1149,18 @@ test.describe('现金转移撤销（#788，双端）', () => {
 });
 
 /**
- * #772：窄桌面档（`lg` 下界 1024）的页面级形态。此前 `main` 作为 flex 子项带内容自动
- * 最小宽，被明细表的最小内容宽（实测 861.84px，七列表头/`whitespace-nowrap` 单元格之和）
- * 钉在 975.84px → 先挤 sidebar（1024 档只剩 99px）、再挤破视口（`scrollWidth` 1075）。
- * 本用例钉住修复后的三件事：整页不横滚、sidebar 保住 `w-56`、四卡在该档降两列后仍无叠印。
- * 四卡取 #745/#770 同一 15 字符夹具（`-¥12,345,678.90`，墨迹 216.05px）——它是四列档
- * 的临界串长，两列下余量最大，故同时是「不该再给四列」的判据。
+ * #772 + #944：1024px 桌面档的页面级形态。#772 修复了侧栏挤窄与整页横滚；#944 删除
+ * 侧栏后，TopNav 静态且不占横向宽度，main 铺满布局视口，四卡容器由约 654px 增至
+ * 约 910px，故从两列恢复为四列。本用例仍钉住整页不横滚、临界长金额不叠印、末卡
+ * 不越视口；侧栏宽度断言退役为 TopNav/main 几何断言。
  */
-test.describe('概览页窄桌面档（#772，1024 视口）', () => {
+test.describe('概览页窄桌面档（#772/#944，1024 视口）', () => {
   test.use({ viewport: { width: 1024, height: 900 } });
 
-  test('1024 档：无整页横向滚动、sidebar 保 224px、四卡降两列不叠印', async ({ page }, testInfo) => {
+  test('1024 档：无整页横向滚动、顶部导航不占侧栏宽、四卡保持四列不叠印', async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name !== 'chromium',
-      '1024 属桌面 `lg` 档：mobile project 是 390px iPhone 13 视口，该档无 sidebar 与四列栅格（移动形态由上方 #730 用例覆盖）',
+      '1024 属桌面 `lg` 档：mobile project 是 390px iPhone 13 视口，该档无 TopNav 与四列栅格（移动形态由上方 #730 用例覆盖）',
     );
     const errors = collectPageErrors(page);
     const wide = '-12345678.90';
@@ -1186,25 +1184,32 @@ test.describe('概览页窄桌面档（#772，1024 视口）', () => {
       `1024 档整页 scrollWidth=${box.scrollWidth} 应 ≤ 视口宽 ${box.innerWidth}`,
     ).toBeLessThanOrEqual(box.innerWidth);
 
-    // ② sidebar 不被压窄（#878 `w-56 shrink-0` = 224px；修复前实测 99px）
-    const aside = await page.locator('aside').boundingBox();
-    expect(aside, '1024 档应渲染桌面 sidebar').not.toBeNull();
-    expect(Math.abs(aside!.width - 224), `sidebar 宽应为 224px，实测 ${aside!.width}`).toBeLessThan(1);
+    // ② #944：桌面 TopNav 可见且静态，侧栏已删除，main 铺满布局视口
+    const topNav = page.getByTestId('top-nav');
+    await expect(topNav).toBeVisible();
+    await expect(topNav).toHaveCSS('position', 'static');
+    await expect(page.locator('aside')).toHaveCount(0);
+    const mainBox = await page.locator('main').boundingBox();
+    const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth);
+    expect(mainBox, '1024 档应渲染 main').not.toBeNull();
+    expect(Math.abs(mainBox!.x), 'main 左侧不应有侧栏占宽').toBeLessThanOrEqual(1);
+    expect(Math.abs(mainBox!.width - layoutWidth), 'main 应铺满布局视口').toBeLessThanOrEqual(1);
 
-    // ③ 四卡：降两列后同排墨迹间隙仍为正，末卡墨迹不越视口
+    // ③ 四卡：TopNav 不占横向宽度后容器 ≥848px，保持四列且同排墨迹间隙为正
     const inks = await statValueInks(page, ['available', 'in_transit', 'inflow', 'outflow']);
-    const gaps = inks.flatMap((a) =>
-      inks
+    const gaps = inks.flatMap((a) => {
+      const next = inks
         .filter((b) => b.key !== a.key && Math.abs(b.top - a.top) < 2 && b.left > a.left)
-        .map((b) => b.left - a.right),
-    );
+        .sort((left, right) => left.left - right.left)[0];
+      return next ? [next.left - a.right] : [];
+    });
     gaps.forEach((g) =>
       expect(
         g,
         `1024 档邻卡主数值墨迹间隙应 ≥8px，实测 [${gaps.map((v) => v.toFixed(2)).join(', ')}]`,
       ).toBeGreaterThanOrEqual(8),
     );
-    expect(gaps, '1024 档容器约 736px 不足四列（需 ≥848px），应降两列、量到 2 对同排邻卡').toHaveLength(2);
+    expect(gaps, '1024 档 TopNav 不占横向宽度，容器约 910px ≥848px，应保持四列、量到 3 对同排邻卡').toHaveLength(3);
     expect(
       Math.max(...inks.map((i) => i.right)),
       '末卡墨迹右缘不应越过视口宽',
