@@ -197,7 +197,8 @@ function shotSlug(path) {
   const url = parseUrl(path);
   const base = url.pathname.split('/').filter(Boolean).slice(-2).join('-') || 'root';
   const market = url.searchParams.get('market');
-  return market ? `${base}-${market}` : base;
+  const safeMarket = market ? market.replace(/[^A-Za-z0-9_-]/g, '_') : '';
+  return safeMarket ? `${base}-${safeMarket}` : base;
 }
 
 function shotName(path, device, theme) {
