@@ -25,6 +25,9 @@ import { expect, test, type Page, type Locator, type TestInfo } from '@playwrigh
 export const E2E_PORT = 'E2E_PORT'; // draft、零交易/申赎/快照
 export const E2E_ACTIVE = 'E2E_ACTIVE'; // active、首购 + 已确认场内交易 + 2 日快照 + 1 pending 交易
 
+/** 面包屑长名夹具：同时覆盖 CJK 换行与无空格 Latin token，防止撑破窄栏。 */
+export const BREADCRUMB_LONG_NAME = `这是一个用于验证组合子页面包屑长名称换行与完整可访问语义的家庭投资组合-${'A'.repeat(55)}`;
+
 /** 组合 code 限定为两个种子契约值：typo 即编译期报错，不再退化为运行期 15s 超时（#354 消除静默失败） */
 export type PortfolioCode = typeof E2E_PORT | typeof E2E_ACTIVE;
 
