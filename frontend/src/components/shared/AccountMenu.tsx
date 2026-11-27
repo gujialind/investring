@@ -16,17 +16,18 @@ import {
 import ChangePasswordDialog from "@/components/shared/ChangePasswordDialog";
 
 interface AccountMenuProps {
-  /** 侧栏收起态：仅头像，不显示姓名/角色 */
+  /** 紧凑态：仅头像，不显示姓名/角色（桌面顶部导航与窄屏顶栏复用） */
   collapsed?: boolean;
-  /** 弹层对齐：侧栏展开 start、收起 center、移动首页 end */
+  /** 弹层对齐：展开 start、紧凑 center、右对齐 end（顶部导航两端均传 end） */
   align?: "start" | "center" | "end";
   className?: string;
 }
 
 /**
- * 账户菜单（#878）：头像 + 姓名/角色触发器，向上展开，含「修改密码」（弹窗）与
- * 「退出登录」。全角色可用——补上移动端此前无退出入口的缺口。侧栏底部与移动首页
- * 账户区共用同一份；触发器 aria-label 恒为「用户菜单」（E2E 锚点）。
+ * 账户菜单（#878）：头像 + 姓名/角色触发器，含「修改密码」（弹窗）与
+ * 「退出登录」。全角色可用——补上移动端此前无退出入口的缺口。桌面顶部导航、窄屏
+ * 顶栏与移动首页账户区共用同一份；触发器 aria-label 恒为「用户菜单」（E2E 锚点）。
+ * 弹层优先向上展开，顶部空间不足时由 Radix 碰撞规避向下翻转。
  */
 export default function AccountMenu({ collapsed = false, align = "start", className }: AccountMenuProps) {
   const { user } = useAuthStore();

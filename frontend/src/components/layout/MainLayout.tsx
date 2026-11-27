@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
-import Sidebar from "./Sidebar";
+import TopNav from "./TopNav";
 import NotificationBell from "./NotificationBell";
 import BottomNav from "@/components/shared/BottomNav";
 import BrandLogo from "@/components/shared/BrandLogo";
@@ -51,10 +51,13 @@ export default function MainLayout({
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* 窄屏（<lg）紧凑顶栏：侧栏此时隐藏，Logo/通知/账户入口收进这里，保证账户可达。
-          宽屏由侧栏承载（#878 移除原常驻 Navbar），本栏 lg:hidden 不渲染可见态。 */}
-      <header className="flex h-14 items-center justify-between border-b bg-background px-4 lg:hidden">
+    <div className="flex min-h-screen flex-col bg-background">
+      <TopNav />
+      {/* 窄屏（<lg）紧凑顶栏：Logo/通知/账户入口保持可达；宽屏由静态 TopNav 承载。 */}
+      <header
+        data-testid="compact-header"
+        className="flex h-14 items-center justify-between border-b bg-background px-4 lg:hidden"
+      >
         <Link href="/dashboard" aria-label="InvestRing 首页">
           <BrandLogo size={22} withWordmark />
         </Link>
@@ -63,14 +66,10 @@ export default function MainLayout({
           <AccountMenu collapsed align="end" />
         </div>
       </header>
-      <div className="flex">
-        <Sidebar />
-        {/* min-w-0 解除 flex 子项的内容自动最小宽：否则页内的表/长数值会把 main 顶到
-            自身最小内容宽，先挤掉 sidebar，再挤破视口（#772）。窄内容改由各自的滚动容器承接。 */}
-        <main className="min-w-0 flex-1 p-4 lg:p-8 pb-20 lg:pb-8">
-          {children}
-        </main>
-      </div>
+      {/* 保留 min-w-0 作为内容宽度防御；纵向 flex 由 flex-1 承接剩余高度，窄内容由各自滚动容器约束。 */}
+      <main className="min-w-0 flex-1 p-4 lg:p-8 pb-20 lg:pb-8">
+        {children}
+      </main>
       <BottomNav basePath="" />
     </div>
   );

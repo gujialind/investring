@@ -1,6 +1,6 @@
 import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
 import { subMonths } from "date-fns";
-import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
+import { collectPageErrors, expectSingleLine, expectDialogSingleScroll, dialogByTitle, pickCalendarDay, toISODate, openAppAndAuth, mockNavHistoryStress, expectNavHistoryGeometry, expectNavHistoryHScroll, measureNavDetailLayout, expectNavDetailColumns, expectTopNavDetailLayout, expectProductDetailIdentity, expectFullNameReadable, expectProductHeaderCollapsed, scrollWindowTo } from "./helpers";
 
 /**
  * #824 产品管理页列合并与净值型产品详情页。
@@ -624,7 +624,7 @@ test.describe("历史净值窄宽布局（#934）", () => {
     let lastGap = 0;
     for (const width of widths) {
       await page.setViewportSize({ width, height });
-      // 侧栏在 lg 边界有宽度过渡，等布局稳定再断言（#934 A2 口径）
+      // TopNav 在 lg 边界切换显示，等布局稳定再断言（#934/#944 A2 口径）
       await expect(async () => {
         const g = await expectNavHistoryGeometry(history, "product", `视口${width}`);
         lastGap = g.minTextGap;
@@ -661,7 +661,7 @@ test.describe("历史净值窄宽布局（#934）", () => {
     await expect(history.getByTestId("history-load-more")).toHaveCount(0);
   });
 
-  test("A2 桌面父布局：容器 799/800 降栏与侧栏联动", async ({ page }, testInfo) => {
+  test("A2 桌面父布局：容器 799/800 降栏与顶部导航几何", async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name === "mobile",
       "移动 variant 无桌面双栏布局（功能确实缺，#934 S4 仅改 desktop 分支）"
@@ -679,10 +679,10 @@ test.describe("历史净值窄宽布局（#934）", () => {
       }).toPass({ timeout: 5_000 });
     }
 
-    // 精确容器边界：按当前容器宽反推视口增量，量实际容器而非把 viewport 当容器
-    await page.setViewportSize({ width: 1280, height: 720 });
-    const base = await measureNavDetailLayout(history, "1280 基线");
-    const viewportAt800 = 1280 + (800 - base.containerWidth);
+    // 精确容器边界：在同一 <lg（main p-4）档内按容器宽反推视口增量，避免跨 lg 改 padding。
+    await page.setViewportSize({ width: 900, height: 720 });
+    const base = await measureNavDetailLayout(history, "900 基线");
+    const viewportAt800 = 900 + (800 - base.containerWidth);
     await page.setViewportSize({ width: viewportAt800, height: 720 });
     await expect(async () => {
       const m = await measureNavDetailLayout(history, "容器800");
@@ -698,23 +698,9 @@ test.describe("历史净值窄宽布局（#934）", () => {
       expect(m.tracks.length).toBe(1);
     }).toPass({ timeout: 5_000 });
 
-    // 1024 视口：展开侧栏单栏，收起后容器变宽应切双栏（等宽度过渡稳定）
+    // 1024 视口：顶部导航不占横向宽度，main 内容宽仍应让历史卡保持双栏。
     await page.setViewportSize({ width: 1024, height: 720 });
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 展开侧栏");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "收起侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 收起侧栏");
-      expectNavDetailColumns(m, "1024 收起侧栏");
-      expect(m.tracks.length).toBe(2);
-    }).toPass({ timeout: 5_000 });
-    await page.getByRole("button", { name: "展开侧栏" }).click();
-    await expect(async () => {
-      const m = await measureNavDetailLayout(history, "1024 再展开");
-      expect(m.tracks.length).toBe(1);
-    }).toPass({ timeout: 5_000 });
+    await expectTopNavDetailLayout(page, history, "1024 顶部导航");
   });
 
   test("A5 局部横滚：首末列可达、表头同步、键盘可滚、标题不动", async ({ page }, testInfo) => {

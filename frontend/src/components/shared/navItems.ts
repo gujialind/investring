@@ -10,13 +10,12 @@ import {
 } from "lucide-react";
 
 /**
- * 全站导航单源（#650）：Sidebar（桌面宽屏）、共享 BottomNav（桌面窄屏 + /m 一级 Tab）
- * 都从这份数据派生，取代原先三份各自维护的列表（layout/Sidebar、layout/MobileNav、
- * mobile/BottomNav）——改一项导航只改这里。
+ * 全站导航单源（#650）：TopNav（桌面宽屏）、共享 BottomNav（桌面窄屏 + /m 一级 Tab）
+ * 都从这份数据派生，取代原先三份各自维护的列表——改一项导航只改这里。
  *
- * - `inNav`：是否进桌面侧栏主导航（#878）。false 的项（投资人/平台/分类）改走**语境分布
+ * - `inNav`：是否进桌面顶部主导航（#878/#944）。false 的项（投资人/平台/分类）改走**语境分布
  *   入口**：投资人在组合页头部、平台与分类在产品页头部（见 PortfolioListContent /
- *   ProductsContent），侧栏不再列出，路由本身保留（入口式，不删页）。
+ *   ProductsContent），顶部导航不再列出，路由本身保留（入口式，不删页）。
  * - `adminOnly`：viewer 角色不出的项（viewer 只见首页/组合）。
  * - `mobileTab`：是否进移动端底部 Tab。false 的项（投资人/平台/分类）**不是移动端没有
  *   该页**，而是底部 Tab 位宽有限——每项 `min-w-[3.5rem]`（56px），iPhone 13 的 390px
@@ -32,7 +31,7 @@ export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
-  /** 进桌面侧栏主导航（#878）；false = 语境分布入口，侧栏不列出 */
+  /** 进桌面顶部主导航（#878/#944）；false = 语境分布入口，顶部导航不列出 */
   inNav: boolean;
   adminOnly: boolean;
   mobileTab: boolean;
@@ -41,7 +40,7 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "首页", icon: LayoutDashboard, inNav: true, adminOnly: false, mobileTab: true, entryHost: null },
-  // 投资人：语境分布入口在组合页头部（#878），侧栏/底部 Tab 不列出，返回宿主=组合
+  // 投资人：语境分布入口在组合页头部（#878），顶部导航/底部 Tab 不列出，返回宿主=组合
   { href: "/investors", label: "投资人", icon: Users, inNav: false, adminOnly: true, mobileTab: false, entryHost: "/portfolio" },
   { href: "/portfolio", label: "组合", icon: Briefcase, inNav: true, adminOnly: false, mobileTab: true, entryHost: null },
   { href: "/products", label: "产品", icon: Package, inNav: true, adminOnly: true, mobileTab: true, entryHost: null },
@@ -59,7 +58,7 @@ export function navItemsForRole(role: string | undefined): NavItem[] {
   return role === "admin" ? NAV_ITEMS : NAV_ITEMS.filter((item) => !item.adminOnly);
 }
 
-/** 桌面侧栏主导航项（#878）：角色过滤后再剔除语境分布入口（inNav:false） */
+/** 桌面顶部主导航项（#878/#944）：角色过滤后再剔除语境分布入口（inNav:false） */
 export function sidebarItemsForRole(role: string | undefined): NavItem[] {
   return navItemsForRole(role).filter((item) => item.inNav);
 }
@@ -70,11 +69,11 @@ export function mobileTabPaths(basePath: "" | "/m"): string[] {
 }
 
 /**
- * 不在该端主导航里的页面的站内出口（#650 验收第 4 条 / #894 补桌面侧 / #904 移入页头）：
+ * 不在该端主导航里的页面的站内出口（#650 验收第 4 条 / #894 补桌面导航 / #904 移入页头）：
  * 路径 → 返回到承载其页内入口的宿主页。由页头 `PageHeader` 面包屑槽消费（双端），
  * 布局不再渲染返回行。
  *
- * **判据按端取轴**：桌面看 `inNav`（侧栏）、移动看 `mobileTab`（底部 Tab）。这是两个独立
+ * **判据按端取轴**：桌面看 `inNav`（顶部导航）、移动看 `mobileTab`（底部 Tab）。这是两个独立
  * 的轴，今天 `inNav:false` 与 `mobileTab:false` 的集合恰好相同，沿用单轴会在将来出现
  * `inNav:false, mobileTab:true` 的项时静默漏掉桌面出口。
  *
