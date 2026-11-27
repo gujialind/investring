@@ -245,19 +245,19 @@ export default function PortfolioActionButtons({
 
     return (
       <div data-testid="portfolio-action-buttons">
-        <div className={isAdmin ? "grid grid-cols-[1fr_1fr_auto] gap-2" : "grid grid-cols-1 gap-2"}>
+        <div className={isAdmin ? "grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2" : "grid grid-cols-1 gap-2"}>
           {isAdmin && status !== "active" && <div className="col-span-2">{activateButton}</div>}
           {isAdmin && status === "active" && (
             <>
-              <Link href={`${basePath}/${portfolioCode}/trades`}>
-                <Button variant="outline" className="h-11 w-full">
-                  <ArrowRightLeft className="mr-2 h-4 w-4" />
+              <Link href={`${basePath}/${portfolioCode}/trades`} className="min-w-0">
+                <Button variant="outline" className="h-11 w-full px-2">
+                  <ArrowRightLeft className="mr-1 h-4 w-4 shrink-0" />
                   调仓
                 </Button>
               </Link>
-              <Link href={`${basePath}/${portfolioCode}/subscriptions`}>
-                <Button className="h-11 w-full">
-                  <Plus className="mr-2 h-4 w-4" />
+              <Link href={`${basePath}/${portfolioCode}/subscriptions`} className="min-w-0">
+                <Button className="h-11 w-full px-2">
+                  <Plus className="mr-1 h-4 w-4 shrink-0" />
                   申购赎回
                 </Button>
               </Link>
