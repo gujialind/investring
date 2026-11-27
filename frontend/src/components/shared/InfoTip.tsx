@@ -15,6 +15,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const suppressFocusOpen = useRef(false);
+  const focusPinned = useRef(false);
   const focusWithinContent = useRef(false);
 
   const cancelClose = () => {
@@ -25,11 +26,13 @@ export default function InfoTip({ label, content }: InfoTipProps) {
   const closeSoon = () => {
     cancelClose();
     closeTimer.current = setTimeout(() => {
+      focusPinned.current = false;
       setOpen(false);
     }, 120);
   };
 
   const canHover = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  const hoverCloseSuppressed = () => focusPinned.current || focusWithinContent.current;
 
   useEffect(
     () => () => {
@@ -43,6 +46,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
       open={open}
       onOpenChange={(next) => {
         cancelClose();
+        if (!next) focusPinned.current = false;
         setOpen(next);
       }}
     >
@@ -57,6 +61,7 @@ export default function InfoTip({ label, content }: InfoTipProps) {
             className="absolute inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             onPointerDown={() => {
               suppressFocusOpen.current = false;
+              focusPinned.current = false;
             }}
             onKeyDown={(event) => {
               if (event.key === "Tab") suppressFocusOpen.current = false;
@@ -68,7 +73,9 @@ export default function InfoTip({ label, content }: InfoTipProps) {
               }
             }}
             onPointerLeave={(event) => {
-              if (event.pointerType === "mouse" && canHover()) closeSoon();
+              if (event.pointerType === "mouse" && canHover() && !hoverCloseSuppressed()) {
+                closeSoon();
+              }
             }}
             onFocus={(event) => {
               if (suppressFocusOpen.current) {
@@ -76,14 +83,19 @@ export default function InfoTip({ label, content }: InfoTipProps) {
                 return;
               }
               if (event.currentTarget.matches(":focus-visible")) {
+                focusPinned.current = true;
                 cancelClose();
                 setOpen(true);
               }
             }}
             onBlur={(event) => {
               const next = event.relatedTarget as Node | null;
-              if (next && contentRef.current?.contains(next)) return;
+              if (next && contentRef.current?.contains(next)) {
+                focusPinned.current = false;
+                return;
+              }
               if (!next && open) return;
+              focusPinned.current = false;
               closeSoon();
             }}
             onClick={(event) => {
@@ -129,9 +141,16 @@ export default function InfoTip({ label, content }: InfoTipProps) {
           if (event.pointerType === "mouse" && canHover()) cancelClose();
         }}
         onPointerLeave={(event) => {
-          if (event.pointerType === "mouse" && canHover()) closeSoon();
+          if (event.pointerType === "mouse" && canHover() && !hoverCloseSuppressed()) {
+            closeSoon();
+          }
         }}
-        onBlur={closeSoon}
+        onBlur={(event) => {
+          const next = event.relatedTarget as Node | null;
+          if (next && contentRef.current?.contains(next)) return;
+          if (!next && open) return;
+          closeSoon();
+        }}
       >
         {content}
       </PopoverContent>

@@ -56,6 +56,15 @@ test.describe("共享说明触发器（#943 S2）", () => {
       await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
       await expect(content).toHaveCount(0);
 
+      await trigger.hover();
+      await expect(content).toBeVisible();
+      await content.click();
+      await trigger.hover();
+      await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
+      await expect(content).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(content).toHaveCount(0);
+
       await focusProbe.focus();
       await trigger.hover();
       await expect(content).toBeVisible();
@@ -69,6 +78,15 @@ test.describe("共享说明触发器（#943 S2）", () => {
       const shadow = await trigger.evaluate((element) => getComputedStyle(element).boxShadow);
       expect(shadow).not.toBe("none");
       await page.keyboard.press("Enter");
+      await expect(content).toHaveCount(0);
+      await page.keyboard.press("Tab");
+      await trigger.focus();
+      await expect(content).toBeVisible();
+      await trigger.hover();
+      await content.hover();
+      await page.getByRole("heading", { name: "产品详情", exact: true }).hover();
+      await expect(content).toBeVisible();
+      await page.keyboard.press("Escape");
       await expect(content).toHaveCount(0);
       await page.keyboard.press("Tab");
       await trigger.focus();
