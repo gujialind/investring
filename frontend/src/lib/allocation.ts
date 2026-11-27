@@ -22,6 +22,9 @@ export const CASH_PRODUCT_CODE = "CASH";
 export const PSEUDO_IN_TRANSIT_CODE = "__IN_TRANSIT__";
 export const PSEUDO_OTHER_CODE = "__OTHER__";
 
+const OTHER_LABEL = "其他";
+const DEFAULT_ALLOCATION_MAX_SLICES = 6;
+
 export interface AllocationItem {
   /** 大类展示名（维度 name / 在途 / 其他） */
   key: string;
@@ -121,7 +124,7 @@ export function buildAllocation(
   }
   if (hasOther) {
     items.push({
-      key: "其他",
+      key: OTHER_LABEL,
       code: PSEUDO_OTHER_CODE,
       value: otherValue,
       percent: otherPercent,
@@ -131,10 +134,11 @@ export function buildAllocation(
   return items;
 }
 
+/** 按市值稳定降序；尾部折叠为「其他」并守恒金额/占比，折叠项也参与降序。 */
 export function sortAllocationItems(
   items: AllocationItem[],
   theme: ChartTheme,
-  maxSlices: number = 6
+  maxSlices: number = DEFAULT_ALLOCATION_MAX_SLICES
 ): AllocationItem[] {
   const sorted = items
     .map((item, index) => ({ item, index }))

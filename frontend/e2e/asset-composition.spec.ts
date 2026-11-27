@@ -1,15 +1,31 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { Position } from '../src/types/position';
 import { E2E_ACTIVE, gotoPortfolioDetail } from './helpers';
 
 const EXPECTED = [
-  { code: 'ASSET_STOCK', name: '股票', value: 400, percent: 40 },
-  { code: 'ASSET_CASH', name: '现金', value: 250, percent: 25 },
-  { code: 'ASSET_BOND', name: '债券', value: 200, percent: 20 },
-  { code: '__IN_TRANSIT__', name: '在途', value: 100, percent: 10 },
-  { code: '__OTHER__', name: '其他', value: 50, percent: 5 },
+  { code: 'ASSET_STOCK', name: '股票', value: 400, percent: 38.1 },
+  { code: 'ASSET_CASH', name: '现金', value: 250, percent: 23.8 },
+  { code: 'ASSET_BOND', name: '债券', value: 200, percent: 19 },
+  { code: '__IN_TRANSIT__', name: '在途', value: 100, percent: 9.5 },
+  // 「其他」折叠未知 50（4.8%）与另类 20（1.9%）；保留 JS 相加的浮点结果。
+  { code: '__OTHER__', name: '其他', value: 70, percent: 4.8 + 1.9 },
+  { code: 'ASSET_COMMODITY', name: '商品', value: 30, percent: 2.9 },
 ] as const;
 
-const POSITIONS = [
+const ASSET_CLASSES = [
+  { code: 'ASSET_STOCK', name: '股票', sort_order: 1 },
+  { code: 'ASSET_BOND', name: '债券', sort_order: 2 },
+  { code: 'ASSET_COMMODITY', name: '商品', sort_order: 3 },
+  { code: 'ASSET_CASH', name: '现金', sort_order: 4 },
+  { code: 'ASSET_ALTERNATIVE', name: '另类', sort_order: 5 },
+].map((item) => ({
+  ...item,
+  dimension: 'asset_class',
+  is_active: true,
+  applicable_asset_classes: [],
+}));
+
+const POSITIONS: Position[] = [
   {
     id: 9101,
     portfolio_code: E2E_ACTIVE,
@@ -44,15 +60,35 @@ const POSITIONS = [
     market_value: 50,
     asset_class_code: 'ASSET_UNKNOWN',
   },
+  {
+    id: 9106,
+    portfolio_code: E2E_ACTIVE,
+    product_code: 'COMMODITY_FIXTURE',
+    market_value: 30,
+    asset_class_code: 'ASSET_COMMODITY',
+  },
+  {
+    id: 9107,
+    portfolio_code: E2E_ACTIVE,
+    product_code: 'ALTERNATIVE_FIXTURE',
+    market_value: 20,
+    asset_class_code: 'ASSET_ALTERNATIVE',
+  },
 ].map((position) => ({ ...position, snapshot_date: '2026-11-26' }));
 
-async function mockAllocationPositions(page: Page) {
+async function mockAllocationData(page: Page, positions = POSITIONS) {
+  await page.route(
+    (url) => url.pathname === '/api/asset-classifications' && url.searchParams.get('dimension') === 'asset_class',
+    (route) => route.fulfill({
+      json: { items: ASSET_CLASSES, dimension_rules: {}, total: ASSET_CLASSES.length },
+    }),
+  );
   await page.route(
     (url) => url.pathname === '/api/positions' && url.searchParams.get('portfolio_code') === E2E_ACTIVE,
     (route) =>
       route.fulfill({
         status: 200,
-        json: { items: POSITIONS, total: POSITIONS.length, page: 1, page_size: 100 },
+        json: { items: positions, total: positions.length, page: 1, page_size: 100 },
       })
   );
 }
@@ -69,7 +105,7 @@ for (const theme of ['light', 'dark'] as const) {
   test.describe(`资产构成 ${theme}`, () => {
     test.beforeEach(async ({ page }) => {
       await page.addInitScript((value) => localStorage.setItem('theme', value), theme);
-      await mockAllocationPositions(page);
+      await mockAllocationData(page);
     });
 
     test('默认条形图按市值降序、占比合计 100.0，焦点与 hover 显示金额', async ({ page }) => {
@@ -174,7 +210,27 @@ for (const theme of ['light', 'dark'] as const) {
       if (testInfo.project.name === 'mobile') {
         await page.setViewportSize({ width: 360, height: 800 });
       }
-      const card = await openComposition(page);
+      await mockAllocationData(page, [{ ...POSITIONS[0], market_value: 1_234_567.89 }]);
+      await gotoPortfolioDetail(page, E2E_ACTIVE);
+      const card = page.getByTestId('asset-composition-card');
+      await expect(card).toBeVisible();
+      const row = card.getByTestId('asset-allocation-row');
+      await expect(row).toHaveCount(1);
+      await expect(row).toContainText('100.0%');
+      await expect(row).toContainText('¥1,234,567.89');
+      const columns = await row.evaluate((element) => {
+        const children = Array.from(element.children) as HTMLElement[];
+        const track = children[1].getBoundingClientRect();
+        const percent = children[2].getBoundingClientRect();
+        const amount = children[3].getBoundingClientRect();
+        const box = element.getBoundingClientRect();
+        return {
+          percentAfterTrack: percent.left >= track.right,
+          amountInsideRow: amount.right <= box.right + 1,
+        };
+      });
+      expect(columns.percentAfterTrack).toBe(true);
+      expect(columns.amountInsideRow).toBe(true);
       const cardBox = await card.boundingBox();
       expect(cardBox).not.toBeNull();
       expect(cardBox!.width).toBeLessThanOrEqual(360.5);

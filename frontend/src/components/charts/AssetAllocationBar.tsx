@@ -13,6 +13,8 @@ interface AssetAllocationBarProps {
   items: AllocationItem[];
 }
 
+const ALLOCATION_GRID_COLUMNS = "grid-cols-[4rem_minmax(1.5rem,1fr)_4rem_6rem]";
+
 export default function AssetAllocationBar({ items }: AssetAllocationBarProps) {
   if (!items.length) {
     return (
@@ -26,7 +28,7 @@ export default function AssetAllocationBar({ items }: AssetAllocationBarProps) {
     <TooltipProvider delayDuration={200}>
       <div data-testid="asset-allocation-bar">
         <div
-          className="mb-1 grid grid-cols-[4rem_minmax(1.5rem,1fr)_3rem_6rem] items-center gap-0.5 text-xs text-muted-foreground"
+          className={`mb-1 grid ${ALLOCATION_GRID_COLUMNS} items-center gap-0.5 text-xs text-muted-foreground`}
           aria-hidden="true"
         >
           <span>分类</span>
@@ -41,6 +43,7 @@ export default function AssetAllocationBar({ items }: AssetAllocationBarProps) {
           {items.map((item) => {
             const percent = `${item.percent.toFixed(1)}%`;
             const amount = formatCurrency(item.value);
+            const meterPercent = Math.min(100, Math.max(0, item.percent));
             return (
               <Tooltip key={item.code}>
                 <TooltipTrigger asChild>
@@ -50,11 +53,11 @@ export default function AssetAllocationBar({ items }: AssetAllocationBarProps) {
                     aria-label={`${item.key}占比`}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-valuenow={item.percent}
+                    aria-valuenow={meterPercent}
                     aria-valuetext={`${percent}，${amount}`}
                     data-testid="asset-allocation-row"
                     data-allocation-code={item.code}
-                    className="grid w-full grid-cols-[4rem_minmax(1.5rem,1fr)_3rem_6rem] items-center gap-0.5 rounded-sm py-2 text-sm outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+                    className={`grid w-full ${ALLOCATION_GRID_COLUMNS} items-center gap-0.5 rounded-sm py-2 text-sm outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card`}
                   >
                     <span className="min-w-0 truncate text-foreground-secondary">
                       {item.key}
@@ -67,13 +70,13 @@ export default function AssetAllocationBar({ items }: AssetAllocationBarProps) {
                       <span
                         data-testid="asset-allocation-fill"
                         className="block h-full rounded-full"
-                        style={{ width: `${item.percent}%`, backgroundColor: item.color }}
+                        style={{ width: `${meterPercent}%`, backgroundColor: item.color }}
                       />
                     </span>
                     <span className="text-right font-semibold tabular-nums">
                       {percent}
                     </span>
-                    <span className="text-right tabular-nums">
+                    <span className="min-w-0 truncate text-right tabular-nums">
                       {amount}
                     </span>
                   </div>
