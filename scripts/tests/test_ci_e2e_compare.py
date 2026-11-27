@@ -231,7 +231,12 @@ def naming_problems(prefix: str, compare_lines: list[str], stack_lines: list[str
 
 
 def capture_problems(stack_text: str, stack_lines: list[str], source: str) -> list[str]:
-    """capture 分支与 baseline 换目录步里「改了就静默失真」的结构约束。"""
+    """capture 分支与 baseline 换目录步里「改了就静默失真」的结构约束。
+
+    `--trace retain-on-failure`（#958）与 `--workers=2` 同属采集口径：配置缺省
+    `on-first-retry` 在 `--retries=0` 下永不产出 trace，删掉显式开关不会让任何用例变红，
+    只会让下一次 mobile 抖动红退回到「没有 trace 可查」——正是 #958 立项时的证据缺口。
+    """
     problems = []
     run_text = step_run_block(stack_text, step=CAPTURE_RUN_STEP, source=source)
     joined = " ".join(code_lines(run_text))
@@ -242,6 +247,12 @@ def capture_problems(stack_text: str, stack_lines: list[str], source: str) -> li
                 + ("（retry 会把 flaky 洗成 passed，形态对比失真）" if "retries" in token
                    else "（并发数一变，两侧时序分布不同，假 diff）")
             )
+    if "--trace retain-on-failure" not in joined:
+        problems.append(
+            "capture 运行步丢了 `--trace retain-on-failure`——"
+            "配置缺省 on-first-retry 在 --retries=0 下不产 trace，"
+            "mobile 抖动红只能靠截图猜帧间隔（#958 证据缺口）"
+        )
     swap = code_lines(step_run_block(stack_text, step=SWAP_STEP, source=source))
     if f"if: inputs.mode == 'capture' && inputs.side == '{SIDES[0]}'" not in code_lines(
         step_body(stack_text, step=SWAP_STEP, source=source)
@@ -408,7 +419,7 @@ def compliant_capture_stack() -> str:
             "        run: |",
             "          rc=0",
             "          npx playwright test --retries=${{ inputs.retries }} --workers=2"
-            " --reporter=list,json || rc=$?",
+            " --trace retain-on-failure --reporter=list,json || rc=$?",
             f"      - name: {RAW_UPLOAD_STEP}",
             "        uses: actions/upload-artifact@v7",
             "        with:",
@@ -690,6 +701,13 @@ class TestGuardIsDiscriminating:
     def test_capture_workers_lost_is_caught(self):
         mutated = compliant_capture_stack().replace(" --workers=2", "")
         assert capture_problems(mutated, code_lines(mutated), "合成 capture")
+
+    def test_capture_trace_lost_is_caught(self):
+        """#958：删掉 trace 开关不会让任何用例变红，只会让下次抖动红没有证据可查。"""
+        mutated = compliant_capture_stack().replace(" --trace retain-on-failure", "")
+        assert mutated != compliant_capture_stack()
+        problems = capture_problems(mutated, code_lines(mutated), "合成 capture")
+        assert any("trace" in p for p in problems), problems
 
     def test_baseline_sha_regression_is_caught(self):
         """#827：对照基线改回 base.sha 必须被点名，否则落后分支的假回归会复活。"""
