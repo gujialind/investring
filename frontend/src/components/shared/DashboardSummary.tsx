@@ -35,9 +35,15 @@ import {
 } from "@/lib/utils";
 import type { Subscription } from "@/types/subscription";
 import type { Trade } from "@/types/trade";
-import { cashLegOrigin, isCashLeg } from "@/lib/tradePairs";
+import {
+  cashLegOrigin,
+  cashRowLabel,
+  groupTradeRows,
+  isCashLeg,
+} from "@/lib/tradePairs";
 
 const PENDING_PREVIEW_LIMIT = 6;
+const RECENT_PREVIEW_LIMIT = 5;
 
 interface DashboardSummaryProps {
   summary: DashboardSummaryData;
@@ -80,7 +86,8 @@ function subscriptionAmount(subscription: Subscription): string {
 }
 
 function tradeAmount(trade: Trade): string {
-  return trade.trade_type === "buy" ? formatCurrency(trade.amount) : formatSharesUnit(trade.shares);
+  if (isCashLeg(trade) || trade.trade_type === "buy") return formatCurrency(trade.amount);
+  return formatSharesUnit(trade.shares);
 }
 
 function PendingAgendaRow({ entry, basePath }: { entry: PendingItem; basePath: "" | "/m" }) {
@@ -97,12 +104,16 @@ function PendingAgendaRow({ entry, basePath }: { entry: PendingItem; basePath: "
     amount = subscriptionAmount(item);
   } else {
     const item = entry.item;
-    title = `${item.trade_type === "buy" ? "买入" : "卖出"} · ${formatProductCodeLabel(
-      item.display_code,
-      item.product_code,
-      item.market,
-    )}`;
+    const cashLeg = isCashLeg(item);
+    title = cashLeg
+      ? cashRowLabel(item)
+      : `${item.trade_type === "buy" ? "买入" : "卖出"} · ${formatProductCodeLabel(
+          item.display_code,
+          item.product_code,
+          item.market,
+        )}`;
     meta = `组合 ${portfolioCode}`;
+    if (cashLeg && item.platform_code) meta += ` · 平台 ${item.platform_code}`;
     date = item.trade_date;
     amount = tradeAmount(item);
   }
@@ -143,12 +154,19 @@ function RecentActivityRow({ entry }: { entry: RecentItem }) {
     amount = subscriptionAmount(item);
   } else {
     const item = entry.item;
-    title = item.trade_type === "buy" ? "买入" : "卖出";
-    identity = `${formatProductCodeLabel(
-      item.display_code,
-      item.product_code,
-      item.market,
-    )} · ${item.portfolio_code}`;
+    if (isCashLeg(item)) {
+      title = cashRowLabel(item);
+      identity = item.platform_code
+        ? `${item.portfolio_code} · 平台 ${item.platform_code}`
+        : item.portfolio_code;
+    } else {
+      title = item.trade_type === "buy" ? "买入" : "卖出";
+      identity = `${formatProductCodeLabel(
+        item.display_code,
+        item.product_code,
+        item.market,
+      )} · ${item.portfolio_code}`;
+    }
     amount = tradeAmount(item);
   }
 
@@ -201,6 +219,18 @@ export default function DashboardSummary({
       .map((item) => ({ kind: "trade" as const, id: item.id, item })),
   ];
   const recentItems: RecentItem[] = useMemo(() => {
+    const visibleTrades = trades.filter(
+      (item) => !(isCashLeg(item) && cashLegOrigin(item) === "subscription"),
+    );
+    const tradeItems = groupTradeRows(visibleTrades).map((row) => {
+      const item = row.kind === "pair" ? row.main : row.trade;
+      return {
+        kind: "trade" as const,
+        id: item.id,
+        item,
+        date: item.trade_date,
+      };
+    });
     const items: RecentItem[] = [
       ...subscriptions.map((item) => ({
         kind: "subscription" as const,
@@ -208,16 +238,9 @@ export default function DashboardSummary({
         item,
         date: item.apply_date,
       })),
-      ...trades
-        .filter((item) => !(isCashLeg(item) && cashLegOrigin(item) === "subscription"))
-        .map((item) => ({
-          kind: "trade" as const,
-          id: item.id,
-          item,
-          date: item.trade_date,
-        })),
+      ...tradeItems,
     ];
-    return items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    return items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, RECENT_PREVIEW_LIMIT);
   }, [subscriptions, trades]);
 
   return (

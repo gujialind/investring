@@ -180,6 +180,190 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
 
+  test('最近活动配对调仓与平台转移现金腿，并过滤申赎现金腿', async ({ page }) => {
+    const pairedTrades: Trade[] = [
+      {
+        id: 9401,
+        portfolio_code: 'ESP_LONG',
+        product_code: '510300.SH',
+        display_code: '510300.SH',
+        market: 'CN_EXCHANGE',
+        platform_code: 'HBZQ',
+        trade_type: 'buy',
+        amount: 8200,
+        fee: 0,
+        trade_date: '2026-11-26',
+        status: 'confirmed',
+        transfer_group: 'rebal_dashboard1',
+      },
+      {
+        id: 9402,
+        portfolio_code: 'ESP_LONG',
+        product_code: 'CASH',
+        market: '',
+        platform_code: 'HBZQ',
+        trade_type: 'sell',
+        amount: 8200,
+        fee: 0,
+        trade_date: '2026-11-26',
+        confirm_date: '2026-11-26',
+        status: 'confirmed',
+        transfer_group: 'rebal_dashboard1',
+      },
+      {
+        id: 9403,
+        portfolio_code: 'ESP_SHORT',
+        product_code: 'CASH',
+        market: '',
+        platform_code: 'HBZQ',
+        trade_type: 'sell',
+        amount: 500,
+        fee: 0,
+        trade_date: '2026-11-25',
+        confirm_date: '2026-11-25',
+        status: 'confirmed',
+        transfer_group: 'a1b2c3d4e5f6',
+      },
+      {
+        id: 9404,
+        portfolio_code: 'ESP_SHORT',
+        product_code: 'CASH',
+        market: '',
+        platform_code: 'MYCF',
+        trade_type: 'buy',
+        amount: 500,
+        fee: 0,
+        trade_date: '2026-11-25',
+        confirm_date: '2026-11-25',
+        status: 'confirmed',
+        transfer_group: 'a1b2c3d4e5f6',
+      },
+      {
+        id: 9405,
+        portfolio_code: 'ESP_LONG',
+        product_code: 'CASH',
+        market: '',
+        platform_code: 'HBZQ',
+        trade_type: 'buy',
+        amount: 100000,
+        fee: 0,
+        trade_date: '2026-11-24',
+        confirm_date: '2026-11-24',
+        status: 'confirmed',
+        transfer_group: 'sub_9102',
+      },
+    ];
+    await mockDashboard(page, {
+      ...reliableSummary,
+      pending_subscription_count: 0,
+      pending_trade_count: 0,
+    });
+    await page.route(
+      (url) => url.pathname === '/api/subscriptions' && url.searchParams.get('page_size') === '100',
+      (route) => route.fulfill({
+        json: {
+          items: [subscriptions[1]],
+          total: 1,
+          page: 1,
+          page_size: 100,
+          total_pages: 1,
+        },
+      }),
+    );
+    await page.route(
+      (url) => url.pathname === '/api/trades' && url.searchParams.get('page_size') === '100',
+      (route) => route.fulfill({
+        json: {
+          items: pairedTrades,
+          total: pairedTrades.length,
+          total_groups: pairedTrades.length,
+          total_pages: 1,
+          page: 1,
+          page_size: 100,
+        },
+      }),
+    );
+    await page.goto('/dashboard');
+
+    const rows = page.getByTestId('dashboard-recent-item');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText('买入');
+    await expect(rows.nth(0)).toContainText('510300.SH · ESP_LONG');
+    await expect(rows.nth(1)).toContainText('现金转出');
+    await expect(rows.nth(1)).toContainText('ESP_SHORT · 平台 HBZQ');
+    await expect(rows.nth(1)).toContainText('¥500.00');
+    await expect(rows.nth(2)).toContainText('申购');
+    await expect(page.getByTestId('dashboard-recent-activity')).not.toContainText('CASH');
+  });
+
+  test('待确认现金到账腿显示现金待到账，最近活动仍只显示调仓主腿', async ({ page }) => {
+    const arrivalTrades: Trade[] = [
+      {
+        id: 9501,
+        portfolio_code: 'ESP_SHORT',
+        product_code: '000300.OF',
+        display_code: '000300.OF',
+        market: 'CN_OTC',
+        platform_code: 'HBZQ',
+        trade_type: 'sell',
+        shares: 300,
+        fee: 0,
+        trade_date: '2026-11-26',
+        status: 'confirmed',
+        transfer_group: 'rebal_arrival01',
+      },
+      {
+        id: 9502,
+        portfolio_code: 'ESP_SHORT',
+        product_code: 'CASH',
+        market: '',
+        platform_code: 'HBZQ',
+        trade_type: 'buy',
+        amount: 2000,
+        fee: 0,
+        trade_date: '2026-11-26',
+        confirm_date: '2026-11-30',
+        status: 'pending',
+        transfer_group: 'rebal_arrival01',
+      },
+    ];
+    await mockDashboard(page, {
+      ...reliableSummary,
+      pending_subscription_count: 0,
+      pending_trade_count: 1,
+    });
+    await page.route(
+      (url) => url.pathname === '/api/subscriptions' && url.searchParams.get('page_size') === '100',
+      (route) => route.fulfill({
+        json: { items: [], total: 0, page: 1, page_size: 100, total_pages: 0 },
+      }),
+    );
+    await page.route(
+      (url) => url.pathname === '/api/trades' && url.searchParams.get('page_size') === '100',
+      (route) => route.fulfill({
+        json: {
+          items: arrivalTrades,
+          total: arrivalTrades.length,
+          total_groups: arrivalTrades.length,
+          total_pages: 1,
+          page: 1,
+          page_size: 100,
+        },
+      }),
+    );
+    await page.goto('/dashboard');
+
+    const pending = page.getByTestId('dashboard-pending-item');
+    await expect(pending).toHaveCount(1);
+    await expect(pending).toContainText('现金待到账');
+    await expect(pending).toContainText('组合 ESP_SHORT · 平台 HBZQ');
+    await expect(pending).toContainText('¥2,000.00');
+    await expect(pending).not.toContainText('买入 · CASH');
+    await expect(page.getByTestId('dashboard-recent-item')).toHaveCount(1);
+    await expect(page.getByTestId('dashboard-recent-item')).toContainText('000300.OF · ESP_SHORT');
+    await expect(page.getByTestId('dashboard-recent-activity')).not.toContainText('CASH');
+  });
+
   test('短历史 XIRR 显示 -- 与后端给出的持有期不足原因', async ({ page }, testInfo) => {
     await mockDashboard(page, {
       ...reliableSummary,
