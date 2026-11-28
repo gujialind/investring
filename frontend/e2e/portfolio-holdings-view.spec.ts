@@ -209,6 +209,15 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
         /累计收益/,
         /最新收益\(\d{2}\/\d{2}\)/,
       ]);
+      await expect(table.getByRole('columnheader', { name: /累计收益/ })).toHaveClass(/number-cell/);
+      const tableGeometry = await table.evaluate((element) => {
+        const container = element.parentElement!;
+        return { clientHeight: container.clientHeight, scrollHeight: container.scrollHeight };
+      });
+      expect(
+        tableGeometry.scrollHeight,
+        '内嵌持仓账表不得形成独立纵向滚动区',
+      ).toBeLessThanOrEqual(tableGeometry.clientHeight + 1);
       await expect(productRow.getByTestId('holding-ratio-value')).toHaveText(/\d+\.\d%/);
     }
 

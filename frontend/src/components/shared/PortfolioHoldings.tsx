@@ -20,8 +20,11 @@ import {
   buildCardPercentMap,
   buildProductSections,
   CUMULATIVE_PROFIT_INFO_TIP,
+  formatHoldingProfit,
+  holdingSnapshotMmdd,
   MOBILE_PRODUCT_RETURN_PREFIX,
   productCardKey,
+  productDetailHref,
   sumGroupPercent,
   type HoldingProductSection,
 } from "@/lib/holdings";
@@ -170,12 +173,6 @@ function SubDimSwitchRow({
   );
 }
 
-function formatLedgerSignedNumber(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "--";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${formatNumber(value)}`;
-}
-
 function DesktopProductTable({
   products,
   percentOf,
@@ -187,15 +184,18 @@ function DesktopProductTable({
   snapshotDate?: string | null;
   productLinkPrefix: string;
 }) {
-  const mmdd = snapshotDate ? snapshotDate.slice(5, 10).replace("-", "/") : "";
+  const mmdd = holdingSnapshotMmdd(snapshotDate);
   return (
-    <Table data-testid="holding-product-table">
-      <TableHeader className="lg:bg-background">
+    <Table
+      data-testid="holding-product-table"
+      containerClassName="lg:max-h-none"
+    >
+      <TableHeader className="lg:static lg:bg-background">
         <TableRow>
           <TableHead>产品</TableHead>
           <TableHead className="number-cell">市值</TableHead>
           <TableHead className="number-cell">占比</TableHead>
-          <TableHead>
+          <TableHead className="number-cell">
             <span className="inline-flex items-center">
               累计收益
               <InfoTip {...CUMULATIVE_PROFIT_INFO_TIP} />
@@ -209,7 +209,7 @@ function DesktopProductTable({
       <TableBody>
         {products.map((product) => {
           const isCash = product.product_code === CASH_PRODUCT_CODE;
-          const href = `${productLinkPrefix}/${encodeURIComponent(product.product_code)}?market=${encodeURIComponent(product.market)}`;
+          const href = productDetailHref(productLinkPrefix, product);
           return (
             <TableRow key={productCardKey(product)} data-testid="holding-product-row">
               <TableCell>
@@ -248,7 +248,7 @@ function DesktopProductTable({
                   !isCash && getReturnColorClass(product.cumulative_profit),
                 )}
               >
-                {isCash ? null : formatLedgerSignedNumber(product.cumulative_profit)}
+                {isCash ? null : formatHoldingProfit(product.cumulative_profit)}
               </TableCell>
               <TableCell
                 data-testid="daily-profit-value"
@@ -257,7 +257,7 @@ function DesktopProductTable({
                   !isCash && getReturnColorClass(product.daily_profit),
                 )}
               >
-                {isCash ? null : formatLedgerSignedNumber(product.daily_profit)}
+                {isCash ? null : formatHoldingProfit(product.daily_profit)}
               </TableCell>
             </TableRow>
           );
@@ -279,8 +279,11 @@ function DesktopPlatformTable({
   basePath: string;
 }) {
   return (
-    <Table data-testid="holding-platform-table">
-      <TableHeader className="lg:bg-background">
+    <Table
+      data-testid="holding-platform-table"
+      containerClassName="lg:max-h-none"
+    >
+      <TableHeader className="lg:static lg:bg-background">
         <TableRow>
           <TableHead>平台</TableHead>
           <TableHead className="number-cell">市值</TableHead>
@@ -471,7 +474,7 @@ function ProductSections({
                             snapshotDate={snapshotDate}
                             variant="mobile"
                             returnFocusKey={portfolioCode}
-                            href={`${productLinkPrefix}/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
+                            href={productDetailHref(productLinkPrefix, p)}
                           />
                         ))
                       )}

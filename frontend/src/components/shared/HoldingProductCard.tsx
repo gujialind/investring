@@ -3,23 +3,21 @@
 import Link from "next/link";
 import type { HoldingProductAggregate } from "@/types/holding";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
-import { CUMULATIVE_PROFIT_INFO_TIP, MOBILE_PRODUCT_RETURN_PREFIX, productCardKey } from "@/lib/holdings";
+import {
+  CUMULATIVE_PROFIT_INFO_TIP,
+  formatHoldingProfit,
+  holdingSnapshotMmdd,
+  MOBILE_PRODUCT_RETURN_PREFIX,
+  productCardKey,
+} from "@/lib/holdings";
 import {
   cn,
   formatCurrency,
   formatMarketName,
-  formatNumber,
   formatProductCodeLabel,
   getReturnColorClass,
 } from "@/lib/utils";
 import InfoTip from "./InfoTip";
-
-/** 带符号收益（卡片「累计收益/最新收益」列：纯数字不带 ¥，对齐 M1/D1 设计稿） */
-function formatSignedNumber(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "--";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${formatNumber(value)}`;
-}
 
 /**
  * #595 按产品视图的持仓产品卡（跨平台聚合，M1/D1）：
@@ -61,7 +59,7 @@ export default function HoldingProductCard({
     product.product_code,
     product.market
   );
-  const mmdd = snapshotDate ? snapshotDate.slice(5, 10).replace("-", "/") : "";
+  const mmdd = holdingSnapshotMmdd(snapshotDate);
   return (
     <div
       data-testid="holding-product-card"
@@ -138,7 +136,7 @@ export default function HoldingProductCard({
                   product.cumulative_profit
                 )}`}
               >
-                {formatSignedNumber(product.cumulative_profit)}
+                {formatHoldingProfit(product.cumulative_profit)}
               </div>
             </div>
             <div className="flex-1 min-w-0">
@@ -151,7 +149,7 @@ export default function HoldingProductCard({
                   product.daily_profit
                 )}`}
               >
-                {formatSignedNumber(product.daily_profit)}
+                {formatHoldingProfit(product.daily_profit)}
               </div>
             </div>
           </div>

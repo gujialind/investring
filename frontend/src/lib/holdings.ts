@@ -21,12 +21,29 @@ import {
   type SubDimOverrides,
 } from "@/lib/dimensions";
 import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
-import { largestRemainderPercents } from "@/lib/utils";
+import { formatNumber, largestRemainderPercents } from "@/lib/utils";
 
 export const CUMULATIVE_PROFIT_INFO_TIP = {
   label: "查看累计收益说明",
   content: "累计收益含已卖出实现盈亏",
 } as const;
+
+export function formatHoldingProfit(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "--";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value)}`;
+}
+
+export function holdingSnapshotMmdd(snapshotDate?: string | null): string {
+  return snapshotDate ? snapshotDate.slice(5, 10).replace("-", "/") : "";
+}
+
+export function productDetailHref(
+  productLinkPrefix: string,
+  product: HoldingProductAggregate,
+): string {
+  return `${productLinkPrefix}/${encodeURIComponent(product.product_code)}?market=${encodeURIComponent(product.market)}`;
+}
 
 export const MOBILE_PRODUCT_RETURN_PREFIX = "investring:mobile-product-return:";
 
