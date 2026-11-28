@@ -211,10 +211,8 @@ for (const theme of ['light', 'dark'] as const) {
       ).toEqual(EXPECTED.map(() => ({ outline: 'none', shadow: 'none' })));
     });
 
-    test('360px 资产栏不横向溢出，可选饼图强制上下排列', async ({ page }, testInfo) => {
-      if (testInfo.project.name === 'mobile') {
-        await page.setViewportSize({ width: 360, height: 800 });
-      }
+    test('360px 资产栏不横向溢出，可选饼图强制上下排列', async ({ page }) => {
+      await page.setViewportSize({ width: 360, height: 800 });
       await mockAllocationData(page, [{ ...POSITIONS[0], market_value: 1_234_567.89 }]);
       await gotoPortfolioDetail(page, E2E_ACTIVE);
       const card = page.getByTestId('asset-composition-card');
