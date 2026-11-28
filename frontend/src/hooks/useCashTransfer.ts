@@ -31,6 +31,7 @@ export function useCreateCashTransfer(portfolioCode: string) {
       // 现金流水页读侧（列表/四卡/构成，#727 Blocker）：转移两腿都是现金流水行
       queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
+      queryClient.invalidateQueries({ queryKey: queryKeys.trades.root });
       addToast({
         type: "success",
         title: "转移成功",
@@ -59,6 +60,7 @@ export function useConfirmCashTransfer(portfolioCode: string) {
       queryClient.invalidateQueries({ queryKey: ["positions", portfolioCode] });
       queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
+      queryClient.invalidateQueries({ queryKey: queryKeys.trades.root });
       addToast({
         type: "success",
         title: "确认成功",

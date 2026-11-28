@@ -358,6 +358,8 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(pending).toContainText('现金待到账');
     await expect(pending).toContainText('组合 ESP_SHORT · 平台 HBZQ');
     await expect(pending).toContainText('¥2,000.00');
+    await expect(pending).toContainText('2026-11-30');
+    await expect(pending).not.toContainText('2026-11-26');
     await expect(pending).not.toContainText('买入 · CASH');
     await expect(page.getByTestId('dashboard-recent-item')).toHaveCount(1);
     await expect(page.getByTestId('dashboard-recent-item')).toContainText('000300.OF · ESP_SHORT');

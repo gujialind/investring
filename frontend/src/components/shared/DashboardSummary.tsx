@@ -90,6 +90,10 @@ function tradeAmount(trade: Trade): string {
   return formatSharesUnit(trade.shares);
 }
 
+function tradeDate(trade: Trade): string {
+  return isCashLeg(trade) ? trade.confirm_date ?? trade.trade_date : trade.trade_date;
+}
+
 function PendingAgendaRow({ entry, basePath }: { entry: PendingItem; basePath: "" | "/m" }) {
   const portfolioCode = entry.item.portfolio_code;
   let title: string;
@@ -114,7 +118,7 @@ function PendingAgendaRow({ entry, basePath }: { entry: PendingItem; basePath: "
         )}`;
     meta = `组合 ${portfolioCode}`;
     if (cashLeg && item.platform_code) meta += ` · 平台 ${item.platform_code}`;
-    date = item.trade_date;
+    date = tradeDate(item);
     amount = tradeAmount(item);
   }
   const href = `${basePath}/portfolio/${portfolioCode}/${entry.kind === "subscription" ? "subscriptions" : "trades"}`;
@@ -228,7 +232,7 @@ export default function DashboardSummary({
         kind: "trade" as const,
         id: item.id,
         item,
-        date: item.trade_date,
+        date: tradeDate(item),
       };
     });
     const items: RecentItem[] = [

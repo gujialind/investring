@@ -472,7 +472,17 @@ test.describe('现金流水页（#725，双端）', () => {
     await post(page, headers, '/api/portfolios', { code, name: `现金流水刷新 ${code}` });
     await seedSubscription(page, headers, code, d);
 
-    await gotoPortfolioSubpage(page, code as PortfolioCode, 'cash-flows');
+    // 先经客户端导航预热交易列表缓存；随后在现金流水页创建转移，返回交易页必须自动刷新。
+    await gotoPortfolioDetail(page, code as PortfolioCode);
+    await page.locator(`a[href$="/${code}/trades"]:visible`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/portfolio/${code}/trades$`));
+    await expect(page.getByText('现金 · 申赎确认').first()).toBeVisible();
+    await expect(page.getByTestId('trade-cash-subrow')).toHaveCount(0);
+    await page.locator(`a[href$="/${code}"]:visible`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/portfolio/${code}$`));
+    await clickPortfolioMoreMenuItem(page, testInfo, '现金流水');
+    await expect(page).toHaveURL(new RegExp(`/portfolio/${code}/cash-flows$`));
+
     await expect(page.getByTestId('stat-available')).toContainText('¥40,000.00');
     await expect(page.getByTestId('stat-in_transit')).toContainText('¥0.00');
     await expect(
@@ -503,6 +513,14 @@ test.describe('现金流水页（#725，双端）', () => {
     ).toHaveCount(2, { timeout: 15_000 });
     await expect(page.getByTestId('stat-available')).toContainText('¥35,000.00');
     await expect(page.getByTestId('stat-in_transit')).toContainText('¥5,000.00');
+
+    await page.locator(`a[href$="/${code}"]:visible`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/portfolio/${code}$`));
+    await page.locator(`a[href$="/${code}/trades"]:visible`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/portfolio/${code}/trades$`));
+    const arrival = page.getByTestId('trade-cash-subrow').filter({ hasText: '现金待到账' }).first();
+    await expect(arrival).toBeVisible({ timeout: 15_000 });
+    await expect(arrival).toContainText('+¥5,000.00');
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
