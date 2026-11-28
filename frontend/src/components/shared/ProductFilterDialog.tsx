@@ -33,7 +33,7 @@ import {
 } from "@/lib/dimensions";
 import type { DimensionFilterKey, DimensionFilters } from "@/lib/dimensions";
 import { MARKET_OPTIONS } from "@/lib/market";
-import { cn, formatMarketName, formatProductDisplayCode } from "@/lib/utils";
+import { formatMarketName, formatProductDisplayCode } from "@/lib/utils";
 
 /** 产品筛选选中项：code + market（market 为空串对应现金类等无市场产品） */
 export interface ProductSelection {
@@ -293,10 +293,8 @@ export default function ProductFilterDialog({
               )}
               <div
                 data-testid="product-filter-results"
-                className={cn(
-                  "h-[40vh] overflow-y-auto rounded-md border px-3",
-                  isFetching && "opacity-50"
-                )}
+                className="h-[40vh] overflow-y-auto rounded-md border px-3"
+                aria-busy={isFetching}
               >
                 {isLoading ? (
                   <div className="flex items-center justify-center py-8">

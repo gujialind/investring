@@ -71,7 +71,7 @@ const ALL_TASKS = "all";
  * 分页表格面板的统一外壳（#715）：加载态 / 失败态 / 空态 / 数据表 + 分页条 + 局部刷新遮罩。
  *
  * 口径（frontend/AGENTS.md §1.2）：① 失败不得伪装成空态——isError 分支排在 length===0
- * 之前；② 换页/重取在途（isFetching && !isLoading）保留旧行集但容器 opacity-50 + 右上角
+ * 之前；② 换页/重取在途（isFetching && !isLoading）保留旧行集且右上角
  * Loader2，并显式写 aria-busy（定位器契约禁止按 Tailwind 工具类定位，故它同时是状态标记与
  * E2E 锚点）。table 由调用方给出（各日志类型列不同），本组件只管状态分支与分页 chrome。
  */
@@ -113,20 +113,18 @@ function PaginatedPanel({
         {busy && (
           <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
         )}
-        <div className={cn(busy && "opacity-50")}>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8 text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              加载中...
-            </div>
-          ) : isError ? (
-            <QueryErrorState error={error} onRetry={refetch} />
-          ) : isEmpty ? (
-            <EmptyState message={emptyMessage} />
-          ) : (
-            table
-          )}
-        </div>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8 text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            加载中...
+          </div>
+        ) : isError ? (
+          <QueryErrorState error={error} onRetry={refetch} />
+        ) : isEmpty ? (
+          <EmptyState message={emptyMessage} />
+        ) : (
+          table
+        )}
       </div>
       <PaginationBar
         page={page}

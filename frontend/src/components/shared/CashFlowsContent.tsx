@@ -681,9 +681,9 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
 
-          {/* §14：筛选/翻页局部刷新保留旧数据，半透明 + 右上角 spinner + aria-busy
+          {/* §14：筛选/翻页局部刷新保留旧数据，右上角 spinner + aria-busy
               （#683 D-1 同形态；首屏在途走上方 LoadingState 提前返回，不在此列） */}
-          <div className={cn("relative", isFetching && "opacity-50")} aria-busy={isFetching}>
+          <div className="relative" aria-busy={isFetching}>
             {isFetching && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}

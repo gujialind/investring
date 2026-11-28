@@ -693,10 +693,13 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
               </Button>
             </div>
           )}
-          {/* 规范 §14：筛选/翻页局部刷新保留旧数据，表格半透明 + 右上角小 spinner；
+          {/* 规范 §14：筛选/翻页局部刷新保留旧数据，右上角小 spinner 标记更新；
               首次加载（isLoading）走上方区块级 spinner，此处不重复遮罩；
               移动端窄屏表格横向滚动（同 SnapshotsContent） */}
-          <div className={cn("relative", variant === "mobile" && "overflow-x-auto")}>
+          <div
+            className={cn("relative", variant === "mobile" && "overflow-x-auto")}
+            aria-busy={isFetching && !isLoading}
+          >
             {isFetching && !isLoading && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
@@ -704,7 +707,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
               /* #904 P1d：移动卡化（§6②），字段集合与桌面列一致；全选自表头移卡列顶行；
                  批量多选/禁选/上限钳制逻辑与桌面逐字同源 */
               <div
-                className={cn("space-y-3", isFetching && !isLoading && "opacity-50")}
+                className="space-y-3"
                 data-testid="products-card-list"
               >
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -801,7 +804,7 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
                 })}
               </div>
             ) : (
-            <Table className={cn(isFetching && !isLoading && "opacity-50")}>
+            <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-8">
