@@ -7,7 +7,7 @@ import PageHeader from "@/components/shared/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { ArrowLeft, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRightLeft, Settings2, Users } from "lucide-react";
 import Link from "next/link";
 import {
   usePortfolio,
@@ -34,6 +34,7 @@ import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
+import PortfolioInfoCard from "@/components/shared/PortfolioInfoCard";
 import SnapshotCatchupAlert from "@/components/shared/SnapshotCatchupAlert";
 import LedgerContent from "@/components/shared/LedgerContent";
 import { buildAllocation } from "@/lib/allocation";
@@ -226,10 +227,8 @@ function PortfolioDetailInner() {
           /* ?tab=investors 投资人视图（draft 也允许）；占比用后端 ratio，不再传 totalShares（#693） */
           <PortfolioInvestorsList investors={investors} />
         ) : (
-          /* 统计卡全宽 + 主体左右分栏（draft 时仅统计段） */
           <div className="space-y-4">
-            {/* 1. 四项统计；页头已显示同一最新快照日期 */}
-            <div>
+            <div data-testid="portfolio-detail-stats">
               <PortfolioStatsCards
                 totalValue={!isDraft ? portfolio.total_value ?? snapshot?.total_value ?? null : null}
                 unitPrice={!isDraft ? snapshot?.unit_price ?? null : null}
@@ -242,11 +241,17 @@ function PortfolioDetailInner() {
             </div>
 
             {!isDraft && (
-              /* 宽屏左右分栏（D1）；窄屏改为单列，避免持仓网格与右侧 360px 栏重叠。 */
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-                <div className="min-w-0 space-y-4 lg:flex-1">
-                  {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
-                      二级组合键子集优先取组合级 display_config（issue #144/#915） */}
+              <>
+                <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                  <div data-testid="portfolio-detail-assets">
+                    <AssetCompositionCard items={allocation} />
+                  </div>
+                  <div data-testid="portfolio-detail-nav">
+                    <PortfolioNavTrendCard code={code} variant="desktop" />
+                  </div>
+                </div>
+
+                <div data-testid="portfolio-detail-holdings">
                   <PortfolioHoldings
                     portfolioCode={code}
                     basePath="/portfolio"
@@ -279,18 +284,32 @@ function PortfolioDetailInner() {
                   />
                 </div>
 
-                <div className="w-full space-y-4 lg:w-[360px] lg:shrink-0">
-                  {/* 资产分布：默认条形图，可选环形图；右栏 360 强制竖排 */}
-                  <AssetCompositionCard items={allocation} forceColumn />
-
-                  {/* #649 起双端共享组件（右栏窄：标题与区间 chips 放不下时整组换行） */}
-                  <PortfolioNavTrendCard code={code} variant="desktop" />
-
-                  {/* 绩效指标（6 项） */}
+                <div data-testid="portfolio-detail-performance">
                   <PerformanceMetrics data={performance} variant="desktop" />
                 </div>
-              </div>
+
+                <nav
+                  aria-label="组合详情入口"
+                  data-testid="portfolio-detail-links"
+                  className="flex flex-wrap gap-2"
+                >
+                  <Button asChild variant="outline">
+                    <Link href={`/portfolio/${code}?tab=investors`}>
+                      <Users className="mr-2 h-4 w-4" />
+                      投资人
+                    </Link>
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link href={`/portfolio/${code}/trades`}>
+                      <ArrowRightLeft className="mr-2 h-4 w-4" />
+                      交易记录
+                    </Link>
+                  </Button>
+                </nav>
+              </>
             )}
+
+            <PortfolioInfoCard portfolio={portfolio} />
           </div>
         )}
       </div>

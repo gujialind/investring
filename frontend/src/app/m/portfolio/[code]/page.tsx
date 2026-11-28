@@ -32,6 +32,7 @@ import BackToTop from "@/components/mobile/BackToTop";
 import PortfolioInvestorsList from "@/components/shared/PortfolioInvestorsList";
 import PortfolioHoldings from "@/components/shared/PortfolioHoldings";
 import PortfolioNavTrendCard from "@/components/shared/PortfolioNavTrendCard";
+import PortfolioInfoCard from "@/components/shared/PortfolioInfoCard";
 import SnapshotCatchupAlert from "@/components/shared/SnapshotCatchupAlert";
 import LedgerContent from "@/components/shared/LedgerContent";
 import DisplayConfigDialog from "@/components/shared/dialogs/DisplayConfigDialog";
@@ -221,18 +222,19 @@ function MobilePortfolioDetailInner() {
         <PortfolioInvestorsList investors={investors} variant="mobile" />
       ) : (
         <>
-          {/* Stats Cards */}
-          {!isDraft && (
-            <PortfolioStatsCards
-              totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
-              unitPrice={snapshot?.unit_price ?? null}
-              totalProfit={portfolio.total_profit ?? null}
-              cumulativeReturn={returns?.cumulative_return ?? null}
-              dailyReturn={dailyReturn}
-              holdingDays={performance?.holding_days ?? null}
-              variant="mobile"
-            />
-          )}
+          <div data-testid="portfolio-detail-stats">
+            {!isDraft && (
+              <PortfolioStatsCards
+                totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
+                unitPrice={snapshot?.unit_price ?? null}
+                totalProfit={portfolio.total_profit ?? null}
+                cumulativeReturn={returns?.cumulative_return ?? null}
+                dailyReturn={dailyReturn}
+                holdingDays={performance?.holding_days ?? null}
+                variant="mobile"
+              />
+            )}
+          </div>
 
           {/* 入流操作区（#937）：主动作 +「更多」Sheet，单层网格由组件内部控制 */}
           {actionButtons}
@@ -255,50 +257,54 @@ function MobilePortfolioDetailInner() {
 
           {!isDraft && (
             <>
-              {/* 资产分布：默认条形图，可选环形图 */}
-              <AssetCompositionCard items={allocation} variant="mobile" pieHeight={150} />
+              <div data-testid="portfolio-detail-assets">
+                <AssetCompositionCard items={allocation} variant="mobile" pieHeight={150} />
+              </div>
 
-              {/* 持仓明细：按产品/按平台双视图（#595，URL ?view= 持久化）；
-                  二级组合键子集优先取组合级 display_config（issue #144/#915） */}
-              <PortfolioHoldings
-                portfolioCode={code}
-                basePath="/m/portfolio"
-                assetClasses={assetClasses}
-                displayConfig={portfolio.display_config}
-                dimensionRules={assetClassDict?.dimension_rules}
-                view={view}
-                onViewChange={handleViewChange}
-                subDimOverrides={subDimOverrides}
-                onSubDimToggle={handleSubDimToggle}
-                variant="mobile"
-                action={
-                  isAdmin ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setDisplayConfigOpen(true)}
-                    >
-                      <Settings2 className="mr-1.5 h-4 w-4" />
-                      分组维度
-                    </Button>
-                  ) : undefined
-                }
-              />
-              <DisplayConfigDialog
-                open={displayConfigOpen}
-                onOpenChange={setDisplayConfigOpen}
-                portfolioCode={code}
-                currentConfig={portfolio.display_config}
-              />
+              <div data-testid="portfolio-detail-nav">
+                <PortfolioNavTrendCard code={code} variant="mobile" />
+              </div>
 
-              {/* #649 起双端共享组件：移动端同得 4 个区间 chips；卡恒在（抽取前空数据
-                  整卡不渲染），加载期出占位 spinner、空数据出卡内空态，与桌面一致 */}
-              <PortfolioNavTrendCard code={code} variant="mobile" />
+              <div data-testid="portfolio-detail-holdings">
+                <PortfolioHoldings
+                  portfolioCode={code}
+                  basePath="/m/portfolio"
+                  assetClasses={assetClasses}
+                  displayConfig={portfolio.display_config}
+                  dimensionRules={assetClassDict?.dimension_rules}
+                  view={view}
+                  onViewChange={handleViewChange}
+                  subDimOverrides={subDimOverrides}
+                  onSubDimToggle={handleSubDimToggle}
+                  variant="mobile"
+                  action={
+                    isAdmin ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDisplayConfigOpen(true)}
+                      >
+                        <Settings2 className="mr-1.5 h-4 w-4" />
+                        分组维度
+                      </Button>
+                    ) : undefined
+                  }
+                />
+                <DisplayConfigDialog
+                  open={displayConfigOpen}
+                  onOpenChange={setDisplayConfigOpen}
+                  portfolioCode={code}
+                  currentConfig={portfolio.display_config}
+                />
+              </div>
 
-              {/* 绩效指标（紧凑两列） */}
-              <PerformanceMetrics data={performance} variant="mobile" />
+              <div data-testid="portfolio-detail-performance">
+                <PerformanceMetrics data={performance} variant="mobile" />
+              </div>
             </>
           )}
+
+          <PortfolioInfoCard portfolio={portfolio} variant="mobile" />
         </>
       )}
     </div>
