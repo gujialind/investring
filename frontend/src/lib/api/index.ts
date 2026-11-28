@@ -7,6 +7,13 @@ export { authApi } from "./auth";
 export { investorApi } from "./investor";
 export { portfolioApi, positionApi } from "./portfolio";
 export type { CashPositionUpdateResponse, CashOverrideItem, CashOverrideListResponse } from "./portfolio";
+export { dashboardApi } from "./dashboard";
+export type {
+  DashboardAggregateXirr,
+  DashboardPortfolioSummary,
+  DashboardSummary,
+  DashboardXirrReason,
+} from "./dashboard";
 export { subscriptionApi } from "./subscription";
 export type { SubscriptionListParams } from "./subscription";
 export { tradeApi } from "./trade";

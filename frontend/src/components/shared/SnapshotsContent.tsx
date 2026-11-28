@@ -68,6 +68,7 @@ import {
   cn,
 } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { useUIStore } from "@/stores/uiStore";
 import {
   useSnapshotStatus,
@@ -196,6 +197,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
       });
       queryClient.invalidateQueries({ queryKey: ["snapshots"] });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
     } else {
       addToast({
         type: "error",

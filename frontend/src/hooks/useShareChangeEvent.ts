@@ -104,6 +104,7 @@ export function useConfirmShareChangeEvent(portfolioCode: string) {
       queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
       queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.status(portfolioCode) });
       queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "确认成功",
@@ -135,6 +136,7 @@ export function useUnconfirmShareChangeEvent(portfolioCode: string) {
       queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
       queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.status(portfolioCode) });
       queryClient.invalidateQueries({ queryKey: queryKeys.cashFlows.root });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "取消确认成功",
