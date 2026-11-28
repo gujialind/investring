@@ -27,6 +27,8 @@ test('投资人管理页：移动卡片形态 / 桌面表格形态，字段承�
 
   if (isMobile) {
     await expect(page).toHaveURL(/\/m\/investors/);
+    await expect(page.getByTestId('mobile-top-bar')).toBeVisible();
+    await expect(page.getByRole('button', { name: '用户菜单', exact: true })).toHaveCount(1);
     await expect(page.getByTestId('investor-card-list')).toBeVisible();
     await expect(page.locator('table')).toHaveCount(0);
     // 描述文案与卡片内大标题仅移动收掉（定案②④⑤），桌面保留见 else 分支
@@ -87,6 +89,8 @@ test('平台管理页：移动卡片形态 / 桌面表格形态，名称与代�
 
   if (isMobile) {
     await expect(page).toHaveURL(/\/m\/platforms/);
+    await expect(page.getByTestId('mobile-top-bar')).toBeVisible();
+    await expect(page.getByRole('button', { name: '用户菜单', exact: true })).toHaveCount(1);
     await expect(page.getByTestId('platform-card-list')).toBeVisible();
     await expect(page.locator('table')).toHaveCount(0);
     await expect(page.getByText('所有投资平台')).toHaveCount(0);
