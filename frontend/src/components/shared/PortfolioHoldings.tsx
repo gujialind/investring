@@ -345,14 +345,24 @@ export default function PortfolioHoldings({
   useEffect(() => {
     if (variant !== "mobile" || view !== "product" || !productData) return;
     const storageKey = `${MOBILE_PRODUCT_RETURN_PREFIX}${portfolioCode}`;
-    const productCode = sessionStorage.getItem(storageKey);
-    if (!productCode) return;
+    let productKey: string | null = null;
+    try {
+      productKey = sessionStorage.getItem(storageKey);
+    } catch {
+      return;
+    }
+    if (!productKey) return;
     const frame = requestAnimationFrame(() => {
       const row = document.querySelector<HTMLAnchorElement>(
-        `[data-testid="portfolio-holdings"] [data-product-code="${CSS.escape(productCode)}"]`,
+        `[data-testid="portfolio-holdings"] [data-product-key="${CSS.escape(productKey)}"]`,
       );
-      row?.focus();
-      sessionStorage.removeItem(storageKey);
+      row?.focus({ preventScroll: true });
+      row?.scrollIntoView({ block: "center" });
+      try {
+        sessionStorage.removeItem(storageKey);
+      } catch {
+        // 焦点已恢复，清理失败不影响本次返回。
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [variant, view, productData, portfolioCode]);

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { HoldingProductAggregate } from "@/types/holding";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
-import { CUMULATIVE_PROFIT_INFO_TIP } from "@/lib/holdings";
+import { CUMULATIVE_PROFIT_INFO_TIP, productCardKey } from "@/lib/holdings";
 import {
   cn,
   formatCurrency,
@@ -52,7 +52,7 @@ export default function HoldingProductCard({
   /** 产品详情链接；卡内 InfoTip 与链接并列，避免嵌套交互元素 */
   href: string;
   variant?: "desktop" | "mobile";
-  /** 移动行点击时记录本次产品码，供组合页返回后聚焦原行；传组合码即按组合隔离 */
+  /** 移动行点击时记录 code-market 全键，供组合页返回后聚焦原行；传组合码即按组合隔离 */
   returnFocusKey?: string;
 }) {
   const isCash = product.product_code === CASH_PRODUCT_CODE;
@@ -78,6 +78,7 @@ export default function HoldingProductCard({
         href={href}
         aria-label={`查看${product.product_name || codeLabel}详情`}
         data-product-code={product.product_code}
+        data-product-key={productCardKey(product)}
         onClick={(event) => {
           if (
             !isMobileRow ||
@@ -89,12 +90,19 @@ export default function HoldingProductCard({
             event.shiftKey ||
             event.altKey
           ) return;
-          sessionStorage.setItem(
-            `${MOBILE_PRODUCT_RETURN_PREFIX}${returnFocusKey}`,
-            product.product_code,
-          );
+          try {
+            sessionStorage.setItem(
+              `${MOBILE_PRODUCT_RETURN_PREFIX}${returnFocusKey}`,
+              productCardKey(product),
+            );
+          } catch {
+            // 存储不可用时放弃焦点恢复，不能阻断产品跳转。
+          }
         }}
-        className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "absolute inset-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          !isMobileRow && "rounded-lg",
+        )}
       />
       <div className="pointer-events-none relative">
         <div className="flex items-baseline justify-between gap-2">
