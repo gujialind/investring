@@ -1039,7 +1039,7 @@ test.describe('危险确认按钮 solid 载体护栏（#874）', () => {
     await activatePortfolioViaApi(page, headers, code);
     await closePortfolioViaApi(page, headers, code);
     await page.goto('/portfolio');
-    await page.locator('button[title="重新激活"]').first().click();
+    await page.getByTestId(`portfolio-card-${code}`).getByTitle('重新激活').click();
     const dlg = page.getByRole('alertdialog').filter({ hasText: '重新激活组合' });
     await expect(dlg).toBeVisible();
     const btn = dlg.getByRole('button', { name: '确认' });

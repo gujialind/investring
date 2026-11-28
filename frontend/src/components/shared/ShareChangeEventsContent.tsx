@@ -868,7 +868,7 @@ export default function ShareChangeEventsContent({
             </div>
           ) : (
             <>
-              {/* 规范 §14：筛选/翻页局部刷新保留旧数据，表格半透明 + 右上角小 spinner */}
+              {/* 规范 §14：筛选/翻页局部刷新保留旧数据，右上角小 spinner 标记更新 */}
               <div className="relative">
                 {isFetching && (
                   <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />

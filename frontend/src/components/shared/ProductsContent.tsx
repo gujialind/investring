@@ -696,7 +696,10 @@ export default function ProductsContent({ variant = "desktop", basePath = "" }: 
           {/* 规范 §14：筛选/翻页局部刷新保留旧数据，右上角小 spinner 标记更新；
               首次加载（isLoading）走上方区块级 spinner，此处不重复遮罩；
               移动端窄屏表格横向滚动（同 SnapshotsContent） */}
-          <div className={cn("relative", variant === "mobile" && "overflow-x-auto")}>
+          <div
+            className={cn("relative", variant === "mobile" && "overflow-x-auto")}
+            aria-busy={isFetching && !isLoading}
+          >
             {isFetching && !isLoading && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
