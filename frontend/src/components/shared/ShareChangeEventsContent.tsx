@@ -882,7 +882,7 @@ export default function ShareChangeEventsContent({
                     {events.map((event) => renderEventCard(event))}
                   </div>
                 ) : (
-                <Table>
+                <Table aria-busy={isFetching}>
                   <TableHeader>
                     <TableRow>
                       {/* 纯 CJK 列无拉丁最小宽度，窄表（含空表仅表头）下会被压成一字宽竖排（#355 同族），

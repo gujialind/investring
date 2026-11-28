@@ -294,6 +294,7 @@ export default function ProductFilterDialog({
               <div
                 data-testid="product-filter-results"
                 className="h-[40vh] overflow-y-auto rounded-md border px-3"
+                aria-busy={isFetching}
               >
                 {isLoading ? (
                   <div className="flex items-center justify-center py-8">

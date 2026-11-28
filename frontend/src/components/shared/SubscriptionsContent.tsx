@@ -712,7 +712,7 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
                 {subscriptions.map((sub) => renderSubCard(sub))}
               </div>
             ) : (
-            <Table>
+            <Table aria-busy={isFetching}>
               <TableHeader>
                 <TableRow>
                   <TableHead>投资人</TableHead>

@@ -1291,7 +1291,7 @@ export default function TradesContent({
                 {tradeRows.map((row) => renderTradeCard(row))}
               </div>
             ) : (
-            <Table>
+            <Table aria-busy={isFetching}>
               <TableHeader>
                 <TableRow>
                   <TableHead>产品</TableHead>

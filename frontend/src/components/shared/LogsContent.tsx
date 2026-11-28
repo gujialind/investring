@@ -113,20 +113,18 @@ function PaginatedPanel({
         {busy && (
           <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
         )}
-        <div>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8 text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              加载中...
-            </div>
-          ) : isError ? (
-            <QueryErrorState error={error} onRetry={refetch} />
-          ) : isEmpty ? (
-            <EmptyState message={emptyMessage} />
-          ) : (
-            table
-          )}
-        </div>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8 text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            加载中...
+          </div>
+        ) : isError ? (
+          <QueryErrorState error={error} onRetry={refetch} />
+        ) : isEmpty ? (
+          <EmptyState message={emptyMessage} />
+        ) : (
+          table
+        )}
       </div>
       <PaginationBar
         page={page}
