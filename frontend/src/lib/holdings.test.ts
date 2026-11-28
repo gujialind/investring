@@ -3,8 +3,11 @@ import {
   buildCardPercentMap,
   buildProductSections,
   clearMobileProductReturnFocus,
+  formatHoldingProfit,
+  holdingSnapshotMmdd,
   MOBILE_PRODUCT_RETURN_PREFIX,
   productCardKey,
+  productDetailHref,
   sumGroupPercent,
   OTHER_SECTION_NAME,
   UNCATEGORIZED_GROUP_NAME,
@@ -93,6 +96,30 @@ function legacySingleDimGroups(items: HoldingProductAggregate[], dim: string) {
   });
   return groups;
 }
+
+describe("holding display helpers", () => {
+  it("收益保留正负零与空值口径", () => {
+    expect(formatHoldingProfit(1234.5)).toBe("+1,234.50");
+    expect(formatHoldingProfit(-1234.5)).toBe("-1,234.50");
+    expect(formatHoldingProfit(0)).toBe("0.00");
+    expect(formatHoldingProfit(null)).toBe("--");
+    expect(formatHoldingProfit(undefined)).toBe("--");
+  });
+
+  it("快照日期只生成 MM/DD，缺省不伪造日期", () => {
+    expect(holdingSnapshotMmdd("2026-11-26")).toBe("11/26");
+    expect(holdingSnapshotMmdd(null)).toBe("");
+    expect(holdingSnapshotMmdd(undefined)).toBe("");
+  });
+
+  it("产品详情链接编码机器码与市场，现金保留空 market 参数", () => {
+    const prefix = "/portfolio/E2E_ACTIVE/product";
+    expect(productDetailHref(prefix, makeProduct({ product_code: "A/B", market: "CN_EXCHANGE" })))
+      .toBe(`${prefix}/A%2FB?market=CN_EXCHANGE`);
+    expect(productDetailHref(prefix, makeProduct({ product_code: "CASH", market: "" })))
+      .toBe(`${prefix}/CASH?market=`);
+  });
+});
 
 describe("buildProductSections", () => {
   it("按字典 sort_order 排序分区并跳过空大类", () => {

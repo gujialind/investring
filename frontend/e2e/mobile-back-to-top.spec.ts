@@ -30,6 +30,12 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     await page.goto(`${path}${query}`);
     await expect(page.getByTestId('page-header')).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(`/m/portfolio/${code}`);
+    if (code === E2E_ACTIVE && !query.includes('tab=investors')) {
+      await expect(page.getByTestId('portfolio-holdings')).toBeVisible();
+      await expect(
+        page.getByTestId('portfolio-nav-trend-card').locator('svg.recharts-surface').first(),
+      ).toBeVisible();
+    }
   }
 
   async function collapsePageHeader(page: Page): Promise<void> {
@@ -305,8 +311,7 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
         spacer.style.height = '2200px';
         content.insertBefore(spacer, content.lastElementChild);
       });
-      const maxY = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
-      await scrollWindowTo(page, maxY);
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       await expect(button).toBeVisible();
       const tailGeometry = await page.evaluate(() => {
         const action = document.querySelector('[data-testid="portfolio-action-buttons"]')!;

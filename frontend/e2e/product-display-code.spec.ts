@@ -51,7 +51,7 @@ const ETF_AGGREGATE = {
 };
 
 test.describe('#705 产品标准码展示', () => {
-  test('持仓产品卡：港互认双码并列、场内去后缀，卡片链接仍用原始码', async ({ page }) => {
+  test('持仓产品：港互认双码并列、场内去后缀，详情链接仍用原始码', async ({ page }) => {
     const errors = collectPageErrors(page);
     await page.route(
       /\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/,
@@ -69,13 +69,16 @@ test.describe('#705 产品标准码展示', () => {
     );
     await gotoPortfolioDetail(page, E2E_ACTIVE);
 
-    const hkCard = page.getByTestId('holding-product-card').filter({ hasText: HK_NAME });
+    const holdings = page
+      .getByTestId('holding-product-card')
+      .or(page.getByTestId('holding-product-row'));
+    const hkCard = holdings.filter({ hasText: HK_NAME });
     await expect(hkCard).toBeVisible({ timeout: 10_000 });
     // 双码并列：销售码在前（人眼口径），机器码在括号内可核对
     await expect(hkCard).toContainText(`${HK_SALE_CODE}（${HK_CODE}）`);
     await expect(hkCard).toContainText('香港互认');
 
-    const etfCard = page.getByTestId('holding-product-card').filter({ hasText: '沪深300ETF' });
+    const etfCard = holdings.filter({ hasText: '沪深300ETF' });
     await expect(etfCard).toBeVisible();
     await expect(etfCard).toContainText(`${ETF_DISPLAY} · A股场内`);
     await expect(etfCard).not.toContainText(ETF_CODE);

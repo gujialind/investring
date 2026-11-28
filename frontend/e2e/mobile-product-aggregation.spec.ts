@@ -21,21 +21,33 @@ function readReturnFocus(page: Page) {
   return page.evaluate((key) => sessionStorage.getItem(key), RETURN_FOCUS_KEY);
 }
 
-test('移动产品聚合行保留字段但移除卡壳，桌面卡片不变（#944 Phase 6.2）', async ({
+test('移动产品聚合行保留字段，桌面按产品使用通栏账表（#944 Phase 6.2/7.1）', async ({
   page,
 }, testInfo) => {
   test.setTimeout(60_000);
   await gotoPortfolioDetail(page, E2E_ACTIVE);
+  const isMobile = testInfo.project.name === 'mobile';
   const row = productRow(page);
-  const card = page.getByTestId('holding-product-card').filter({ hasText: '沪深300ETF' });
-  const cash = page.getByTestId('holding-product-card').filter({ hasText: '可用现金' });
+  const card = page
+    .getByTestId(isMobile ? 'holding-product-card' : 'holding-product-row')
+    .filter({ hasText: '沪深300ETF' });
+  const cash = page
+    .getByTestId(isMobile ? 'holding-product-card' : 'holding-product-row')
+    .filter({ hasText: '可用现金' });
 
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute('data-product-code', '510300.SH');
   await expect(row).toHaveAttribute('data-product-key', PRODUCT_RETURN_VALUE);
   await expect(card).toContainText('510300 · A股场内');
-  await expect(card).toContainText(/占比\s+\d+\.\d%/);
-  await expect(card).toContainText(/最新收益\(\d{2}\/\d{2}\)/);
+  if (isMobile) {
+    await expect(card).toContainText(/占比\s+\d+\.\d%/);
+    await expect(card).toContainText(/最新收益\(\d{2}\/\d{2}\)/);
+  } else {
+    await expect(card).toContainText(/\d+\.\d%/);
+    await expect(
+      card.locator('xpath=ancestor::table[1]').getByRole('columnheader', { name: /最新收益/ }),
+    ).toBeVisible();
+  }
   await expect(card).not.toContainText('华宝证券');
   await expect(card.getByTestId('total-profit-value')).toBeVisible();
   await expect(card.getByTestId('daily-profit-value')).toBeVisible();
@@ -43,7 +55,7 @@ test('移动产品聚合行保留字段但移除卡壳，桌面卡片不变（#9
   await expect(cash).not.toContainText('华宝证券');
 
   const groupCards = page.getByTestId('asset-group-cards').first();
-  if (testInfo.project.name === 'mobile') {
+  if (isMobile) {
     await expect(card).toHaveCSS('border-top-width', '0px');
     await expect(card).toHaveCSS('border-radius', '0px');
     await expect(row).toHaveCSS('border-top-left-radius', '0px');
@@ -74,8 +86,9 @@ test('移动产品聚合行保留字段但移除卡壳，桌面卡片不变（#9
       }).toPass({ timeout: 5_000 });
     }
   } else {
-    await expect(card).toHaveCSS('border-top-width', '1px');
-    await expect(groupCards).toHaveCSS('display', 'grid');
+    await expect(card.locator('xpath=ancestor::table[1]')).toBeVisible();
+    await expect(card).toHaveCSS('display', 'table-row');
+    await expect(groupCards).toHaveCSS('display', 'block');
   }
 });
 

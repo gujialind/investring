@@ -4,19 +4,27 @@ import { useEffect } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { AssetClassificationItem } from "@/types/asset-classification";
-import type { HoldingsView, HoldingProductAggregate } from "@/types/holding";
+import type {
+  HoldingPlatformAggregate,
+  HoldingsView,
+  HoldingProductAggregate,
+} from "@/types/holding";
 import {
   useHoldingsByPlatform,
   useHoldingsByProduct,
 } from "@/hooks/usePosition";
 import { assetClassColor, otherColor } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
+import { CASH_PRODUCT_CODE, PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import {
   buildCardPercentMap,
   buildProductSections,
+  CUMULATIVE_PROFIT_INFO_TIP,
+  formatHoldingProfit,
+  holdingSnapshotMmdd,
   MOBILE_PRODUCT_RETURN_PREFIX,
   productCardKey,
+  productDetailHref,
   sumGroupPercent,
   type HoldingProductSection,
 } from "@/lib/holdings";
@@ -29,11 +37,28 @@ import {
   type SubDimension,
   type SubDimOverrides,
 } from "@/lib/dimensions";
-import { cn, formatNumber, largestRemainderPercents } from "@/lib/utils";
+import {
+  cn,
+  formatCurrency,
+  formatNumber,
+  formatSignedCurrency,
+  getReturnColorClass,
+  largestRemainderPercents,
+} from "@/lib/utils";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import HoldingInTransitCard from "./HoldingInTransitCard";
 import HoldingProductCard from "./HoldingProductCard";
 import HoldingPlatformCard from "./HoldingPlatformCard";
+import InfoTip from "./InfoTip";
 import LoadingState from "./LoadingState";
+import ProductCell from "./ProductCell";
 import QueryErrorState from "./QueryErrorState";
 
 interface PortfolioHoldingsProps {
@@ -65,21 +90,9 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
 ];
 
 /**
- * 产品卡栅格：移动 1 列、桌面 auto-fill minmax（spec「桌面 2 列」，单卡宽
- * 设计区间 ~358-372、允许栅格微调）。min 取 350 而非 360：桌面带引导线的维度组
- * 内容宽比平铺组少 16px（ml-0.5(2) + border-l-2(2) + pl-3(12)；#724 起引导线仅桌面保留，
- * 移动端两组等宽、不受此约束），auto-fill 按 content-box
- * 算列数，min=360 会在 1440 档使两组列数分叉（隔离栈探针实测引导组 720px→1 列 vs
- * 平铺组 736px→2 列，同页卡宽不一致）；min ≤ (720-12)/2 = 354 时两组同列数，
- * 单卡实宽 354（引导组）-362（平铺组）——引导组下界比设计区间少 4px，是换两组同列数的代价。
- *
- * **消费点不止本文件**（#750 收敛后该串仅此一处持有）：按产品视图的引导组 / 平铺组与
- * 在途卡、按平台视图的平台卡组，以及 `PlatformDetailContent.tsx` 的平台详情「持仓明细」。
- * 该页没有引导线结构、不参与上面的分叉推导，但列数与卡宽同样由这个 350 决定——按引导线
- * 理由调 350 会连带改动它，两处需一起目检。
- *
- * **移动端按用途分两支**：产品列表传 `"product-rows"`（#944 Phase 6.2 分隔线行，无卡壳）；
- * 其余默认 `"cards"`（`space-y-2.5` 卡片间距，平台卡与在途卡沿用）。桌面两端同串。
+ * 卡片栅格：桌面用于在途卡与 PlatformDetailContent 持仓明细；移动产品列表传
+ * "product-rows" 分隔线行，其余平台卡/在途卡沿用 "cards" 间距。
+ * PortfolioHoldings 桌面产品/平台视图已改为通栏账表，不再消费该栅格。
  */
 export function cardGridClass(
   variant: "desktop" | "mobile",
@@ -160,9 +173,181 @@ function SubDimSwitchRow({
   );
 }
 
-/** 按产品分区渲染（V4 语义：分区头 → chip → 卡组；引导线缩进仅桌面，#724）。
- * #915：二级组为维度子集组合键，React key 用 code 元组串（同名不同 code 不冲突）；
- * showChip 判据（组名 ≠ 大类名）原样保留。 */
+function DesktopProductTable({
+  products,
+  percentOf,
+  snapshotDate,
+  productLinkPrefix,
+}: {
+  products: HoldingProductAggregate[];
+  percentOf: (product: HoldingProductAggregate) => number;
+  snapshotDate?: string | null;
+  productLinkPrefix: string;
+}) {
+  const mmdd = holdingSnapshotMmdd(snapshotDate);
+  return (
+    <Table
+      data-testid="holding-product-table"
+      containerClassName="lg:max-h-none"
+    >
+      <TableHeader className="lg:static lg:bg-background">
+        <TableRow>
+          <TableHead>产品</TableHead>
+          <TableHead className="number-cell">市值</TableHead>
+          <TableHead className="number-cell">占比</TableHead>
+          <TableHead className="number-cell">
+            <span className="inline-flex items-center">
+              累计收益
+              <InfoTip {...CUMULATIVE_PROFIT_INFO_TIP} />
+            </span>
+          </TableHead>
+          <TableHead className="number-cell">
+            最新收益{mmdd ? `(${mmdd})` : ""}
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {products.map((product) => {
+          const isCash = product.product_code === CASH_PRODUCT_CODE;
+          const href = productDetailHref(productLinkPrefix, product);
+          return (
+            <TableRow key={productCardKey(product)} data-testid="holding-product-row">
+              <TableCell>
+                <Link
+                  href={href}
+                  aria-label={`查看${isCash ? "可用现金" : product.product_name || product.product_code}详情`}
+                  data-product-code={product.product_code}
+                  data-product-key={productCardKey(product)}
+                  className="rounded-sm font-medium text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {isCash ? (
+                    "可用现金"
+                  ) : (
+                    <ProductCell
+                      code={product.product_code}
+                      name={product.product_name ?? undefined}
+                      market={product.market}
+                      displayCode={product.display_code}
+                    />
+                  )}
+                </Link>
+              </TableCell>
+              <TableCell className="number-cell whitespace-nowrap">
+                {formatCurrency(product.market_value)}
+              </TableCell>
+              <TableCell
+                data-testid="holding-ratio-value"
+                className="number-cell whitespace-nowrap"
+              >
+                {percentOf(product).toFixed(1)}%
+              </TableCell>
+              <TableCell
+                data-testid="total-profit-value"
+                className={cn(
+                  "number-cell whitespace-nowrap",
+                  !isCash && getReturnColorClass(product.cumulative_profit),
+                )}
+              >
+                {isCash ? null : formatHoldingProfit(product.cumulative_profit)}
+              </TableCell>
+              <TableCell
+                data-testid="daily-profit-value"
+                className={cn(
+                  "number-cell whitespace-nowrap",
+                  !isCash && getReturnColorClass(product.daily_profit),
+                )}
+              >
+                {isCash ? null : formatHoldingProfit(product.daily_profit)}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+}
+
+function DesktopPlatformTable({
+  platforms,
+  percents,
+  portfolioCode,
+  basePath,
+}: {
+  platforms: HoldingPlatformAggregate[];
+  percents: number[];
+  portfolioCode: string;
+  basePath: string;
+}) {
+  return (
+    <Table
+      data-testid="holding-platform-table"
+      containerClassName="lg:max-h-none"
+    >
+      <TableHeader className="lg:static lg:bg-background">
+        <TableRow>
+          <TableHead>平台</TableHead>
+          <TableHead className="number-cell">市值</TableHead>
+          <TableHead className="number-cell">占比</TableHead>
+          <TableHead className="number-cell">持有收益</TableHead>
+          <TableHead>产品与现金</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {platforms.map((platform, index) => {
+          const name = platform.platform_name || platform.platform_code || "--";
+          const identity = (
+            <>
+              <span className="block text-sm font-medium">{name}</span>
+              {platform.platform_code && (
+                <span className="block whitespace-nowrap text-xs text-muted-foreground">
+                  {platform.platform_code}
+                </span>
+              )}
+            </>
+          );
+          return (
+            <TableRow key={platform.platform_code ?? "anonymous-platform"} data-testid="holding-platform-row">
+              <TableCell>
+                {platform.platform_code ? (
+                  <Link
+                    href={`${basePath}/${portfolioCode}/platforms/${platform.platform_code}`}
+                    aria-label={`查看${name}详情`}
+                    className="rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {identity}
+                  </Link>
+                ) : (
+                  identity
+                )}
+              </TableCell>
+              <TableCell className="number-cell whitespace-nowrap">
+                {formatCurrency(platform.market_value)}
+              </TableCell>
+              <TableCell className="number-cell whitespace-nowrap">
+                {(percents[index] ?? 0).toFixed(1)}%
+              </TableCell>
+              <TableCell
+                className={cn(
+                  "number-cell whitespace-nowrap",
+                  getReturnColorClass(platform.holding_profit),
+                )}
+              >
+                {formatSignedCurrency(platform.holding_profit)}
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                {platform.product_count} 只产品
+                {platform.cash_balance !== 0 &&
+                  ` · 现金 ${formatCurrency(platform.cash_balance, 0)}`}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+}
+
+/** 按产品分区渲染：桌面通栏账表，移动分隔线行；#915 分区与子集切换语义不变。 */
 function ProductSections({
   portfolioCode,
   sections,
@@ -269,31 +454,30 @@ function ProductSections({
                         </span>
                       </div>
                     )}
-                    {/* 引导线缩进仅桌面保留（§6 第 4 类；量级与理由由该条持有）。
-                        testid 是 E2E 定位缩进载体的锚点——#382 口径：需锚点补 testid，不按 DOM 深度跳 */}
                     <div
                       data-testid="asset-group-cards"
-                      className={cn(
-                        showChip && variant === "desktop" &&
-                          "ml-0.5 border-l-2 border-border pl-3",
-                        cardGridClass(variant, "product-rows")
-                      )}
+                      className={variant === "desktop" ? "w-full" : cardGridClass("mobile", "product-rows")}
                     >
-                      {g.products.map((p) => {
-                        // #595 步骤③/⑤：产品卡点击 → 产品详情页；
-                        // market 走 ?market=（步骤⑤起），现金 market="" 与平台-产品页现金形态一致
-                        return (
+                      {variant === "desktop" ? (
+                        <DesktopProductTable
+                          products={g.products}
+                          percentOf={percentOf}
+                          snapshotDate={snapshotDate}
+                          productLinkPrefix={productLinkPrefix}
+                        />
+                      ) : (
+                        g.products.map((p) => (
                           <HoldingProductCard
                             key={productCardKey(p)}
                             product={p}
                             percent={percentOf(p)}
                             snapshotDate={snapshotDate}
-                            variant={variant}
-                            returnFocusKey={variant === "mobile" ? portfolioCode : undefined}
-                            href={`${productLinkPrefix}/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
+                            variant="mobile"
+                            returnFocusKey={portfolioCode}
+                            href={productDetailHref(productLinkPrefix, p)}
                           />
-                        );
-                      })}
+                        ))
+                      )}
                     </div>
                   </div>
                 );
@@ -445,8 +629,26 @@ export default function PortfolioHoldings({
         )
       ) : platforms.length === 0 ? (
         <div className="py-8 text-center text-muted-foreground">暂无持仓记录</div>
+      ) : variant === "desktop" ? (
+        <div className="pt-3" data-testid="platform-group">
+          <div
+            data-testid="platform-group-header"
+            className="mb-2 flex items-baseline justify-between px-1"
+          >
+            <span className="text-sm font-bold">平台合计</span>
+            <span className="number-cell text-sm font-bold">
+              {formatCurrency(platforms.reduce((sum, platform) => sum + platform.market_value, 0))}
+            </span>
+          </div>
+          <DesktopPlatformTable
+            platforms={platforms}
+            percents={platformPercents}
+            portfolioCode={portfolioCode}
+            basePath={basePath}
+          />
+        </div>
       ) : (
-        <div className={`pt-3 ${cardGridClass(variant)}`}>
+        <div className={`pt-3 ${cardGridClass("mobile")}`}>
           {platforms.map((p, i) => {
             const card = (
               <HoldingPlatformCard
