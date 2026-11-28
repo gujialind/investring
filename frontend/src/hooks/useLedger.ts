@@ -25,6 +25,7 @@ function useLedgerInvalidation(code: string) {
     // 时与带 params 的查询键（["portfolios","list",{page_size}]）第三元素不等 → 不匹配、列表停旧值。
     // 改用 portfolios.root（["portfolios"]）前缀失效，覆盖 list(任意 params)+detail。
     queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.root });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
   };
 }
 

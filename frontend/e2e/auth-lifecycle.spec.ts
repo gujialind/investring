@@ -136,7 +136,7 @@ test.describe('凭证生命周期', () => {
     const ready = new Promise<void>((resolve) => { started = resolve; });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    await page.route(/\/api\/portfolios(\?|$)/, async (route) => {
+    await page.route(/\/api\/(portfolios|subscriptions)(\?|$)/, async (route) => {
       if (route.request().headers().authorization !== `Bearer ${original.token}`) {
         await route.continue();
         return;
@@ -150,7 +150,7 @@ test.describe('凭证生命周期', () => {
     const response = await page.request.post('/api/auth/login', { data: { code: 'ADMIN', password: 'admin@2026' } });
     const replacement: LoginResponse = await response.json();
     await installCredential(page, replacement);
-    const completed = page.waitForResponse(/\/api\/portfolios(\?|$)/);
+    const completed = page.waitForResponse(/\/api\/(portfolios|subscriptions)(\?|$)/);
     release();
     await completed;
     await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
@@ -166,7 +166,7 @@ test.describe('凭证生命周期', () => {
       json: { ...original, token: 'wrong-owner', user: { ...original.user, code: 'OTHER' } },
     }));
     page.on('request', (request) => {
-      if (/\/api\/(portfolios|investors|subscriptions|trades)(\?|$)/.test(request.url())) businessRequests++;
+      if (/\/api\/(portfolios|investors|subscriptions|trades|dashboard\/summary)(\?|$)/.test(request.url())) businessRequests++;
     });
     await page.goto('/dashboard');
     await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();

@@ -129,7 +129,7 @@ test.describe('台账型组合视图（#905 PR3）', () => {
     await expect(page.getByTestId('ledger-activate')).toHaveCount(0);
   });
 
-  test('仪表盘 R8 合并：台账计入总资产/总收益 chip，四卡栅格（双端目检取证）', async ({ page }, testInfo) => {
+  test('仪表盘 R8 合并：台账计入总资产/总收益与活跃行 XIRR（双端目检取证）', async ({ page }, testInfo) => {
     const headers = await openAppAndAuth(page);
     const code = isolatedPortfolioCode('E905R', testInfo, 'L');
     await createLedgerViaApi(page, headers, code, true);
@@ -141,13 +141,17 @@ test.describe('台账型组合视图（#905 PR3）', () => {
       headers, data: { platform_code: 'HBZQ', flow_date: today, direction: 'inflow', amount: 100 },
     });
     await page.goto('/dashboard');
-    await expect(page.getByTestId('dashboard-stat-total_value')).toBeVisible();
-    // R8：总收益 chip 存在（含台账型）；平均收益率标「不含台账型」
-    await expect(page.getByTestId('dashboard-stat-total_profit')).toBeVisible();
-    await expect(page.getByText('不含台账型').first()).toBeVisible();
-    // B3（#905 PR3 L2）：台账活跃卡显「累计收益(元)」，不把 None 收益率渲染成 0.00%
-    await expect(page.getByText('累计收益 ¥0.00').first()).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('dashboard-r8.png'), fullPage: true });
+    await expect(page.getByTestId('dashboard-summary-total_value')).toBeVisible();
+    await expect(page.getByTestId('dashboard-summary-total_profit')).toBeVisible();
+    await expect(page.getByText('不含台账型')).toHaveCount(0);
+    const row = page.locator(`[data-testid="dashboard-portfolio-row"][data-portfolio-code="${code}"]`);
+    await expect(row.getByTestId('dashboard-portfolio-value')).toHaveText('¥100.00');
+    await expect(row.getByTestId('dashboard-portfolio-profit')).toHaveText('¥0.00');
+    await expect(row.getByTestId('dashboard-portfolio-xirr')).toHaveText('--');
+    await page.locator('section[aria-label="家庭财务汇总"]').screenshot({
+      path: testInfo.outputPath('dashboard-r8-summary.png'),
+    });
+    await row.screenshot({ path: testInfo.outputPath('dashboard-r8.png') });
   });
 
   test('S2：真实点击激活后汇总从 -- 变 0 且登记入口出现（totals 失效回归）', async ({ page }, testInfo) => {
