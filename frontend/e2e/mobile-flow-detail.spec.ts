@@ -19,6 +19,7 @@ test('移动流水核对明细支持键盘展开、保持阅读位置且刷新�
 
   const trigger = card.getByTestId('trade-card-details');
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(trigger).not.toHaveAttribute('aria-controls');
   await expect(card.getByTestId('trade-card-shares')).toHaveCount(0);
   const box = await trigger.boundingBox();
   expect(box?.height, '展开触发器触控高度不得小于 44px').toBeGreaterThanOrEqual(44);
@@ -57,5 +58,6 @@ test('移动流水核对明细支持键盘展开、保持阅读位置且刷新�
 
   await page.keyboard.press('Enter');
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(trigger).not.toHaveAttribute('aria-controls');
   await expect(card.getByTestId('trade-card-shares')).toHaveCount(0);
 });

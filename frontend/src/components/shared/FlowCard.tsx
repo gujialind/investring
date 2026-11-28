@@ -104,7 +104,7 @@ export function FlowCardDetails({
         size="sm"
         className="h-11 w-full justify-between px-2"
         aria-expanded={open}
-        aria-controls={contentId}
+        aria-controls={open ? contentId : undefined}
         data-testid={testId}
         onClick={() => setOpen((value) => !value)}
       >
@@ -131,7 +131,7 @@ export function FlowCardKVGrid({
   return (
     <>
       <FlowCardKVGridRows items={items} />
-      {secondaryItems != null && secondaryItems.length > 0 && (
+      {secondaryItems !== undefined && secondaryItems.length > 0 && (
         <FlowCardDetails testId={detailsTestId}>
           <FlowCardKVGridRows items={secondaryItems} />
         </FlowCardDetails>
