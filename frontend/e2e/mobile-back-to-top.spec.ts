@@ -311,10 +311,7 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
         spacer.style.height = '2200px';
         content.insertBefore(spacer, content.lastElementChild);
       });
-      const maxY = await page.evaluate(
-        () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
-      );
-      await scrollWindowTo(page, maxY);
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       await expect(button).toBeVisible();
       const tailGeometry = await page.evaluate(() => {
         const action = document.querySelector('[data-testid="portfolio-action-buttons"]')!;
