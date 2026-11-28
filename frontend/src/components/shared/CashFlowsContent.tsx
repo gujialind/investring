@@ -49,12 +49,14 @@ import { DateRangePicker } from "@/components/ui/date-range-picker";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
+import MobileFilterSheet from "@/components/shared/MobileFilterSheet";
 import PaginationBar from "@/components/shared/PaginationBar";
 import RowActionButton from "@/components/shared/RowActionButton";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import ConfirmDialog from "@/components/shared/dialogs/ConfirmDialog";
 import CancelTransferDialog from "@/components/shared/dialogs/CancelTransferDialog";
 import { useRoleCheck } from "@/hooks/useAuth";
+import { useDraftFilters } from "@/hooks/useDraftFilters";
 import CashTransferDialog from "@/components/shared/dialogs/CashTransferDialog";
 import CashTransferListDialog from "@/components/shared/dialogs/CashTransferListDialog";
 import CashMarketValueUpdateDialog from "@/components/shared/dialogs/CashMarketValueUpdateDialog";
@@ -62,6 +64,7 @@ import TradeDetailDialog from "@/components/shared/dialogs/TradeDetailDialog";
 
 import { cn, formatNumber, formatSignedCurrency, getNumberCellClass, toDateOnly } from "@/lib/utils";
 import { getErrorMessage, type CashFlowListParams } from "@/lib/api";
+import { filterDateRangeError } from "@/lib/draftFilter";
 import type { CashFlowPairRef, CashFlowRow, CashFlowStatusFilter, CashFlowType } from "@/types/cash-flow";
 import {
   amountNote,
@@ -89,6 +92,22 @@ interface CashFlowsContentProps {
   /** 链接前缀：桌面 ""，移动 "/m"（拼 `/portfolio/{code}`） */
   basePath: "" | "/m";
   variant?: "desktop" | "mobile";
+}
+
+interface CashFlowFilters {
+  range: DateRange | undefined;
+  statusFilter: CashFlowStatusFilter | undefined;
+  platformFilter: string | undefined;
+  flowTypeFilter: CashFlowType | undefined;
+}
+
+function defaultFilters(): CashFlowFilters {
+  return {
+    range: defaultRange(),
+    statusFilter: undefined,
+    platformFilter: undefined,
+    flowTypeFilter: undefined,
+  };
 }
 
 /** 默认区间：下界近 1 年、上界**开放**（to=undefined）——否则预计到账日在未来的
@@ -126,14 +145,24 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const code = params.code as string;
   const isMobile = variant === "mobile";
 
-  // 筛选状态（visual-spec §9）：空字段 undefined，axios 不传参
-  const [range, setRange] = useState<DateRange | undefined>(() => defaultRange());
-  const [statusFilter, setStatusFilter] = useState<CashFlowStatusFilter | undefined>(undefined);
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(undefined);
-  const [flowTypeFilter, setFlowTypeFilter] = useState<CashFlowType | undefined>(undefined);
+  // 筛选状态（visual-spec §9）：空字段 undefined，axios 不传参；移动端先编辑草稿，应用后生效
+  const defaults = useMemo(() => defaultFilters(), []);
+  const {
+    applied: filters,
+    draft: draftFilters,
+    isOpen: filterOpen,
+    error: filterError,
+    isValid: filtersValid,
+    setApplied,
+    setDraft,
+    openDraft,
+    discardDraft,
+    resetDraft,
+    resetApplied,
+    apply,
+  } = useDraftFilters<CashFlowFilters>(defaults, defaults, (draft) => filterDateRangeError(draft.range));
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [filterOpen, setFilterOpen] = useState(false);
 
   // 页头三入口（复用既有现金弹窗）+ 构成弹窗 + 行级详情/当日弹窗
   const [transferOpen, setTransferOpen] = useState(false);
@@ -152,6 +181,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
   const [cancelTransferRow, setCancelTransferRow] = useState<CashFlowRow | null>(null);
   const { isAdmin } = useRoleCheck();
 
+  const { range, statusFilter, platformFilter, flowTypeFilter } = filters;
   const listParams: CashFlowListParams = {
     from_date: range?.from ? toDateOnly(range.from) : undefined,
     to_date: range?.to ? toDateOnly(range.to) : undefined,
@@ -231,11 +261,13 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     (flowTypeFilter ? 1 : 0) +
     (isDefaultRange(range) ? 0 : 1);
 
+  const updateAppliedFilters = (patch: Partial<CashFlowFilters>) => {
+    setApplied(patch);
+    setPage(1);
+  };
+
   const resetFilters = () => {
-    setStatusFilter(undefined);
-    setPlatformFilter(undefined);
-    setFlowTypeFilter(undefined);
-    setRange(defaultRange());
+    resetApplied();
     setPage(1);
   };
 
@@ -471,75 +503,75 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
     dayData && dayData.total > dayGroupRows.length ? dayData.total - dayGroupRows.length : 0;
 
   // ---- 筛选栏控件（visual-spec §9：时间 → 状态 → 实体 → 类型）----
-  const rangeWidth = isMobile ? "h-9 w-full" : "h-9 w-[240px]";
-  const selectWidth = isMobile ? "h-9 w-full" : "h-9 w-[160px]";
-  const filterControls = (
-    <>
-      <DateRangePicker
-        value={range}
-        onChange={(r) => {
-          setRange(r);
-          setPage(1);
-        }}
-        placeholder="现金日期"
-        numberOfMonths={isMobile ? 1 : 2}
-        className={rangeWidth}
-      />
-      <Select
-        value={statusFilter ?? "all"}
-        onValueChange={(v) => {
-          setStatusFilter(v === "all" ? undefined : (v as CashFlowStatusFilter));
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部状态" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部状态</SelectItem>
-          {CASH_FLOW_STATUS_OPTIONS.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <SearchablePlatformSelect
-        platforms={platforms}
-        value={platformFilter ?? null}
-        onChange={(v) => {
-          setPlatformFilter(v ?? undefined);
-          setPage(1);
-        }}
-        specialOptionLabel="全部平台"
-        className={selectWidth}
-      />
-      <Select
-        value={flowTypeFilter ?? "all"}
-        onValueChange={(v) => {
-          setFlowTypeFilter(v === "all" ? undefined : (v as CashFlowType));
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部流水类型" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部流水类型</SelectItem>
-          {CASH_FLOW_TYPE_OPTIONS.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {hasNonDefaultFilter && (
-        <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
-          重置
-        </Button>
-      )}
-    </>
-  );
+  // 桌面写 applied（即时生效 + 显示重置），移动写 draft（重置在 Sheet 页脚）。
+  const renderFilterControls = (
+    values: CashFlowFilters,
+    update: (patch: Partial<CashFlowFilters>) => void,
+    mobile: boolean,
+    onReset: () => void,
+  ) => {
+    const rangeWidth = mobile ? "h-9 w-full" : "h-9 w-[240px]";
+    const selectWidth = mobile ? "h-9 w-full" : "h-9 w-[160px]";
+    return (
+      <>
+        <DateRangePicker
+          value={values.range}
+          onChange={(r) => update({ range: r })}
+          placeholder="现金日期"
+          numberOfMonths={mobile ? 1 : 2}
+          className={rangeWidth}
+        />
+        <Select
+          value={values.statusFilter ?? "all"}
+          onValueChange={(v) =>
+            update({ statusFilter: v === "all" ? undefined : (v as CashFlowStatusFilter) })
+          }
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            {CASH_FLOW_STATUS_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <SearchablePlatformSelect
+          platforms={platforms}
+          value={values.platformFilter ?? null}
+          onChange={(v) => update({ platformFilter: v ?? undefined })}
+          specialOptionLabel="全部平台"
+          className={selectWidth}
+        />
+        <Select
+          value={values.flowTypeFilter ?? "all"}
+          onValueChange={(v) =>
+            update({ flowTypeFilter: v === "all" ? undefined : (v as CashFlowType) })
+          }
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部流水类型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部流水类型</SelectItem>
+            {CASH_FLOW_TYPE_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {!mobile && hasNonDefaultFilter && (
+          <Button variant="ghost" size="sm" className="h-9" onClick={onReset}>
+            重置
+          </Button>
+        )}
+      </>
+    );
+  };
 
   const entryButtons = (
     <>
@@ -648,37 +680,45 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
             )}
           </div>
           {isMobile ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9"
-              aria-expanded={filterOpen}
-              aria-controls="cash-flow-filters"
-              onClick={() => setFilterOpen((v) => !v)}
+            <MobileFilterSheet
+              trigger={
+                <Button variant="outline" size="sm" className="h-9">
+                  <Filter className="mr-2 h-4 w-4" />
+                  筛选
+                  {activeFilterCount > 0 && (
+                    <Badge variant="outline" className="ml-2 px-1.5 py-0">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Button>
+              }
+              open={filterOpen}
+              onOpenChange={(open) => {
+                if (open) openDraft();
+                else discardDraft();
+              }}
+              canApply={filtersValid}
+              error={filterError}
+              onReset={resetDraft}
+              onApply={() => {
+                if (apply()) setPage(1);
+              }}
             >
-              <Filter className="mr-2 h-4 w-4" />
-              筛选
-              {activeFilterCount > 0 && (
-                <Badge variant="outline" className="ml-2 px-1.5 py-0">
-                  {activeFilterCount}
-                </Badge>
-              )}
-            </Button>
+              <div className="grid grid-cols-1 gap-2">
+                {renderFilterControls(draftFilters, setDraft, true, resetDraft)}
+              </div>
+            </MobileFilterSheet>
           ) : (
             <div className="flex gap-2">{entryButtons}</div>
           )}
         </CardHeader>
         <CardContent>
           {isMobile && <div className="mb-3 flex gap-2">{entryButtons}</div>}
-          {/* 筛选栏（§9）：桌面平铺，移动折叠面板 + 激活计数 Badge */}
-          {isMobile ? (
-            filterOpen && (
-              <div id="cash-flow-filters" className="mb-3 grid grid-cols-1 gap-2">
-                {filterControls}
-              </div>
-            )
-          ) : (
-            <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
+          {/* 筛选栏（§9）：桌面平铺即时生效；移动端在页头筛选 Sheet 中编辑草稿 */}
+          {!isMobile && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {renderFilterControls(filters, updateAppliedFilters, false, resetFilters)}
+            </div>
           )}
 
           {/* §14：筛选/翻页局部刷新保留旧数据，右上角 spinner + aria-busy
@@ -1196,8 +1236,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                       outflow={r.outflow}
                       hit={platformFilter === r.platform_code}
                       onDrill={() => {
-                        setPlatformFilter(r.platform_code);
-                        setPage(1);
+                        updateAppliedFilters({ platformFilter: r.platform_code });
                         setBreakdownOpen(false);
                       }}
                       onUpdate={() => {
@@ -1247,8 +1286,7 @@ export default function CashFlowsContent({ basePath, variant = "desktop" }: Cash
                             size="sm"
                             data-testid="breakdown-drill"
                             onClick={() => {
-                              setPlatformFilter(r.platform_code);
-                              setPage(1);
+                              updateAppliedFilters({ platformFilter: r.platform_code });
                               setBreakdownOpen(false);
                             }}
                           >

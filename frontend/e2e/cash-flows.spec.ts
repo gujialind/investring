@@ -25,6 +25,7 @@
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import {
   collectPageErrors,
+  closeFilterPanelIfMobile,
   dialogByTitle,
   gotoPortfolioDetail,
   gotoPortfolioSubpage,
@@ -152,6 +153,7 @@ async function pickFlowType(page: Page, testInfo: TestInfo, label: string): Prom
   await openPopover(page, trigger, option);
   await option.click({ timeout: 10_000 });
   await settlePopovers(page);
+  await closeFilterPanelIfMobile(page, testInfo);
 }
 
 /** 状态 Select（在途 / 已生效） */
@@ -163,6 +165,7 @@ async function pickStatus(page: Page, testInfo: TestInfo, label: string): Promis
   await openPopover(page, trigger, option);
   await option.click({ timeout: 10_000 });
   await settlePopovers(page);
+  await closeFilterPanelIfMobile(page, testInfo);
 }
 
 /**

@@ -37,6 +37,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import {
   E2E_PORT,
   collectPageErrors,
+  closeFilterPanelIfMobile,
   dialogByTitle,
   expectFilteredPlatformOptions,
   firstPlatformOption,
@@ -143,8 +144,16 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
       { timeout: 10_000 }
     );
     await pickPlatformOption(popover, picked.code);
+    await closeFilterPanelIfMobile(page, testInfo);
     await respWith;
-    const selectedTrigger = platformTrigger(page, picked.text);
+    // 应用后 Sheet 收起（回到列表）：移动回显须重开 Sheet，桌面筛选栏恒展开
+    const isMobile = testInfo.project.name === 'mobile';
+    const filterScope = () => (isMobile ? dialogByTitle(page, '筛选') : page);
+    if (isMobile) {
+      await expect(dialogByTitle(page, '筛选')).toBeHidden();
+      await openFilterPanelIfMobile(page, testInfo);
+    }
+    const selectedTrigger = platformTrigger(filterScope(), picked.text);
     await expect(selectedTrigger).toBeVisible();
 
     // 带过滤词点选关闭后重开 → 搜索词已重置、选项恢复全量（点选路径不经过 onOpenChange）
@@ -156,7 +165,7 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
 
     // 点「全部平台」→ 触发按钮回显恢复
     await popover2.getByTestId('platform-special-option').click();
-    await expect(platformTrigger(page, '全部平台')).toBeVisible();
+    await expect(platformTrigger(filterScope(), '全部平台')).toBeVisible();
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
@@ -495,8 +504,15 @@ test.describe('平台选择框搜索（防 #177 回归）', () => {
       { timeout: 10_000 }
     );
     await pickPlatformOption(popover, picked.code);
+    await closeFilterPanelIfMobile(page, testInfo);
     await respWith;
-    await expect(platformTrigger(page, picked.text)).toBeVisible();
+    // 应用后 Sheet 收起（回到列表）：移动回显须重开 Sheet，桌面筛选栏恒展开
+    const filterScope = () => (testInfo.project.name === 'mobile' ? dialogByTitle(page, '筛选') : page);
+    if (testInfo.project.name === 'mobile') {
+      await expect(dialogByTitle(page, '筛选')).toBeHidden();
+      await openFilterPanelIfMobile(page, testInfo);
+    }
+    await expect(platformTrigger(filterScope(), picked.text)).toBeVisible();
 
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
