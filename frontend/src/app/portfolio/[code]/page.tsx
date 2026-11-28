@@ -321,7 +321,7 @@ function PortfolioDetailInner() {
 }
 
 /**
- * 组合详情页（issue #99 单列五段；#595 改为主体左右分栏 + 持仓双视图 + ?view= 持久化）。
+ * 组合详情页（issue #99；#944 Phase 7.2 七段 IA + 持仓双视图 + ?view= 持久化）。
  * useSearchParams 需包 Suspense 边界（Next 15 静态预渲染要求）。
  */
 export default function PortfolioDetailPage() {
