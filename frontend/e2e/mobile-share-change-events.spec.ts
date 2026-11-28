@@ -35,6 +35,9 @@ test.describe('移动端份额变动事件页（#276）', () => {
     const code = await gotoMobilePortfolioDetail(page);
     await clickPortfolioMoreMenuItem(page, testInfo, '份额变动事件');
     await expect(page).toHaveURL(`/m/portfolio/${code}/share-change-events`);
+    await expect(page.getByTestId('mobile-top-bar')).toBeVisible();
+    await expect(page.getByRole('button', { name: '用户菜单', exact: true })).toHaveCount(1);
+    await expect(page.getByTestId('bottom-nav')).toHaveCount(0);
 
     // 页面骨架：标题 + 新建按钮 + 筛选折叠按钮（移动端形态）
     await expect(page.getByRole('heading', { name: '份额变动事件' })).toBeVisible();

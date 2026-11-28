@@ -175,7 +175,8 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(page.getByTestId('dashboard-recent-item')).toHaveCount(4);
     await expect(page.getByTestId('dashboard-recent-activity')).not.toContainText('CASH');
     if (testInfo.project.name === 'mobile') {
-      await expect(page.getByRole('heading', { name: '账户', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '用户菜单', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '账户', exact: true })).toHaveCount(0);
     }
     expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
   });
@@ -462,8 +463,8 @@ test.describe('首页汇总（#944 Phase 3.2）', () => {
     await expect(page.getByText('加载失败：仪表盘汇总暂不可用')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('暂无活跃组合，请先创建组合')).toHaveCount(0);
     if (testInfo.project.name === 'mobile') {
-      await expect(page.getByRole('heading', { name: '账户', exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '用户菜单', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '账户', exact: true })).toHaveCount(0);
     }
     await page.getByRole('button', { name: '重试', exact: true }).click();
     await expect(page.getByTestId('dashboard-summary-total_value')).toHaveText('¥603,000.00');
