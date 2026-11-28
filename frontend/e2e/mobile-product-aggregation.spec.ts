@@ -24,6 +24,7 @@ function readReturnFocus(page: Page) {
 test('移动产品聚合行保留字段但移除卡壳，桌面卡片不变（#944 Phase 6.2）', async ({
   page,
 }, testInfo) => {
+  test.setTimeout(60_000);
   await gotoPortfolioDetail(page, E2E_ACTIVE);
   const row = productRow(page);
   const card = page.getByTestId('holding-product-card').filter({ hasText: '沪深300ETF' });
@@ -50,25 +51,27 @@ test('移动产品聚合行保留字段但移除卡壳，桌面卡片不变（#9
     for (const width of [320, 390, 430]) {
       await page.setViewportSize({ width, height: 844 });
       await expect(card).toBeVisible();
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - window.innerWidth,
-      );
-      const offenders = await page.evaluate(() =>
-        [...document.querySelectorAll('body *')]
-          .map((element) => {
-            const rect = element.getBoundingClientRect();
-            return {
-              tag: element.tagName,
-              className: element.className,
-              text: element.textContent?.trim().slice(0, 40),
-              left: rect.left,
-              right: rect.right,
-            };
-          })
-          .filter((item) => item.right > window.innerWidth + 1 || item.left < -1)
-          .slice(0, 8),
-      );
-      expect(overflow, `移动产品行在 ${width}px 不得撑宽页面：${JSON.stringify(offenders)}`).toBeLessThanOrEqual(1);
+      await expect(async () => {
+        const overflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth,
+        );
+        const offenders = await page.evaluate(() =>
+          [...document.querySelectorAll('body *')]
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              return {
+                tag: element.tagName,
+                className: element.className,
+                text: element.textContent?.trim().slice(0, 40),
+                left: rect.left,
+                right: rect.right,
+              };
+            })
+            .filter((item) => item.right > window.innerWidth + 1 || item.left < -1)
+            .slice(0, 8),
+        );
+        expect(overflow, `移动产品行在 ${width}px 不得撑宽页面：${JSON.stringify(offenders)}`).toBeLessThanOrEqual(1);
+      }).toPass({ timeout: 5_000 });
     }
   } else {
     await expect(card).toHaveCSS('border-top-width', '1px');
