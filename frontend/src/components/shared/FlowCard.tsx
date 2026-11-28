@@ -66,7 +66,7 @@ export function FlowCardHeader({
  * （pending 空值 fallback `--`，#424）。testId 挂在值 span（非整格）——E2E 对值文本做精确断言，
  * 含 label 会污染 textContent。
  */
-type FlowCardKVItem = { label: string; value: ReactNode; testId?: string };
+export type FlowCardKVItem = { label: string; value: ReactNode; testId?: string };
 
 function FlowCardKVGridRows({ items }: { items: FlowCardKVItem[] }) {
   return (
