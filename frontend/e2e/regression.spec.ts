@@ -23,6 +23,15 @@ import {
   openSettingsSection,
   portfolioPath,
   settlePopovers,
+  captureNavCardThemes,
+  expectNavCurveGeometry,
+  expectNavCurveKeyboardNavigation,
+  expectNavCurvePointerInteraction,
+  expectNavRangeLayout,
+  mockPortfolioNavCurve,
+  navCurveInCard,
+  setNavTextScale,
+  NAV_CURVE_STANDARD,
   type PortfolioCode,
 } from './helpers';
 // 运行时导入导航单源：断言清单与返回出口由同一份数据派生，不在 spec 里抄第三份（#650）
@@ -278,6 +287,76 @@ test.describe('组合净值走势卡双端一致（#649）', () => {
     );
     await retry.click();
     await refetched;
+  });
+});
+
+test.describe('净值折线图焦点与绘图区（#941）', () => {
+  test('A2/A3 普通刻度回收留白，pointer/touch 无粗框，Tab/方向键保留 Tooltip 与选中点', async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    const errors = collectPageErrors(page);
+    await mockPortfolioNavCurve(page);
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const card = page.getByTestId('portfolio-nav-trend-card');
+    const curve = navCurveInCard(card);
+    const geometry = await expectNavCurveGeometry(card, '组合净值标准夹具', {
+      requireReferenceLabel: true,
+    });
+    expect(geometry.plotWidth, '普通刻度夹具应回收有效绘图区').toBeGreaterThan(200);
+    expect(curve).toHaveCSS('height', testInfo.project.name === 'mobile' ? '200px' : '300px');
+
+    const focusedTags = await expectNavCurvePointerInteraction(
+      page,
+      card,
+      testInfo.project.name === 'mobile' ? 'touch' : 'mouse',
+      '组合净值指针',
+    );
+    if (testInfo.project.name !== 'mobile') {
+      expect(focusedTags, '鼠标必须实际覆盖根 SVG 与内部可聚焦 g，不得只测根').toContain('svg');
+      expect(focusedTags).toContain('g');
+    }
+
+    await expectNavCurveKeyboardNavigation(page, card, NAV_CURVE_STANDARD, '组合净值键盘');
+    await captureNavCardThemes(page, card, testInfo.outputPath('nav941-portfolio-standard'));
+    expect(errors, `页面抛出未捕获异常: ${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  test('A4 组合区间：320/360/390 与 125% 下整颗换行、文字单行、常规宽度四颗同排', async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    await mockPortfolioNavCurve(page);
+    await gotoPortfolioDetail(page, E2E_ACTIVE);
+    const card = page.getByTestId('portfolio-nav-trend-card');
+    const group = card.getByRole('group', { name: '净值区间' });
+    const height = page.viewportSize()?.height ?? 720;
+    const isMobile = testInfo.project.name === 'mobile';
+    const normalWidth = isMobile ? 390 : 1280;
+    const widths = isMobile ? [320, 360, 390] : [768, 1024, 1280];
+
+    await page.setViewportSize({ width: normalWidth, height });
+    await expectNavRangeLayout(group, `组合区间 ${normalWidth} 常规字号`, { fontSize: 12, singleRow: true });
+    for (const scale of [100, 125] as const) {
+      await setNavTextScale(page, scale);
+      for (const width of widths) {
+        await page.setViewportSize({ width, height });
+        await expect(async () => {
+          await expectNavCurveGeometry(card, `组合图表 ${width}px/${scale}%`, { minSvgWidth: 0 });
+          await expectNavRangeLayout(group, `组合区间 ${width}px/${scale}%`, {
+            fontSize: scale === 125 ? 15 : 12,
+          });
+        }).toPass({ timeout: 5_000 });
+      }
+    }
+
+    // 真实键盘往返把首颗按钮置于 focus-visible，确认 ring 未被换行/卡片裁掉。
+    const first = group.getByRole('button').first();
+    await first.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(first).toBeFocused();
+    expect(await first.evaluate((el) => getComputedStyle(el).boxShadow)).not.toBe('none');
+    await page.setViewportSize({ width: isMobile ? 320 : 768, height });
+    await expectNavCurveGeometry(card, `组合图表 ${isMobile ? 320 : 768}px/125% 最终态`, { minSvgWidth: 0 });
+    await expectNavRangeLayout(group, `组合区间 ${isMobile ? 320 : 768}px/125% 最终态`, { fontSize: 15 });
+    await captureNavCardThemes(page, card, testInfo.outputPath(`nav941-portfolio-ranges-${isMobile ? 320 : 768}-125`));
   });
 });
 

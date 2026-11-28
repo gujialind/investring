@@ -104,14 +104,18 @@ export default function ProductNavCards({
       {analysisRevalidating && (
         <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}
-      <div className="mt-2 flex gap-1" role="group" aria-label="净值区间">
+      <div
+        className="mt-2 flex min-w-0 max-w-full flex-wrap gap-x-1 gap-y-1.5"
+        role="group"
+        aria-label="净值区间"
+      >
         {NAV_RANGE_TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
             aria-pressed={range === tab.key}
             data-testid={`nav-range-${tab.key}`}
-            className={`rounded-md px-3 py-1 text-sm ${
+            className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
               range === tab.key
                 ? "bg-primary/10 text-primary font-medium"
                 : "text-muted-foreground hover:bg-muted"

@@ -9,6 +9,8 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  Text,
+  type XAxisTickContentProps,
 } from "recharts";
 import { chartOtherColor, navLineColor } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
@@ -25,6 +27,35 @@ interface NavCurveProps {
   initialNav?: number;
 }
 
+/** 首末日期向内锚定，8px 右边距下仍完整可见；日期格式与筛选语义不变。 */
+function NavDateTick({
+  x,
+  y,
+  payload,
+  index,
+  visibleTicksCount,
+  tickFormatter,
+  verticalAnchor,
+}: XAxisTickContentProps) {
+  let textAnchor: "start" | "middle" | "end" = "middle";
+  if (index === 0) textAnchor = "start";
+  else if (index === visibleTicksCount - 1) textAnchor = "end";
+  return (
+    <Text
+      x={x}
+      y={y}
+      textAnchor={textAnchor}
+      verticalAnchor={verticalAnchor}
+      fontSize={12}
+      fill="hsl(var(--foreground-secondary))"
+      stroke="none"
+      className="recharts-cartesian-axis-tick-value"
+    >
+      {tickFormatter ? tickFormatter(payload.value, index) : String(payload.value)}
+    </Text>
+  );
+}
+
 export default function NavCurve({ data, height = 300, initialNav = 1.0 }: NavCurveProps) {
   const theme = useChartTheme();
   if (!data || data.length === 0) {
@@ -37,17 +68,22 @@ export default function NavCurve({ data, height = 300, initialNav = 1.0 }: NavCu
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+      <LineChart
+        data={data}
+        className="nav-curve"
+        margin={{ top: 5, right: 8, left: 0, bottom: 5 }}
+      >
         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
         {/* #872 PR2：recharts 默认轴色 #666 暗卡仅 2.91:1，显式走 token（visual-spec §2 治理结论） */}
         <XAxis
           dataKey="date"
           stroke="hsl(var(--border))"
-          tick={{ fontSize: 12, fill: "hsl(var(--foreground-secondary))" }}
-          tickFormatter={(value) => value.slice(5)}
+          tick={NavDateTick}
+          tickFormatter={(value) => String(value).slice(5)}
         />
         <YAxis
           domain={["auto", "auto"]}
+          width="auto"
           stroke="hsl(var(--border))"
           tick={{ fontSize: 12, fill: "hsl(var(--foreground-secondary))" }}
           tickFormatter={(value) => formatNav(value)}
@@ -65,11 +101,13 @@ export default function NavCurve({ data, height = 300, initialNav = 1.0 }: NavCu
         />
         <ReferenceLine
           y={initialNav}
+          fill="none"
           stroke={chartOtherColor(theme)}
           strokeDasharray="5 5"
           label={{
             value: "初始净值",
-            position: "right",
+            position: "insideRight",
+            offset: 8,
             fontSize: 12,
             fill: "hsl(var(--foreground-secondary))",
           }}
