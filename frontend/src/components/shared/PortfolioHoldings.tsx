@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { AssetClassificationItem } from "@/types/asset-classification";
@@ -29,7 +30,9 @@ import {
 } from "@/lib/dimensions";
 import { cn, formatNumber, largestRemainderPercents } from "@/lib/utils";
 import HoldingInTransitCard from "./HoldingInTransitCard";
-import HoldingProductCard from "./HoldingProductCard";
+import HoldingProductCard, {
+  MOBILE_PRODUCT_RETURN_PREFIX,
+} from "./HoldingProductCard";
 import HoldingPlatformCard from "./HoldingPlatformCard";
 import LoadingState from "./LoadingState";
 import QueryErrorState from "./QueryErrorState";
@@ -75,11 +78,18 @@ const VIEW_TABS: { key: HoldingsView; label: string }[] = [
  * 在途卡、按平台视图的平台卡组，以及 `PlatformDetailContent.tsx` 的平台详情「持仓明细」。
  * 该页没有引导线结构、不参与上面的分叉推导，但列数与卡宽同样由这个 350 决定——按引导线
  * 理由调 350 会连带改动它，两处需一起目检。
+ *
+ * **移动端按用途分两支**：产品列表传 `"product-rows"`（#944 Phase 6.2 分隔线行，无卡壳）；
+ * 其余默认 `"cards"`（`space-y-2.5` 卡片间距，平台卡与在途卡沿用）。桌面两端同串。
  */
-export function cardGridClass(variant: "desktop" | "mobile"): string {
-  return variant === "desktop"
-    ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(350px,100%),1fr))]"
-    : "space-y-2.5";
+export function cardGridClass(
+  variant: "desktop" | "mobile",
+  layout: "cards" | "product-rows" = "cards",
+): string {
+  if (variant === "desktop") {
+    return "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(350px,100%),1fr))]";
+  }
+  return layout === "product-rows" ? "divide-y divide-border" : "space-y-2.5";
 }
 
 /** 分区头下的子集切换 chip 行（#915 B2：快捷切换单维 + 页面直切子集，同一交互）。
@@ -155,6 +165,7 @@ function SubDimSwitchRow({
  * #915：二级组为维度子集组合键，React key 用 code 元组串（同名不同 code 不冲突）；
  * showChip 判据（组名 ≠ 大类名）原样保留。 */
 function ProductSections({
+  portfolioCode,
   sections,
   percentOf,
   snapshotDate,
@@ -164,6 +175,7 @@ function ProductSections({
   subDimOverrides,
   onSubDimToggle,
 }: {
+  portfolioCode: string;
   sections: HoldingProductSection[];
   /** 行级占比查表（buildCardPercentMap 输出），§4 分区头 = 行占比加总后取整 */
   percentOf: (product: HoldingProductAggregate) => number;
@@ -265,7 +277,7 @@ function ProductSections({
                       className={cn(
                         showChip && variant === "desktop" &&
                           "ml-0.5 border-l-2 border-border pl-3",
-                        cardGridClass(variant)
+                        cardGridClass(variant, "product-rows")
                       )}
                     >
                       {g.products.map((p) => {
@@ -277,6 +289,8 @@ function ProductSections({
                             product={p}
                             percent={percentOf(p)}
                             snapshotDate={snapshotDate}
+                            variant={variant}
+                            returnFocusKey={variant === "mobile" ? portfolioCode : undefined}
                             href={`${productLinkPrefix}/${encodeURIComponent(p.product_code)}?market=${encodeURIComponent(p.market)}`}
                           />
                         );
@@ -326,6 +340,22 @@ export default function PortfolioHoldings({
   const percentOfProduct = (
     p: NonNullable<typeof productData>["products"][number]
   ) => productPercentMap?.get(productCardKey(p)) ?? 0;
+
+  // 移动端从产品详情返回：聚焦点击前那一行（键按组合隔离，焦点归还后即清除）
+  useEffect(() => {
+    if (variant !== "mobile" || view !== "product" || !productData) return;
+    const storageKey = `${MOBILE_PRODUCT_RETURN_PREFIX}${portfolioCode}`;
+    const productCode = sessionStorage.getItem(storageKey);
+    if (!productCode) return;
+    const frame = requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLAnchorElement>(
+        `[data-testid="portfolio-holdings"] [data-product-code="${CSS.escape(productCode)}"]`,
+      );
+      row?.focus();
+      sessionStorage.removeItem(storageKey);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [variant, view, productData, portfolioCode]);
 
   const sections =
     view === "product" && productData
@@ -382,6 +412,7 @@ export default function PortfolioHoldings({
         ) : (
           <>
             <ProductSections
+              portfolioCode={portfolioCode}
               sections={sections}
               percentOf={percentOfProduct}
               snapshotDate={productData?.snapshot_date}

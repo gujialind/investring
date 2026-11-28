@@ -2,7 +2,7 @@
 
 import PageHeader from "@/components/shared/PageHeader";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
@@ -98,6 +98,26 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   const product = holdings?.products.find(
     (p) => p.product_code === productCode && (isCash || p.market === market)
   );
+  const hasProduct = !!product;
+  // 移动端进详情（含深链）：数据就绪后回到顶部，双 rAF 等布局落定再聚焦「返回组合详情」crumb
+  useEffect(() => {
+    if (!isMobile || portfolioLoading || holdingsLoading || !hasProduct) return;
+    window.scrollTo({ top: 0 });
+    const backCrumbSelector =
+      '[data-testid="page-header"] nav a[aria-label="返回组合详情"]';
+    let innerFrame = 0;
+    const outerFrame = requestAnimationFrame(() => {
+      innerFrame = requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLAnchorElement>(backCrumbSelector)
+          ?.focus({ preventScroll: true });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outerFrame);
+      cancelAnimationFrame(innerFrame);
+    };
+  }, [isMobile, portfolioLoading, holdingsLoading, hasProduct]);
 
   // 概览卡「单位净值 · 累计净值 (MM/DD)」取最新一条历史净值。三卡（走势/区间收益率/历史净值）
   // 已移入 ProductNavCards（#824），此处只为概览取首屏首条——页 1 的 query key 与 ProductNavCards
@@ -334,7 +354,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
   );
 
   return (
-    <div className={isMobile ? "space-y-3 p-3" : "space-y-4 p-6"}>
+    <div className={isMobile ? "space-y-3 p-3 pb-5" : "space-y-4 p-6"}>
       <PageHeader
         variant={variant}
         crumbs={[
