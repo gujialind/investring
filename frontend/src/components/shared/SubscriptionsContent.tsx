@@ -470,7 +470,7 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
   );
 
   // 移动流水卡（#907，visual-spec §8 流水卡解剖）：头行（投资人名 + code·平台次行 /
-  // 类型 chip neutral / 状态 badge）→ kv（金额/份额/净值，pending 空值 `--` 不折 0.00 #424）
+  // 类型 chip neutral / 状态 badge）→ 常显金额 → 份额/净值核对明细（pending 空值 `--` 不折 0.00 #424）
   // → 申请/确认日期行（pending 预计）→ 操作行。字段集合与桌面列逐一对应（§6）。
   const renderSubCard = (sub: Subscription) => {
     const investorName = investorNameMap.get(sub.investor_code);
@@ -501,9 +501,12 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
         <FlowCardKVGrid
           items={[
             { label: "金额", value: formatCurrency(sub.amount) },
+          ]}
+          secondaryItems={[
             { label: "份额", value: formatSharesUnit(sub.shares) },
             { label: "净值", value: formatNav(sub.unit_price) },
           ]}
+          detailsTestId="subscription-card-details"
         />
         <div>
           <DatePairCell

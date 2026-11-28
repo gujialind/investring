@@ -915,8 +915,8 @@ export default function TradesContent({
     );
   };
 
-  // 主卡：头行（名称 + code·市场·平台次行 / 类型 chip neutral / 状态 badge）→ kv 数值网格
-  // （金额/份额/手续费/价格）→ 日期行（交易/确认，pending 预计）→ 操作行（仅主行）。
+  // 主卡：头行（名称 + code·市场·平台次行 / 类型 chip neutral / 状态 badge）→ 常显金额
+  // → 份额/手续费/价格核对明细 → 日期行（交易/确认，pending 预计）→ 操作行（仅主行）。
   // 结对主行卡内追加子块（现金腿/派生对手），与桌面主+子成组同语义。
   const renderTradeCard = (row: TradeRow) => {
     const trade = row.kind === "pair" ? row.main : row.trade;
@@ -952,10 +952,13 @@ export default function TradesContent({
         <FlowCardKVGrid
           items={[
             { label: "金额", value: formatCurrency(trade.amount) },
+          ]}
+          secondaryItems={[
             { label: "份额", value: formatSharesUnit(isCash ? null : trade.shares), testId: "trade-card-shares" },
             { label: "手续费", value: formatCurrency(trade.fee) },
             { label: "价格", value: formatNav(isCash ? null : trade.price), testId: "trade-card-price" },
           ]}
+          detailsTestId="trade-card-details"
         />
         <div>
           <DatePairCell
