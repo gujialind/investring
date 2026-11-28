@@ -244,7 +244,7 @@ function PortfolioDetailInner() {
               <>
                 <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
                   <div data-testid="portfolio-detail-assets">
-                    <AssetCompositionCard items={allocation} />
+                    <AssetCompositionCard items={allocation} forceColumn />
                   </div>
                   <div data-testid="portfolio-detail-nav">
                     <PortfolioNavTrendCard code={code} variant="desktop" />
@@ -288,26 +288,29 @@ function PortfolioDetailInner() {
                   <PerformanceMetrics data={performance} variant="desktop" />
                 </div>
 
-                <nav
-                  aria-label="组合详情入口"
-                  data-testid="portfolio-detail-links"
-                  className="flex flex-wrap gap-2"
-                >
-                  <Button asChild variant="outline">
-                    <Link href={`/portfolio/${code}?tab=investors`}>
-                      <Users className="mr-2 h-4 w-4" />
-                      投资人
-                    </Link>
-                  </Button>
-                  <Button asChild variant="outline">
-                    <Link href={`/portfolio/${code}/trades`}>
-                      <ArrowRightLeft className="mr-2 h-4 w-4" />
-                      交易记录
-                    </Link>
-                  </Button>
-                </nav>
               </>
             )}
+
+            <nav
+              aria-label="组合详情入口"
+              data-testid="portfolio-detail-links"
+              className="flex flex-wrap gap-2"
+            >
+              <Button asChild variant="outline">
+                <Link href={`/portfolio/${code}?tab=investors`}>
+                  <Users className="mr-2 h-4 w-4" />
+                  投资人
+                </Link>
+              </Button>
+              {!isDraft && (
+                <Button asChild variant="outline">
+                  <Link href={`/portfolio/${code}/trades`}>
+                    <ArrowRightLeft className="mr-2 h-4 w-4" />
+                    交易记录
+                  </Link>
+                </Button>
+              )}
+            </nav>
 
             <PortfolioInfoCard portfolio={portfolio} />
           </div>

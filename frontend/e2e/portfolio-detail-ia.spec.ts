@@ -80,4 +80,11 @@ test('草稿组合不伪造成立日期或空持仓段，只保留口径卡', as
   await expect(page.getByTestId('portfolio-detail-assets')).toHaveCount(0);
   await expect(page.getByTestId('portfolio-detail-nav')).toHaveCount(0);
   await expect(page.getByTestId('portfolio-detail-performance')).toHaveCount(0);
+  if (testInfo.project.name === 'chromium') {
+    await expect(page.getByTestId('portfolio-detail-links').getByRole('link', { name: '投资人' })).toBeVisible();
+    await expect(page.getByTestId('portfolio-detail-links').getByRole('link', { name: '交易记录' })).toHaveCount(0);
+  } else {
+    await expect(page.getByTestId('portfolio-detail-stats')).toHaveCount(0);
+    await expect(page.getByTestId('portfolio-detail-links')).toHaveCount(0);
+  }
 });

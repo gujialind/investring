@@ -222,8 +222,8 @@ function MobilePortfolioDetailInner() {
         <PortfolioInvestorsList investors={investors} variant="mobile" />
       ) : (
         <>
-          <div data-testid="portfolio-detail-stats">
-            {!isDraft && (
+          {!isDraft && (
+            <div data-testid="portfolio-detail-stats">
               <PortfolioStatsCards
                 totalValue={portfolio.total_value ?? snapshot?.total_value ?? null}
                 unitPrice={snapshot?.unit_price ?? null}
@@ -233,8 +233,8 @@ function MobilePortfolioDetailInner() {
                 holdingDays={performance?.holding_days ?? null}
                 variant="mobile"
               />
-            )}
-          </div>
+            </div>
+          )}
 
           {/* 入流操作区（#937）：主动作 +「更多」Sheet，单层网格由组件内部控制 */}
           {actionButtons}
