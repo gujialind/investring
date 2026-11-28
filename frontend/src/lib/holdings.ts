@@ -28,6 +28,21 @@ export const CUMULATIVE_PROFIT_INFO_TIP = {
   content: "累计收益含已卖出实现盈亏",
 } as const;
 
+export const MOBILE_PRODUCT_RETURN_PREFIX = "investring:mobile-product-return:";
+
+export function clearMobileProductReturnFocus(): void {
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith(MOBILE_PRODUCT_RETURN_PREFIX)) {
+        sessionStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // 存储不可用时放弃清理，不能阻断底部导航。
+  }
+}
+
 export const UNCATEGORIZED_GROUP_NAME = "未分类";
 export const OTHER_SECTION_NAME = "其他";
 /** 组合键显示名分隔符（U+00B7，两侧不加空格；存量观感契约，SPEC §6.1） */

@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   buildCardPercentMap,
   buildProductSections,
+  clearMobileProductReturnFocus,
+  MOBILE_PRODUCT_RETURN_PREFIX,
   productCardKey,
   sumGroupPercent,
   OTHER_SECTION_NAME,
@@ -420,6 +422,39 @@ describe("sumGroupPercent", () => {
     const products = [makeProduct({}), makeProduct({}), makeProduct({})];
     const percentOf = () => 33.4;
     expect(sumGroupPercent(products, percentOf)).toBeCloseTo(100.2, 5);
+  });
+});
+
+describe("clearMobileProductReturnFocus", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("只清理移动产品返回焦点键，保留其他会话状态", () => {
+    const values = new Map([
+      [`${MOBILE_PRODUCT_RETURN_PREFIX}E2E_ACTIVE`, "510300.SH-CN_EXCHANGE"],
+      [`${MOBILE_PRODUCT_RETURN_PREFIX}P001`, "CASH-"],
+      ["unrelated", "keep"],
+    ]);
+    vi.stubGlobal("sessionStorage", {
+      get length() {
+        return values.size;
+      },
+      key: (index: number) => [...values.keys()][index] ?? null,
+      removeItem: (key: string) => values.delete(key),
+    });
+
+    clearMobileProductReturnFocus();
+
+    expect([...values.entries()]).toEqual([["unrelated", "keep"]]);
+  });
+
+  it("存储不可用时静默放弃清理", () => {
+    vi.stubGlobal("sessionStorage", {
+      get length(): number {
+        throw new Error("blocked");
+      },
+    });
+
+    expect(() => clearMobileProductReturnFocus()).not.toThrow();
   });
 });
 

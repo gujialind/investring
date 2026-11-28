@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuthStore } from "@/stores/authStore";
+import { clearMobileProductReturnFocus } from "@/lib/holdings";
 import { cn } from "@/lib/utils";
 import { navItemsForRole } from "./navItems";
 
@@ -49,6 +50,7 @@ export default function BottomNav({ basePath }: BottomNavProps) {
               key={item.href}
               href={href}
               aria-current={isActive ? "page" : undefined}
+              onClick={clearMobileProductReturnFocus}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] h-full px-2 text-xs font-medium transition-colors",
                 isActive

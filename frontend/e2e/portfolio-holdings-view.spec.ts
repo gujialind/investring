@@ -220,12 +220,13 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await expect(tipContent).toHaveCount(0);
     await expect(productCard).toContainText('占比');
 
-    // 现金聚合卡（可用现金 · 平台名）
+    // 现金聚合卡副标双端只显「可用现金」，平台构成由产品详情承载
     const cashCard = page
       .getByTestId('holding-product-card')
       .filter({ hasText: '可用现金' });
     await expect(cashCard).toBeVisible();
-    await expect(cashCard).toContainText('华宝证券');
+    await expect(cashCard.getByText('可用现金', { exact: true })).toBeVisible();
+    await expect(cashCard).not.toContainText('华宝证券');
   });
 
   test('维度组引导线缩进仅桌面保留，移动端让位横向空间（#724，§6 第 4 类）', async ({

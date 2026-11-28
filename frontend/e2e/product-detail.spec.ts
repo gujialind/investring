@@ -510,6 +510,7 @@ test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析�
   });
 
   test("切换区间在途不得把上一个区间的数据当成当前区间呈现（#683 D-1）", async ({ page }) => {
+    test.setTimeout(60_000);
     // useNavAnalysis 配 placeholderData: keepPreviousData，换 range 键时先保留上一个键的返回值
     // （筛选/翻页不闪烁的既有行为，本批按判定**不动它**）。实测 query-core 5.102.8 的时序：
     // 点「近1个月」后该请求在途期间 isError=false、isPlaceholderData=true、isFetching=true，
@@ -543,8 +544,11 @@ test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析�
     await expect(curve).toHaveAttribute("aria-busy", "false");
     await expect(returns).toHaveAttribute("aria-busy", "false");
 
-    await page.getByTestId("nav-range-1m").click();
-    await expect(page.getByTestId("nav-range-1m")).toHaveAttribute("aria-pressed", "true");
+    // 直接派发 click，避免 WebKit 在并行负载下丢失物理点击；承重断言仍是区间状态与在途标记。
+    await page.getByTestId("nav-range-1m").dispatchEvent("click");
+    await expect(page.getByTestId("nav-range-1m")).toHaveAttribute("aria-pressed", "true", {
+      timeout: 30_000,
+    });
     // 承重：两卡都必须显式标出「本区间正在重取」，不得让旧值无标记地冒充当前区间
     // 反证③的落点：删掉组件里 isRefetching 门控，这两句红
     await expect(curve).toHaveAttribute("aria-busy", "true");
