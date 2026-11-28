@@ -49,23 +49,14 @@ import { formatCurrency, formatSharesUnit, formatNav, formatDate, formatProductN
 import { Badge } from "@/components/ui/badge";
 import { tradeDirectionColors } from "@/lib/colors";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { Plus, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info, X } from "lucide-react";
-import {
-  Sheet,
-  SheetTrigger,
-  SheetClose,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetBody,
-  SheetFooter,
-} from "@/components/ui/sheet";
+import { Plus, CheckCircle, XCircle, Loader2, Pencil, Trash2, Undo, Filter, CalendarClock, Info } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
 import type { DateRange } from "react-day-picker";
 import { isSameDay, subYears } from "date-fns";
 import { ApiException } from "@/lib/api";
 import type { TradeListParams } from "@/lib/api";
 import type { Trade, TradeCreate, TradeUpdate } from "@/types/trade";
+import { filterDateRangeError } from "@/lib/draftFilter";
 import {
   canEditArrivalDate,
   cashLegArrived,
@@ -89,6 +80,7 @@ import {
   useDeleteTrade,
 } from "@/hooks/useTrade";
 import { useRoleCheck } from "@/hooks/useAuth";
+import { useDraftFilters } from "@/hooks/useDraftFilters";
 import { usePlatformList } from "@/hooks/usePlatform";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useUIStore } from "@/stores/uiStore";
@@ -101,6 +93,7 @@ import ProductCell from "@/components/shared/ProductCell";
 import DatePairCell from "@/components/shared/DatePairCell";
 import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions, FlowCardSubBlock } from "@/components/shared/FlowCard";
 import ProductFilterSelect from "@/components/shared/ProductFilterSelect";
+import MobileFilterSheet from "@/components/shared/MobileFilterSheet";
 import SearchableProductSelect from "@/components/shared/SearchableProductSelect";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import ProductFormDialog from "@/components/shared/ProductFormDialog";
@@ -125,6 +118,15 @@ interface TradesContentProps {
    * 不变：仅筛选列表，表单初值仍为空（「查看全部」路径行为零变化）。
    */
   initialAction?: string;
+}
+
+interface TradeFilters {
+  statusFilter: string | undefined;
+  tradeTypeFilter: string | undefined;
+  productFilters: ProductSelection[] | undefined;
+  platformFilter: string | undefined;
+  tradeRange: DateRange | undefined;
+  confirmRange: DateRange | undefined;
 }
 
 type ConfirmState =
@@ -153,6 +155,17 @@ const CONFIRM_TEXT: Record<ConfirmState extends infer S ? S extends { action: st
 /** 默认交易日期区间 = 快捷项「近1年」（#126 决策⑤，区间语义与 DateRangePicker 快捷项一致） */
 function defaultTradeRange(): DateRange {
   return { from: subYears(new Date(), 1), to: new Date() };
+}
+
+function defaultTradeFilters(): TradeFilters {
+  return {
+    statusFilter: undefined,
+    tradeTypeFilter: undefined,
+    productFilters: undefined,
+    platformFilter: undefined,
+    tradeRange: defaultTradeRange(),
+    confirmRange: undefined,
+  };
 }
 
 /** 与默认区间一致（isSameDay 双端比较）→ 视为「无筛选」默认态，用于重置按钮显隐与空态文案 */
@@ -210,21 +223,42 @@ export default function TradesContent({
   // #646：只认 create；其它值（含空串/拼错）一律视为无录入意图，不静默开弹窗
   const createIntent = initialAction === "create";
 
-  // 筛选状态（#126 服务端筛选）：tradeRange 默认最近 1 年（决策⑤，惰性初始化避免每渲染重算）
-  // #595：initial* 仅作 useState 初值（一次性），用户进入后可自行清空/改选
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [tradeTypeFilter, setTradeTypeFilter] = useState<string | undefined>(normalizedInitialTradeType);
-  // 产品多选筛选（#155）：undefined = 全部产品；元素为 {code, market}（market 可空串）
-  const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(
-    normalizedInitialProduct ? [normalizedInitialProduct] : undefined
+  // 筛选状态（#126 服务端筛选）：桌面即时应用，移动 sheet 内先编辑草稿。
+  // #595：initial* 仅作 useDraftFilters 初值（一次性），用户进入后可自行清空/改选。
+  const filterDefaults = useMemo(() => defaultTradeFilters(), []);
+  const {
+    applied: appliedFilters,
+    draft: draftFilters,
+    isOpen: isFilterOpen,
+    error: filterError,
+    isValid: isFilterValid,
+    setApplied,
+    setDraft,
+    openDraft,
+    discardDraft,
+    resetDraft,
+    resetApplied,
+    apply,
+  } = useDraftFilters<TradeFilters>(
+    {
+      ...filterDefaults,
+      tradeTypeFilter: normalizedInitialTradeType,
+      productFilters: normalizedInitialProduct ? [normalizedInitialProduct] : undefined,
+      platformFilter: initialPlatform || undefined,
+    },
+    filterDefaults,
+    (draft) => filterDateRangeError(draft.tradeRange, draft.confirmRange)
   );
-  // #638 L2 N3：platform 归一与 product/trade_type 同口径，空串视为未传
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(initialPlatform || undefined);
-  const [tradeRange, setTradeRange] = useState<DateRange | undefined>(() => defaultTradeRange());
-  const [confirmRange, setConfirmRange] = useState<DateRange | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [filterOpen, setFilterOpen] = useState(false);
+  const {
+    statusFilter,
+    tradeTypeFilter,
+    productFilters,
+    platformFilter,
+    tradeRange,
+    confirmRange,
+  } = appliedFilters;
 
   // 空筛选字段为 undefined，axios 不传参；产品多选拼 `code|market` 逗号分隔（market 段可空，
   // 如 `CASH|`），与后端 products 参数契约一致（#155，与 product_code/market 互斥不同传）
@@ -298,12 +332,7 @@ export default function TradesContent({
     (tradeRange === undefined || !isDefaultTradeRange(tradeRange) ? 1 : 0);
 
   const resetFilters = () => {
-    setStatusFilter(undefined);
-    setTradeTypeFilter(undefined);
-    setProductFilters(undefined);
-    setPlatformFilter(undefined);
-    setTradeRange(defaultTradeRange());
-    setConfirmRange(undefined);
+    resetApplied();
     setPage(1);
   };
 
@@ -549,92 +578,89 @@ export default function TradesContent({
   // 筛选栏控件（visual-spec §9）：顺序 = 交易日期区间 → 确认日期区间 → 状态 → 产品 → 平台 → 类型；
   // 控件统一 h-9，下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值）；
   // 平台为 SearchablePlatformSelect（Popover，null 哨兵）；
-  // 产品为 ProductFilterDialog 多选弹窗触发按钮（#155），outline 风格同筛选栏
-  const rangeWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[240px]";
-  const selectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[150px]";
-  const productSelectWidth = variant === "mobile" ? "h-10 w-full" : "h-9 w-[220px]";
-  const filterControls = (
-    <>
-      <DateRangePicker
-        value={tradeRange}
-        onChange={(r) => {
-          setTradeRange(r);
-          setPage(1);
-        }}
-        placeholder="交易日期"
-        numberOfMonths={variant === "mobile" ? 1 : 2}
-        className={rangeWidth}
-      />
-      <DateRangePicker
-        value={confirmRange}
-        onChange={(r) => {
-          setConfirmRange(r);
-          setPage(1);
-        }}
-        placeholder="确认日期"
-        numberOfMonths={variant === "mobile" ? 1 : 2}
-        className={rangeWidth}
-      />
-      <Select
-        value={statusFilter ?? "all"}
-        onValueChange={(v) => {
-          setStatusFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部状态" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部状态</SelectItem>
-          <SelectItem value="pending">待确认</SelectItem>
-          <SelectItem value="confirmed">已确认</SelectItem>
-          <SelectItem value="cancelled">已取消</SelectItem>
-        </SelectContent>
-      </Select>
-      <ProductFilterSelect
-        variant={variant}
-        value={productFilters ?? []}
-        onChange={(selection) => {
-          // 空选择归一为 undefined（= 全部产品），与非默认筛选判定口径一致
-          setProductFilters(selection.length ? selection : undefined);
-          setPage(1);
-        }}
-        className={productSelectWidth}
-      />
-      <SearchablePlatformSelect
-        platforms={platforms}
-        value={platformFilter ?? null}
-        onChange={(v) => {
-          setPlatformFilter(v ?? undefined);
-          setPage(1);
-        }}
-        specialOptionLabel="全部平台"
-        className={selectWidth}
-      />
-      <Select
-        value={tradeTypeFilter ?? "all"}
-        onValueChange={(v) => {
-          setTradeTypeFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部类型" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部类型</SelectItem>
-          <SelectItem value="buy">买入</SelectItem>
-          <SelectItem value="sell">卖出</SelectItem>
-        </SelectContent>
-      </Select>
-      {hasNonDefaultFilter && variant !== "mobile" && (
-        <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
-          重置
-        </Button>
-      )}
-    </>
-  );
+  // 产品为 ProductFilterDialog 多选弹窗触发按钮（#155），outline 风格同筛选栏。
+  // 同一份控件渲染器只替换值来源与更新回调：桌面写 applied，移动写 draft。
+  const renderFilterControls = (
+    values: TradeFilters,
+    update: (patch: Partial<TradeFilters>) => void,
+    mobile: boolean,
+    onReset: () => void
+  ) => {
+    const rangeWidth = mobile ? "h-10 w-full" : "h-9 w-[240px]";
+    const selectWidth = mobile ? "h-10 w-full" : "h-9 w-[150px]";
+    const productSelectWidth = mobile ? "h-10 w-full" : "h-9 w-[220px]";
+    return (
+      <>
+        <DateRangePicker
+          value={values.tradeRange}
+          onChange={(r) => update({ tradeRange: r })}
+          placeholder="交易日期"
+          numberOfMonths={mobile ? 1 : 2}
+          className={rangeWidth}
+        />
+        <DateRangePicker
+          value={values.confirmRange}
+          onChange={(r) => update({ confirmRange: r })}
+          placeholder="确认日期"
+          numberOfMonths={mobile ? 1 : 2}
+          className={rangeWidth}
+        />
+        <Select
+          value={values.statusFilter ?? "all"}
+          onValueChange={(v) => update({ statusFilter: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="pending">待确认</SelectItem>
+            <SelectItem value="confirmed">已确认</SelectItem>
+            <SelectItem value="cancelled">已取消</SelectItem>
+          </SelectContent>
+        </Select>
+        <ProductFilterSelect
+          variant={mobile ? "mobile" : "desktop"}
+          value={values.productFilters ?? []}
+          onChange={(selection) => {
+            // 空选择归一为 undefined（= 全部产品），与非默认筛选判定口径一致
+            update({ productFilters: selection.length ? selection : undefined });
+          }}
+          className={productSelectWidth}
+        />
+        <SearchablePlatformSelect
+          platforms={platforms}
+          value={values.platformFilter ?? null}
+          onChange={(v) => update({ platformFilter: v ?? undefined })}
+          specialOptionLabel="全部平台"
+          className={selectWidth}
+        />
+        <Select
+          value={values.tradeTypeFilter ?? "all"}
+          onValueChange={(v) => update({ tradeTypeFilter: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部类型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类型</SelectItem>
+            <SelectItem value="buy">买入</SelectItem>
+            <SelectItem value="sell">卖出</SelectItem>
+          </SelectContent>
+        </Select>
+        {hasNonDefaultFilter && !mobile && (
+          <Button variant="ghost" size="sm" className="h-9" onClick={onReset}>
+            重置
+          </Button>
+        )}
+      </>
+    );
+  };
+
+  const updateAppliedFilters = (patch: Partial<TradeFilters>) => {
+    setApplied(patch);
+    setPage(1);
+  };
 
   const isMobile = variant === "mobile";
 
@@ -1237,8 +1263,8 @@ export default function TradesContent({
         <CardContent>
           {/* 筛选栏（规范 §9）；移动端为底部 sheet + 激活计数 Badge（#904 P1c，控件 h-10） */}
           {variant === "mobile" ? (
-            <Sheet open={filterOpen} onOpenChange={setFilterOpen}>
-              <SheetTrigger asChild>
+            <MobileFilterSheet
+              trigger={
                 <Button variant="outline" size="sm" className="h-10">
                   <Filter className="mr-2 h-4 w-4" />
                   筛选
@@ -1248,37 +1274,24 @@ export default function TradesContent({
                     </Badge>
                   )}
                 </Button>
-              </SheetTrigger>
-              <SheetContent>
-                <SheetHeader>
-                  <SheetTitle>筛选</SheetTitle>
-                  <SheetClose asChild>
-                    <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="关闭">
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </SheetClose>
-                </SheetHeader>
-                <SheetBody>
-                  <div className="grid grid-cols-1 gap-3">{filterControls}</div>
-                </SheetBody>
-                <SheetFooter>
-                  <div className="flex items-center justify-between">
-                    {hasNonDefaultFilter ? (
-                      <Button variant="ghost" size="sm" className="h-11" onClick={resetFilters}>
-                        重置
-                      </Button>
-                    ) : (
-                      <span />
-                    )}
-                    <SheetClose asChild>
-                      <Button size="sm" className="h-11">完成</Button>
-                    </SheetClose>
-                  </div>
-                </SheetFooter>
-              </SheetContent>
-            </Sheet>
+              }
+              open={isFilterOpen}
+              onOpenChange={(next) => next ? openDraft() : discardDraft()}
+              canApply={isFilterValid}
+              error={filterError}
+              onReset={resetDraft}
+              onApply={() => {
+                if (apply()) setPage(1);
+              }}
+            >
+              <div className="grid grid-cols-1 gap-3">
+                {renderFilterControls(draftFilters, setDraft, true, resetDraft)}
+              </div>
+            </MobileFilterSheet>
           ) : (
-            <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {renderFilterControls(appliedFilters, updateAppliedFilters, false, resetFilters)}
+            </div>
           )}
           {/* 规范 §14：筛选/翻页局部刷新保留旧数据，右上角小 spinner 标记更新 */}
           <div className="relative">

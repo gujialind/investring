@@ -3,7 +3,7 @@
 import PageHeader from "@/components/shared/PageHeader";
 import InfoTip from "@/components/shared/InfoTip";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { format, isSameDay, subYears } from "date-fns";
 import type { DateRange } from "react-day-picker";
@@ -11,6 +11,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
+  Filter,
   Loader2,
   RefreshCw,
   Trash2,
@@ -57,6 +58,7 @@ import RowActionButton from "@/components/shared/RowActionButton";
 import LoadingState from "@/components/shared/LoadingState";
 import EmptyState from "@/components/shared/EmptyState";
 import QueryErrorState from "@/components/shared/QueryErrorState";
+import MobileFilterSheet from "@/components/shared/MobileFilterSheet";
 import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
 import {
   formatCurrency,
@@ -68,6 +70,7 @@ import {
   cn,
 } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api";
+import { filterDateRangeError } from "@/lib/draftFilter";
 import { queryKeys } from "@/lib/queryKeys";
 import { useUIStore } from "@/stores/uiStore";
 import {
@@ -82,6 +85,7 @@ import {
   useDeleteSnapshot,
 } from "@/hooks/useSnapshot";
 import { usePortfolio, useUpdatePortfolio } from "@/hooks/usePortfolio";
+import { useDraftFilters } from "@/hooks/useDraftFilters";
 import { useSyncJob } from "@/hooks/useSyncJob";
 import type { SnapshotValidationCheck, BulkDeleteDryRunResult } from "@/types/snapshot";
 
@@ -89,6 +93,14 @@ interface SnapshotsContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
   basePath: string;
   variant?: "desktop" | "mobile";
+}
+
+interface SnapshotFilters {
+  snapshotRange: DateRange | undefined;
+}
+
+function defaultSnapshotFilters(): SnapshotFilters {
+  return { snapshotRange: defaultSnapshotRange() };
 }
 
 /** 默认快照区间 = 快捷项「近1年」（#152 决策，与调仓/申赎页 #125/#126 决策⑤一致） */
@@ -114,8 +126,25 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
   const queryClient = useQueryClient();
   const addToast = useUIStore((state) => state.addToast);
 
-  // 快照日期筛选（#152）：默认最近 1 年，惰性初始化避免每渲染重算；X 清空 = 不按日期过滤
-  const [snapshotRange, setSnapshotRange] = useState<DateRange | undefined>(() => defaultSnapshotRange());
+  // 快照日期筛选（#152）：默认最近 1 年；X 清空 = 不按日期过滤；移动端先编辑草稿，应用后生效
+  const defaults = useMemo(() => defaultSnapshotFilters(), []);
+  const {
+    applied: filters,
+    draft: draftFilters,
+    isOpen: filterOpen,
+    error: filterError,
+    isValid: filtersValid,
+    setApplied,
+    setDraft,
+    openDraft,
+    discardDraft,
+    resetDraft,
+    resetApplied,
+    apply,
+  } = useDraftFilters<SnapshotFilters>(defaults, defaults, (draft) =>
+    filterDateRangeError(draft.snapshotRange)
+  );
+  const snapshotRange = filters.snapshotRange;
   const hasNonDefaultRange = snapshotRange !== undefined && !isDefaultSnapshotRange(snapshotRange);
 
   // 数据：区间转查询参数（闭区间）；undefined 字段 axios 不传参
@@ -287,8 +316,6 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
   const items = listData?.items ?? [];
   const jobParams = job?.params as { start_date?: string; end_date?: string } | null | undefined;
   const jobRunning = job?.status === "pending" || job?.status === "running";
-
-  const isMobile = variant === "mobile";
 
   // 移动快照卡（#907，visual-spec §8 流水卡解剖）：日期标题 + 涨跌 chip（getSignedReturn 单点）
   // → 常显市值/在途 → 净值/份额核对明细 → 删除（仅最新日，disabledHint 保留快照连续原则）。
@@ -507,31 +534,55 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
         </CardHeader>
         <CardContent>
           {/* 筛选行（#152）：默认最近 1 年，X 清空后为后端默认最近 500 条（与调仓页语义一致） */}
-          <div
-            className={
-              variant === "mobile"
-                ? "mb-3 space-y-2"
-                : "mb-3 flex flex-wrap items-center gap-2"
-            }
-          >
-            <DateRangePicker
-              value={snapshotRange}
-              onChange={setSnapshotRange}
-              placeholder="快照日期"
-              numberOfMonths={variant === "mobile" ? 1 : 2}
-              className={variant === "mobile" ? "h-9 w-full" : "h-9 w-[240px]"}
-            />
-            {hasNonDefaultRange && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-9"
-                onClick={() => setSnapshotRange(defaultSnapshotRange())}
+          {variant === "mobile" ? (
+            <div className="mb-3">
+              <MobileFilterSheet
+                trigger={
+                  <Button type="button" variant="outline" size="sm" className="h-9">
+                    <Filter className="mr-2 h-4 w-4" />
+                    筛选
+                    {hasNonDefaultRange && (
+                      <Badge variant="default" className="ml-2">
+                        1
+                      </Badge>
+                    )}
+                  </Button>
+                }
+                open={filterOpen}
+                onOpenChange={(open) => {
+                  if (open) openDraft();
+                  else discardDraft();
+                }}
+                canApply={filtersValid}
+                error={filterError}
+                onReset={resetDraft}
+                onApply={apply}
               >
-                重置
-              </Button>
-            )}
-          </div>
+                <DateRangePicker
+                  value={draftFilters.snapshotRange}
+                  onChange={(range) => setDraft({ snapshotRange: range })}
+                  placeholder="快照日期"
+                  numberOfMonths={1}
+                  className="h-9 w-full"
+                />
+              </MobileFilterSheet>
+            </div>
+          ) : (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <DateRangePicker
+                value={snapshotRange}
+                onChange={(range) => setApplied({ snapshotRange: range })}
+                placeholder="快照日期"
+                numberOfMonths={2}
+                className="h-9 w-[240px]"
+              />
+              {hasNonDefaultRange && (
+                <Button variant="ghost" size="sm" className="h-9" onClick={resetApplied}>
+                  重置
+                </Button>
+              )}
+            </div>
+          )}
           {listLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -543,11 +594,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
                 description="可扩大日期区间或清除筛选后查看"
                 action={
                   hasNonDefaultRange ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSnapshotRange(defaultSnapshotRange())}
-                    >
+                    <Button variant="ghost" size="sm" onClick={resetApplied}>
                       重置筛选
                     </Button>
                   ) : undefined
@@ -558,7 +605,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
             )
           ) : (
             <>
-              {isMobile ? (
+              {variant === "mobile" ? (
                 <div className="space-y-3" data-testid="snapshot-card-list">
                   {items.map((item, i) => renderSnapshotCard(item, i))}
                 </div>

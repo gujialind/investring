@@ -246,10 +246,10 @@
 - **控件尺寸**：筛选栏控件桌面统一紧凑档 `h-9`（Select/Input/日期触发按钮同高）；表单对话框内仍为 `h-10`，两档不混用。**移动 sheet 内控件 `h-10`（40px 触控档，#904 P1b 落地）**；桌面 `h-9` 不变。本款覆盖 Select/Input/日期触发按钮；sheet footer 动作按钮与图标按钮按 44px（`h-11`/`h-11 w-11`，#917 L2 工效补充）。仓库触控基线为 §8 WCAG 2.5.8 AA 24px 下限，44px 为建议值。
 - **标签**：筛选栏省略 `Label`，以 placeholder 表意；placeholder 统一「全部 + 维度名」（全部状态/全部平台/全部产品）。默认有值的筛选（如"最近 1 年"）显示实际值而非 placeholder。
 - **控件排序**：全站统一——时间区间 → 状态 → 实体维度（投资人/平台/产品）→ 类型；多页并存时顺序一致。
-- **生效方式**：变更即时查询，不设「查询」按钮；文本输入类防抖 300ms，下拉/日期选择即时生效。
+- **生效方式**：桌面变更即时查询，不设「查询」按钮；文本输入类防抖 300ms，下拉/日期选择即时生效。**移动端为草稿应用（#944 Phase 8.2，D2/A9）**：打开筛选 sheet 时复制已应用条件，之后修改只存草稿、不触发列表请求；仅 footer「应用筛选」提交并回到第一页。
 - **重置**：单项清空用控件自带清除件（如 date-picker 的 X 先例）；存在非默认筛选时，筛选行末尾出现「重置」ghost 按钮，点击恢复默认筛选集。
 - **激活提示**：桌面端控件值即提示，不额外加徽标；移动端「筛选」入口按钮带激活计数 Badge（`default` variant——纯计数无状态语义，§1.3）。
-- **移动端形态**：筛选控件收进「筛选」底部 sheet（#904 P1b，`ui/sheet`；触发按钮带激活计数 Badge），展开后纵向堆叠 `grid-cols-1`、控件 `h-10`；footer sticky「重置/完成」，完成仅关闭 sheet，变更即时查询语义不变。
+- **移动端形态**：筛选控件收进「筛选」底部 sheet（#904 P1b，`ui/sheet`；触发按钮带激活计数 Badge），展开后纵向堆叠 `grid-cols-1`、控件 `h-10`；sticky footer 为「重置 / 取消 / 应用筛选」。重置只清草稿；取消、标题关闭、遮罩与 Esc 均放弃草稿；重开恢复上次已应用条件。日期区间非法时显示 inline 错误并禁用「应用筛选」，不得提交。桌面仍即时应用，分页、URL 与浏览器返回契约不变。
 - **筛选无结果空态**：见 §8 空态变体②——文案「无符合筛选条件的记录」+ 内嵌「重置筛选」入口。
 
 ## 10. 日期区间选择器（date-range-picker）
@@ -299,6 +299,7 @@
 - **产品身份区单点 = `components/shared/ProductIdentity.tsx`**（#935 S2）：三类产品详情共用的非吸顶全文身份区，位于页眉之后、概览/操作与一栏或两栏内容之前，双端用主内容宽度（不塞桌面 360px 右栏）。产品全名 h2 16/600/24 自然换行、不限行、不 ellipsis/clamp/仅 tooltip（长连续串 `break-words` 必要时断行）；代码/市场 14px/22px 在名称下方；平台-产品页的平台名（回退平台码）为独立上下文行；停用 badge 与名称分别占位、窄屏可换行。消费方传入既有格式化结果（显示码/港互认双码/市场格式/空名回退代码/现金 market 口径不变），组件不新增请求、缓存、路由判断或 scroll state。管理操作行由 `ProductManageDetailContent` 在身份区下方维护（编辑/启停图标+文字、删除独立图标危险色，随正文滚动），不扩成通用详情框架。
 - **持仓产品组件双形态单点 = `components/shared/HoldingProductCard.tsx`**（#944 Phase 6.2/7.1）：组合「按产品」的移动分支使用无边框分隔线行；桌面组合持仓改由 `PortfolioHoldings` 内通栏账表承载，`HoldingProductCard` 的桌面圆角卡仅继续用于平台详情等既有消费方。字段、显示码、收益格式化与 InfoTip 口径同源；`cardGridClass` 的移动分隔线分支只传给组合产品区，平台详情与在途卡继续原卡片间距。
 - **流水卡解剖单点 = `components/shared/FlowCard.tsx`**（#907/#944 Phase 8.1）：`FlowCard` / `FlowCardHeader` / `FlowCardKVGrid` / `FlowCardDetails` / `FlowCardActions` / `FlowCardSubBlock` 六件组合承载流水卡（容器 / 头行 / 常显与核对明细 kv 栅格 / 键盘可访问展开件 / 操作行 / 结对子块），调仓/申赎/事件/快照四页移动分支共用；新流水卡禁止手写卡内 flex/grid 解剖，形态与字段口径详见 §8。桌面表格分支不消费（仍走 `Table`）。
+- **移动筛选草稿单点 = `components/shared/MobileFilterSheet.tsx` + `hooks/useDraftFilters.ts` + `lib/draftFilter.ts`**（#944 Phase 8.2）：Sheet 只负责统一标题、关闭、sticky footer 与错误位；纯 reducer 持有 applied/draft/open 三种状态，日期校验在 lib 单点。消费方只传字段与提交回调，不在五个页面复制关闭/放弃逻辑；触发器由 Sheet 注入展开态 ARIA，桌面分支不消费该 Sheet。
 - **历史净值卡单点 = `components/shared/ProductNavCards.tsx`**（#934）：四列共享轨道（`grid-cols-[max-content_repeat(3,minmax(max-content,1fr))]`，日期按完整内容占宽、数值列不小于内容宽），表头/ul/li 逐层 subgrid 继承同一祖先轨道与列间距，**禁止每行独立分列**（#934 叠印根因）；宽度不足时仅数据区横滚，表头与全部行同步横移，标题与查看更多留在滚动区外（tabIndex/role/aria 提供键盘滚动入口）。三个详情页（产品/平台-产品/平台管理-产品）桌面净值分支按**内容容器宽**降栏：外层套 `@container` **父**元素（容器查询按最近祖先容器求值，挂在栅格自身不生效，同 #774 口径），容器 ≥800px 双栏（右栏 360px、栏距 16px）、<800px 单栏左组上/右组下；现金/虚拟产品分支不参与。800px 为 #934 SPEC v2 定稿阈值（决策与实测记录见该 issue 正文）；守卫 = 三个 detail spec 的「A2 桌面父布局：容器 799/800 降栏与顶部导航几何」用例 + `e2e/helpers.ts::expectNavHistoryGeometry` / `expectNavDetailColumns` / `expectTopNavDetailLayout` 几何断言。新增消费方或触及该布局时按本条复核，不得绕开共享轨道另写分列。
 - **净值区间组按内容宽换行（#941）**：`PortfolioNavTrendCard` 与 `ProductNavCards` 的两套区间容器都用 `min-w-0 max-w-full flex-wrap`，受所在卡片内容宽约束；单颗按钮 `shrink-0 whitespace-nowrap`，窄屏/放大时整颗换到下一行，不拆字、不省略、不缩字号、不做横向滚动。常规宽度四颗同排，间距与横向 padding 只能沿用既有档位；两套原有文案、字号、默认项、选中态与 `aria-pressed` 不统一成同一视觉样式。按钮键盘焦点环必须完整可见，因此不得用 `overflow-hidden` 裁切换取“无溢出”。#934 的历史数据局部横滚是另一职责，不得借此把区间组改成滚动容器。
 - 双端页面优先 `components/shared/` + `variant`，只有布局本质差异才拆 `components/mobile/` / `components/desktop/`。

@@ -80,6 +80,9 @@ import NameCodeCell from "@/components/shared/NameCodeCell";
 import ProductCell from "@/components/shared/ProductCell";
 import DatePairCell from "@/components/shared/DatePairCell";
 import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
+import MobileFilterSheet from "@/components/shared/MobileFilterSheet";
+import { useDraftFilters } from "@/hooks/useDraftFilters";
+import { filterDateRangeError } from "@/lib/draftFilter";
 
 interface ShareChangeEventsContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
@@ -97,6 +100,22 @@ interface ShareChangeEventsContentProps {
 }
 
 const PLATFORM_LEVEL_TYPES: EventType[] = ["cash_dividend", "reinvest_dividend", "forced_adjustment"];
+
+interface ShareChangeEventFilters {
+  status: string | undefined;
+  eventType: string | undefined;
+  products: ProductSelection[] | undefined;
+  platform: string | undefined;
+  exRange: DateRange | undefined;
+}
+
+const DEFAULT_EVENT_FILTERS: ShareChangeEventFilters = {
+  status: undefined,
+  eventType: undefined,
+  products: undefined,
+  platform: undefined,
+  exRange: undefined,
+};
 
 // 状态徽标统一走 Badge variant 语义映射（#127，visual-spec §1.3）；
 // 文案单点迁至 event-detail-dialog 的 EVENT_STATUS_LABELS（#754，列表列与详情弹窗共用）
@@ -145,33 +164,48 @@ export default function ShareChangeEventsContent({
 
   // 筛选状态（#274 服务端筛选）：除息日区间默认不带条件、展示全部事件（#346）。
   // #656 L2 S1：URL 的 product/platform 与 trades 页同口径——既喂录入表单初值，
-  // 也喂列表筛选；否则同一组参数在两页含义分裂（trades 过滤、事件页不过滤）
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [eventTypeFilter, setEventTypeFilter] = useState<string | undefined>(undefined);
-  const [productFilters, setProductFilters] = useState<ProductSelection[] | undefined>(
-    normalizedInitialProduct ? [normalizedInitialProduct] : undefined
+  // 也喂列表筛选；否则同一组参数在两页含义分裂（trades 过滤、事件页不过滤）。
+  // 移动端只改草稿，应用后才更新列表（#944 Phase 8.2）。
+  const {
+    applied: appliedFilters,
+    draft: draftFilters,
+    isOpen,
+    error,
+    isValid,
+    setApplied,
+    setDraft,
+    openDraft,
+    discardDraft,
+    resetDraft,
+    resetApplied,
+    apply: applyFilters,
+  } = useDraftFilters<ShareChangeEventFilters>(
+    {
+      status: undefined,
+      eventType: undefined,
+      products: normalizedInitialProduct ? [normalizedInitialProduct] : undefined,
+      platform: initialPlatform || undefined,
+      exRange: undefined,
+    },
+    DEFAULT_EVENT_FILTERS,
+    (draft) => filterDateRangeError(draft.exRange)
   );
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(
-    initialPlatform || undefined
-  );
-  const [exRange, setExRange] = useState<DateRange | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [filterOpen, setFilterOpen] = useState(false);
 
   // 查询份额变动事件列表（服务端筛选 + 分页，#274）
   const listParams = {
     portfolio_code: code,
     page,
     page_size: pageSize,
-    status: statusFilter,
-    event_type: eventTypeFilter,
-    products: productFilters?.length
-      ? productFilters.map((p) => `${p.code}|${p.market}`).join(",")
+    status: appliedFilters.status,
+    event_type: appliedFilters.eventType,
+    products: appliedFilters.products?.length
+      ? appliedFilters.products.map((p) => `${p.code}|${p.market}`).join(",")
       : undefined,
-    platform_code: platformFilter,
-    ex_date_start: exRange?.from ? toDateOnly(exRange.from) : undefined,
-    ex_date_end: exRange?.to ? toDateOnly(exRange.to) : undefined,
+    platform_code: appliedFilters.platform,
+    ex_date_start: appliedFilters.exRange?.from ? toDateOnly(appliedFilters.exRange.from) : undefined,
+    ex_date_end: appliedFilters.exRange?.to ? toDateOnly(appliedFilters.exRange.to) : undefined,
   };
   const { data: eventsData, isLoading, isFetching } = useShareChangeEventList(code, listParams);
   const {
@@ -184,24 +218,24 @@ export default function ShareChangeEventsContent({
 
   // 非默认筛选判定（默认集 = 无任何筛选）：驱动「重置」按钮显隐与空态文案
   const hasNonDefaultFilter =
-    statusFilter !== undefined ||
-    eventTypeFilter !== undefined ||
-    productFilters !== undefined ||
-    platformFilter !== undefined ||
-    exRange !== undefined;
+    appliedFilters.status !== undefined ||
+    appliedFilters.eventType !== undefined ||
+    appliedFilters.products !== undefined ||
+    appliedFilters.platform !== undefined ||
+    appliedFilters.exRange !== undefined;
   const activeFilterCount =
-    (statusFilter ? 1 : 0) +
-    (eventTypeFilter ? 1 : 0) +
-    (productFilters?.length ? 1 : 0) +
-    (platformFilter ? 1 : 0) +
-    (exRange !== undefined ? 1 : 0);
+    (appliedFilters.status ? 1 : 0) +
+    (appliedFilters.eventType ? 1 : 0) +
+    (appliedFilters.products?.length ? 1 : 0) +
+    (appliedFilters.platform ? 1 : 0) +
+    (appliedFilters.exRange !== undefined ? 1 : 0);
 
   const resetFilters = () => {
-    setStatusFilter(undefined);
-    setEventTypeFilter(undefined);
-    setProductFilters(undefined);
-    setPlatformFilter(undefined);
-    setExRange(undefined);
+    resetApplied();
+    setPage(1);
+  };
+  const updateAppliedFilters = (patch: Partial<ShareChangeEventFilters>) => {
+    setApplied(patch);
     setPage(1);
   };
 
@@ -379,84 +413,76 @@ export default function ShareChangeEventsContent({
   };
 
   // 筛选栏控件（visual-spec §9）：顺序 = 除息日区间 → 状态 → 事件类型 → 产品 → 平台；
-  // 控件统一 h-9（移动端全宽），「全部 X」用 "all" 哨兵
-  const rangeWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[240px]";
-  const selectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[150px]";
-  const productSelectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[220px]";
+  // 控件统一 h-9（桌面）/h-10（移动 sheet），「全部 X」用 "all" 哨兵
   const filterControls = (
-    <>
-      <DateRangePicker
-        value={exRange}
-        onChange={(r) => {
-          setExRange(r);
-          setPage(1);
-        }}
-        placeholder="全部时间"
-        numberOfMonths={variant === "mobile" ? 1 : 2}
-        className={rangeWidth}
-      />
-      <Select
-        value={statusFilter ?? "all"}
-        onValueChange={(v) => {
-          setStatusFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部状态" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部状态</SelectItem>
-          <SelectItem value="pending">待确认</SelectItem>
-          <SelectItem value="confirmed">已确认</SelectItem>
-          <SelectItem value="cancelled">已取消</SelectItem>
-        </SelectContent>
-      </Select>
-      <Select
-        value={eventTypeFilter ?? "all"}
-        onValueChange={(v) => {
-          setEventTypeFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部类型" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部类型</SelectItem>
-          {Object.entries(EVENT_TYPE_LABELS).map(([value, label]) => (
-            <SelectItem key={value} value={value}>
-              {label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <ProductFilterSelect
-        variant={variant}
-        value={productFilters ?? []}
-        onChange={(selection) => {
-          setProductFilters(selection.length ? selection : undefined);
-          setPage(1);
-        }}
-        className={productSelectWidth}
-      />
-      <SearchablePlatformSelect
-        platforms={platforms}
-        value={platformFilter ?? null}
-        onChange={(v) => {
-          setPlatformFilter(v ?? undefined);
-          setPage(1);
-        }}
-        specialOptionLabel="全部平台"
-        className={selectWidth}
-      />
-      {hasNonDefaultFilter && (
-        <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
-          重置
-        </Button>
-      )}
-    </>
-  );
+    values: ShareChangeEventFilters,
+    update: (patch: Partial<ShareChangeEventFilters>) => void,
+    mobile: boolean,
+    onReset: () => void
+  ) => {
+    const rangeWidth = mobile ? "h-10 w-full" : "h-9 w-[240px]";
+    const selectWidth = mobile ? "h-10 w-full" : "h-9 w-[150px]";
+    const productSelectWidth = mobile ? "h-10 w-full" : "h-9 w-[220px]";
+    return (
+      <>
+        <DateRangePicker
+          value={values.exRange}
+          onChange={(r) => update({ exRange: r })}
+          placeholder="全部时间"
+          numberOfMonths={mobile ? 1 : 2}
+          className={rangeWidth}
+        />
+        <Select
+          value={values.status ?? "all"}
+          onValueChange={(v) => update({ status: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="pending">待确认</SelectItem>
+            <SelectItem value="confirmed">已确认</SelectItem>
+            <SelectItem value="cancelled">已取消</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={values.eventType ?? "all"}
+          onValueChange={(v) => update({ eventType: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部类型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类型</SelectItem>
+            {Object.entries(EVENT_TYPE_LABELS).map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <ProductFilterSelect
+          variant={mobile ? "mobile" : "desktop"}
+          value={values.products ?? []}
+          onChange={(selection) => update({ products: selection.length ? selection : undefined })}
+          className={productSelectWidth}
+        />
+        <SearchablePlatformSelect
+          platforms={platforms}
+          value={values.platform ?? null}
+          onChange={(v) => update({ platform: v ?? undefined })}
+          specialOptionLabel="全部平台"
+          className={selectWidth}
+        />
+        {!mobile && hasNonDefaultFilter && (
+          <Button variant="ghost" size="sm" className="h-9" onClick={onReset}>
+            重置
+          </Button>
+        )}
+      </>
+    );
+  };
 
   // 表单双列布局窄屏降为单列（移动端控件全宽）
   const formGrid = variant === "mobile" ? "grid grid-cols-1 gap-4" : "grid grid-cols-2 gap-4";
@@ -844,22 +870,42 @@ export default function ShareChangeEventsContent({
           <CardDescription>查看和管理份额变动事件</CardDescription>
         </CardHeader>
         <CardContent>
-          {/* 筛选栏（#274，规范 §9：表格卡片内顶部）；移动端为折叠面板 + 激活计数 Badge */}
+          {/* 筛选栏（#274，规范 §9：表格卡片内顶部）；移动端为草稿筛选 sheet + 激活计数 Badge */}
           {variant === "mobile" ? (
             <div className="mb-3 space-y-2">
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setFilterOpen((v) => !v)}>
-                <Filter className="mr-2 h-4 w-4" />
-                筛选
-                {activeFilterCount > 0 && (
-                  <Badge variant="default" className="ml-2">
-                    {activeFilterCount}
-                  </Badge>
-                )}
-              </Button>
-              {filterOpen && <div className="grid grid-cols-1 gap-2">{filterControls}</div>}
+              <MobileFilterSheet
+                trigger={
+                  <Button variant="outline" size="sm" className="h-9">
+                    <Filter className="mr-2 h-4 w-4" />
+                    筛选
+                    {activeFilterCount > 0 && (
+                      <Badge variant="default" className="ml-2">
+                        {activeFilterCount}
+                      </Badge>
+                    )}
+                  </Button>
+                }
+                open={isOpen}
+                onOpenChange={(open) => {
+                  if (open) openDraft();
+                  else discardDraft();
+                }}
+                canApply={isValid}
+                error={error}
+                onReset={resetDraft}
+                onApply={() => {
+                  if (applyFilters()) setPage(1);
+                }}
+              >
+                <div className="grid grid-cols-1 gap-2">
+                  {filterControls(draftFilters, setDraft, true, resetDraft)}
+                </div>
+              </MobileFilterSheet>
             </div>
           ) : (
-            <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {filterControls(appliedFilters, updateAppliedFilters, false, resetFilters)}
+            </div>
           )}
           {isLoading ? (
             <div className="flex items-center justify-center py-8 text-muted-foreground">

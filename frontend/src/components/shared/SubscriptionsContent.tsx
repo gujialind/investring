@@ -79,6 +79,9 @@ import DatePairCell from "@/components/shared/DatePairCell";
 import { FlowCard, FlowCardHeader, FlowCardKVGrid, FlowCardActions } from "@/components/shared/FlowCard";
 import SearchablePlatformSelect from "@/components/shared/SearchablePlatformSelect";
 import { SubscriptionConfirmDialog } from "@/components/shared/SubscriptionConfirmDialog";
+import MobileFilterSheet from "@/components/shared/MobileFilterSheet";
+import { useDraftFilters } from "@/hooks/useDraftFilters";
+import { filterDateRangeError } from "@/lib/draftFilter";
 
 interface SubscriptionsContentProps {
   /** 链接前缀：桌面 "/portfolio"，移动 "/m/portfolio" */
@@ -100,9 +103,29 @@ const CONFIRM_TEXT: Record<"confirm" | "cancel" | "unconfirm" | "delete", { titl
   delete: { title: "删除申请", desc: "删除后将影响后续快照数据，建议先取消确认再删除。是否继续？" },
 };
 
+interface SubscriptionFilters {
+  status: string | undefined;
+  subType: string | undefined;
+  investor: string | undefined;
+  platform: string | undefined;
+  applyRange: DateRange | undefined;
+  confirmRange: DateRange | undefined;
+}
+
 /** 默认申购日期区间 = 快捷项「近1年」（#125 决策⑤，区间语义与 DateRangePicker 快捷项一致） */
 function defaultApplyRange(): DateRange {
   return { from: subYears(new Date(), 1), to: new Date() };
+}
+
+function createDefaultSubscriptionFilters(): SubscriptionFilters {
+  return {
+    status: undefined,
+    subType: undefined,
+    investor: undefined,
+    platform: undefined,
+    applyRange: defaultApplyRange(),
+    confirmRange: undefined,
+  };
 }
 
 /** 与默认区间一致（isSameDay 双端比较）→ 视为「无筛选」默认态，用于重置按钮显隐与空态文案 */
@@ -123,30 +146,43 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
   const router = useRouter();
   const code = params.code as string;
 
-  // 筛选状态（#125 服务端筛选）：applyRange 默认最近 1 年（决策⑤，惰性初始化避免每渲染重算）
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [subTypeFilter, setSubTypeFilter] = useState<string | undefined>(undefined);
-  const [investorFilter, setInvestorFilter] = useState<string | undefined>(undefined);
-  const [platformFilter, setPlatformFilter] = useState<string | undefined>(undefined);
-  const [applyRange, setApplyRange] = useState<DateRange | undefined>(() => defaultApplyRange());
-  const [confirmRange, setConfirmRange] = useState<DateRange | undefined>(undefined);
+  // 筛选状态（#125 服务端筛选）：applyRange 默认最近 1 年（决策⑤）；
+  // 移动端只改草稿，应用后才更新列表（#944 Phase 8.2）。
+  const filterDefaults = useMemo(() => createDefaultSubscriptionFilters(), []);
+  const {
+    applied: appliedFilters,
+    draft: draftFilters,
+    isOpen,
+    error,
+    isValid,
+    setApplied,
+    setDraft,
+    openDraft,
+    discardDraft,
+    resetDraft,
+    resetApplied,
+    apply: applyFilters,
+  } = useDraftFilters<SubscriptionFilters>(
+    filterDefaults,
+    filterDefaults,
+    (draft) => filterDateRangeError(draft.applyRange, draft.confirmRange)
+  );
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [filterOpen, setFilterOpen] = useState(false);
 
   // 空筛选字段为 undefined，axios 不传参；日期区间映射 start/end 闭区间参数
   const listParams: SubscriptionListParams = {
     portfolio_code: code,
     page,
     page_size: pageSize,
-    status: statusFilter,
-    sub_type: subTypeFilter,
-    investor_code: investorFilter,
-    platform_code: platformFilter,
-    apply_date_start: applyRange?.from ? toDateOnly(applyRange.from) : undefined,
-    apply_date_end: applyRange?.to ? toDateOnly(applyRange.to) : undefined,
-    confirm_date_start: confirmRange?.from ? toDateOnly(confirmRange.from) : undefined,
-    confirm_date_end: confirmRange?.to ? toDateOnly(confirmRange.to) : undefined,
+    status: appliedFilters.status,
+    sub_type: appliedFilters.subType,
+    investor_code: appliedFilters.investor,
+    platform_code: appliedFilters.platform,
+    apply_date_start: appliedFilters.applyRange?.from ? toDateOnly(appliedFilters.applyRange.from) : undefined,
+    apply_date_end: appliedFilters.applyRange?.to ? toDateOnly(appliedFilters.applyRange.to) : undefined,
+    confirm_date_start: appliedFilters.confirmRange?.from ? toDateOnly(appliedFilters.confirmRange.from) : undefined,
+    confirm_date_end: appliedFilters.confirmRange?.to ? toDateOnly(appliedFilters.confirmRange.to) : undefined,
   };
   const { data, isLoading, isFetching } = useSubscriptionList(listParams);
   const createSubscription = useCreateSubscription();
@@ -171,28 +207,27 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
 
   // 非默认筛选判定（默认集 = 仅 applyRange 为最近 1 年）：驱动「重置」按钮显隐与空态文案
   const hasNonDefaultFilter =
-    statusFilter !== undefined ||
-    subTypeFilter !== undefined ||
-    investorFilter !== undefined ||
-    platformFilter !== undefined ||
-    confirmRange !== undefined ||
-    applyRange === undefined ||
-    !isDefaultApplyRange(applyRange);
+    appliedFilters.status !== undefined ||
+    appliedFilters.subType !== undefined ||
+    appliedFilters.investor !== undefined ||
+    appliedFilters.platform !== undefined ||
+    appliedFilters.confirmRange !== undefined ||
+    appliedFilters.applyRange === undefined ||
+    !isDefaultApplyRange(appliedFilters.applyRange);
   const activeFilterCount =
-    (statusFilter ? 1 : 0) +
-    (subTypeFilter ? 1 : 0) +
-    (investorFilter ? 1 : 0) +
-    (platformFilter ? 1 : 0) +
-    (confirmRange ? 1 : 0) +
-    (applyRange === undefined || !isDefaultApplyRange(applyRange) ? 1 : 0);
+    (appliedFilters.status ? 1 : 0) +
+    (appliedFilters.subType ? 1 : 0) +
+    (appliedFilters.investor ? 1 : 0) +
+    (appliedFilters.platform ? 1 : 0) +
+    (appliedFilters.confirmRange ? 1 : 0) +
+    (appliedFilters.applyRange === undefined || !isDefaultApplyRange(appliedFilters.applyRange) ? 1 : 0);
 
   const resetFilters = () => {
-    setStatusFilter(undefined);
-    setSubTypeFilter(undefined);
-    setInvestorFilter(undefined);
-    setPlatformFilter(undefined);
-    setApplyRange(defaultApplyRange());
-    setConfirmRange(undefined);
+    resetApplied();
+    setPage(1);
+  };
+  const updateAppliedFilters = (patch: Partial<SubscriptionFilters>) => {
+    setApplied(patch);
     setPage(1);
   };
 
@@ -328,101 +363,90 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
   };
 
   // 筛选栏控件（visual-spec §9）：顺序 = 申购日期区间 → 确认日期区间 → 状态 → 投资人 → 平台 → 类型；
-  // 控件统一 h-9，下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值）；
+  // 控件统一 h-9（桌面）/h-10（移动 sheet），下拉走 ui/select（「全部 X」用 "all" 哨兵，Radix SelectItem 不允许空串值）；
   // 平台为 SearchablePlatformSelect（Popover，null 哨兵）
-  const rangeWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[240px]";
-  const selectWidth = variant === "mobile" ? "h-9 w-full" : "h-9 w-[150px]";
   const filterControls = (
-    <>
-      <DateRangePicker
-        value={applyRange}
-        onChange={(r) => {
-          setApplyRange(r);
-          setPage(1);
-        }}
-        placeholder="申购日期"
-        numberOfMonths={variant === "mobile" ? 1 : 2}
-        className={rangeWidth}
-      />
-      <DateRangePicker
-        value={confirmRange}
-        onChange={(r) => {
-          setConfirmRange(r);
-          setPage(1);
-        }}
-        placeholder="确认日期"
-        numberOfMonths={variant === "mobile" ? 1 : 2}
-        className={rangeWidth}
-      />
-      <Select
-        value={statusFilter ?? "all"}
-        onValueChange={(v) => {
-          setStatusFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部状态" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部状态</SelectItem>
-          <SelectItem value="pending">待确认</SelectItem>
-          <SelectItem value="confirmed">已确认</SelectItem>
-          <SelectItem value="cancelled">已取消</SelectItem>
-        </SelectContent>
-      </Select>
-      <Select
-        value={investorFilter ?? "all"}
-        onValueChange={(v) => {
-          setInvestorFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部投资人" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部投资人</SelectItem>
-          {investors.map((inv) => (
-            <SelectItem key={inv.code} value={inv.code}>
-              {inv.name} ({inv.code})
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <SearchablePlatformSelect
-        platforms={platforms}
-        value={platformFilter ?? null}
-        onChange={(v) => {
-          setPlatformFilter(v ?? undefined);
-          setPage(1);
-        }}
-        specialOptionLabel="全部平台"
-        className={selectWidth}
-      />
-      <Select
-        value={subTypeFilter ?? "all"}
-        onValueChange={(v) => {
-          setSubTypeFilter(v === "all" ? undefined : v);
-          setPage(1);
-        }}
-      >
-        <SelectTrigger className={selectWidth}>
-          <SelectValue placeholder="全部类型" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部类型</SelectItem>
-          <SelectItem value="subscribe">申购</SelectItem>
-          <SelectItem value="redeem">赎回</SelectItem>
-        </SelectContent>
-      </Select>
-      {hasNonDefaultFilter && (
-        <Button variant="ghost" size="sm" className="h-9" onClick={resetFilters}>
-          重置
-        </Button>
-      )}
-    </>
-  );
+    values: SubscriptionFilters,
+    update: (patch: Partial<SubscriptionFilters>) => void,
+    mobile: boolean,
+    onReset: () => void
+  ) => {
+    const rangeWidth = mobile ? "h-10 w-full" : "h-9 w-[240px]";
+    const selectWidth = mobile ? "h-10 w-full" : "h-9 w-[150px]";
+    return (
+      <>
+        <DateRangePicker
+          value={values.applyRange}
+          onChange={(r) => update({ applyRange: r })}
+          placeholder="申购日期"
+          numberOfMonths={mobile ? 1 : 2}
+          className={rangeWidth}
+        />
+        <DateRangePicker
+          value={values.confirmRange}
+          onChange={(r) => update({ confirmRange: r })}
+          placeholder="确认日期"
+          numberOfMonths={mobile ? 1 : 2}
+          className={rangeWidth}
+        />
+        <Select
+          value={values.status ?? "all"}
+          onValueChange={(v) => update({ status: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="pending">待确认</SelectItem>
+            <SelectItem value="confirmed">已确认</SelectItem>
+            <SelectItem value="cancelled">已取消</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={values.investor ?? "all"}
+          onValueChange={(v) => update({ investor: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部投资人" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部投资人</SelectItem>
+            {investors.map((inv) => (
+              <SelectItem key={inv.code} value={inv.code}>
+                {inv.name} ({inv.code})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <SearchablePlatformSelect
+          platforms={platforms}
+          value={values.platform ?? null}
+          onChange={(v) => update({ platform: v ?? undefined })}
+          specialOptionLabel="全部平台"
+          className={selectWidth}
+        />
+        <Select
+          value={values.subType ?? "all"}
+          onValueChange={(v) => update({ subType: v === "all" ? undefined : v })}
+        >
+          <SelectTrigger className={selectWidth}>
+            <SelectValue placeholder="全部类型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类型</SelectItem>
+            <SelectItem value="subscribe">申购</SelectItem>
+            <SelectItem value="redeem">赎回</SelectItem>
+          </SelectContent>
+        </Select>
+        {!mobile && hasNonDefaultFilter && (
+          <Button variant="ghost" size="sm" className="h-9" onClick={onReset}>
+            重置
+          </Button>
+        )}
+      </>
+    );
+  };
 
   const isMobile = variant === "mobile";
 
@@ -684,22 +708,42 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
           <CardDescription>申购和赎回记录</CardDescription>
         </CardHeader>
         <CardContent>
-          {/* 筛选栏（规范 §9：表格卡片内顶部）；移动端为折叠面板 + 激活计数 Badge */}
+          {/* 筛选栏（规范 §9：表格卡片内顶部）；移动端为草稿筛选 sheet + 激活计数 Badge */}
           {variant === "mobile" ? (
             <div className="mb-3 space-y-2">
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setFilterOpen((v) => !v)}>
-                <Filter className="mr-2 h-4 w-4" />
-                筛选
-                {activeFilterCount > 0 && (
-                  <Badge variant="default" className="ml-2">
-                    {activeFilterCount}
-                  </Badge>
-                )}
-              </Button>
-              {filterOpen && <div className="grid grid-cols-1 gap-2">{filterControls}</div>}
+              <MobileFilterSheet
+                trigger={
+                  <Button variant="outline" size="sm" className="h-9">
+                    <Filter className="mr-2 h-4 w-4" />
+                    筛选
+                    {activeFilterCount > 0 && (
+                      <Badge variant="default" className="ml-2">
+                        {activeFilterCount}
+                      </Badge>
+                    )}
+                  </Button>
+                }
+                open={isOpen}
+                onOpenChange={(open) => {
+                  if (open) openDraft();
+                  else discardDraft();
+                }}
+                canApply={isValid}
+                error={error}
+                onReset={resetDraft}
+                onApply={() => {
+                  if (applyFilters()) setPage(1);
+                }}
+              >
+                <div className="grid grid-cols-1 gap-2">
+                  {filterControls(draftFilters, setDraft, true, resetDraft)}
+                </div>
+              </MobileFilterSheet>
             </div>
           ) : (
-            <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {filterControls(appliedFilters, updateAppliedFilters, false, resetFilters)}
+            </div>
           )}
           {/* 规范 §14：筛选/翻页局部刷新保留旧数据，右上角小 spinner 标记更新 */}
           <div className="relative">

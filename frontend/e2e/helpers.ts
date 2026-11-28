@@ -82,16 +82,11 @@ export async function gotoPortfolioSubpage(
 }
 
 /**
- * 移动端展开折叠筛选面板；桌面端筛选栏恒展开，本函数 no-op（#383）。
+ * 移动端打开筛选 sheet；桌面端筛选栏恒展开，本函数 no-op（#383）。
  *
- * `components/shared/*Content.tsx` 的 `variant === "mobile"` 分支把 filterControls 包在
- * `{filterOpen && …}` 里、`filterOpen` 初值 false，故未展开时 platformTrigger 定位到
- * 未渲染节点、click 直接超时。这是端差异里**唯一**需要适配的一处：面板展开后控件与
- * 桌面完全同构（同一 filterControls 节点），断言本身双端通用。
- *
- * 按钮名必须用锚定正则——激活计数 Badge 会把 accessible name 变成「筛选1」，而空态在
- * `hasNonDefaultFilter` 下另有「重置筛选」按钮（EmptyState 的 resetFilters action），
- * Playwright 字符串 name 默认子串匹配，两者会 strict-mode 撞车。
+ * 打开后控件才挂载；#944 Phase 8.2 起修改先进入草稿，由 closeFilterPanelIfMobile
+ * 点击「应用筛选」提交。按钮名必须用锚定正则——激活计数 Badge 会把 accessible name
+ * 变成「筛选1」，而空态在 hasNonDefaultFilter 下另有「重置筛选」按钮。
  */
 export async function openFilterPanelIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
   if (testInfo.project.name !== 'mobile') return;
@@ -102,12 +97,13 @@ export async function openFilterPanelIfMobile(page: Page, testInfo: TestInfo): P
 
 /**
  * 关闭移动端筛选 sheet（#904 P1b）：sheet 是 modal Dialog，开着时表格外 aria-hidden，
- * 行集 role 定位/点击不可达；设完筛选须回列表（点「完成」）再断言行集，与真实用户流一致。
+ * 行集 role 定位/点击不可达；设完筛选须回列表再断言行集，与真实用户流一致。
+ * #944 Phase 8.2 的流水页按钮为「应用筛选」，未迁移的产品页仍为「完成」。
  * 桌面筛选栏恒展开、无 sheet，本函数 no-op。
  */
 export async function closeFilterPanelIfMobile(page: Page, testInfo: TestInfo): Promise<void> {
   if (testInfo.project.name !== 'mobile') return;
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: /^(?:应用筛选|完成)$/ }).click();
 }
 
 /**

@@ -47,12 +47,12 @@ RATCHET_STEP = "Assert lcov data source (PR)"
 ATTRIBUTION_STEP = "Warn on attribution gap (PR)"
 SUMMARY_STEP = "Append diff coverage summary"
 
-#: 分母下限的高水位（2026-11-27 实测：`include ∖ exclude` 命中 15 个文件，
-#: #943 新增 src/lib/portfolioSnapshot.ts 入分母；上一次的 14 来自 #880 的
-#: src/lib/dataSource.ts，13 来自 #725 的 src/lib/cashFlows.ts，12 来自 #703 的
-#: src/lib/navBasis.ts）。只升不降，口径与 frontend/AGENTS.md §3、ci.yml 的
-#: LCOV_SF_MIN 一致；下调这个数就是放松门禁，必须在 PR 里被显式讨论。
-SF_MIN_HIGH_WATER = 15
+#: 分母下限的高水位（2026-11-28 实测：`include ∖ exclude` 命中 16 个文件，
+#: #944 新增 src/lib/draftFilter.ts 入分母；上一次的 15 来自 #943 的
+#: src/lib/portfolioSnapshot.ts，14 来自 #880 的 src/lib/dataSource.ts，13 来自
+#: #725 的 src/lib/cashFlows.ts）。只升不降，口径与 frontend/AGENTS.md §3、
+#: ci.yml 的 LCOV_SF_MIN 一致；下调这个数就是放松门禁，必须在 PR 里被显式讨论。
+SF_MIN_HIGH_WATER = 16
 #: ci.yml 里的运行时下限常量名（与测试共享同一语义，两侧各自出现一次是刻意的：
 #: 一处在 CI 里判、一处在 review 时判，任何一处被删都有另一处兜）。
 SF_MIN_PATTERN = re.compile(r"LCOV_SF_MIN=(\d+)")
@@ -472,11 +472,11 @@ class TestAttributionAssertion:
 class TestDenominatorRatchet:
     def test_compliant_template_is_compliant(self):
         assert ratchet_problems([
-            "LCOV_SF_MIN=15",
+            "LCOV_SF_MIN=16",
             "if [ \"${sf}\" -lt \"${LCOV_SF_MIN}\" ]; then",
             "echo \"::error::lcov 只描述了 ${sf} 个\"",
             "exit 1",
-        ], denominator_size=15) == []
+        ], denominator_size=16) == []
 
     def test_real_step_is_compliant(self, ratchet_lines, vitest_config):
         problems = ratchet_problems(ratchet_lines, len(denominator_files(vitest_config)))

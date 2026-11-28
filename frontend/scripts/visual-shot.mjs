@@ -20,7 +20,8 @@
  *             info-tip = 说明浮层取证（#943 S2，未传 --path 时默认组合详情，也可指定
  *             产品/平台产品/快照/绩效说明所在页面）；
  *             portfolio-back-to-top = 移动组合详情页内操作区与三屏回顶（#937，
- *             先截页首，再仅移动端在正文后注入长页空白并滚到阈值截回顶态）
+ *             先截页首，再仅移动端在正文后注入长页空白并滚到阈值截回顶态）；
+ *             mobile-filter-draft = 移动流水筛选草稿 sheet 打开态（#944 Phase 8.2）
  *   --out     输出目录，默认创建独立临时目录
  *   --base    前端地址，默认 http://localhost:3000（调用方须先启动服务）
  * 每个 --path 每张图出两张：整页 fullPage 与 table 元素裁剪（-table.png 后缀）；
@@ -64,11 +65,12 @@ const DEFAULT_PATHS = [
   portfolioPath(E2E_ACTIVE, 'subscriptions'),
   portfolioPath(E2E_ACTIVE, 'share-change-events'),
 ];
-const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip', 'portfolio-back-to-top'];
+const SCENARIOS = ['snapshot-delete-confirm', 'trade-date-range', 'investor-reset-password', 'snapshot-catchup-alert', 'portfolio-breadcrumb-long-name', 'info-tip', 'portfolio-back-to-top', 'mobile-filter-draft'];
 // 停更态目检夹具组合 code（scenario 造数与默认路径单点持有，防漂移，L2 r2）
 const CATCHUP_FIXTURE_CODE = 'VIS906STALE';
 const INFO_TIP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
 const BACK_TO_TOP_DEFAULT_PATH = portfolioPath(E2E_ACTIVE);
+const FILTER_DRAFT_DEFAULT_PATH = portfolioPath(E2E_ACTIVE, 'trades');
 
 /** --path 可带查询串，故一律按 URL 解析；相对路径以占位 base 补全 */
 function parseUrl(path) {
@@ -172,6 +174,18 @@ if (opts.scenario === 'portfolio-back-to-top') {
     process.exit(2);
   }
 }
+if (opts.scenario === 'mobile-filter-draft' && !pathsExplicit) {
+  opts.paths = [FILTER_DRAFT_DEFAULT_PATH];
+}
+if (opts.scenario === 'mobile-filter-draft') {
+  const invalidPath = opts.paths.find((path) =>
+    !/^\/(?:m\/)?portfolio\/[^/]+\/(?:trades|subscriptions|share-change-events|snapshots|cash-flows)\/?$/.test(parseUrl(path).pathname),
+  );
+  if (invalidPath) {
+    console.error(`mobile-filter-draft 仅支持流水筛选路径: ${invalidPath}`);
+    process.exit(2);
+  }
+}
 const shotSlugs = new Set();
 for (const path of opts.paths) {
   const slug = shotSlug(path);
@@ -226,6 +240,18 @@ function shotName(path, device, theme) {
 
 /** 打开态浮层取证：交互同步点沿用 e2e/helpers 的 popper 挂载/卸载语义（不裸 waitFor） */
 async function runScenario(page, scenario, device) {
+  if (scenario === 'mobile-filter-draft') {
+    if (device !== 'mobile') return { close: async () => {} };
+    const trigger = page.getByRole('button', { name: /^筛选/ });
+    await trigger.waitFor({ state: 'visible', timeout: 15_000 });
+    await trigger.click();
+    const sheet = page.getByRole('dialog', { name: '筛选' });
+    await sheet.waitFor({ state: 'visible', timeout: 15_000 });
+    return { close: async () => {
+      await page.keyboard.press('Escape');
+      await sheet.waitFor({ state: 'hidden', timeout: 15_000 });
+    } };
+  }
   if (scenario === 'info-tip') {
     const label = infoTipLabelForPath(page.url());
     if (!label) throw new Error(`info-tip 场景不支持路径: ${page.url()}`);
