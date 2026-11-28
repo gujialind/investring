@@ -291,7 +291,7 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
   const isMobile = variant === "mobile";
 
   // 移动快照卡（#907，visual-spec §8 流水卡解剖）：日期标题 + 涨跌 chip（getSignedReturn 单点）
-  // → kv（净值/份额/市值/在途）→ 删除（仅最新日，disabledHint 保留快照连续原则）。
+  // → 常显市值/在途 → 净值/份额核对明细 → 删除（仅最新日，disabledHint 保留快照连续原则）。
   const renderSnapshotCard = (item: (typeof items)[number], i: number) => {
     // 涨跌 = 当日净值 / 前一交易日净值 − 1（数组倒序，i+1 即前一交易日；快照连续原则保证相邻）
     const prev = items[i + 1];
@@ -310,11 +310,14 @@ export default function SnapshotsContent({ basePath, variant = "desktop" }: Snap
         />
         <FlowCardKVGrid
           items={[
-            { label: "净值", value: formatNav(item.unit_price) },
-            { label: "份额", value: formatSharesUnit(item.total_shares) },
             { label: "市值", value: formatCurrency(item.total_value) },
             { label: "在途", value: formatCurrency(item.in_transit_total) },
           ]}
+          secondaryItems={[
+            { label: "净值", value: formatNav(item.unit_price) },
+            { label: "份额", value: formatSharesUnit(item.total_shares) },
+          ]}
+          detailsTestId="snapshot-card-details"
         />
         <FlowCardActions>
           <RowActionButton

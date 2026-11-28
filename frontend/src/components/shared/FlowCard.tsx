@@ -1,16 +1,18 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
  * 流水卡解剖共享单点（#907，visual-spec §8「流水卡解剖」）。
  * 调仓/申赎/份额变动事件/快照四页移动分支共用同一副卡解剖，消除横滚与 CJK 竖排：
- * 头行（名称 + code·市场·平台次行 / 方向·类型 chip neutral / 状态 badge）→ kv 数值网格
- * （mono + format 函数 + number-cell 族）→ 日期行（双值均可见、pending 带「预计」）→
+ * 头行（名称 + code·市场·平台次行 / 方向·类型 chip neutral / 状态 badge）→ 常显 kv 数值网格
+ * （mono + format 函数 + number-cell 族）→ 可选核对明细展开 → 日期行（双值均可见、pending 带「预计」）→
  * 操作行（RowActionButton 图标档、仅主行）。结对子行 → 卡内子块（muted 底 + xs + 标签
  * nowrap、无操作入口）。容器形态承 #897 管理页移动卡片（rounded-lg border p-3、无阴影）。
- * 字段集合双端一致（§6）：卡呈现的字段与桌面列逐一对应，不为移动端单独裁剪信息结构。
+ * 字段集合双端一致（§6）：卡呈现的字段与桌面列逐一对应，核对字段按需展开，不裁剪信息结构。
  * 子块文案/状态判据消费 lib/tradePairs.ts 单点，不在此重新推导。
  */
 
@@ -64,11 +66,9 @@ export function FlowCardHeader({
  * （pending 空值 fallback `--`，#424）。testId 挂在值 span（非整格）——E2E 对值文本做精确断言，
  * 含 label 会污染 textContent。
  */
-export function FlowCardKVGrid({
-  items,
-}: {
-  items: { label: string; value: ReactNode; testId?: string }[];
-}) {
+type FlowCardKVItem = { label: string; value: ReactNode; testId?: string };
+
+function FlowCardKVGridRows({ items }: { items: FlowCardKVItem[] }) {
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-1">
       {items.map((item) => (
@@ -82,6 +82,61 @@ export function FlowCardKVGrid({
         </div>
       ))}
     </div>
+  );
+}
+
+/** 核对明细展开件：触发器高 44px、文案随开合切换，具 aria-expanded / aria-controls；明细默认收起。 */
+export function FlowCardDetails({
+  testId,
+  children,
+}: {
+  testId?: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
+
+  return (
+    <div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-11 w-full justify-between px-2"
+        aria-expanded={open}
+        aria-controls={contentId}
+        data-testid={testId}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {open ? "收起核对明细" : "展开核对明细"}
+        <ChevronDown
+          aria-hidden="true"
+          className={cn("h-4 w-4 transition-transform motion-reduce:transition-none", open && "rotate-180")}
+        />
+      </Button>
+      {open && <div id={contentId}>{children}</div>}
+    </div>
+  );
+}
+
+export function FlowCardKVGrid({
+  items,
+  secondaryItems,
+  detailsTestId,
+}: {
+  items: FlowCardKVItem[];
+  secondaryItems?: FlowCardKVItem[];
+  detailsTestId?: string;
+}) {
+  return (
+    <>
+      <FlowCardKVGridRows items={items} />
+      {secondaryItems != null && secondaryItems.length > 0 && (
+        <FlowCardDetails testId={detailsTestId}>
+          <FlowCardKVGridRows items={secondaryItems} />
+        </FlowCardDetails>
+      )}
+    </>
   );
 }
 

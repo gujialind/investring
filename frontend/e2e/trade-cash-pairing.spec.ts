@@ -189,8 +189,6 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     // `-- @ 1.0000` 是详情卡形态、交易表两个槽位分开渲染，修复前后都不可能出现在表里；
     // 保留它们是防形态漂移，不是 #732 的承重点。承重点只有价格槽（修复前为红）。
     if (isMobile) {
-      await expect(cashMain.getByTestId("trade-card-shares")).toHaveText("--"); // 份额（既有行为护栏）
-      await expect(cashMain.getByTestId("trade-card-price")).toHaveText("--"); // 价格（#732 承重）
       await expect(page.getByTestId("trade-card-list")).not.toContainText("-- @ 1.0000");
     } else {
       // 主行列数 = §8 槽位算术的对侧：cell 数一变，子行的 colSpan 折叠就整体错位
@@ -205,6 +203,11 @@ test.describe("交易列表的配对现金信息（#719）", () => {
     const cashMainRows = flowRows(page).filter({ hasText: "现金 · 申赎确认" });
     await expect(cashMainRows).toHaveCount(cashMainCount);
     for (const row of await cashMainRows.all()) {
+      if (isMobile) {
+        const details = row.getByTestId("trade-card-details");
+        if ((await details.getAttribute("aria-expanded")) !== "true") await details.click();
+        await expect(row.getByTestId("trade-card-shares")).toHaveText("--");
+      }
       await expect(
         isMobile ? row.getByTestId("trade-card-price") : row.getByRole("cell").nth(6),
       ).toHaveText("--");
