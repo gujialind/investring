@@ -257,7 +257,7 @@ export default function PortfolioListContent({ basePath, variant = "desktop" }: 
 
       <div className={gridCls}>
         {filteredPortfolios.map((portfolio) => (
-          <Card key={portfolio.code} data-testid={`portfolio-card-${portfolio.code}`}>
+          <Card key={portfolio.code}>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>{portfolio.name}</CardTitle>
