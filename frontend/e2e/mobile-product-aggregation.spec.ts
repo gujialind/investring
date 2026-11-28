@@ -109,6 +109,23 @@ test('产品行 Enter 往返恢复焦点，移动详情保留底栏且不污染�
   }
 });
 
+test('移动产品详情经底栏离开时清除未消费的返回焦点键（#944 Phase 6.2）', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile', '仅移动产品详情保留底栏');
+  await gotoPortfolioDetail(page, E2E_ACTIVE);
+  await productRow(page).click();
+  await page.waitForURL(/\/product\/510300\.SH\?market=CN_EXCHANGE/);
+  expect(await readReturnFocus(page)).toBe(PRODUCT_RETURN_VALUE);
+
+  await page
+    .getByTestId('bottom-nav')
+    .getByRole('link', { name: '首页', exact: true })
+    .click();
+  await page.waitForURL(/\/m\/dashboard$/);
+  expect(await readReturnFocus(page)).toBeNull();
+});
+
 test('移动产品详情深链聚焦返回 crumb，末操作不被底栏遮挡（#944 Phase 6.2）', async ({
   page,
 }, testInfo) => {

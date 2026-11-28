@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { HoldingProductAggregate } from "@/types/holding";
 import { CASH_PRODUCT_CODE } from "@/lib/allocation";
-import { CUMULATIVE_PROFIT_INFO_TIP, productCardKey } from "@/lib/holdings";
+import { CUMULATIVE_PROFIT_INFO_TIP, MOBILE_PRODUCT_RETURN_PREFIX, productCardKey } from "@/lib/holdings";
 import {
   cn,
   formatCurrency,
@@ -13,9 +13,6 @@ import {
   getReturnColorClass,
 } from "@/lib/utils";
 import InfoTip from "./InfoTip";
-
-/** 移动产品行返回焦点的 sessionStorage 键前缀，后接组合码（仅组合页消费） */
-export const MOBILE_PRODUCT_RETURN_PREFIX = "investring:mobile-product-return:";
 
 /** 带符号收益（卡片「累计收益/最新收益」列：纯数字不带 ¥，对齐 M1/D1 设计稿） */
 function formatSignedNumber(value: number | null | undefined): string {
@@ -57,6 +54,7 @@ export default function HoldingProductCard({
 }) {
   const isCash = product.product_code === CASH_PRODUCT_CODE;
   const isMobileRow = variant === "mobile";
+  const productKey = productCardKey(product);
   // #705 row2 代码用显示码；港互认双码并列（isCash 判定与跳转仍用原始 product_code）
   const codeLabel = formatProductCodeLabel(
     product.display_code,
@@ -78,7 +76,7 @@ export default function HoldingProductCard({
         href={href}
         aria-label={`查看${product.product_name || codeLabel}详情`}
         data-product-code={product.product_code}
-        data-product-key={productCardKey(product)}
+        data-product-key={productKey}
         onClick={(event) => {
           if (
             !isMobileRow ||
@@ -93,7 +91,7 @@ export default function HoldingProductCard({
           try {
             sessionStorage.setItem(
               `${MOBILE_PRODUCT_RETURN_PREFIX}${returnFocusKey}`,
-              productCardKey(product),
+              productKey,
             );
           } catch {
             // 存储不可用时放弃焦点恢复，不能阻断产品跳转。

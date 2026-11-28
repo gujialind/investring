@@ -117,7 +117,7 @@ export default function ProductDetailContent({ basePath, variant }: ProductDetai
       cancelAnimationFrame(outerFrame);
       cancelAnimationFrame(innerFrame);
     };
-  }, [isMobile, portfolioLoading, holdingsLoading, hasProduct]);
+  }, [isMobile, portfolioLoading, holdingsLoading, hasProduct, portfolioCode, productCode, market]);
 
   // 概览卡「单位净值 · 累计净值 (MM/DD)」取最新一条历史净值。三卡（走势/区间收益率/历史净值）
   // 已移入 ProductNavCards（#824），此处只为概览取首屏首条——页 1 的 query key 与 ProductNavCards

@@ -15,6 +15,7 @@ import { PSEUDO_IN_TRANSIT_CODE } from "@/lib/allocation";
 import {
   buildCardPercentMap,
   buildProductSections,
+  MOBILE_PRODUCT_RETURN_PREFIX,
   productCardKey,
   sumGroupPercent,
   type HoldingProductSection,
@@ -30,9 +31,7 @@ import {
 } from "@/lib/dimensions";
 import { cn, formatNumber, largestRemainderPercents } from "@/lib/utils";
 import HoldingInTransitCard from "./HoldingInTransitCard";
-import HoldingProductCard, {
-  MOBILE_PRODUCT_RETURN_PREFIX,
-} from "./HoldingProductCard";
+import HoldingProductCard from "./HoldingProductCard";
 import HoldingPlatformCard from "./HoldingPlatformCard";
 import LoadingState from "./LoadingState";
 import QueryErrorState from "./QueryErrorState";
