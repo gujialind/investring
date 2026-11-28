@@ -160,7 +160,12 @@ for (const theme of ['light', 'dark'] as const) {
       const ring = await firstRow.evaluate((element) => getComputedStyle(element).boxShadow);
       expect(ring).not.toBe('none');
       await expect(page.getByRole('tooltip')).toContainText('¥400.00');
-      await rows.nth(1).hover();
+      await firstRow.evaluate((element) => (element as HTMLElement).blur());
+      await page.mouse.move(0, 0);
+      await expect(page.getByRole('tooltip')).toHaveCount(0);
+      const secondRow = rows.nth(1);
+      await secondRow.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+      await secondRow.hover();
       await expect(page.getByRole('tooltip')).toContainText('¥250.00');
     });
 

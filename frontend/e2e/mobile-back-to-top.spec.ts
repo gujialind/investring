@@ -34,7 +34,11 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
 
   async function collapsePageHeader(page: Page): Promise<void> {
     // 页头折叠会改变文档高度；先越过 32px 并等折叠提交，再做精确 scrollY/文档坐标断言。
-    await page.evaluate(() => window.scrollTo(0, 100));
+    const maxY = await page.evaluate(
+      () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
+    );
+    if (maxY <= 32) return;
+    await page.evaluate((top) => window.scrollTo(0, top), Math.min(100, maxY));
     await expect(page.getByTestId('page-header').getByRole('navigation', { name: '面包屑' })).toHaveCount(0);
   }
 
@@ -168,12 +172,15 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     const threshold = await scrollToThreshold(page, -1);
     await expect(page.getByTestId('back-to-top')).toHaveCount(0);
     await scrollWindowTo(page, threshold);
+    await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
     await expect(page.getByTestId('back-to-top')).toHaveCount(1);
     await expect(page.getByRole('button', { name: '回到顶部', exact: true })).toBeVisible();
     await scrollWindowTo(page, threshold - 1);
+    await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
     await expect(page.getByTestId('back-to-top')).toHaveCount(0);
 
     await gotoMobileDetail(page, E2E_PORT);
+    await collapsePageHeader(page);
     const maxY = await page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight);
     expect(maxY, '草稿短页应不足三屏').toBeLessThan(BACK_TO_TOP_VISIBILITY_MULTIPLIER * 844);
     await scrollWindowTo(page, maxY);

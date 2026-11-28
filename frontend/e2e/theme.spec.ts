@@ -264,15 +264,24 @@ test('净值图键盘焦点浅暗均走 ring，局部规则不污染饼图与普
     await expectNavCurveKeyboardNavigation(page, card, NAV_CURVE_STANDARD, `${scheme} 净值键盘`, { ringColor: ring });
     ringColors.push(ring);
 
-    const pieSvg = page.locator('svg.recharts-surface').filter({ has: page.locator('.recharts-pie-sector') }).first();
-    await expect(pieSvg, `${scheme}: 资产饼图应仍存在`).toBeVisible();
-    await expect(pieSvg).toHaveCSS('outline-style', 'none');
     const ordinary = card.getByTestId('nav-range-6m');
     await ordinary.focus();
     await page.keyboard.press('Tab');
     await page.keyboard.press('Shift+Tab');
     await expect(ordinary).toBeFocused();
     expect(await ordinary.evaluate((el) => getComputedStyle(el).boxShadow), `${scheme}: 普通按钮焦点环应保留`).not.toBe('none');
+  }
+  const allocationCard = page.getByTestId('asset-composition-card');
+  const pieToggle = allocationCard.getByTestId('asset-composition-view-pie');
+  if (await pieToggle.getAttribute('aria-pressed') !== 'true') {
+    await pieToggle.click();
+  }
+  const pieSvg = page.locator('svg.recharts-surface').filter({ has: page.locator('.recharts-pie-sector') }).first();
+  await expect(pieSvg, '资产饼图应仍存在').toBeVisible();
+  for (const scheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(page.locator('html')).toHaveClass(scheme === 'dark' ? /dark/ : /^(?!.*dark).*$/);
+    await expect(pieSvg).toHaveCSS('outline-style', 'none');
   }
   expect(new Set(ringColors).size, '浅暗焦点应分别取各自主题 token，而非同一硬编码色').toBe(2);
   await page.emulateMedia({ colorScheme: 'light' });

@@ -13,7 +13,7 @@ interface AssetAllocationBarProps {
   items: AllocationItem[];
 }
 
-const ALLOCATION_GRID_COLUMNS = "grid-cols-[4rem_minmax(1.5rem,1fr)_4rem_6rem]";
+const ALLOCATION_GRID_COLUMNS = "grid-cols-[minmax(2.5rem,0.8fr)_minmax(1.5rem,1.2fr)_minmax(3rem,0.9fr)_minmax(4.5rem,1.3fr)]";
 
 export default function AssetAllocationBar({ items }: AssetAllocationBarProps) {
   if (!items.length) {
