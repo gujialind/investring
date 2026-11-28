@@ -34,7 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, formatProductCodeLabel, formatMarketName, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, formatProductCodeLabel, formatMarketName } from "@/lib/utils";
 import { Plus, Loader2, CheckCircle, XCircle, Undo, Filter, Pencil, Info } from "lucide-react";
 import RowActionButton from "@/components/shared/RowActionButton";
 import { ShareChangeEventCreate, ApiException } from "@/lib/api";
@@ -875,14 +875,14 @@ export default function ShareChangeEventsContent({
                 )}
                 {isMobile ? (
                   <div
-                    className={cn("space-y-3", isFetching && "opacity-50")}
+                    className="space-y-3"
                     aria-busy={isFetching}
                     data-testid="event-card-list"
                   >
                     {events.map((event) => renderEventCard(event))}
                   </div>
                 ) : (
-                <Table className={cn(isFetching && "opacity-50")}>
+                <Table>
                   <TableHeader>
                     <TableRow>
                       {/* 纯 CJK 列无拉丁最小宽度，窄表（含空表仅表头）下会被压成一字宽竖排（#355 同族），

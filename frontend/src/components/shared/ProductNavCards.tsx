@@ -7,7 +7,6 @@ import NavCurve from "@/components/charts/NavCurve";
 import { type NavAnalysisRange } from "@/lib/api";
 import { navBasisLabels } from "@/lib/navBasis";
 import {
-  cn,
   formatDate,
   formatNav,
   formatReturnRate,
@@ -102,7 +101,7 @@ export default function ProductNavCards({
         </p>
       )}
       {analysisRevalidating && (
-        <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
+        <Loader2 role="status" aria-label="更新中" className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}
       <div
         className="mt-2 flex min-w-0 max-w-full flex-wrap gap-x-1 gap-y-1.5"
@@ -128,12 +127,12 @@ export default function ProductNavCards({
       </div>
       {/* #683 D-2：失败 ≠「这个区间没净值」。失败臂必须排在 NavCurve 之前，否则后端故障被
           NavCurve 的内置空态文案吞掉。
-          D-1：重取期保留 placeholder 的**上一个区间**数值，但整块压暗 + 右上角 spinner
+          D-1：重取期保留 placeholder 的**上一个区间**数值，右上角 spinner 标记更新
           （docs/design/visual-spec.md §14 局部加载态），不得为消除该观感而删 keepPreviousData。 */}
       {analysisError ? (
         <QueryErrorState error={analysisErr} onRetry={refetchAnalysis} className="mt-3" />
       ) : (
-        <div className={cn("mt-2", analysisRevalidating && "opacity-50")}>
+        <div className="mt-2">
           <NavCurve data={(analysis?.curve ?? []).map((p) => ({ date: p.date, nav: p.accumulated_nav }))} height={isMobile ? 220 : 300} />
         </div>
       )}
@@ -153,14 +152,14 @@ export default function ProductNavCards({
         </p>
       )}
       {analysisRevalidating && (
-        <Loader2 className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
+        <Loader2 role="status" aria-label="更新中" className="absolute right-3 top-3 z-10 h-4 w-4 animate-spin text-muted-foreground" />
       )}
       {/* 失败臂整块替换六窗（不是塞进 grid 子位）：失败时六个 return-<field> 都不存在，
           「全为 --」的形态随之消失，后端故障不再被读成「这些窗口没有净值」 */}
       {analysisError ? (
         <QueryErrorState error={analysisErr} onRetry={refetchAnalysis} className="mt-3" />
       ) : (
-        <div className={cn("mt-3 grid grid-cols-3 gap-3", analysisRevalidating && "opacity-50")}>
+        <div className="mt-3 grid grid-cols-3 gap-3">
           {RETURN_WINDOWS.map((w) => {
             const value = analysis?.interval_returns?.[w.field];
             return (

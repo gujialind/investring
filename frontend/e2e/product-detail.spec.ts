@@ -516,7 +516,7 @@ test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析�
     // 点「近1个月」后该请求在途期间 isError=false、isPlaceholderData=true、isFetching=true，
     // data 仍是 6m 的值——chip 的 aria-pressed 已切到 1m，而六窗数值仍是 6m 的旧值，屏上原本
     // 没有任何「这不是当前区间」的标记。对记账系统这是「把旧数读成新数」，比落空态更严重。
-    // 形态取 docs/design/visual-spec.md §14 既有的局部加载态（容器 opacity-50 + 右上角 Loader2），
+    // 形态取 docs/design/visual-spec.md §14 的局部加载态（保留旧值 + 右上角 Loader2，不压暗），
     // 并把该状态显式写成 aria-busy 供断言：定位器契约禁止按 Tailwind 工具类定位（同 #650 用
     // aria-current 而不按高亮类名断言的手法）。**旧值仍在屏上是刻意的**，本用例不断它缺席。
     const SIX_M = {
@@ -553,6 +553,9 @@ test.describe("读侧失败伪装成空态（#683 B 交易卡 / D 净值分析�
     // 反证③的落点：删掉组件里 isRefetching 门控，这两句红
     await expect(curve).toHaveAttribute("aria-busy", "true");
     await expect(returns).toHaveAttribute("aria-busy", "true");
+    await expect(curve.getByRole("status", { name: "更新中" })).toBeVisible();
+    await expect(returns.getByRole("status", { name: "更新中" })).toBeVisible();
+    await expect(returns.getByTestId("return-m1").locator("..")).toHaveCSS("opacity", "1");
   });
 });
 

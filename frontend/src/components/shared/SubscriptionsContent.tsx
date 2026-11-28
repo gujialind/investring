@@ -45,7 +45,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatCurrency, formatSharesUnit, formatNav, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant, cn } from "@/lib/utils";
+import { formatCurrency, formatSharesUnit, formatNav, formatDate, toDateOnly, parseDateOnly, getStatusBadgeVariant } from "@/lib/utils";
 import { validatePlatformCode, parsePositiveNumber } from "@/lib/validation";
 import { Badge } from "@/components/ui/badge";
 import { tradeDirectionColors } from "@/lib/colors";
@@ -698,21 +698,21 @@ export default function SubscriptionsContent({ basePath, variant = "desktop" }: 
           ) : (
             <div className="mb-3 flex flex-wrap items-center gap-2">{filterControls}</div>
           )}
-          {/* 规范 §14：筛选/翻页局部刷新保留旧数据，表格半透明 + 右上角小 spinner */}
+          {/* 规范 §14：筛选/翻页局部刷新保留旧数据，右上角小 spinner 标记更新 */}
           <div className="relative">
             {isFetching && (
               <Loader2 className="absolute right-2 top-2 z-10 h-4 w-4 animate-spin text-muted-foreground" />
             )}
             {isMobile ? (
               <div
-                className={cn("space-y-3", isFetching && "opacity-50")}
+                className="space-y-3"
                 aria-busy={isFetching}
                 data-testid="subscription-card-list"
               >
                 {subscriptions.map((sub) => renderSubCard(sub))}
               </div>
             ) : (
-            <Table className={cn(isFetching && "opacity-50")}>
+            <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>投资人</TableHead>
