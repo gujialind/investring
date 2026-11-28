@@ -159,6 +159,7 @@ async function pickStatus(page: Page, testInfo: TestInfo, label: string): Promis
   await ensureCashFlowFiltersOpen(page, testInfo);
   const trigger = page.getByRole('combobox').filter({ hasText: '全部状态' });
   const option = page.getByRole('option', { name: label });
+  await trigger.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await openPopover(page, trigger, option);
   await option.click({ timeout: 10_000 });
   await settlePopovers(page);
@@ -514,6 +515,7 @@ test.describe('现金流水页（#725，双端）', () => {
     await expect(page.getByTestId('stat-available')).toContainText('¥35,000.00');
     await expect(page.getByTestId('stat-in_transit')).toContainText('¥5,000.00');
 
+    await expect(page.getByTestId('toast-card')).toHaveCount(0, { timeout: 15_000 });
     await page.locator(`a[href$="/${code}"]:visible`).first().click();
     await expect(page).toHaveURL(new RegExp(`/portfolio/${code}$`));
     await page.locator(`a[href$="/${code}/trades"]:visible`).first().click();

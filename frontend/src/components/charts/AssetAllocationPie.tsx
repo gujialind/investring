@@ -14,7 +14,7 @@ interface AssetAllocationPieProps {
 
 /**
  * 资产分布环形图（issue #99）：左侧 donut + 右侧图例（名称 + 占比%）。
- * 颜色/顺序由 asset_class 维度字典 sort_order 驱动（#128，见 lib/allocation.ts）。
+ * 身份色由 buildAllocation 决定，排序与合并由 AssetCompositionCard 单一路径负责。
  * 图例标签 whitespace-nowrap 防窄容器 CJK 逐字竖排（#355 同族防护）。
  */
 export default function AssetAllocationPie({ items, height = 180, forceColumn = false }: AssetAllocationPieProps) {
@@ -31,6 +31,7 @@ export default function AssetAllocationPie({ items, height = 180, forceColumn = 
 
   return (
     <div
+      data-testid="asset-allocation-pie"
       className={`flex flex-col items-center gap-4 ${
         forceColumn ? "" : "sm:flex-row sm:gap-10"
       }`}
@@ -47,7 +48,7 @@ export default function AssetAllocationPie({ items, height = 180, forceColumn = 
               strokeWidth={0}
             >
               {items.map((item) => (
-                <Cell key={item.key} fill={item.color} />
+                <Cell key={item.code} data-allocation-code={item.code} fill={item.color} />
               ))}
             </Pie>
             <Tooltip
@@ -68,8 +69,14 @@ export default function AssetAllocationPie({ items, height = 180, forceColumn = 
       </div>
       <div className="flex-1 grid grid-cols-2 gap-x-6 gap-y-3 w-full">
         {items.map((item) => (
-          <div key={item.key} className="flex items-center text-sm">
+          <div
+            key={item.code}
+            data-testid="asset-allocation-legend-item"
+            data-allocation-code={item.code}
+            className="flex items-center text-sm"
+          >
             <span
+              data-testid="asset-allocation-legend-color"
               className="w-2 h-2 rounded-sm mr-2 shrink-0"
               style={{ background: item.color }}
             />

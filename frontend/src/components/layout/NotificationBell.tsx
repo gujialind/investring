@@ -41,6 +41,7 @@ export default function NotificationBell() {
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
+          size="icon"
           className="relative h-8 w-8 rounded-full"
           aria-label="通知"
           aria-describedby={unreadCount > 0 ? unreadDescriptionId : undefined}
