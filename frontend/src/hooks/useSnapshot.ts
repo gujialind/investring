@@ -95,6 +95,7 @@ export function useGenerateSnapshot() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "快照生成成功",
@@ -121,6 +122,7 @@ export function useGenerateNextSnapshot() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "快照生成成功",
@@ -149,6 +151,7 @@ export function useCatchUpSnapshots() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       if (data.failed_date) {
         addToast({
           type: "warning",
@@ -217,6 +220,7 @@ export function useBulkDeleteSnapshots() {
       if (variables.mode === "confirm") {
         queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
         queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       }
     },
   });
@@ -250,6 +254,7 @@ export function useDeleteSnapshot() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
       queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "删除成功",

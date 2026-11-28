@@ -477,6 +477,9 @@ test.describe('移动组合详情页内操作区与回到顶部（#937）', () =
     await makeLongPage(page);
     const back = page.getByTestId('back-to-top');
     const captureBackGeometry = async () => {
+      // WebKit 关闭 AlertDialog 后可能恢复展开页头；先折叠再量 maxY，避免 41px 页头收缩
+      // 在 scrollTo 后把 2632px 目标锚定成 2591px。保留精确阈值断言，不引入容差或固定等待。
+      await collapsePageHeader(page);
       await scrollToThreshold(page, 100);
       await expect(back).toBeVisible();
       const box = await back.boundingBox();

@@ -18,6 +18,11 @@ import {
   openFilterPanelIfMobile,
   openSettingsSection,
   settlePopovers,
+  captureNavCardThemes,
+  expectNavCurveKeyboardNavigation,
+  mockPortfolioNavCurve,
+  navCurveInCard,
+  NAV_CURVE_STANDARD,
 } from './helpers';
 
 // B3 golden：基线 :root 33 个色彩 token 逐字节不变 + PR1 新增 destructive-solid（同声明）。
@@ -74,6 +79,18 @@ async function cssVar(page: Page, name: string): Promise<string> {
     (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(),
     name,
   );
+}
+
+/** 取 --ring 的实际渲染色；焦点断言因此验证 token 消费，不复抄近似 hex/rgb。 */
+async function renderedRingColor(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.style.color = 'hsl(var(--ring))';
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
 }
 
 /** 打开一个危险确认弹窗，断载体 computed style，取消收尾（零业务写入） */
@@ -218,14 +235,48 @@ test('图表暗色：饼图扇区/净值主线走暗色板，Tooltip 无白底�
   await expect(sector).toHaveAttribute('fill', '#5C82E0');
   const line = page.locator('.recharts-line-curve').first();
   await expect(line).toHaveAttribute('stroke', '#5C82E0');
-  // recharts 扇区入场动画/重渲染会使 path handle 失效（boundingBox null）；用稳定容器坐标触发 tooltip
-  const wrap = page.locator('.recharts-responsive-container').first();
+  // recharts 扇区入场动画/重渲染会使 path handle 失效（boundingBox null）；用稳定容器坐标触发 tooltip。
+  // #941：显式限定净值卡，不能再取页面第一个 responsive-container（那是饼图）。
+  const navCard = page.getByTestId('portfolio-nav-trend-card');
+  const wrap = navCard.locator('.recharts-responsive-container');
+  // 净值卡在首屏下方；先滚入视口再取坐标，避免把鼠标移到视口外而从未触发 chart mouse move。
+  await wrap.scrollIntoViewIfNeeded();
   const wb = await wrap.boundingBox();
   expect(wb).not.toBeNull();
   await page.mouse.move(wb!.x + wb!.width / 2, wb!.y + wb!.height * 0.15);
-  const tooltip = page.locator('.recharts-tooltip-wrapper div').first();
+  const tooltip = navCard.locator('.recharts-tooltip-wrapper div').first();
   await expect(tooltip).toBeVisible();
   await expect(tooltip).toHaveCSS('background-color', DARK_CARD);
+});
+
+test('净值图键盘焦点浅暗均走 ring，局部规则不污染饼图与普通按钮（#941 A3/A7）', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  await mockPortfolioNavCurve(page);
+  await page.goto(`/portfolio/${E2E_ACTIVE}`);
+  const card = page.getByTestId('portfolio-nav-trend-card');
+  const curve = navCurveInCard(card);
+  await expect(curve).toBeVisible();
+  const ringColors: string[] = [];
+  for (const scheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(page.locator('html')).toHaveClass(scheme === 'dark' ? /dark/ : /^(?!.*dark).*$/);
+    const ring = await renderedRingColor(page);
+    await expectNavCurveKeyboardNavigation(page, card, NAV_CURVE_STANDARD, `${scheme} 净值键盘`, { ringColor: ring });
+    ringColors.push(ring);
+
+    const pieSvg = page.locator('svg.recharts-surface').filter({ has: page.locator('.recharts-pie-sector') }).first();
+    await expect(pieSvg, `${scheme}: 资产饼图应仍存在`).toBeVisible();
+    await expect(pieSvg).toHaveCSS('outline-style', 'none');
+    const ordinary = card.getByTestId('nav-range-6m');
+    await ordinary.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(ordinary).toBeFocused();
+    expect(await ordinary.evaluate((el) => getComputedStyle(el).boxShadow), `${scheme}: 普通按钮焦点环应保留`).not.toBe('none');
+  }
+  expect(new Set(ringColors).size, '浅暗焦点应分别取各自主题 token，而非同一硬编码色').toBe(2);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await captureNavCardThemes(page, card, testInfo.outputPath('nav941-theme-keyboard'));
 });
 
 test('首屏不闪白代理事实 + 无水合报错 + SSR 含主题内联脚本（B4）', async ({ page }) => {

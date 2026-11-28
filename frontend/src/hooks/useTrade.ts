@@ -38,6 +38,7 @@ function invalidateTradeWrites(
   queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
   queryClient.invalidateQueries({ queryKey: queryKeys.positions.root });
   queryClient.invalidateQueries({ queryKey: queryKeys.snapshots.root });
+  queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
 }
 
 /**
@@ -56,6 +57,7 @@ function invalidateSubscriptionWrites(
   queryClient.invalidateQueries({ queryKey: queryKeys.subscriptions.list() });
   queryClient.invalidateQueries({ queryKey: queryKeys.subscriptions.detail(subscriptionId) });
   queryClient.invalidateQueries({ queryKey: queryKeys.portfolios.detail(portfolioCode) });
+  queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
 }
 
 // ==================== 调仓交易 Hooks ====================
@@ -364,6 +366,7 @@ export function useCreateSubscription() {
     mutationFn: (data: SubscriptionCreate) => subscriptionApi.create(data),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       queryClient.invalidateQueries({
         queryKey: ["portfolios", data.portfolio_code],
       });
@@ -393,6 +396,7 @@ export function useUpdateSubscription(id: number) {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, data.id] });
       queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       // 与 create/confirm/cancel 对齐：改金额/日期后可用现金等派生值变化，失效组合缓存
       queryClient.invalidateQueries({
         queryKey: ["portfolios", data.portfolio_code],
@@ -423,6 +427,7 @@ export function useConfirmSubscription() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, data.id] });
       queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       queryClient.invalidateQueries({
         queryKey: ["portfolios", data.portfolio_code],
       });
@@ -516,6 +521,7 @@ export function useDeleteSubscription() {
     mutationFn: (id: number) => subscriptionApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [SUBSCRIPTION_QUERY_KEY, "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.root });
       addToast({
         type: "success",
         title: "删除成功",
