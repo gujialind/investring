@@ -111,6 +111,12 @@ async function clickViewTab(page: Page, key: 'product' | 'platform'): Promise<vo
   await tab.click();
 }
 
+function platformHoldings(page: Page): Locator {
+  return page
+    .getByTestId('holding-platform-card')
+    .or(page.getByTestId('holding-platform-row'));
+}
+
 test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
   test('持仓明细读取失败 → 后端消息与重试入口，而非「暂无持仓记录」（#663③）', async ({ page }) => {
     // 只钉默认的按产品视图：按平台走同一个 activeQuery.isError 分支（同一段代码），
@@ -138,8 +144,8 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
     await refetched;
   });
 
-  test('默认按产品视图：URL 无 view 参数，产品聚合卡与现金聚合卡渲染', async ({ page }) => {
-    // 种子没有已卖出仓位，持有/累计收益恰好同值；读侧注入异号哨兵值，钉住 row3
+  test('默认按产品视图：URL 无 view 参数，桌面账表与移动聚合行渲染', async ({ page }, testInfo) => {
+    // 种子没有已卖出仓位，持有/累计收益恰好同值；读侧注入异号哨兵值，钉住累计收益
     // 确实取 cumulative_profit，并同时覆盖数值与涨跌色两个绑定。
     await page.route(/\/api\/positions\/portfolio\/[^/]+\/holdings\/by-product(\?|$)/, async (route) => {
       const resp = await route.fetch();
@@ -168,96 +174,99 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       'true',
     );
 
-    // 产品聚合卡（跨平台合计，卡内 row3 两列：累计收益 / 最新收益(MM/DD)）
-    const productCard = page
-      .getByTestId('holding-product-card')
-      .filter({ hasText: '沪深300ETF' });
-    await expect(productCard).toBeVisible();
-    // #705 卡片次行出显示码（去 tushare 后缀），机器码不再直吐
-    await expect(productCard).toContainText('510300 · ');
-    await expect(productCard).not.toContainText('510300.SH');
-    // #724：份额列双端移除（份额改由产品详情页概览卡承载，见 product-detail.spec.ts）
-    await expect(productCard).not.toContainText('持有份额');
-    // 日期标注取自响应级 snapshot_date，未退化为逐卡不同日期或被丢弃
-    await expect(productCard).toContainText(/最新收益\(\d{2}\/\d{2}\)/);
-    // 三列时「最新收益(MM/DD)」是唯一超列宽的标题，只有它折行、只有它的数值下沉一行；
-    // 两列后两标题须同行同高（标题不折行 ⇒ 数值不位移）
-    const totalTitle = productCard.getByText('累计收益', { exact: true });
-    const dailyTitle = productCard.getByText(/^最新收益\(\d{2}\/\d{2}\)$/);
-    await expect(totalTitle).toBeVisible();
-    await expect(dailyTitle).toBeVisible();
-    const totalBox = await totalTitle.boundingBox();
-    const dailyBox = await dailyTitle.boundingBox();
-    expect(totalBox, '「累计收益」标题未渲染出 boundingBox').not.toBeNull();
-    expect(dailyBox, '「最新收益(MM/DD)」标题未渲染出 boundingBox').not.toBeNull();
-    expect(Math.abs(totalBox!.y - dailyBox!.y), '两列标题须同一行').toBeLessThanOrEqual(1);
-    expect(Math.abs(totalBox!.height - dailyBox!.height), '两列标题须同高（无一侧折行）').toBeLessThanOrEqual(1);
-    // CSS 省略号不改 DOM 文本，文本级断言看不见 truncate 回归；按计算值钉住「不出省略号」本体（#636）
-    const totalValue = productCard.getByTestId('total-profit-value');
+    const isMobile = testInfo.project.name === 'mobile';
+    const rowTestId = isMobile ? 'holding-product-card' : 'holding-product-row';
+    const productRow = page.getByTestId(rowTestId).filter({ hasText: '沪深300ETF' });
+    await expect(productRow).toBeVisible();
+    await expect(productRow).toContainText('510300 · ');
+    await expect(productRow).not.toContainText('510300.SH');
+    await expect(productRow).not.toContainText('持有份额');
+
+    const totalValue = productRow.getByTestId('total-profit-value');
     await expect(totalValue).toHaveText('+9,876.50');
     await expect(totalValue).not.toHaveText('-1,234.50');
     await expect(totalValue).toHaveClass(/text-gain/);
     await expect(totalValue).not.toHaveClass(/text-loss/);
-    await expect(totalValue).toHaveCSS('text-overflow', 'clip');
-    await expect(productCard.getByTestId('daily-profit-value')).toHaveCSS('text-overflow', 'clip');
-    // 持仓卡与详情页使用同一累计收益口径；说明默认收起，打开不触发整卡链接。
-    const tipTrigger = productCard.getByRole('button', { name: '查看累计收益说明' });
+
+    if (isMobile) {
+      await expect(productRow).toContainText(/最新收益\(\d{2}\/\d{2}\)/);
+      const totalTitle = productRow.getByText('累计收益', { exact: true });
+      const dailyTitle = productRow.getByText(/^最新收益\(\d{2}\/\d{2}\)$/);
+      const totalBox = await totalTitle.boundingBox();
+      const dailyBox = await dailyTitle.boundingBox();
+      expect(totalBox, '「累计收益」标题未渲染出 boundingBox').not.toBeNull();
+      expect(dailyBox, '「最新收益(MM/DD)」标题未渲染出 boundingBox').not.toBeNull();
+      expect(Math.abs(totalBox!.y - dailyBox!.y), '两列标题须同一行').toBeLessThanOrEqual(1);
+      expect(Math.abs(totalBox!.height - dailyBox!.height), '两列标题须同高').toBeLessThanOrEqual(1);
+      await expect(totalValue).toHaveCSS('text-overflow', 'clip');
+      await expect(productRow.getByTestId('daily-profit-value')).toHaveCSS('text-overflow', 'clip');
+    } else {
+      const table = page.getByTestId('holding-product-table').filter({ hasText: '沪深300ETF' });
+      await expect(table.getByRole('columnheader')).toHaveText([
+        '产品',
+        '市值',
+        '占比',
+        /累计收益/,
+        /最新收益\(\d{2}\/\d{2}\)/,
+      ]);
+      await expect(productRow.getByTestId('holding-ratio-value')).toHaveText(/\d+\.\d%/);
+    }
+
+    const tipScope = isMobile
+      ? productRow
+      : page.getByTestId('holding-product-table').filter({ hasText: '沪深300ETF' });
+    const tipTrigger = tipScope.getByRole('button', { name: '查看累计收益说明' });
     const tipContent = page.getByTestId('info-tip-content');
     await expect(tipTrigger).toHaveAttribute('aria-expanded', 'false');
     const tipBox = await tipTrigger.boundingBox();
-    const totalValueBox = await totalValue.boundingBox();
     expect(tipBox).not.toBeNull();
-    expect(totalValueBox).not.toBeNull();
-    expect(tipBox!.width, '持仓卡说明触点至少 44px 宽').toBeGreaterThanOrEqual(44);
-    expect(tipBox!.height, '持仓卡说明触点至少 44px 高').toBeGreaterThanOrEqual(44);
-    expect(tipBox!.y + tipBox!.height, '说明触点不得覆盖下方收益值').toBeLessThanOrEqual(totalValueBox!.y + 1);
+    expect(tipBox!.width, '累计收益说明触点至少 44px 宽').toBeGreaterThanOrEqual(44);
+    expect(tipBox!.height, '累计收益说明触点至少 44px 高').toBeGreaterThanOrEqual(44);
+    if (isMobile) {
+      const totalValueBox = await totalValue.boundingBox();
+      expect(totalValueBox).not.toBeNull();
+      expect(tipBox!.y + tipBox!.height, '说明触点不得覆盖下方收益值').toBeLessThanOrEqual(totalValueBox!.y + 1);
+    }
     await expect(page.getByText('累计收益含已卖出实现盈亏', { exact: true })).toHaveCount(0);
-    const cardPageUrl = page.url();
+    const pageUrl = page.url();
     await openPopover(page, tipTrigger, tipContent);
     await expect(tipContent).toHaveText('累计收益含已卖出实现盈亏');
-    expect(page.url(), '打开持仓卡说明不得跳转产品详情').toBe(cardPageUrl);
+    expect(page.url(), '打开持仓说明不得跳转产品详情').toBe(pageUrl);
     await page.keyboard.press('Escape');
     await expect(tipContent).toHaveCount(0);
-    await expect(productCard).toContainText('占比');
 
-    // 现金聚合卡副标双端只显「可用现金」，平台构成由产品详情承载
-    const cashCard = page
-      .getByTestId('holding-product-card')
-      .filter({ hasText: '可用现金' });
-    await expect(cashCard).toBeVisible();
-    await expect(cashCard.getByText('可用现金', { exact: true })).toBeVisible();
-    await expect(cashCard).not.toContainText('华宝证券');
+    const cashRow = page.getByTestId(rowTestId).filter({ hasText: '可用现金' });
+    await expect(cashRow).toBeVisible();
+    await expect(cashRow.getByText('可用现金', { exact: true })).toBeVisible();
+    await expect(cashRow).not.toContainText('华宝证券');
+    if (!isMobile) {
+      await expect(cashRow.getByTestId('total-profit-value')).toBeEmpty();
+      await expect(cashRow.getByTestId('daily-profit-value')).toBeEmpty();
+    }
   });
 
-  test('维度组引导线缩进仅桌面保留，移动端让位横向空间（#724，§6 第 4 类）', async ({
+  test('桌面账表与移动聚合行均铺满维度组，不再保留桌面引导线缩进（#944 Phase 7.1）', async ({
     page,
   }, testInfo) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
-    // 只取带 chip 的维度组：平铺组（组名与大类同名）双端都无缩进，取到它会让桌面断言假红
     const group = page
       .getByTestId('asset-group')
       .filter({ has: page.getByTestId('asset-group-header') })
       .first();
-    const card = group.getByTestId('holding-product-card').first();
-    await expect(card).toBeVisible({ timeout: 10_000 });
-
-    // 缩进量 = 卡片左缘 − 维度组容器左缘；按 testid 取盒子，不按 Tailwind 工具类定位
-    const groupBox = await group.boundingBox();
-    const cardBox = await card.boundingBox();
-    expect(groupBox, '维度组容器未渲染出 boundingBox').not.toBeNull();
-    expect(cardBox, '产品卡未渲染出 boundingBox').not.toBeNull();
-    const indent = cardBox!.x - groupBox!.x;
-    // 引导线载体按 testid 取，不按 ../.. 深度跳：插入包装层后深度跳会落到无 border 的
-    // Link 上，移动端的 0px 断言便对错节点成立（#382：需锚点就在组件侧补 testid）
     const grid = group.getByTestId('asset-group-cards');
+    await expect(grid).toBeVisible({ timeout: 10_000 });
+
+    const groupBox = await group.boundingBox();
+    const gridBox = await grid.boundingBox();
+    expect(groupBox, '维度组容器未渲染出 boundingBox').not.toBeNull();
+    expect(gridBox, '产品容器未渲染出 boundingBox').not.toBeNull();
+    expect(gridBox!.x - groupBox!.x, '产品容器铺满维度组').toBeLessThanOrEqual(1);
+    await expect(grid).toHaveCSS('border-left-width', '0px');
     if (testInfo.project.name === 'mobile') {
-      expect(indent, '移动端不套引导线缩进（回收 16px 给卡内两列）').toBeLessThanOrEqual(1);
-      await expect(grid).toHaveCSS('border-left-width', '0px');
+      await expect(group.getByTestId('holding-product-card').first()).toBeVisible();
     } else {
-      // 15 = 桌面 16px 缩进（推导见 PortfolioHoldings.tsx::cardGridClass）留 1px 抖动；
-      // 另钉引导线本体（#741 L2 S2：只断下限 12 会放过「删 border-l-2 只剩 pl-3」的退化）
-      await expect(grid).toHaveCSS('border-left-width', '2px');
-      expect(indent, '桌面保留引导线缩进').toBeGreaterThanOrEqual(15);
+      await expect(group.getByTestId('holding-product-table')).toBeVisible();
+      await expect(group.getByTestId('holding-product-row').first()).toBeVisible();
     }
   });
 
@@ -273,31 +282,34 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       .first()
       .waitFor({ state: 'visible', timeout: 15_000 });
 
-    const productCards = page.getByTestId('holding-product-card');
+    const isMobile = testInfo.project.name === 'mobile';
+    const productRows = page.getByTestId(isMobile ? 'holding-product-card' : 'holding-product-row');
     const inTransitCard = page.getByTestId('holding-intransit-card');
-    await expect(productCards.first()).toBeVisible({ timeout: 10_000 });
+    await expect(productRows.first()).toBeVisible({ timeout: 10_000 });
     // T 日快照含 IN_TRANSIT_BUY 行 → 在途计市值、在途卡渲染（#636 评审补回）
     await expect(inTransitCard).toBeVisible();
     await expect(inTransitCard).toContainText('占比');
 
-    // 关系式：现金卡 + 在途卡的行级占比（1 位小数）加总恒为 100.0
-    const extractPercents = async (locator: Locator): Promise<number[]> => {
-      const texts = await locator.allInnerTexts();
+    const extractPercents = async (locator: Locator, labeled: boolean): Promise<number[]> => {
+      const texts = labeled ? await locator.allInnerTexts() : await locator.allTextContents();
       return texts.map((t) => {
-        const m = /占比\s*([\d.]+)%/.exec(t);
-        expect(m, `卡片文本应含「占比 x.x%」：${t}`).toBeTruthy();
+        const m = labeled ? /占比\s*([\d.]+)%/.exec(t) : /([\d.]+)%/.exec(t);
+        expect(m, `行文本应含占比：${t}`).toBeTruthy();
         return Number(m![1]);
       });
     };
+    const productPercents = isMobile
+      ? await extractPercents(productRows, true)
+      : await extractPercents(productRows.getByTestId('holding-ratio-value'), false);
     const all = [
-      ...(await extractPercents(productCards)),
-      ...(await extractPercents(inTransitCard)),
+      ...productPercents,
+      ...(await extractPercents(inTransitCard, true)),
     ];
     const sum = all.reduce((s, v) => s + v, 0);
     expect(Math.abs(sum - 100.0)).toBeLessThanOrEqual(0.05);
   });
 
-  test('切换按平台视图：URL 写入 ?view=platform，平台卡字段齐全', async ({ page }) => {
+  test('切换按平台视图：URL 写入 ?view=platform，桌面账表与移动平台卡字段齐全', async ({ page }, testInfo) => {
     await gotoPortfolioDetail(page, E2E_ACTIVE);
     await expect(page.getByTestId('holdings-view-tabs')).toBeVisible({ timeout: 10_000 });
 
@@ -308,14 +320,24 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       'true',
     );
 
-    const platformCard = page
-      .getByTestId('holding-platform-card')
-      .filter({ hasText: '华宝证券' });
-    await expect(platformCard).toBeVisible();
-    await expect(platformCard).toContainText('持仓市值');
-    await expect(platformCard).toContainText('持有收益');
-    await expect(platformCard).toContainText('1 只产品');
-    await expect(platformCard).toContainText('现金 ¥');
+    const platformRow = platformHoldings(page).filter({ hasText: '华宝证券' });
+    await expect(platformRow).toBeVisible();
+    await expect(platformRow).toContainText('1 只产品');
+    await expect(platformRow).toContainText('现金 ¥');
+    if (testInfo.project.name === 'mobile') {
+      await expect(platformRow).toContainText('持仓市值');
+      await expect(platformRow).toContainText('持有收益');
+    } else {
+      const table = page.getByTestId('holding-platform-table');
+      await expect(table.getByRole('columnheader')).toHaveText([
+        '平台',
+        '市值',
+        '占比',
+        '持有收益',
+        '产品与现金',
+      ]);
+      await expect(page.getByTestId('platform-group-header')).toContainText('平台合计');
+    }
   });
 
   test('深链 ?view=platform 直接进入按平台视图（URL 驱动，/m 重定向保参回归）', async ({
@@ -333,7 +355,7 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       'aria-pressed',
       'true',
     );
-    await expect(page.getByTestId('holding-platform-card').first()).toBeVisible({
+    await expect(platformHoldings(page).first()).toBeVisible({
       timeout: 10_000,
     });
   });
@@ -350,12 +372,15 @@ test.describe('#595 持仓明细双视图（按产品 / 按平台）', () => {
       'aria-pressed',
       'true',
     );
-    await expect(page.getByTestId('holding-platform-card').first()).toBeVisible();
+    await expect(platformHoldings(page).first()).toBeVisible();
 
     await clickViewTab(page, 'product');
     // router.replace 为异步：用轮询断言等 URL 收敛，不做即时 page.url() 快照
     await expect(page).toHaveURL((url) => !url.search.includes('view='));
-    await expect(page.getByTestId('holding-product-card').first()).toBeVisible();
+    await expect(page
+      .getByTestId('holding-product-card')
+      .or(page.getByTestId('holding-product-row'))
+      .first()).toBeVisible();
   });
 
   test('active 管理操作统一收进更多菜单，主页不再重复管理入口（#943 S4，双端）', async ({ page }, testInfo) => {

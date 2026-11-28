@@ -153,8 +153,8 @@ test.describe('持仓明细维度二级分组（防 #109 / #114 复发，#128 �
   // data-testid="asset-group-header" 挂在所有 chip 行上
   // #128：分组数据源从 asset_name 换成维度 name；#915：二级分组改为维度子集
   // 组合键（默认子集 D3：股票/债券 region,segment、商品 segment、现金平铺）
-  // #595：卡片改为跨平台聚合卡（holding-product-card），分组契约不变
-  test('子分组头合计金额应等于名下各卡市值之和（含单卡分组）', async ({ page }) => {
+  // #595 聚合语义不变；#944 Phase 7.1 桌面卡改为账表行，移动仍为聚合卡
+  test('子分组头合计金额应等于名下各产品市值之和（含单卡分组）', async ({ page }) => {
     // E2E_ACTIVE 种子契约：2 日快照 + 510300.SH 持仓 → 持仓明细区必渲染（不再优雅 skip）。
     // 移动端经 middleware 重定向到 /m 详情页，PortfolioHoldings 为双端共享组件，故本
     // 用例在 mobile project 同样真跑（旧 `href^="/portfolio/"` 定位曾使其在移动端恒 skip）。
@@ -177,7 +177,9 @@ test.describe('持仓明细维度二级分组（防 #109 / #114 复发，#128 �
     for (let i = 0; i < headerCount; i++) {
       const header = headers.nth(i);
       const group = header.locator('xpath=ancestor::div[@data-testid="asset-group"]');
-      const cards = group.locator('[data-testid="holding-product-card"]');
+      const cards = group.locator(
+        '[data-testid="holding-product-card"], [data-testid="holding-product-row"]',
+      );
       expect(await cards.count()).toBeGreaterThanOrEqual(1);
 
       const headerTotal = firstAmount(await header.innerText());
